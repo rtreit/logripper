@@ -19,10 +19,11 @@ Primary goals:
 ## Architecture Direction
 
 - Keep the log engine independent from any specific UI.
-- Share domain logic between TUI and GUI surfaces.
+- The engine exposes a gRPC API; UX implementations are independent consumers.
+- No specific UI technology is required or privileged.
 - Keep third-party integrations isolated behind interfaces.
 - Make offline logging resilient, even when network integrations fail.
-- Rust owns the core engine, TUI, and QRZ providers. .NET owns the GUI and reporting.
+- Rust owns the core engine, QRZ providers, and gRPC server.
 - Components communicate via gRPC with Protocol Buffer messages.
 
 ## Data Model Conventions
@@ -57,3 +58,13 @@ Primary goals:
 - Use PowerShell for Windows shell scripting.
 - Use `rg` for text search operations.
 - Keep build and test loops fast to support tight iteration.
+
+## Cross-Platform
+
+All code must work on both Windows and Linux. The engine is developed on Windows but runs in Linux Docker containers in production.
+
+- Use `std::path::Path` and `PathBuf` in Rust for all filesystem operations. Never hardcode path separators.
+- In C code, use only portable POSIX/C standard headers (`<stdint.h>`, `<stddef.h>`, `<string.h>`, etc.). Avoid Windows-specific headers like `<windows.h>` unless behind a platform guard.
+- Use `#[cfg(target_os = "...")]` in Rust or `#ifdef _WIN32` / `#ifdef __linux__` in C only when platform-specific behavior is genuinely unavoidable. Prefer portable abstractions.
+- Do not assume a specific shell. Build and test commands should work with `cargo build` / `cargo test` on any platform.
+- Test on both Windows and Linux before merging platform-sensitive changes.

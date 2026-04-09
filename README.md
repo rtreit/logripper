@@ -61,28 +61,43 @@ ADIF (Amateur Data Interchange Format) is used **only at the edges** -- QRZ API 
 
 **Rust toolchain** -- install via [rustup](https://rustup.rs/):
 
-```powershell
+```
+# Windows
 winget install Rustlang.Rustup
+
+# Linux (Debian/Ubuntu)
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 ```
 
 **Protocol Buffers compiler** -- needed to generate gRPC code from proto files:
 
-```powershell
+```
+# Windows
 winget install Google.Protobuf
+
+# Linux (Debian/Ubuntu)
+sudo apt install protobuf-compiler
+
+# Linux (Fedora)
+sudo dnf install protobuf-compiler
 ```
 
-**C compiler** -- required for the native FFI libraries under `src/c/`. On Windows, install the "Desktop development with C++" workload in Visual Studio or the [Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/). On Linux, `gcc` or `clang` will work. The `cc` crate finds the compiler automatically.
+**C compiler** -- required for the native FFI libraries under `src/c/`. On Windows, install the "Desktop development with C++" workload in Visual Studio or the [Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/). On Linux, `gcc` or `clang` is typically already available; install with `sudo apt install build-essential` if needed. The `cc` crate finds the compiler automatically on both platforms.
 
 **buf** (optional) -- for linting and breaking change detection on proto files:
 
-```powershell
+```
+# Windows
 winget install Bufbuild.Buf
+
+# Linux
+# See https://buf.build/docs/installation
 ```
 
 ### Build and Test
 
-```powershell
-cd src\rust
+```
+cd src/rust
 cargo build
 cargo test
 ```
