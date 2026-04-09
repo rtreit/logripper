@@ -1,0 +1,149 @@
+syntax = "proto3";
+
+package logripper.services;
+
+option csharp_namespace = "LogRipper.Services";
+
+import "google/protobuf/timestamp.proto";
+import "domain/qso.proto";
+
+// Core logbook operations. The Rust engine implements this service.
+service LogbookService {
+  // --- QSO CRUD ---
+
+  // Log a new QSO. Returns the assigned local_id and optional QRZ sync result.
+  rpc LogQso(LogQsoRequest) returns (LogQsoResponse);
+
+  // Update an existing QSO.
+  rpc UpdateQso(UpdateQsoRequest) returns (UpdateQsoResponse);
+
+  // Delete a QSO. Irreversible locally; optional QRZ-side delete.
+  rpc DeleteQso(DeleteQsoRequest) returns (DeleteQsoResponse);
+
+  // Get a single QSO by local ID.
+  rpc GetQso(GetQsoRequest) returns (logripper.domain.QsoRecord);
+
+  // List QSOs with filtering and pagination.
+  rpc ListQsos(ListQsosRequest) returns (stream logripper.domain.QsoRecord);
+
+  // --- QRZ Sync ---
+
+  // Trigger a full or incremental sync with QRZ logbook.
+  rpc SyncWithQrz(SyncRequest) returns (stream SyncProgress);
+
+  // Get current sync/logbook status.
+  rpc GetSyncStatus(SyncStatusRequest) returns (SyncStatusResponse);
+
+  // --- ADIF Import/Export ---
+
+  // Import QSOs from ADIF data (file or paste).
+  rpc ImportAdif(stream AdifChunk) returns (ImportResult);
+
+  // Export QSOs to ADIF format.
+  rpc ExportAdif(ExportRequest) returns (stream AdifChunk);
+}
+
+// --- Request/Response messages ---
+
+message LogQsoRequest {
+  logripper.domain.QsoRecord qso = 1;
+  bool sync_to_qrz               = 2;  // Also upload to QRZ immediately
+}
+
+message LogQsoResponse {
+  string local_id          = 1;
+  optional string qrz_logid = 2;   // Set if sync_to_qrz was true and succeeded
+  bool sync_success        = 3;
+  optional string sync_error = 4;
+}
+
+message UpdateQsoRequest {
+  logripper.domain.QsoRecord qso = 1;
+  bool sync_to_qrz               = 2;
+}
+
+message UpdateQsoResponse {
+  bool success              = 1;
+  optional string error     = 2;
+  bool sync_success         = 3;
+  optional string sync_error = 4;
+}
+
+message DeleteQsoRequest {
+  string local_id           = 1;
+  bool delete_from_qrz      = 2;   // Also delete from QRZ logbook (permanent!)
+}
+
+message DeleteQsoResponse {
+  bool success              = 1;
+  optional string error     = 2;
+  bool qrz_delete_success   = 3;
+  optional string qrz_delete_error = 4;
+}
+
+message GetQsoRequest {
+  string local_id           = 1;
+}
+
+message ListQsosRequest {
+  optional google.protobuf.Timestamp after   = 1;
+  optional google.protobuf.Timestamp before  = 2;
+  optional string callsign_filter            = 3;
+  optional logripper.domain.Band band_filter = 4;
+  optional logripper.domain.Mode mode_filter = 5;
+  optional string contest_id                 = 6;
+  uint32 limit                               = 7;  // 0 = no limit
+  uint32 offset                              = 8;
+  SortOrder sort                             = 9;
+}
+
+enum SortOrder {
+  SORT_ORDER_NEWEST_FIRST = 0;
+  SORT_ORDER_OLDEST_FIRST = 1;
+}
+
+// --- Sync messages ---
+
+message SyncRequest {
+  bool full_sync            = 1;   // true = re-fetch all; false = incremental
+}
+
+message SyncProgress {
+  uint32 total_records      = 1;
+  uint32 processed_records  = 2;
+  uint32 uploaded_records   = 3;
+  uint32 downloaded_records = 4;
+  uint32 conflict_records   = 5;
+  optional string current_action = 6;  // Human-readable status
+  bool complete             = 7;
+  optional string error     = 8;
+}
+
+message SyncStatusRequest {}
+
+message SyncStatusResponse {
+  uint32 local_qso_count    = 1;
+  uint32 qrz_qso_count     = 2;   // From QRZ STATUS command
+  uint32 pending_upload     = 3;
+  optional google.protobuf.Timestamp last_sync = 4;
+  optional string qrz_logbook_owner = 5;
+}
+
+// --- ADIF messages ---
+
+message AdifChunk {
+  bytes data                = 1;   // Raw ADIF text bytes
+}
+
+message ImportResult {
+  uint32 records_imported   = 1;
+  uint32 records_skipped    = 2;   // Duplicates or parse errors
+  repeated string warnings  = 3;
+}
+
+message ExportRequest {
+  optional google.protobuf.Timestamp after   = 1;
+  optional google.protobuf.Timestamp before  = 2;
+  optional string contest_id                 = 3;
+  bool include_header                        = 4;  // ADIF header with version/program info
+}

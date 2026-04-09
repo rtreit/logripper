@@ -187,6 +187,33 @@ Core types, lookup state, and UX flow should belong to Logripper.
 
 QRZ, XML, HTTP, auth, and future providers are edge concerns.
 
+## Data Model Layer
+
+### Schema-First with Protocol Buffers
+
+All shared domain types are defined in `.proto` files under `proto/`. These are the single source of truth:
+
+- `proto/domain/callsign.proto` — CallsignRecord, DxccEntity, GeoSource
+- `proto/domain/qso.proto` — QsoRecord, Band, Mode, RstReport, SyncStatus
+- `proto/domain/lookup.proto` — LookupResult, LookupState, LookupRequest
+- `proto/services/lookup_service.proto` — gRPC LookupService
+- `proto/services/logbook_service.proto` — gRPC LogbookService
+
+Code is generated for both Rust (`prost`/`tonic`) and C# (`Grpc.Tools`). Never hand-write types that should come from proto generation.
+
+### Language Split
+
+- **Rust** = Core engine, TUI, QRZ providers, gRPC server (tonic)
+- **C# / .NET** = GUI (Avalonia), reporting, analytics, gRPC client
+
+The Rust process is the engine. The .NET process is the rich client. They communicate via gRPC.
+
+### ADIF Is an Edge Concern
+
+ADIF is the external interchange format for QRZ logbook API and file import/export. It is **not** used for internal IPC. The Rust-side ADIF parser converts to/from proto domain types at the provider edge.
+
+See `docs/architecture/data-model.md` for full details, conventions, and how to add fields.
+
 ## One-Sentence Project Philosophy
 
 **Build for instant UX with the fewest abstractions that preserve clean boundaries.**

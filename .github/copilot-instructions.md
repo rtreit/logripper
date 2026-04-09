@@ -22,6 +22,16 @@ Primary goals:
 - Share domain logic between TUI and GUI surfaces.
 - Keep third-party integrations isolated behind interfaces.
 - Make offline logging resilient, even when network integrations fail.
+- Rust owns the core engine, TUI, and QRZ providers. .NET owns the GUI and reporting.
+- Components communicate via gRPC with Protocol Buffer messages.
+
+## Data Model Conventions
+
+- All shared domain types are defined in `proto/` and generated for both Rust and C#.
+- Proto files are the single source of truth. Never hand-write types that should come from proto generation.
+- Use `buf lint` to validate proto files. Use `buf breaking` to guard against incompatible schema changes.
+- ADIF is for external interchange (QRZ API, file I/O) only — internal IPC uses protobuf.
+- See `docs/architecture/data-model.md` for full conventions.
 
 ## Domain Guidance
 

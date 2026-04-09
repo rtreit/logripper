@@ -1,0 +1,57 @@
+syntax = "proto3";
+
+package logripper.domain;
+
+option csharp_namespace = "LogRipper.Domain";
+
+import "domain/callsign.proto";
+
+// The state of an in-flight or completed lookup operation.
+enum LookupState {
+  LOOKUP_STATE_LOADING    = 0;  // Request in flight
+  LOOKUP_STATE_FOUND      = 1;  // Callsign resolved successfully
+  LOOKUP_STATE_NOT_FOUND  = 2;  // Callsign does not exist in provider
+  LOOKUP_STATE_ERROR      = 3;  // Provider error (network, auth, rate limit)
+  LOOKUP_STATE_STALE      = 4;  // Returning cached data, refresh pending
+  LOOKUP_STATE_CANCELLED  = 5;  // Superseded by a newer lookup
+}
+
+// Result of a callsign lookup, wrapping the async state machine
+// described in architecture principle #11 (structured concurrency).
+message LookupResult {
+  LookupState state            = 1;
+  optional CallsignRecord record = 2;
+  optional string error_message  = 3;
+  bool cache_hit               = 4;
+  uint32 lookup_latency_ms     = 5;
+  string queried_callsign      = 6;  // The original input callsign
+}
+
+// Request to look up a callsign.
+message LookupRequest {
+  string callsign              = 1;
+  bool skip_cache              = 2;  // Force fresh lookup, bypass L1 cache
+}
+
+// Request to look up a specific callsign from cache only.
+message CachedCallsignRequest {
+  string callsign              = 1;
+}
+
+// Request for DXCC entity information.
+message DxccRequest {
+  oneof query {
+    uint32 dxcc_code           = 1;   // By numeric DXCC entity code
+    string prefix              = 2;   // By callsign prefix (QRZ does 4->3->2 letter reduction)
+  }
+}
+
+// Batch lookup request for prefetch scenarios (e.g., contest pre-population).
+message BatchLookupRequest {
+  repeated string callsigns    = 1;
+}
+
+// Batch lookup response.
+message BatchLookupResponse {
+  repeated LookupResult results = 1;
+}

@@ -1,0 +1,13 @@
+version: v2
+modules:
+  - path: proto
+    name: buf.build/logripper/logripper
+lint:
+  use:
+    - STANDARD
+  enum_zero_value_suffix: _UNSPECIFIED
+  rpc_allow_google_protobuf_empty_requests: true
+  rpc_allow_google_protobuf_empty_responses: true
+breaking:
+  use:
+    - FILE

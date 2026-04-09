@@ -1,0 +1,15 @@
+version: v2
+plugins:
+  # Rust code generation via prost
+  - local: protoc-gen-prost
+    out: src/generated/rust
+    opt:
+      - compile_well_known_types=true
+  # Rust tonic gRPC stubs
+  - local: protoc-gen-tonic
+    out: src/generated/rust
+  # C# code generation via grpc_csharp_plugin
+  - local: protoc-gen-grpc-csharp
+    out: src/generated/csharp
+    opt:
+      - base_namespace=LogRipper
