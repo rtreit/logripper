@@ -62,9 +62,10 @@ proto/                    Shared IDL (language-neutral)
   domain/                 CallsignRecord, QsoRecord, LookupResult, enums
   services/               LookupService, LogbookService gRPC definitions
 src/
-  rust/                   Rust workspace
+  rust/                   Rust workspace (Cargo.toml at this level)
     logripper-core/       Engine: storage, lookups, cache, ADIF, gRPC server
-    logripper-tui/        Reference TUI (depends on logripper-core)
+  c/                      Native C libraries called by the engine via FFI
+    logripper-dsp/        Signal processing helpers (DSP, filtering, audio)
 tests/
   fixtures/               Shared test data (ADIF files, etc.)
 docs/
