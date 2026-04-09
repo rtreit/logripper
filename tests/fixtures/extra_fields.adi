@@ -1,0 +1,26 @@
+Test file with app-defined and extra fields
+
+<adif_ver:5>3.1.7
+<programid:9>LogRipper
+<EOH>
+
+<qso_date:8>20260201
+<time_on:4>0900
+<call:5>VE3XY
+<band:2>2M
+<mode:2>FM
+<freq:7>146.520
+<rst_sent:2>59
+<rst_rcvd:2>59
+<station_callsign:5>AA7BQ
+<my_rig:12>Icom IC-7300
+<my_antenna:14>Yagi 3-element
+<my_city:7>Seattle
+<my_state:2>WA
+<my_gridsquare:6>CN87up
+<ant_az:3>045
+<ant_el:2>15
+<sat_name:3>ISS
+<sat_mode:1>V
+<app_logripper_sync_status:6>synced
+<eor>

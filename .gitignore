@@ -57,3 +57,7 @@ nunit-*.xml
 .env
 .env.*
 !.env.example
+
+# Rust
+target/
+Cargo.lock

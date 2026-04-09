@@ -1,0 +1,4 @@
+# ADIF files must use LF line endings (length-delimited format)
+*.adi text eol=lf
+*.adif text eol=lf
+*.adx text eol=lf

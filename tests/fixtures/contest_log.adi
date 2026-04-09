@@ -1,0 +1,45 @@
+Generated for contest import test
+
+<adif_ver:5>3.1.7
+<programid:9>LogRipper
+<EOH>
+
+<qso_date:8>20261025
+<time_on:4>1200
+<call:5>W1AW
+<band:3>20M
+<mode:3>SSB
+<submode:3>USB
+<freq:6>14.250
+<rst_sent:2>59
+<rst_rcvd:2>59
+<contest_id:9>CQ-WW-SSB
+<srx:3>001
+<stx:3>001
+<stx_string:5>05 OH
+<station_callsign:5>AA7BQ
+<check:2>73
+<class:2>3A
+<precedence:1>A
+<arrl_sect:2>OH
+<eor>
+
+<qso_date:8>20261025
+<time_on:4>1205
+<call:6>DL1ABC
+<band:3>15M
+<mode:3>SSB
+<submode:3>USB
+<freq:6>21.350
+<rst_sent:2>59
+<rst_rcvd:2>58
+<contest_id:9>CQ-WW-SSB
+<srx:3>042
+<stx:3>002
+<stx_string:5>05 OH
+<station_callsign:5>AA7BQ
+<country:7>Germany
+<dxcc:3>230
+<cont:2>EU
+<cqz:2>14
+<eor>
