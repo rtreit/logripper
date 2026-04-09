@@ -22,7 +22,7 @@ Sourced from [dotnet/skills](https://github.com/dotnet/skills) (MIT license).
 
 ## When Not to Use
 
-- User needs to write or generate test code (use `code-testing-agent`)
+- User needs to write or generate test code (use `code-testing`)
 - User wants to iterate on failing tests without rebuilding
 - User needs CI/CD pipeline configuration
 - User needs to debug a test

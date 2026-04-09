@@ -1,5 +1,5 @@
 ---
-name: code-testing-agent
+name: code-testing
 description: >-
   Generates comprehensive, workable unit tests for any programming language
   using a Research-Plan-Implement pipeline. Use when asked to generate tests,

@@ -24,7 +24,7 @@ Sourced from [dotnet/skills](https://github.com/dotnet/skills) (MIT license).
 
 ## When Not to Use
 
-- User wants to write new tests from scratch (use `code-testing-agent`)
+- User wants to write new tests from scratch (use `code-testing`)
 - User wants to run or execute tests (use `run-tests`)
 - User wants to measure code coverage (out of scope)
 
