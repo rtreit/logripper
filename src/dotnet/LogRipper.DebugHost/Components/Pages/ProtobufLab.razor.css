@@ -1,0 +1,16 @@
+.proto-summary {
+    min-width: 0;
+}
+
+.proto-summary dd,
+.proto-summary dt {
+    min-width: 0;
+}
+
+.proto-inline-payload {
+    display: block;
+    max-width: 100%;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+    white-space: normal;
+}

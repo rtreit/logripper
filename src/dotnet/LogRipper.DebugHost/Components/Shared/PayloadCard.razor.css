@@ -1,0 +1,7 @@
+.payload-copy-button {
+    white-space: nowrap;
+}
+
+.payload-copy-button svg {
+    vertical-align: text-bottom;
+}

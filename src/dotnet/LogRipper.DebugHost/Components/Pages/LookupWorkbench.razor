@@ -1,0 +1,134 @@
+@page "/lookup-workbench"
+@inject DebugWorkbenchState WorkbenchState
+@inject LookupWorkbenchService LookupWorkbenchService
+@inject SampleProtoFactory SampleProtoFactory
+@inject ProtoJsonService ProtoJsonService
+
+<PageTitle>Callsign Lookup Workbench</PageTitle>
+
+<h1 class="mb-3">Callsign Lookup Workbench</h1>
+<p class="text-muted">
+    This page is the first feature-shaped debugging slice: build a lookup request, inspect its protobuf payload, preview the result UI with sample data, and switch to a live gRPC call the moment the Rust lookup service host is ready.
+</p>
+
+<div class="alert alert-secondary">
+    <strong>Current engine endpoint:</strong> @WorkbenchState.EngineEndpoint
+</div>
+
+<div class="card shadow-sm mb-4">
+    <div class="card-body">
+        <div class="row g-3 align-items-end">
+            <div class="col-md-6">
+                <label class="form-label" for="lookup-callsign">Callsign</label>
+                <InputText id="lookup-callsign" class="form-control" @bind-Value="callsign" />
+            </div>
+            <div class="col-md-3">
+                <div class="form-check mb-2">
+                    <InputCheckbox id="skip-cache" class="form-check-input" @bind-Value="skipCache" />
+                    <label class="form-check-label" for="skip-cache">Skip cache</label>
+                </div>
+            </div>
+            <div class="col-md-3 d-flex gap-2 flex-wrap">
+                <button class="btn btn-outline-primary" @onclick="Preview">Preview</button>
+                <button class="btn btn-primary" @onclick="RunUnaryAsync">Live lookup</button>
+                <button class="btn btn-outline-secondary" @onclick="RunStreamingAsync">Stream lookup</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row g-4">
+    <div class="col-xl-6">
+        <PayloadCard Title="Request payload"
+                     Payload="@requestPayload.Json" />
+    </div>
+    <div class="col-xl-6">
+        <PayloadCard Title="Sample result preview"
+                     Payload="@samplePayload.Json" />
+    </div>
+</div>
+
+<div class="card shadow-sm mt-4">
+    <div class="card-body">
+        <div class="d-flex justify-content-between align-items-center mb-2">
+            <h2 class="h5 mb-0">Live invocation</h2>
+            @if (liveResult is not null)
+            {
+                <span class="badge @(liveResult.Succeeded ? "text-bg-success" : "text-bg-danger")">
+                    @(liveResult.Succeeded ? "Completed" : "Failed")
+                </span>
+            }
+        </div>
+
+        @if (liveResult is null)
+        {
+            <p class="text-muted mb-0">No live invocation yet. Use the buttons above to exercise the current endpoint.</p>
+        }
+        else
+        {
+            <div class="mb-3">
+                <strong>Mode:</strong> @(liveResult.WasStreaming ? "Streaming lookup" : "Unary lookup")<br />
+                <strong>Completed:</strong> @liveResult.CompletedAtUtc.LocalDateTime.ToString("g")
+            </div>
+
+            @if (!string.IsNullOrWhiteSpace(liveResult.ErrorMessage))
+            {
+                <div class="alert alert-danger">
+                    @liveResult.ErrorMessage
+                </div>
+            }
+
+            @if (livePayloads.Count == 0)
+            {
+                <p class="text-muted mb-0">No response payloads were returned.</p>
+            }
+            else
+            {
+                @for (var i = 0; i < livePayloads.Count; i++)
+                {
+                    <div class="mb-3">
+                        <PayloadCard Title="@($"Response {i + 1}")"
+                                     Payload="@livePayloads[i].Json" />
+                    </div>
+                }
+            }
+        }
+    </div>
+</div>
+
+@code {
+    private string callsign = "K7DBG";
+    private bool skipCache;
+    private ProtoPayloadView requestPayload = new("{}", string.Empty, 0);
+    private ProtoPayloadView samplePayload = new("{}", string.Empty, 0);
+    private LookupInvocationResult? liveResult;
+    private List<ProtoPayloadView> livePayloads = [];
+
+    protected override void OnInitialized()
+    {
+        Preview();
+    }
+
+    private void Preview()
+    {
+        var request = SampleProtoFactory.CreateLookupRequest(callsign, skipCache);
+        requestPayload = ProtoJsonService.Describe(request);
+        samplePayload = ProtoJsonService.Describe(SampleProtoFactory.CreateLookupResult(callsign, cacheHit: !skipCache));
+    }
+
+    private async Task RunUnaryAsync()
+    {
+        Preview();
+        var request = SampleProtoFactory.CreateLookupRequest(callsign, skipCache);
+        liveResult = await LookupWorkbenchService.RunLookupAsync(request);
+        livePayloads = liveResult.Responses.Select(ProtoJsonService.Describe).ToList();
+    }
+
+    private async Task RunStreamingAsync()
+    {
+        Preview();
+        var request = SampleProtoFactory.CreateLookupRequest(callsign, skipCache);
+        liveResult = await LookupWorkbenchService.RunStreamingLookupAsync(request);
+        livePayloads = liveResult.Responses.Select(ProtoJsonService.Describe).ToList();
+    }
+}

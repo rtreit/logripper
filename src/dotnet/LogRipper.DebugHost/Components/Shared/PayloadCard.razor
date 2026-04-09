@@ -1,0 +1,51 @@
+@inject IJSRuntime JSRuntime
+
+<div class="card shadow-sm h-100">
+    <div class="card-body">
+        <div class="d-flex justify-content-between align-items-center mb-2 gap-3">
+            <div class="d-flex align-items-center gap-2 flex-wrap">
+                <h2 class="h5 mb-0">@Title</h2>
+                @if (!string.IsNullOrWhiteSpace(BadgeText))
+                {
+                    <span class="badge text-bg-primary">@BadgeText</span>
+                }
+            </div>
+            <button type="button"
+                    class="btn btn-sm btn-outline-secondary payload-copy-button"
+                    @onclick="CopyAsync"
+                    title="Copy payload"
+                    aria-label="Copy payload">
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16" aria-hidden="true">
+                    <path d="M10 1.5v1h1.5A1.5 1.5 0 0 1 13 4v8a1.5 1.5 0 0 1-1.5 1.5H5A1.5 1.5 0 0 1 3.5 12V4A1.5 1.5 0 0 1 5 2.5h1.5v-1A1.5 1.5 0 0 1 8 0h.5A1.5 1.5 0 0 1 10 1.5M8 1a.5.5 0 0 0-.5.5v1h2v-1A.5.5 0 0 0 9 1z"/>
+                    <path d="M2.5 5A1.5 1.5 0 0 0 1 6.5v8A1.5 1.5 0 0 0 2.5 16h6A1.5 1.5 0 0 0 10 14.5V14H5A2.5 2.5 0 0 1 2.5 11.5z"/>
+                </svg>
+                <span class="ms-1">@(copySucceeded ? "Copied" : "Copy")</span>
+            </button>
+        </div>
+
+        <pre class="payload-view">@Payload</pre>
+    </div>
+</div>
+
+@code {
+    [Parameter, EditorRequired]
+    public string Title { get; set; } = string.Empty;
+
+    [Parameter, EditorRequired]
+    public string Payload { get; set; } = string.Empty;
+
+    [Parameter]
+    public string? BadgeText { get; set; }
+
+    private bool copySucceeded;
+
+    private async Task CopyAsync()
+    {
+        await JSRuntime.InvokeVoidAsync("logRipperDebug.copyText", Payload);
+        copySucceeded = true;
+        StateHasChanged();
+        await Task.Delay(1500);
+        copySucceeded = false;
+        await InvokeAsync(StateHasChanged);
+    }
+}

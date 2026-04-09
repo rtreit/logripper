@@ -1,0 +1,6 @@
+<Solution>
+  <Project Path="LogRipper.Cli/LogRipper.Cli.csproj" />
+  <Project Path="LogRipper.Cli.Tests/LogRipper.Cli.Tests.csproj" />
+  <Project Path="LogRipper.DebugHost/LogRipper.DebugHost.csproj" />
+  <Project Path="LogRipper.DebugHost.Tests/LogRipper.DebugHost.Tests.csproj" />
+</Solution>

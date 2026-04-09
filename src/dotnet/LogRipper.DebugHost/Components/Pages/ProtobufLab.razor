@@ -1,0 +1,116 @@
+@page "/protobuf-lab"
+@inject SampleProtoFactory SampleProtoFactory
+@inject ProtoJsonService ProtoJsonService
+
+<PageTitle>Protobuf Lab</PageTitle>
+
+<h1 class="mb-3">Protobuf Lab</h1>
+<p class="text-muted">
+    Generate sample payloads from the shared <code>proto/</code> contracts so the debug host can inspect exactly the same message shapes the Rust engine and future clients will use.
+</p>
+
+<div class="card shadow-sm mb-4">
+    <div class="card-body">
+        <div class="row g-3 align-items-end">
+            <div class="col-md-4">
+                <label class="form-label" for="sample-type">Sample type</label>
+                <InputSelect id="sample-type" class="form-select" @bind-Value="selectedSampleType">
+                    @foreach (var sampleType in System.Enum.GetValues<SampleMessageType>())
+                    {
+                        <option value="@sampleType">@sampleType</option>
+                    }
+                </InputSelect>
+            </div>
+            <div class="col-md-4">
+                <label class="form-label" for="sample-callsign">Seed callsign</label>
+                <InputText id="sample-callsign" class="form-control" @bind-Value="callsign" />
+            </div>
+            <div class="col-md-4">
+                <button class="btn btn-primary" @onclick="Generate">Generate sample</button>
+            </div>
+        </div>
+
+        @if (selectedSampleType == SampleMessageType.QsoRecord)
+        {
+            <div class="row g-3 align-items-end mt-1">
+                <div class="col-md-6">
+                    <label class="form-label" for="sample-band">Band</label>
+                    <InputSelect id="sample-band" class="form-select" @bind-Value="selectedBand">
+                        @foreach (var band in bands)
+                        {
+                            <option value="@band">@ProtoEnumDisplay.ForBand(band)</option>
+                        }
+                    </InputSelect>
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label" for="sample-mode">Mode</label>
+                    <InputSelect id="sample-mode" class="form-select" @bind-Value="selectedMode">
+                        @foreach (var mode in modes)
+                        {
+                            <option value="@mode">@ProtoEnumDisplay.ForMode(mode)</option>
+                        }
+                    </InputSelect>
+                </div>
+            </div>
+        }
+    </div>
+</div>
+
+<div class="row g-4">
+    <div class="col-xl-7">
+        <PayloadCard Title="JSON payload"
+                     BadgeText="@selectedSampleType.ToString()"
+                     Payload="@payload.Json" />
+    </div>
+    <div class="col-xl-5">
+        <div class="card shadow-sm mb-4">
+            <div class="card-body">
+                <h2 class="h5">Binary summary</h2>
+                <dl class="row mb-0 proto-summary">
+                    <dt class="col-sm-4">Bytes</dt>
+                    <dd class="col-sm-8">@payload.ByteCount</dd>
+                    <dt class="col-sm-4">Base64</dt>
+                    <dd class="col-sm-8"><code class="small proto-inline-payload">@payload.Base64</code></dd>
+                </dl>
+            </div>
+        </div>
+        <div class="card shadow-sm">
+            <div class="card-body">
+                <h2 class="h5">Why this matters</h2>
+                <ul class="mb-0">
+                    <li>Developers can inspect message shape before a live engine endpoint exists.</li>
+                    <li>The same contracts feed the Rust build, the debug host, and future production clients.</li>
+                    <li>Extensible sample builders make it easy to add new workbenches as proto models grow.</li>
+                </ul>
+            </div>
+        </div>
+    </div>
+</div>
+
+@code {
+    private SampleMessageType selectedSampleType = SampleMessageType.LookupRequest;
+    private string callsign = "K7DBG";
+    private Band selectedBand = Band._20M;
+    private Mode selectedMode = Mode.Ssb;
+    private ProtoPayloadView payload = new("{}", string.Empty, 0);
+    private readonly IReadOnlyList<Band> bands = System.Enum.GetValues<Band>().Where(static band => band != Band.Unspecified).ToArray();
+    private readonly IReadOnlyList<Mode> modes = System.Enum.GetValues<Mode>().Where(static mode => mode != Mode.Unspecified).ToArray();
+
+    protected override void OnInitialized()
+    {
+        Generate();
+    }
+
+    private void Generate()
+    {
+        var message = SampleProtoFactory.CreateSampleMessage(
+            selectedSampleType,
+            callsign,
+            new QsoSampleOptions
+            {
+                Band = selectedBand,
+                Mode = selectedMode
+            });
+        payload = ProtoJsonService.Describe(message);
+    }
+}

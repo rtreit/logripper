@@ -69,6 +69,18 @@ winget install Rustlang.Rustup
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 ```
 
+**.NET SDK 10** -- required for the .NET workspace under `src/dotnet/`, including the developer debug workbench and engine validation CLI:
+
+```
+# Windows
+winget install Microsoft.DotNet.SDK.10
+
+# Linux (Debian/Ubuntu)
+sudo apt install dotnet-sdk-10.0
+```
+
+The repository pins SDK `10.0.201` in `global.json`.
+
 **Protocol Buffers compiler** -- needed to generate gRPC code from proto files:
 
 ```
@@ -96,6 +108,8 @@ winget install Bufbuild.Buf
 
 ### Build and Test
 
+**Rust engine:**
+
 ```
 cd src/rust
 cargo build
@@ -103,6 +117,48 @@ cargo test
 ```
 
 This compiles the C libraries via FFI, generates Rust types from the proto files, and builds the engine. All tests (unit + integration) run with `cargo test`.
+
+**.NET workspace:**
+
+```
+cd src/dotnet
+dotnet build LogRipper.slnx
+dotnet test LogRipper.slnx
+```
+
+This builds the shared .NET workspace, including the developer debug host and the CLI tool that validates engine connectivity over gRPC.
+
+### Developer Debug Workbench
+
+The repository now includes a **developer-only Blazor Server debug host** under `src/dotnet/LogRipper.DebugHost`. This is not the product logger UX. It is an internal workbench for:
+
+- configuring and probing a local Rust engine endpoint
+- inspecting generated protobuf payloads and sample data
+- exercising the callsign lookup flow as live gRPC services come online
+- running curated Rust/.NET validation commands from a safe allowlist
+
+Build, test, and run it with:
+
+```
+cd src/dotnet
+dotnet build LogRipper.Debug.sln
+dotnet test LogRipper.Debug.sln
+dotnet run --project LogRipper.DebugHost
+```
+
+### Engine Validation CLI
+
+The repository also includes a minimal **.NET 10 CLI tool** under `src/dotnet/LogRipper.Cli` for validating connectivity to the Rust engine over gRPC.
+
+Run it with:
+
+```
+cd src/dotnet
+dotnet run --project LogRipper.Cli -- status
+dotnet run --project LogRipper.Cli -- --endpoint http://localhost:50051 status
+```
+
+The CLI generates client stubs from the shared proto contracts at build time and currently includes a `status` command for `LogbookService.GetSyncStatus`.
 
 ## Project Structure
 
@@ -113,6 +169,11 @@ proto/                    Shared IDL (language-neutral)
 src/
   rust/                   Rust workspace (Cargo.toml at this level)
     logripper-core/       Engine: storage, lookups, cache, ADIF, gRPC server
+  dotnet/
+    LogRipper.slnx        Root .NET workspace solution
+    LogRipper.Cli/        Minimal CLI for engine validation over gRPC
+    LogRipper.DebugHost/  Developer-only Blazor Server debug workbench
+    LogRipper.DebugHost.Tests/  Tests for debug-host services and payload builders
   c/                      Native C libraries called by the engine via FFI
     logripper-dsp/        Signal processing helpers (DSP, filtering, audio)
 tests/

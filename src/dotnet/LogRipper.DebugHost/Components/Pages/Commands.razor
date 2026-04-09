@@ -1,0 +1,133 @@
+@page "/commands"
+@inject DebugCommandService DebugCommandService
+@inject ToolchainLocator ToolchainLocator
+
+<PageTitle>Commands and Tests</PageTitle>
+
+<h1 class="mb-3">Commands & Tests</h1>
+<p class="text-muted">
+    The workbench only executes curated, allowlisted commands rooted in the repo. This keeps the debug surface useful without turning it into a generic shell.
+</p>
+
+<div class="row g-4">
+    <div class="col-xl-5">
+        <div class="card shadow-sm h-100">
+            <div class="card-body">
+                <h2 class="h5">Available commands</h2>
+                @foreach (var command in commands)
+                {
+                    <div class="border rounded p-3 mb-3">
+                        <div class="d-flex justify-content-between align-items-start gap-3">
+                            <div>
+                                <div class="fw-semibold">@command.DisplayName</div>
+                                <div class="small text-muted">@command.Description</div>
+                                <div class="small mt-2"><code>@command.FileName @command.Arguments</code></div>
+                            </div>
+                            <button class="btn btn-sm btn-primary"
+                                    disabled="@(!CanRun(command) || isRunning)"
+                                    @onclick="() => RunAsync(command.Key)">
+                                Run
+                            </button>
+                        </div>
+                    </div>
+                }
+            </div>
+        </div>
+    </div>
+    <div class="col-xl-7">
+        <div class="card shadow-sm">
+            <div class="card-body">
+                <div class="d-flex justify-content-between align-items-center mb-3">
+                    <h2 class="h5 mb-0">Latest execution</h2>
+                    @if (lastResult is not null)
+                    {
+                        <span class="badge @(lastResult.Succeeded ? "text-bg-success" : "text-bg-danger")">
+                            Exit @lastResult.ExitCode
+                        </span>
+                    }
+                </div>
+
+                @if (isRunning)
+                {
+                    <div class="alert alert-info">Running command...</div>
+                }
+
+                @if (lastResult is null)
+                {
+                    <p class="text-muted mb-0">No command has run yet.</p>
+                }
+                else
+                {
+                    <dl class="row">
+                        <dt class="col-sm-3">Command</dt>
+                        <dd class="col-sm-9">@lastResult.Command.DisplayName</dd>
+                        <dt class="col-sm-3">Duration</dt>
+                        <dd class="col-sm-9">@lastResult.Duration</dd>
+                        <dt class="col-sm-3">Environment</dt>
+                        <dd class="col-sm-9">
+                            @if (lastResult.EffectiveEnvironment.Count == 0)
+                            {
+                                <span class="text-muted">No overrides</span>
+                            }
+                            else
+                            {
+                                @foreach (var item in lastResult.EffectiveEnvironment)
+                                {
+                                    <div><code>@item.Key=@item.Value</code></div>
+                                }
+                            }
+                        </dd>
+                    </dl>
+
+                    <h3 class="h6">stdout</h3>
+                    <pre class="payload-view">@FormatOutput(lastResult.StandardOutput)</pre>
+
+                    <h3 class="h6">stderr</h3>
+                    <pre class="payload-view">@FormatOutput(lastResult.StandardError)</pre>
+                }
+            </div>
+        </div>
+    </div>
+</div>
+
+@code {
+    private IReadOnlyList<DebugCommandDefinition> commands = Array.Empty<DebugCommandDefinition>();
+    private CommandExecutionResult? lastResult;
+    private bool isRunning;
+
+    protected override void OnInitialized()
+    {
+        commands = DebugCommandService.GetCommands();
+    }
+
+    private bool CanRun(DebugCommandDefinition command)
+    {
+        return command.RequiredTool switch
+        {
+            "buf" => ToolchainLocator.FindBuf() is not null,
+            _ when string.Equals(command.FileName, "cargo", StringComparison.OrdinalIgnoreCase)
+                => ToolchainLocator.FindCargo() is not null && ToolchainLocator.FindProtoc() is not null,
+            _ when string.Equals(command.FileName, "dotnet", StringComparison.OrdinalIgnoreCase)
+                => ToolchainLocator.FindDotnet() is not null,
+            _ => true
+        };
+    }
+
+    private async Task RunAsync(string key)
+    {
+        isRunning = true;
+        try
+        {
+            lastResult = await DebugCommandService.RunAsync(key);
+        }
+        finally
+        {
+            isRunning = false;
+        }
+    }
+
+    private static string FormatOutput(string value)
+    {
+        return string.IsNullOrWhiteSpace(value) ? "(empty)" : value;
+    }
+}

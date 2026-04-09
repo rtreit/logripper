@@ -1,0 +1,28 @@
+## .NET build outputs
+[Bb]in/
+[Oo]bj/
+artifacts/
+
+## User-specific files
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+## VS / Rider caches
+.vs/
+.idea/
+*.DotSettings.user
+
+## NuGet
+*.nupkg
+*.snupkg
+
+## Test results
+[Tt]est[Rr]esult*/
+coverage/
+*.coverage
+*.coveragexml
+
+## MSBuild binary logs
+*.binlog

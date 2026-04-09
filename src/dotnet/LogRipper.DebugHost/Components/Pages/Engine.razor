@@ -1,0 +1,108 @@
+@page "/engine"
+@inject DebugWorkbenchState WorkbenchState
+@inject ToolchainLocator ToolchainLocator
+
+<PageTitle>Engine Session</PageTitle>
+
+<h1 class="mb-3">Engine Session</h1>
+<p class="text-muted">
+    Configure the Rust engine endpoint the debug workbench should target. Transport probing confirms that the host and port are reachable; method success still depends on the Rust engine exposing the corresponding gRPC service.
+</p>
+
+<EditForm Model="this" OnSubmit="SaveEndpointAsync">
+    <div class="row g-3 align-items-end">
+        <div class="col-lg-8">
+            <label class="form-label" for="engine-endpoint">Engine endpoint</label>
+            <InputText id="engine-endpoint" class="form-control" @bind-Value="endpoint" />
+        </div>
+        <div class="col-lg-4 d-flex gap-2">
+            <button type="submit" class="btn btn-primary">Save endpoint</button>
+            <button type="button" class="btn btn-outline-primary" @onclick="ProbeAsync">Probe transport</button>
+        </div>
+    </div>
+</EditForm>
+
+@if (!string.IsNullOrWhiteSpace(statusMessage))
+{
+    <div class="alert alert-info mt-3">@statusMessage</div>
+}
+
+@if (WorkbenchState.LastProbe is not null)
+{
+    <div class="alert mt-3 @(WorkbenchState.LastProbe.IsSuccess ? "alert-success" : "alert-danger")">
+        <div><strong>Probe result:</strong> @WorkbenchState.LastProbe.Summary</div>
+        <div class="small text-muted mt-1">Attempted @WorkbenchState.LastProbe.AttemptedAtUtc.LocalDateTime.ToString("g") against @WorkbenchState.LastProbe.Endpoint</div>
+    </div>
+}
+
+<div class="row g-4 mt-1">
+    <div class="col-xl-7">
+        <div class="card shadow-sm h-100">
+            <div class="card-body">
+                <h2 class="h5">Current session notes</h2>
+                <ul class="mb-0">
+                    <li>The workbench stores endpoint selection per Blazor server circuit.</li>
+                    <li>Use <code>http://localhost:50051</code> by default for local Rust gRPC development.</li>
+                    <li>The lookup page and future logbook pages use this endpoint automatically.</li>
+                </ul>
+            </div>
+        </div>
+    </div>
+    <div class="col-xl-5">
+        <div class="card shadow-sm h-100">
+            <div class="card-body">
+                <h2 class="h5">Tool detection</h2>
+                <table class="table table-sm align-middle mb-0">
+                    <thead>
+                        <tr>
+                            <th>Tool</th>
+                            <th>Status</th>
+                            <th>Path</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var tool in tools)
+                        {
+                            <tr>
+                                <td><code>@tool.Name</code></td>
+                                <td>
+                                    <span class="badge @(tool.IsAvailable ? "text-bg-success" : "text-bg-secondary")">
+                                        @(tool.IsAvailable ? "Detected" : "Missing")
+                                    </span>
+                                </td>
+                                <td class="small">@tool.Details</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+
+@code {
+    private string endpoint = string.Empty;
+    private string? statusMessage;
+    private IReadOnlyList<ToolAvailability> tools = Array.Empty<ToolAvailability>();
+
+    protected override void OnInitialized()
+    {
+        endpoint = WorkbenchState.EngineEndpoint;
+        tools = ToolchainLocator.GetToolAvailability();
+    }
+
+    private Task SaveEndpointAsync()
+    {
+        WorkbenchState.UpdateEngineEndpoint(endpoint);
+        statusMessage = $"Saved endpoint '{WorkbenchState.EngineEndpoint}'.";
+        return Task.CompletedTask;
+    }
+
+    private async Task ProbeAsync()
+    {
+        WorkbenchState.UpdateEngineEndpoint(endpoint);
+        statusMessage = "Probing engine transport...";
+        await WorkbenchState.ProbeAsync();
+        statusMessage = null;
+    }
+}
