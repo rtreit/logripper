@@ -55,6 +55,40 @@ Proto files under `proto/` are the **single source of truth** for all shared typ
 
 ADIF (Amateur Data Interchange Format) is used **only at the edges** -- QRZ API calls and file I/O. Internal communication always uses protobuf. The Rust ADIF parser converts to/from proto types at the boundary, with an `extra_fields` map for lossless round-tripping.
 
+## Getting Started
+
+### Prerequisites
+
+**Rust toolchain** -- install via [rustup](https://rustup.rs/):
+
+```powershell
+winget install Rustlang.Rustup
+```
+
+**Protocol Buffers compiler** -- needed to generate gRPC code from proto files:
+
+```powershell
+winget install Google.Protobuf
+```
+
+**C compiler** -- required for the native FFI libraries under `src/c/`. On Windows, install the "Desktop development with C++" workload in Visual Studio or the [Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/). On Linux, `gcc` or `clang` will work. The `cc` crate finds the compiler automatically.
+
+**buf** (optional) -- for linting and breaking change detection on proto files:
+
+```powershell
+winget install Bufbuild.Buf
+```
+
+### Build and Test
+
+```powershell
+cd src\rust
+cargo build
+cargo test
+```
+
+This compiles the C libraries via FFI, generates Rust types from the proto files, and builds the engine. All tests (unit + integration) run with `cargo test`.
+
 ## Project Structure
 
 ```

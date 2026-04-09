@@ -17,5 +17,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .build_client(true)
         .compile_protos(protos, &[&proto_root])?;
 
+    let dsp_root = PathBuf::from("../../../src/c/logripper-dsp");
+    println!("cargo::rerun-if-changed={}", dsp_root.display());
+
+    cc::Build::new()
+        .file(dsp_root.join("src/dsp.c"))
+        .include(dsp_root.join("include"))
+        .warnings(true)
+        .compile("logripper_dsp");
+
     Ok(())
 }
