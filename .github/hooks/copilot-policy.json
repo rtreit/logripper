@@ -1,0 +1,19 @@
+{
+  "hooks": {
+    "pre-tool": [
+      {
+        "script": ".github/hooks/scripts/pre-tool-policy.ps1",
+        "tools": ["edit", "create"],
+        "description": "Validates edited files for basic policy and secret-handling violations."
+      }
+    ],
+    "post-tool": [
+      {
+        "script": ".github/hooks/scripts/post-build-check.ps1",
+        "tools": ["powershell"],
+        "description": "Stub hook for post-command validation wiring as project tooling is added."
+      }
+    ]
+  }
+}
+
