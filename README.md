@@ -118,6 +118,15 @@ cargo test
 
 This compiles the C libraries via FFI, generates Rust types from the proto files, and builds the engine. All tests (unit + integration) run with `cargo test`.
 
+**Runnable gRPC server host:**
+
+```
+cd src/rust
+cargo run -p logripper-server
+```
+
+This starts the developer gRPC server on `127.0.0.1:50051` by default so the .NET CLI and debug workbench can validate transport and service wiring against a live Rust host.
+
 **.NET workspace:**
 
 ```

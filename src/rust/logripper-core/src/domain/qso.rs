@@ -1,6 +1,7 @@
 //! QsoRecord helpers: construction, QSL status mapping, ADIF field mapping.
 
 use crate::proto::logripper::domain::{Band, Mode, QslStatus, QsoRecord, SyncStatus};
+use uuid::Uuid;
 
 /// Map ADIF QSL Sent/Received status character to QslStatus enum.
 pub fn qsl_status_from_adif(s: &str) -> QslStatus {
@@ -35,7 +36,7 @@ impl QsoRecordBuilder {
     pub fn new(station_callsign: impl Into<String>, worked_callsign: impl Into<String>) -> Self {
         Self {
             record: QsoRecord {
-                local_id: uuid_v4(),
+                local_id: new_local_id(),
                 station_callsign: station_callsign.into(),
                 worked_callsign: worked_callsign.into(),
                 sync_status: SyncStatus::LocalOnly.into(),
@@ -94,15 +95,9 @@ impl QsoRecordBuilder {
     }
 }
 
-/// Generate a simple UUID v4 string.
-/// In production this would use a proper UUID crate; for now, a placeholder.
-fn uuid_v4() -> String {
-    // This will be replaced with a proper UUID crate dependency later.
-    // For now, generate a deterministic placeholder for test builds.
-    format!(
-        "{:08x}-{:04x}-4{:03x}-{:04x}-{:012x}",
-        0u32, 0u16, 0u16, 0u16, 0u64
-    )
+/// Generate a QSO local ID using the documented UUID format.
+pub fn new_local_id() -> String {
+    Uuid::new_v4().to_string()
 }
 
 #[cfg(test)]
@@ -167,9 +162,25 @@ mod tests {
             .extra_field("ANT_AZ", "270")
             .build();
 
-        assert_eq!(record.extra_fields.get("MY_RIG").map(|s| s.as_str()), Some("Icom IC-7300"));
-        assert_eq!(record.extra_fields.get("ANT_AZ").map(|s| s.as_str()), Some("270"));
+        assert_eq!(
+            record.extra_fields.get("MY_RIG").map(|s| s.as_str()),
+            Some("Icom IC-7300")
+        );
+        assert_eq!(
+            record.extra_fields.get("ANT_AZ").map(|s| s.as_str()),
+            Some("270")
+        );
         assert_eq!(record.extra_fields.len(), 2);
+    }
+
+    #[test]
+    fn builder_generates_unique_local_ids() {
+        let first = QsoRecordBuilder::new("AA7BQ", "VK9NS").build();
+        let second = QsoRecordBuilder::new("AA7BQ", "VK9NS").build();
+
+        assert_ne!(first.local_id, second.local_id);
+        assert!(Uuid::parse_str(&first.local_id).is_ok());
+        assert!(Uuid::parse_str(&second.local_id).is_ok());
     }
 
     #[test]
@@ -219,6 +230,9 @@ mod tests {
         assert_eq!(decoded.mode, Mode::Cw as i32);
         assert_eq!(decoded.frequency_khz, Some(7_030));
         assert_eq!(decoded.comment.as_deref(), Some("CW contest"));
-        assert_eq!(decoded.extra_fields.get("CHECK").map(|s| s.as_str()), Some("73"));
+        assert_eq!(
+            decoded.extra_fields.get("CHECK").map(|s| s.as_str()),
+            Some("73")
+        );
     }
 }

@@ -5,7 +5,7 @@
 
 use crate::domain::band::band_from_adif;
 use crate::domain::mode::{import_only_submode, mode_from_adif};
-use crate::domain::qso::qsl_status_from_adif;
+use crate::domain::qso::{new_local_id, qsl_status_from_adif};
 use crate::proto::logripper::domain::{Band, Mode, QsoRecord, SyncStatus};
 use difa::Record;
 
@@ -207,50 +207,102 @@ impl AdifMapper {
         }
 
         // Geographic
-        if let Some(ref v) = qso.worked_operator_name { fields.push(("NAME".into(), v.clone())); }
-        if let Some(ref v) = qso.worked_grid { fields.push(("GRIDSQUARE".into(), v.clone())); }
-        if let Some(ref v) = qso.worked_country { fields.push(("COUNTRY".into(), v.clone())); }
-        if let Some(dxcc) = qso.worked_dxcc { fields.push(("DXCC".into(), dxcc.to_string())); }
-        if let Some(ref v) = qso.worked_state { fields.push(("STATE".into(), v.clone())); }
-        if let Some(ref v) = qso.worked_county { fields.push(("CNTY".into(), v.clone())); }
-        if let Some(ref v) = qso.worked_continent { fields.push(("CONT".into(), v.clone())); }
-        if let Some(z) = qso.worked_cq_zone { fields.push(("CQZ".into(), z.to_string())); }
-        if let Some(z) = qso.worked_itu_zone { fields.push(("ITUZ".into(), z.to_string())); }
-        if let Some(ref v) = qso.worked_iota { fields.push(("IOTA".into(), v.clone())); }
+        if let Some(ref v) = qso.worked_operator_name {
+            fields.push(("NAME".into(), v.clone()));
+        }
+        if let Some(ref v) = qso.worked_grid {
+            fields.push(("GRIDSQUARE".into(), v.clone()));
+        }
+        if let Some(ref v) = qso.worked_country {
+            fields.push(("COUNTRY".into(), v.clone()));
+        }
+        if let Some(dxcc) = qso.worked_dxcc {
+            fields.push(("DXCC".into(), dxcc.to_string()));
+        }
+        if let Some(ref v) = qso.worked_state {
+            fields.push(("STATE".into(), v.clone()));
+        }
+        if let Some(ref v) = qso.worked_county {
+            fields.push(("CNTY".into(), v.clone()));
+        }
+        if let Some(ref v) = qso.worked_continent {
+            fields.push(("CONT".into(), v.clone()));
+        }
+        if let Some(z) = qso.worked_cq_zone {
+            fields.push(("CQZ".into(), z.to_string()));
+        }
+        if let Some(z) = qso.worked_itu_zone {
+            fields.push(("ITUZ".into(), z.to_string()));
+        }
+        if let Some(ref v) = qso.worked_iota {
+            fields.push(("IOTA".into(), v.clone()));
+        }
 
         // QSL
         let sent = crate::domain::qso::qsl_status_to_adif(
             crate::proto::logripper::domain::QslStatus::try_from(qso.qsl_sent_status)
                 .unwrap_or(crate::proto::logripper::domain::QslStatus::Unspecified),
         );
-        if let Some(s) = sent { fields.push(("QSL_SENT".into(), s.to_string())); }
+        if let Some(s) = sent {
+            fields.push(("QSL_SENT".into(), s.to_string()));
+        }
 
         let rcvd = crate::domain::qso::qsl_status_to_adif(
             crate::proto::logripper::domain::QslStatus::try_from(qso.qsl_received_status)
                 .unwrap_or(crate::proto::logripper::domain::QslStatus::Unspecified),
         );
-        if let Some(s) = rcvd { fields.push(("QSL_RCVD".into(), s.to_string())); }
+        if let Some(s) = rcvd {
+            fields.push(("QSL_RCVD".into(), s.to_string()));
+        }
 
-        if let Some(true) = qso.lotw_sent { fields.push(("LOTW_QSL_SENT".into(), "Y".into())); }
-        if let Some(true) = qso.lotw_received { fields.push(("LOTW_QSL_RCVD".into(), "Y".into())); }
-        if let Some(true) = qso.eqsl_sent { fields.push(("EQSL_QSL_SENT".into(), "Y".into())); }
-        if let Some(true) = qso.eqsl_received { fields.push(("EQSL_QSL_RCVD".into(), "Y".into())); }
+        if let Some(true) = qso.lotw_sent {
+            fields.push(("LOTW_QSL_SENT".into(), "Y".into()));
+        }
+        if let Some(true) = qso.lotw_received {
+            fields.push(("LOTW_QSL_RCVD".into(), "Y".into()));
+        }
+        if let Some(true) = qso.eqsl_sent {
+            fields.push(("EQSL_QSL_SENT".into(), "Y".into()));
+        }
+        if let Some(true) = qso.eqsl_received {
+            fields.push(("EQSL_QSL_RCVD".into(), "Y".into()));
+        }
 
         // Contest
-        if let Some(ref v) = qso.contest_id { fields.push(("CONTEST_ID".into(), v.clone())); }
-        if let Some(ref v) = qso.serial_sent { fields.push(("STX".into(), v.clone())); }
-        if let Some(ref v) = qso.serial_received { fields.push(("SRX".into(), v.clone())); }
-        if let Some(ref v) = qso.exchange_sent { fields.push(("STX_STRING".into(), v.clone())); }
-        if let Some(ref v) = qso.exchange_received { fields.push(("SRX_STRING".into(), v.clone())); }
+        if let Some(ref v) = qso.contest_id {
+            fields.push(("CONTEST_ID".into(), v.clone()));
+        }
+        if let Some(ref v) = qso.serial_sent {
+            fields.push(("STX".into(), v.clone()));
+        }
+        if let Some(ref v) = qso.serial_received {
+            fields.push(("SRX".into(), v.clone()));
+        }
+        if let Some(ref v) = qso.exchange_sent {
+            fields.push(("STX_STRING".into(), v.clone()));
+        }
+        if let Some(ref v) = qso.exchange_received {
+            fields.push(("SRX_STRING".into(), v.clone()));
+        }
 
         // Propagation
-        if let Some(ref v) = qso.prop_mode { fields.push(("PROP_MODE".into(), v.clone())); }
-        if let Some(ref v) = qso.sat_name { fields.push(("SAT_NAME".into(), v.clone())); }
-        if let Some(ref v) = qso.sat_mode { fields.push(("SAT_MODE".into(), v.clone())); }
+        if let Some(ref v) = qso.prop_mode {
+            fields.push(("PROP_MODE".into(), v.clone()));
+        }
+        if let Some(ref v) = qso.sat_name {
+            fields.push(("SAT_NAME".into(), v.clone()));
+        }
+        if let Some(ref v) = qso.sat_mode {
+            fields.push(("SAT_MODE".into(), v.clone()));
+        }
 
         // Notes
-        if let Some(ref v) = qso.comment { fields.push(("COMMENT".into(), v.clone())); }
-        if let Some(ref v) = qso.notes { fields.push(("NOTES".into(), v.clone())); }
+        if let Some(ref v) = qso.comment {
+            fields.push(("COMMENT".into(), v.clone()));
+        }
+        if let Some(ref v) = qso.notes {
+            fields.push(("NOTES".into(), v.clone()));
+        }
 
         // Extra fields (round-trip overflow)
         for (k, v) in &qso.extra_fields {
@@ -321,17 +373,10 @@ fn format_adif_datetime(ts: &prost_types::Timestamp) -> (String, String) {
     (date, time)
 }
 
-/// Generate a simple local ID. Will be replaced with proper UUID crate later.
-fn new_local_id() -> String {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static COUNTER: AtomicU64 = AtomicU64::new(1);
-    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-    format!("local-{n:012}")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use uuid::Uuid;
 
     fn make_test_record() -> Record {
         let mut rec = Record::new();
@@ -345,6 +390,13 @@ mod tests {
         rec.insert("RST_RCVD", "57").unwrap();
         rec.insert("STATION_CALLSIGN", "AA7BQ").unwrap();
         rec
+    }
+
+    #[test]
+    fn record_to_qso_generates_uuid_local_id() {
+        let qso = AdifMapper::record_to_qso(&make_test_record());
+
+        assert!(Uuid::parse_str(&qso.local_id).is_ok());
     }
 
     #[test]
@@ -377,7 +429,9 @@ mod tests {
         let qso = AdifMapper::record_to_qso(&rec);
         let ts = qso.utc_timestamp.unwrap();
 
-        let dt = chrono::DateTime::from_timestamp(ts.seconds, 0).unwrap().naive_utc();
+        let dt = chrono::DateTime::from_timestamp(ts.seconds, 0)
+            .unwrap()
+            .naive_utc();
         assert_eq!(dt.format("%Y%m%d").to_string(), "20260115");
         assert_eq!(dt.format("%H%M").to_string(), "1523");
     }
@@ -390,7 +444,9 @@ mod tests {
         rec.insert("CALL", "W1AW").unwrap();
         let qso = AdifMapper::record_to_qso(&rec);
         let ts = qso.utc_timestamp.unwrap();
-        let dt = chrono::DateTime::from_timestamp(ts.seconds, 0).unwrap().naive_utc();
+        let dt = chrono::DateTime::from_timestamp(ts.seconds, 0)
+            .unwrap()
+            .naive_utc();
         assert_eq!(dt.format("%H%M%S").to_string(), "152345");
     }
 
@@ -480,10 +536,24 @@ mod tests {
         rec.insert("APP_LOGRIPPER_SYNC_STATUS", "synced").unwrap();
 
         let qso = AdifMapper::record_to_qso(&rec);
-        assert_eq!(qso.extra_fields.get("MY_RIG").map(|s| s.as_str()), Some("Icom IC-7300"));
-        assert_eq!(qso.extra_fields.get("MY_ANTENNA").map(|s| s.as_str()), Some("Yagi 3-element"));
-        assert_eq!(qso.extra_fields.get("ANT_AZ").map(|s| s.as_str()), Some("045"));
-        assert_eq!(qso.extra_fields.get("APP_LOGRIPPER_SYNC_STATUS").map(|s| s.as_str()), Some("synced"));
+        assert_eq!(
+            qso.extra_fields.get("MY_RIG").map(|s| s.as_str()),
+            Some("Icom IC-7300")
+        );
+        assert_eq!(
+            qso.extra_fields.get("MY_ANTENNA").map(|s| s.as_str()),
+            Some("Yagi 3-element")
+        );
+        assert_eq!(
+            qso.extra_fields.get("ANT_AZ").map(|s| s.as_str()),
+            Some("045")
+        );
+        assert_eq!(
+            qso.extra_fields
+                .get("APP_LOGRIPPER_SYNC_STATUS")
+                .map(|s| s.as_str()),
+            Some("synced")
+        );
     }
 
     #[test]
@@ -567,7 +637,10 @@ mod tests {
         rec.insert("FREQ", "-1.0").unwrap();
 
         let qso = AdifMapper::record_to_qso(&rec);
-        assert_eq!(qso.frequency_khz, None, "Negative frequency should be rejected, not mapped to 0");
+        assert_eq!(
+            qso.frequency_khz, None,
+            "Negative frequency should be rejected, not mapped to 0"
+        );
     }
 
     #[test]
@@ -599,6 +672,9 @@ mod tests {
         // "202ü123" is 8 bytes but byte 4 is inside the ü (continuation byte),
         // so str[0..4] would panic on a char boundary check without a guard.
         let result = parse_adif_datetime("202\u{00fc}123", None);
-        assert!(result.is_none(), "Non-ASCII date should return None, not panic");
+        assert!(
+            result.is_none(),
+            "Non-ASCII date should return None, not panic"
+        );
     }
 }

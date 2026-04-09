@@ -11,6 +11,7 @@ prost = { workspace = true }
 prost-types = { workspace = true }
 tonic = { workspace = true }
 tokio = { workspace = true }
+uuid = { workspace = true }
 difa = "0.1"
 thiserror = "2"
 chrono = "0.4"
