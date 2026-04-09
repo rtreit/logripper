@@ -36,7 +36,9 @@ string GetEndpoint(string[] args)
     for (var i = 0; i < args.Length - 1; i++)
     {
         if (args[i] is "--endpoint" or "-e")
-            return args[i + 1];
+            {
+                return args[i + 1];
+            }
     }
 
     return Environment.GetEnvironmentVariable("LOGRIPPER_ENDPOINT") ?? DefaultEndpoint;
@@ -47,7 +49,9 @@ string GetCommand(string[] args)
     foreach (var arg in args)
     {
         if (!arg.StartsWith('-'))
+        {
             return arg;
+        }
     }
 
     return "help";
@@ -56,7 +60,9 @@ string GetCommand(string[] args)
 int ShowHelp(string? error = null)
 {
     if (error is not null)
+    {
         Console.Error.WriteLine(error);
+    }
 
     Console.WriteLine("""
         LogRipper CLI - validate and interact with the LogRipper engine

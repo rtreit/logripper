@@ -15,12 +15,18 @@ public static class StatusCommand
         Console.WriteLine($"Pending upload:   {response.PendingUpload}");
 
         if (response.LastSync is not null)
+        {
             Console.WriteLine($"Last sync:        {response.LastSync.ToDateTime():u}");
+        }
         else
+        {
             Console.WriteLine("Last sync:        never");
+        }
 
         if (response.QrzLogbookOwner is not null)
+        {
             Console.WriteLine($"QRZ owner:        {response.QrzLogbookOwner}");
+        }
 
         return 0;
     }
