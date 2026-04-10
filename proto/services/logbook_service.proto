@@ -21,7 +21,7 @@ service LogbookService {
   rpc DeleteQso(DeleteQsoRequest) returns (DeleteQsoResponse);
 
   // Get a single QSO by local ID.
-  rpc GetQso(GetQsoRequest) returns (logripper.domain.QsoRecord);
+  rpc GetQso(GetQsoRequest) returns (GetQsoResponse);
 
   // List QSOs with filtering and pagination.
   rpc ListQsos(ListQsosRequest) returns (stream logripper.domain.QsoRecord);
@@ -83,6 +83,10 @@ message DeleteQsoResponse {
 
 message GetQsoRequest {
   string local_id           = 1;
+}
+
+message GetQsoResponse {
+  logripper.domain.QsoRecord qso = 1;
 }
 
 message ListQsosRequest {
