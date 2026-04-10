@@ -12,9 +12,9 @@ use logripper_core::proto::logripper::domain::{
 use logripper_core::proto::logripper::services::{
     logbook_service_server::{LogbookService, LogbookServiceServer},
     lookup_service_server::{LookupService, LookupServiceServer},
-    AdifChunk, DeleteQsoRequest, DeleteQsoResponse, ExportRequest, GetQsoRequest,
-    GetQsoResponse, ImportResult, ListQsosRequest, LogQsoRequest, LogQsoResponse, SyncProgress,
-    SyncRequest, SyncStatusRequest, SyncStatusResponse, UpdateQsoRequest, UpdateQsoResponse,
+    AdifChunk, DeleteQsoRequest, DeleteQsoResponse, ExportRequest, GetQsoRequest, GetQsoResponse,
+    ImportResult, ListQsosRequest, LogQsoRequest, LogQsoResponse, SyncProgress, SyncRequest,
+    SyncStatusRequest, SyncStatusResponse, UpdateQsoRequest, UpdateQsoResponse,
 };
 
 #[tokio::main]
