@@ -8,11 +8,14 @@ public class RepositoryPathsTests
     [Fact]
     public void Derives_expected_repo_paths_from_content_root()
     {
-        var paths = new RepositoryPaths(@"C:\repo\src\dotnet\LogRipper.DebugHost");
+        var root = Path.GetFullPath(Path.Combine(Path.GetTempPath(), "fakerepo"));
+        var contentRoot = Path.Combine(root, "src", "dotnet", "LogRipper.DebugHost");
 
-        Assert.Equal(@"C:\repo", paths.RepoRoot);
-        Assert.Equal(Path.Combine(@"C:\repo", "src", "rust"), paths.RustWorkspaceRoot);
-        Assert.Equal(Path.Combine(@"C:\repo", "src", "dotnet", "LogRipper.slnx"), paths.DotnetWorkspaceSolutionPath);
+        var paths = new RepositoryPaths(contentRoot);
+
+        Assert.Equal(root, paths.RepoRoot);
+        Assert.Equal(Path.Combine(root, "src", "rust"), paths.RustWorkspaceRoot);
+        Assert.Equal(Path.Combine(root, "src", "dotnet", "LogRipper.slnx"), paths.DotnetWorkspaceSolutionPath);
     }
 }
 #pragma warning restore CA1707
