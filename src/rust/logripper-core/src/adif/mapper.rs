@@ -111,10 +111,30 @@ impl AdifMapper {
                 // --- QSL ---
                 "QSL_SENT" => qso.qsl_sent_status = qsl_status_from_adif(&value_str).into(),
                 "QSL_RCVD" => qso.qsl_received_status = qsl_status_from_adif(&value_str).into(),
-                "LOTW_QSL_SENT" => qso.lotw_sent = Some(value_str == "Y"),
-                "LOTW_QSL_RCVD" => qso.lotw_received = Some(value_str == "Y"),
-                "EQSL_QSL_SENT" => qso.eqsl_sent = Some(value_str == "Y"),
-                "EQSL_QSL_RCVD" => qso.eqsl_received = Some(value_str == "Y"),
+                "LOTW_QSL_SENT" => map_confirmation_field(
+                    &mut qso.lotw_sent,
+                    &mut qso.extra_fields,
+                    key_upper,
+                    value_str,
+                ),
+                "LOTW_QSL_RCVD" => map_confirmation_field(
+                    &mut qso.lotw_received,
+                    &mut qso.extra_fields,
+                    key_upper,
+                    value_str,
+                ),
+                "EQSL_QSL_SENT" => map_confirmation_field(
+                    &mut qso.eqsl_sent,
+                    &mut qso.extra_fields,
+                    key_upper,
+                    value_str,
+                ),
+                "EQSL_QSL_RCVD" => map_confirmation_field(
+                    &mut qso.eqsl_received,
+                    &mut qso.extra_fields,
+                    key_upper,
+                    value_str,
+                ),
 
                 // --- Contest ---
                 "CONTEST_ID" => qso.contest_id = Some(value_str),
@@ -254,18 +274,10 @@ impl AdifMapper {
             fields.push(("QSL_RCVD".into(), s.to_string()));
         }
 
-        if let Some(true) = qso.lotw_sent {
-            fields.push(("LOTW_QSL_SENT".into(), "Y".into()));
-        }
-        if let Some(true) = qso.lotw_received {
-            fields.push(("LOTW_QSL_RCVD".into(), "Y".into()));
-        }
-        if let Some(true) = qso.eqsl_sent {
-            fields.push(("EQSL_QSL_SENT".into(), "Y".into()));
-        }
-        if let Some(true) = qso.eqsl_received {
-            fields.push(("EQSL_QSL_RCVD".into(), "Y".into()));
-        }
+        push_confirmation_field(&mut fields, "LOTW_QSL_SENT", qso.lotw_sent);
+        push_confirmation_field(&mut fields, "LOTW_QSL_RCVD", qso.lotw_received);
+        push_confirmation_field(&mut fields, "EQSL_QSL_SENT", qso.eqsl_sent);
+        push_confirmation_field(&mut fields, "EQSL_QSL_RCVD", qso.eqsl_received);
 
         // Contest
         if let Some(ref v) = qso.contest_id {
@@ -305,6 +317,9 @@ impl AdifMapper {
 
         // Extra fields (round-trip overflow)
         for (k, v) in &qso.extra_fields {
+            if confirmation_field_is_overridden(qso, k) {
+                continue;
+            }
             fields.push((k.clone(), v.clone()));
         }
 
@@ -397,6 +412,55 @@ fn mhz_to_khz(mhz: f64) -> Option<u64> {
     format!("{rounded:.0}").parse().ok()
 }
 
+fn parse_confirmation_bool(value: &str) -> Option<bool> {
+    if value.eq_ignore_ascii_case("Y") {
+        Some(true)
+    } else if value.eq_ignore_ascii_case("N") {
+        Some(false)
+    } else {
+        None
+    }
+}
+
+fn map_confirmation_field(
+    target: &mut Option<bool>,
+    extra_fields: &mut std::collections::HashMap<String, String>,
+    key: String,
+    value: String,
+) {
+    if let Some(parsed) = parse_confirmation_bool(&value) {
+        *target = Some(parsed);
+    } else {
+        extra_fields.insert(key, value);
+    }
+}
+
+fn push_confirmation_field(
+    fields: &mut Vec<(String, String)>,
+    key: &'static str,
+    value: Option<bool>,
+) {
+    match value {
+        Some(true) => fields.push((key.into(), "Y".into())),
+        Some(false) => fields.push((key.into(), "N".into())),
+        None => {}
+    }
+}
+
+fn confirmation_field_is_overridden(qso: &QsoRecord, key: &str) -> bool {
+    if key.eq_ignore_ascii_case("LOTW_QSL_SENT") {
+        qso.lotw_sent.is_some()
+    } else if key.eq_ignore_ascii_case("LOTW_QSL_RCVD") {
+        qso.lotw_received.is_some()
+    } else if key.eq_ignore_ascii_case("EQSL_QSL_SENT") {
+        qso.eqsl_sent.is_some()
+    } else if key.eq_ignore_ascii_case("EQSL_QSL_RCVD") {
+        qso.eqsl_received.is_some()
+    } else {
+        false
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
@@ -482,6 +546,8 @@ mod tests {
         rec.insert("QSL_SENT", "Y").unwrap();
         rec.insert("QSL_RCVD", "N").unwrap();
         rec.insert("LOTW_QSL_SENT", "Y").unwrap();
+        rec.insert("LOTW_QSL_RCVD", "N").unwrap();
+        rec.insert("EQSL_QSL_SENT", "N").unwrap();
         rec.insert("EQSL_QSL_RCVD", "Y").unwrap();
 
         let qso = AdifMapper::record_to_qso(&rec);
@@ -494,7 +560,38 @@ mod tests {
             crate::proto::logripper::domain::QslStatus::No as i32
         );
         assert_eq!(qso.lotw_sent, Some(true));
+        assert_eq!(qso.lotw_received, Some(false));
+        assert_eq!(qso.eqsl_sent, Some(false));
         assert_eq!(qso.eqsl_received, Some(true));
+    }
+
+    #[test]
+    fn non_boolean_lotw_eqsl_values_preserved_for_round_trip() {
+        let mut rec = Record::new();
+        rec.insert("CALL", "W1AW").unwrap();
+        rec.insert("LOTW_QSL_SENT", "R").unwrap();
+        rec.insert("EQSL_QSL_RCVD", "I").unwrap();
+
+        let qso = AdifMapper::record_to_qso(&rec);
+        assert_eq!(qso.lotw_sent, None);
+        assert_eq!(qso.eqsl_received, None);
+        assert_eq!(
+            qso.extra_fields.get("LOTW_QSL_SENT").map(String::as_str),
+            Some("R")
+        );
+        assert_eq!(
+            qso.extra_fields.get("EQSL_QSL_RCVD").map(String::as_str),
+            Some("I")
+        );
+
+        let fields = AdifMapper::qso_to_adif_fields(&qso);
+        let field_map: std::collections::HashMap<&str, &str> = fields
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect();
+
+        assert_eq!(field_map.get("LOTW_QSL_SENT"), Some(&"R"));
+        assert_eq!(field_map.get("EQSL_QSL_RCVD"), Some(&"I"));
     }
 
     #[test]
@@ -622,6 +719,60 @@ mod tests {
         assert!(adi.contains("<CALL:4>W1AW"));
         assert!(adi.contains("<BAND:3>20M"));
         assert!(adi.contains("<eor>"));
+    }
+
+    #[test]
+    fn qso_to_adif_fields_emits_n_for_false_confirmation_fields() {
+        let qso = crate::proto::logripper::domain::QsoRecord {
+            worked_callsign: "W1AW".into(),
+            lotw_sent: Some(false),
+            lotw_received: Some(true),
+            eqsl_sent: Some(false),
+            eqsl_received: Some(true),
+            ..Default::default()
+        };
+
+        let fields = AdifMapper::qso_to_adif_fields(&qso);
+        let field_map: std::collections::HashMap<&str, &str> = fields
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect();
+
+        assert_eq!(field_map.get("LOTW_QSL_SENT"), Some(&"N"));
+        assert_eq!(field_map.get("LOTW_QSL_RCVD"), Some(&"Y"));
+        assert_eq!(field_map.get("EQSL_QSL_SENT"), Some(&"N"));
+        assert_eq!(field_map.get("EQSL_QSL_RCVD"), Some(&"Y"));
+    }
+
+    #[test]
+    fn confirmation_fields_do_not_duplicate_overridden_extra_fields() {
+        let qso = crate::proto::logripper::domain::QsoRecord {
+            worked_callsign: "W1AW".into(),
+            lotw_sent: Some(true),
+            eqsl_received: Some(false),
+            extra_fields: [
+                ("lotw_qsl_sent".to_string(), "R".to_string()),
+                ("eqsl_qsl_rcvd".to_string(), "I".to_string()),
+            ]
+            .into_iter()
+            .collect(),
+            ..Default::default()
+        };
+
+        let fields = AdifMapper::qso_to_adif_fields(&qso);
+        let lotw_values: Vec<&str> = fields
+            .iter()
+            .filter(|(k, _)| k == "LOTW_QSL_SENT")
+            .map(|(_, v)| v.as_str())
+            .collect();
+        let eqsl_values: Vec<&str> = fields
+            .iter()
+            .filter(|(k, _)| k == "EQSL_QSL_RCVD")
+            .map(|(_, v)| v.as_str())
+            .collect();
+
+        assert_eq!(lotw_values, vec!["Y"]);
+        assert_eq!(eqsl_values, vec!["N"]);
     }
 
     #[test]
