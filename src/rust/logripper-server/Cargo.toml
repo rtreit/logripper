@@ -8,6 +8,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+dotenvy = "0.15"
 logripper-core = { path = "../logripper-core", version = "0.1.0" }
 logripper-storage-memory = { path = "../logripper-storage-memory", version = "0.1.0" }
 logripper-storage-sqlite = { path = "../logripper-storage-sqlite", version = "0.1.0" }

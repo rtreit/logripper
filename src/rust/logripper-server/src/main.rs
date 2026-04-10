@@ -30,6 +30,7 @@ use runtime_config::RuntimeConfigManager;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    load_dotenv_if_present();
     let options = ServerOptions::from_env_and_args(std::env::args().skip(1))?;
     let address = options.listen_address;
     let runtime_config = Arc::new(RuntimeConfigManager::new_from_storage_options(
@@ -52,6 +53,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await?;
 
     Ok(())
+}
+
+fn load_dotenv_if_present() {
+    dotenvy::dotenv().ok();
 }
 
 #[derive(Clone)]
@@ -497,12 +502,14 @@ fn sync_result(requested: bool, label: &str) -> (bool, Option<String>) {
 mod tests {
     use std::collections::BTreeMap;
     use std::fs;
+    use std::path::PathBuf;
     use std::sync::Arc;
+    use std::sync::Mutex;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::{
-        build_storage, parse_storage_backend, DeveloperLogbookService, DeveloperLookupService,
-        ServerOptions, StorageBackendKind, StorageOptions,
+        build_storage, load_dotenv_if_present, parse_storage_backend, DeveloperLogbookService,
+        DeveloperLookupService, ServerOptions, StorageBackendKind, StorageOptions,
     };
     use crate::runtime_config::RuntimeConfigManager;
     use logripper_core::proto::logripper::domain::{
@@ -516,12 +523,99 @@ mod tests {
     use tokio_stream::StreamExt;
     use tonic::{Code, Request};
 
+    static PROCESS_STATE_LOCK: Mutex<()> = Mutex::new(());
+
+    const SERVER_ENV_KEYS: [&str; 3] = [
+        "LOGRIPPER_SERVER_ADDR",
+        "LOGRIPPER_STORAGE_BACKEND",
+        "LOGRIPPER_SQLITE_PATH",
+    ];
+
+    struct ProcessStateGuard {
+        original_dir: PathBuf,
+        original_env: Vec<(&'static str, Option<String>)>,
+    }
+
+    impl ProcessStateGuard {
+        fn capture() -> Self {
+            Self {
+                original_dir: std::env::current_dir().expect("current working directory"),
+                original_env: SERVER_ENV_KEYS
+                    .into_iter()
+                    .map(|key| (key, std::env::var(key).ok()))
+                    .collect(),
+            }
+        }
+
+        fn restore_current_dir(&self) {
+            std::env::set_current_dir(&self.original_dir).expect("restore current directory");
+        }
+    }
+
+    impl Drop for ProcessStateGuard {
+        fn drop(&mut self) {
+            let _ = std::env::set_current_dir(&self.original_dir);
+            for (key, value) in &self.original_env {
+                match value {
+                    Some(value) => std::env::set_var(key, value),
+                    None => std::env::remove_var(key),
+                }
+            }
+        }
+    }
+
     fn test_lookup_service() -> DeveloperLookupService {
         DeveloperLookupService::new(test_runtime_config())
     }
 
     fn test_runtime_config() -> Arc<RuntimeConfigManager> {
         Arc::new(RuntimeConfigManager::new(BTreeMap::new()).expect("runtime config"))
+    }
+
+    #[test]
+    fn load_dotenv_if_present_reads_env_from_current_directory() {
+        let _process_state_lock = PROCESS_STATE_LOCK.lock().expect("lock process state");
+        let process_state = ProcessStateGuard::capture();
+
+        for key in SERVER_ENV_KEYS {
+            std::env::remove_var(key);
+        }
+
+        let temp_dir = std::env::temp_dir().join(format!(
+            "logripper-dotenv-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system clock")
+                .as_nanos()
+        ));
+        fs::create_dir_all(&temp_dir).expect("create temp dir");
+        let env_path = temp_dir.join(".env");
+        fs::write(
+            &env_path,
+            concat!(
+                "LOGRIPPER_SERVER_ADDR=127.0.0.1:61051\n",
+                "LOGRIPPER_STORAGE_BACKEND=sqlite\n",
+                "LOGRIPPER_SQLITE_PATH=data/test-logripper.db\n"
+            ),
+        )
+        .expect("write temp .env");
+
+        std::env::set_current_dir(&temp_dir).expect("switch to temp dir");
+        load_dotenv_if_present();
+
+        let options = ServerOptions::from_env_and_args(Vec::<String>::new()).unwrap();
+
+        assert_eq!("127.0.0.1:61051", options.listen_address.to_string());
+        assert_eq!(StorageBackendKind::Sqlite, options.storage.backend);
+        assert_eq!(
+            PathBuf::from("data/test-logripper.db"),
+            options.storage.sqlite_path
+        );
+
+        process_state.restore_current_dir();
+        fs::remove_file(env_path).expect("remove temp .env");
+        fs::remove_dir(temp_dir).expect("remove temp dir");
     }
 
     #[test]
