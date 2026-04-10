@@ -8,12 +8,13 @@ import "domain/callsign.proto";
 
 // The state of an in-flight or completed lookup operation.
 enum LookupState {
-  LOOKUP_STATE_LOADING    = 0;  // Request in flight
-  LOOKUP_STATE_FOUND      = 1;  // Callsign resolved successfully
-  LOOKUP_STATE_NOT_FOUND  = 2;  // Callsign does not exist in provider
-  LOOKUP_STATE_ERROR      = 3;  // Provider error (network, auth, rate limit)
-  LOOKUP_STATE_STALE      = 4;  // Returning cached data, refresh pending
-  LOOKUP_STATE_CANCELLED  = 5;  // Superseded by a newer lookup
+  LOOKUP_STATE_UNSPECIFIED = 0;  // Default/uninitialized state
+  LOOKUP_STATE_LOADING     = 1;  // Request in flight
+  LOOKUP_STATE_FOUND       = 2;  // Callsign resolved successfully
+  LOOKUP_STATE_NOT_FOUND   = 3;  // Callsign does not exist in provider
+  LOOKUP_STATE_ERROR       = 4;  // Provider error (network, auth, rate limit)
+  LOOKUP_STATE_STALE       = 5;  // Returning cached data, refresh pending
+  LOOKUP_STATE_CANCELLED   = 6;  // Superseded by a newer lookup
 }
 
 // Result of a callsign lookup, wrapping the async state machine
