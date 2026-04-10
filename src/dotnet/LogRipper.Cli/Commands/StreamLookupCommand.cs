@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using Grpc.Core;
 using Grpc.Net.Client;
 using LogRipper.Domain;
 using LogRipper.Services;
@@ -26,7 +25,7 @@ internal static class StreamLookupCommand
         while (await call.ResponseStream.MoveNext(CancellationToken.None))
         {
             var update = call.ResponseStream.Current;
-            var state = (LookupState)update.State;
+            var state = update.State;
             var elapsed = stopwatch.ElapsedMilliseconds;
 
             Console.WriteLine($"[{elapsed,6} ms]  {state}");
@@ -45,7 +44,7 @@ internal static class StreamLookupCommand
             LookupCommand.PrintRecord(record);
         }
 
-        var finalState = lastResult is null ? LookupState.Unspecified : (LookupState)lastResult.State;
+        var finalState = lastResult is null ? LookupState.Unspecified : lastResult.State;
         return finalState == LookupState.Found ? 0 : 1;
     }
 }

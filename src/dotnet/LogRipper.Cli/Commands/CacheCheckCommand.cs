@@ -14,7 +14,7 @@ internal static class CacheCheckCommand
             Callsign = callsign,
         });
 
-        var state = (LookupState)response.State;
+        var state = response.State;
 
         if (response.CacheHit && response.Record is not null)
         {

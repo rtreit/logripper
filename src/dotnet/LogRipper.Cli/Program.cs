@@ -15,6 +15,13 @@ if (!CliEndpointValidator.TryCreateEndpointUri(arguments.Endpoint, out var endpo
     return ShowHelp($"The endpoint '{arguments.Endpoint}' must be a valid absolute http:// or https:// URI.");
 }
 
+var needsCallsign = arguments.Command is "lookup" or "stream-lookup" or "cache-check";
+if (needsCallsign && string.IsNullOrEmpty(arguments.Callsign))
+{
+    Console.Error.WriteLine($"The '{arguments.Command}' command requires a callsign argument.");
+    return 1;
+}
+
 try
 {
     using var channel = GrpcChannel.ForAddress(endpointUri!);
@@ -22,9 +29,9 @@ try
     return arguments.Command switch
     {
         "status" => await StatusCommand.RunAsync(channel),
-        "lookup" => await RequireCallsign(arguments, () => LookupCommand.RunAsync(channel, arguments.Callsign!, arguments.SkipCache)),
-        "stream-lookup" => await RequireCallsign(arguments, () => StreamLookupCommand.RunAsync(channel, arguments.Callsign!, arguments.SkipCache)),
-        "cache-check" => await RequireCallsign(arguments, () => CacheCheckCommand.RunAsync(channel, arguments.Callsign!)),
+        "lookup" => await LookupCommand.RunAsync(channel, arguments.Callsign!, arguments.SkipCache),
+        "stream-lookup" => await StreamLookupCommand.RunAsync(channel, arguments.Callsign!, arguments.SkipCache),
+        "cache-check" => await CacheCheckCommand.RunAsync(channel, arguments.Callsign!),
         _ => ShowHelp($"Unknown command: {arguments.Command}")
     };
 }
@@ -66,15 +73,4 @@ static int ShowHelp(string? error = null)
         """);
 
     return error is null ? 0 : 1;
-}
-
-static Task<int> RequireCallsign(CliArguments arguments, Func<Task<int>> action)
-{
-    if (string.IsNullOrEmpty(arguments.Callsign))
-    {
-        Console.Error.WriteLine($"The '{arguments.Command}' command requires a callsign argument.");
-        return Task.FromResult(1);
-    }
-
-    return action();
 }
