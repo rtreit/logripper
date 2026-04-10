@@ -1,37 +1,46 @@
 //! Runnable tonic gRPC host for the `LogRipper` Rust engine.
 
-use std::{net::SocketAddr, sync::Arc};
+use std::{net::SocketAddr, path::PathBuf, sync::Arc};
 
+use logripper_core::application::logbook::{LogbookEngine, LogbookError};
 use logripper_core::lookup::{
     CallsignProvider, DisabledCallsignProvider, LookupCoordinator, LookupCoordinatorConfig,
     QrzXmlConfig, QrzXmlProvider,
 };
+use logripper_core::storage::{EngineStorage, QsoListQuery, QsoSortOrder, StorageError};
+use logripper_storage_memory::MemoryStorage;
+use logripper_storage_sqlite::SqliteStorageBuilder;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::transport::Server;
 use tonic::{Request, Response, Status};
 
 use logripper_core::proto::logripper::domain::{
-    BatchLookupRequest, BatchLookupResponse, CachedCallsignRequest, DxccEntity, DxccRequest,
-    LookupRequest, LookupResult, QsoRecord,
+    Band, BatchLookupRequest, BatchLookupResponse, CachedCallsignRequest, DxccEntity, DxccRequest,
+    LookupRequest, LookupResult, Mode, QsoRecord,
 };
 use logripper_core::proto::logripper::services::{
     logbook_service_server::{LogbookService, LogbookServiceServer},
     lookup_service_server::{LookupService, LookupServiceServer},
     AdifChunk, DeleteQsoRequest, DeleteQsoResponse, ExportRequest, GetQsoRequest, GetQsoResponse,
-    ImportResult, ListQsosRequest, LogQsoRequest, LogQsoResponse, SyncProgress, SyncRequest,
-    SyncStatusRequest, SyncStatusResponse, UpdateQsoRequest, UpdateQsoResponse,
+    ImportResult, ListQsosRequest, LogQsoRequest, LogQsoResponse, SortOrder, SyncProgress,
+    SyncRequest, SyncStatusRequest, SyncStatusResponse, UpdateQsoRequest, UpdateQsoResponse,
 };
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let options = ServerOptions::from_env_and_args(std::env::args().skip(1))?;
     let address = options.listen_address;
+    let storage = build_storage(&options.storage)?;
+    let logbook_service = DeveloperLogbookService::new(LogbookEngine::new(storage));
     let lookup_service = DeveloperLookupService::new(create_lookup_coordinator());
 
-    println!("Starting LogRipper gRPC server on {address}");
+    println!(
+        "Starting LogRipper gRPC server on {address} using {} storage",
+        logbook_service.engine.storage_backend_name()
+    );
 
     Server::builder()
-        .add_service(LogbookServiceServer::new(DeveloperLogbookService))
+        .add_service(LogbookServiceServer::new(logbook_service))
         .add_service(LookupServiceServer::new(lookup_service))
         .serve(address)
         .await?;
@@ -39,8 +48,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-#[derive(Debug, Clone, Copy)]
-struct DeveloperLogbookService;
+#[derive(Clone)]
+struct DeveloperLogbookService {
+    engine: LogbookEngine,
+}
+
+impl DeveloperLogbookService {
+    fn new(engine: LogbookEngine) -> Self {
+        Self { engine }
+    }
+}
 
 #[tonic::async_trait]
 impl LogbookService for DeveloperLogbookService {
@@ -50,37 +67,100 @@ impl LogbookService for DeveloperLogbookService {
 
     async fn log_qso(
         &self,
-        _request: Request<LogQsoRequest>,
+        request: Request<LogQsoRequest>,
     ) -> Result<Response<LogQsoResponse>, Status> {
-        Err(Status::unimplemented("LogQso is not implemented yet."))
+        let request = request.into_inner();
+        let qso = request
+            .qso
+            .ok_or_else(|| Status::invalid_argument("LogQso requires a qso payload."))?;
+        let stored = self.engine.log_qso(qso).await.map_err(map_logbook_error)?;
+        let (sync_success, sync_error) = sync_result(request.sync_to_qrz, "QRZ sync");
+
+        Ok(Response::new(LogQsoResponse {
+            local_id: stored.local_id,
+            qrz_logid: stored.qrz_logid,
+            sync_success,
+            sync_error,
+        }))
     }
 
     async fn update_qso(
         &self,
-        _request: Request<UpdateQsoRequest>,
+        request: Request<UpdateQsoRequest>,
     ) -> Result<Response<UpdateQsoResponse>, Status> {
-        Err(Status::unimplemented("UpdateQso is not implemented yet."))
+        let request = request.into_inner();
+        let qso = request
+            .qso
+            .ok_or_else(|| Status::invalid_argument("UpdateQso requires a qso payload."))?;
+        let _ = self
+            .engine
+            .update_qso(qso)
+            .await
+            .map_err(map_logbook_error)?;
+        let (sync_success, sync_error) = sync_result(request.sync_to_qrz, "QRZ sync");
+
+        Ok(Response::new(UpdateQsoResponse {
+            success: true,
+            error: None,
+            sync_success,
+            sync_error,
+        }))
     }
 
     async fn delete_qso(
         &self,
-        _request: Request<DeleteQsoRequest>,
+        request: Request<DeleteQsoRequest>,
     ) -> Result<Response<DeleteQsoResponse>, Status> {
-        Err(Status::unimplemented("DeleteQso is not implemented yet."))
+        let request = request.into_inner();
+        self.engine
+            .delete_qso(&request.local_id)
+            .await
+            .map_err(map_logbook_error)?;
+        let (qrz_delete_success, qrz_delete_error) =
+            sync_result(request.delete_from_qrz, "QRZ delete");
+
+        Ok(Response::new(DeleteQsoResponse {
+            success: true,
+            error: None,
+            qrz_delete_success,
+            qrz_delete_error,
+        }))
     }
 
     async fn get_qso(
         &self,
-        _request: Request<GetQsoRequest>,
+        request: Request<GetQsoRequest>,
     ) -> Result<Response<GetQsoResponse>, Status> {
-        Err(Status::unimplemented("GetQso is not implemented yet."))
+        let request = request.into_inner();
+        let qso = self
+            .engine
+            .get_qso(&request.local_id)
+            .await
+            .map_err(map_logbook_error)?;
+
+        Ok(Response::new(GetQsoResponse { qso: Some(qso) }))
     }
 
     async fn list_qsos(
         &self,
-        _request: Request<ListQsosRequest>,
+        request: Request<ListQsosRequest>,
     ) -> Result<Response<Self::ListQsosStream>, Status> {
-        Err(Status::unimplemented("ListQsos is not implemented yet."))
+        let request = request.into_inner();
+        let query = qso_list_query_from_request(&request).map_err(|status| *status)?;
+        let records = self
+            .engine
+            .list_qsos(&query)
+            .await
+            .map_err(map_logbook_error)?;
+        let (sender, receiver) = tokio::sync::mpsc::channel(records.len().max(1));
+
+        for record in records {
+            if sender.send(Ok(record)).await.is_err() {
+                break;
+            }
+        }
+
+        Ok(Response::new(ReceiverStream::new(receiver)))
     }
 
     async fn sync_with_qrz(
@@ -94,12 +174,18 @@ impl LogbookService for DeveloperLogbookService {
         &self,
         _request: Request<SyncStatusRequest>,
     ) -> Result<Response<SyncStatusResponse>, Status> {
+        let sync_status = self
+            .engine
+            .get_sync_status()
+            .await
+            .map_err(map_logbook_error)?;
+
         Ok(Response::new(SyncStatusResponse {
-            local_qso_count: 0,
-            qrz_qso_count: 0,
-            pending_upload: 0,
-            last_sync: None,
-            qrz_logbook_owner: None,
+            local_qso_count: sync_status.local_qso_count,
+            qrz_qso_count: sync_status.qrz_qso_count,
+            pending_upload: sync_status.pending_upload,
+            last_sync: sync_status.last_sync,
+            qrz_logbook_owner: sync_status.qrz_logbook_owner,
         }))
     }
 
@@ -219,9 +305,22 @@ fn build_provider_from_env() -> Arc<dyn CallsignProvider> {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 struct ServerOptions {
     listen_address: SocketAddr,
+    storage: StorageOptions,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct StorageOptions {
+    backend: StorageBackendKind,
+    sqlite_path: PathBuf,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StorageBackendKind {
+    Memory,
+    Sqlite,
 }
 
 impl ServerOptions {
@@ -231,6 +330,12 @@ impl ServerOptions {
     {
         let mut listen = std::env::var("LOGRIPPER_SERVER_ADDR")
             .unwrap_or_else(|_| "127.0.0.1:50051".to_string());
+        let mut storage_backend = parse_storage_backend(
+            &std::env::var("LOGRIPPER_STORAGE_BACKEND").unwrap_or_else(|_| "memory".to_string()),
+        )?;
+        let mut sqlite_path = PathBuf::from(
+            std::env::var("LOGRIPPER_SQLITE_PATH").unwrap_or_else(|_| "logripper.db".to_string()),
+        );
         let mut args = args.into_iter();
 
         while let Some(arg) = args.next() {
@@ -238,6 +343,14 @@ impl ServerOptions {
                 "--listen" => {
                     let value = args.next().ok_or("Missing value for --listen")?;
                     listen = value;
+                }
+                "--storage" => {
+                    let value = args.next().ok_or("Missing value for --storage")?;
+                    storage_backend = parse_storage_backend(&value)?;
+                }
+                "--sqlite-path" => {
+                    let value = args.next().ok_or("Missing value for --sqlite-path")?;
+                    sqlite_path = PathBuf::from(value);
                 }
                 "--help" | "-h" => {
                     print_help();
@@ -249,22 +362,122 @@ impl ServerOptions {
 
         Ok(Self {
             listen_address: listen.parse()?,
+            storage: StorageOptions {
+                backend: storage_backend,
+                sqlite_path,
+            },
         })
     }
 }
 
 fn print_help() {
     println!(
-        "LogRipper gRPC server\n\nUsage:\n  cargo run -p logripper-server -- [--listen 127.0.0.1:50051]\n\nEnvironment:\n  LOGRIPPER_SERVER_ADDR   Overrides the bind address"
+        "LogRipper gRPC server\n\nUsage:\n  cargo run -p logripper-server -- [--listen 127.0.0.1:50051] [--storage memory|sqlite] [--sqlite-path path\\to\\logripper.db]\n\nEnvironment:\n  LOGRIPPER_SERVER_ADDR       Overrides the bind address\n  LOGRIPPER_STORAGE_BACKEND   Selects memory or sqlite storage (default: memory)\n  LOGRIPPER_SQLITE_PATH       SQLite path when sqlite storage is selected (default: logripper.db)"
     );
+}
+
+fn build_storage(
+    options: &StorageOptions,
+) -> Result<Arc<dyn EngineStorage>, Box<dyn std::error::Error>> {
+    let storage: Arc<dyn EngineStorage> = match options.backend {
+        StorageBackendKind::Memory => Arc::new(MemoryStorage::new()),
+        StorageBackendKind::Sqlite => Arc::new(
+            SqliteStorageBuilder::new()
+                .path(options.sqlite_path.clone())
+                .build()?,
+        ),
+    };
+
+    Ok(storage)
+}
+
+fn parse_storage_backend(value: &str) -> Result<StorageBackendKind, Box<dyn std::error::Error>> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "memory" => Ok(StorageBackendKind::Memory),
+        "sqlite" => Ok(StorageBackendKind::Sqlite),
+        other => Err(format!("Unsupported storage backend: {other}").into()),
+    }
+}
+
+fn map_logbook_error(error: LogbookError) -> Status {
+    match error {
+        LogbookError::Validation(message) => Status::invalid_argument(message),
+        LogbookError::NotFound(local_id) => {
+            Status::not_found(format!("QSO '{local_id}' was not found."))
+        }
+        LogbookError::Storage(StorageError::Duplicate { entity, key }) => {
+            Status::already_exists(format!("{entity} '{key}' already exists."))
+        }
+        LogbookError::Storage(other) => Status::internal(other.to_string()),
+    }
+}
+
+fn qso_list_query_from_request(request: &ListQsosRequest) -> Result<QsoListQuery, Box<Status>> {
+    let band_filter = request
+        .band_filter
+        .map(|value| {
+            Band::try_from(value)
+                .map_err(|_| Box::new(Status::invalid_argument("Invalid band_filter value.")))
+        })
+        .transpose()?;
+    let mode_filter = request
+        .mode_filter
+        .map(|value| {
+            Mode::try_from(value)
+                .map_err(|_| Box::new(Status::invalid_argument("Invalid mode_filter value.")))
+        })
+        .transpose()?;
+    let sort = match SortOrder::try_from(request.sort) {
+        Ok(SortOrder::NewestFirst) => QsoSortOrder::NewestFirst,
+        Ok(SortOrder::OldestFirst) => QsoSortOrder::OldestFirst,
+        Err(_) => return Err(Box::new(Status::invalid_argument("Invalid sort order."))),
+    };
+
+    Ok(QsoListQuery {
+        after: request.after,
+        before: request.before,
+        callsign_filter: request
+            .callsign_filter
+            .as_deref()
+            .and_then(non_empty_string),
+        band_filter,
+        mode_filter,
+        contest_id: request.contest_id.as_deref().and_then(non_empty_string),
+        limit: (request.limit > 0).then_some(request.limit),
+        offset: request.offset,
+        sort,
+    })
+}
+
+fn non_empty_string(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+fn sync_result(requested: bool, label: &str) -> (bool, Option<String>) {
+    if requested {
+        (false, Some(format!("{label} is not implemented yet.")))
+    } else {
+        (true, None)
+    }
 }
 
 #[cfg(test)]
 #[allow(clippy::expect_used, clippy::unwrap_used)]
 mod tests {
+    use std::fs;
     use std::sync::Arc;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
-    use super::{DeveloperLogbookService, DeveloperLookupService, ServerOptions};
+    use super::{
+        build_storage, parse_storage_backend, DeveloperLogbookService, DeveloperLookupService,
+        ServerOptions, StorageBackendKind, StorageOptions,
+    };
+    use logripper_core::application::logbook::LogbookEngine;
     use logripper_core::lookup::{
         DisabledCallsignProvider, LookupCoordinator, LookupCoordinatorConfig,
     };
@@ -290,10 +503,13 @@ mod tests {
     #[test]
     fn server_options_default_to_localhost_port_50051() {
         std::env::remove_var("LOGRIPPER_SERVER_ADDR");
+        std::env::remove_var("LOGRIPPER_STORAGE_BACKEND");
+        std::env::remove_var("LOGRIPPER_SQLITE_PATH");
 
         let options = ServerOptions::from_env_and_args(Vec::<String>::new()).unwrap();
 
         assert_eq!("127.0.0.1:50051", options.listen_address.to_string());
+        assert_eq!(options.storage.backend, StorageBackendKind::Memory);
     }
 
     #[test]
@@ -314,6 +530,60 @@ mod tests {
         let result = LookupResult::default();
 
         assert_eq!(LookupState::Unspecified as i32, result.state);
+    }
+
+    #[test]
+    fn server_options_allow_sqlite_storage_override() {
+        let options = ServerOptions::from_env_and_args([
+            "--storage".to_string(),
+            "sqlite".to_string(),
+            "--sqlite-path".to_string(),
+            "data\\logripper.db".to_string(),
+        ])
+        .unwrap();
+
+        assert_eq!(options.storage.backend, StorageBackendKind::Sqlite);
+        assert_eq!(
+            options.storage.sqlite_path,
+            std::path::PathBuf::from("data\\logripper.db")
+        );
+    }
+
+    #[test]
+    fn parse_storage_backend_rejects_unknown_values() {
+        let error = parse_storage_backend("rocksdb").unwrap_err();
+
+        assert!(error.to_string().contains("Unsupported storage backend"));
+    }
+
+    #[test]
+    fn build_storage_uses_requested_backend() {
+        let memory_storage = build_storage(&StorageOptions {
+            backend: StorageBackendKind::Memory,
+            sqlite_path: std::path::PathBuf::from("ignored.db"),
+        })
+        .expect("memory storage");
+        assert_eq!(memory_storage.backend_name(), "memory");
+
+        let unique_suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock")
+            .as_nanos();
+        let sqlite_path = std::env::temp_dir().join(format!(
+            "logripper-storage-{}-{unique_suffix}.db",
+            std::process::id()
+        ));
+        let sqlite_storage = build_storage(&StorageOptions {
+            backend: StorageBackendKind::Sqlite,
+            sqlite_path: sqlite_path.clone(),
+        })
+        .expect("sqlite storage");
+        assert_eq!(sqlite_storage.backend_name(), "sqlite");
+        drop(sqlite_storage);
+
+        if sqlite_path.exists() {
+            fs::remove_file(sqlite_path).expect("remove sqlite test database");
+        }
     }
 
     #[tokio::test]
@@ -411,13 +681,18 @@ mod tests {
 
     #[tokio::test]
     async fn logbook_sync_status_returns_zeroed_placeholder_values() {
-        let response = LogbookService::get_sync_status(
-            &DeveloperLogbookService,
-            Request::new(SyncStatusRequest {}),
-        )
-        .await
-        .expect("sync status")
-        .into_inner();
+        let storage = build_storage(&StorageOptions {
+            backend: StorageBackendKind::Memory,
+            sqlite_path: std::path::PathBuf::from("ignored.db"),
+        })
+        .expect("storage");
+        let service = DeveloperLogbookService::new(LogbookEngine::new(storage));
+
+        let response =
+            LogbookService::get_sync_status(&service, Request::new(SyncStatusRequest {}))
+                .await
+                .expect("sync status")
+                .into_inner();
 
         assert_eq!(0, response.local_qso_count);
         assert_eq!(0, response.qrz_qso_count);

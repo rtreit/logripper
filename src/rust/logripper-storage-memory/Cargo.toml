@@ -1,6 +1,6 @@
 [package]
-name = "logripper-server"
-description = "Runnable gRPC server host for the LogRipper engine"
+name = "logripper-storage-memory"
+description = "In-memory storage adapter for LogRipper engine tests and local composition"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -9,11 +9,9 @@ repository.workspace = true
 
 [dependencies]
 logripper-core = { path = "../logripper-core", version = "0.1.0" }
-logripper-storage-memory = { path = "../logripper-storage-memory", version = "0.1.0" }
-logripper-storage-sqlite = { path = "../logripper-storage-sqlite", version = "0.1.0" }
 tokio = { workspace = true }
 tonic = { workspace = true }
-tokio-stream = "0.1"
+prost-types = { workspace = true }
 
 [lints]
 workspace = true

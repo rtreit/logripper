@@ -45,6 +45,14 @@ internal sealed class DebugCommandService
                 _repositoryPaths.RepoRoot,
                 RequiresProtoc: true),
             new(
+                "cargo-storage-tests",
+                "Run storage adapter tests",
+                "Runs the memory and SQLite storage adapter tests plus backend-selection coverage in the Rust server host.",
+                "cargo",
+                "test --manifest-path src\\rust\\Cargo.toml -p logripper-storage-memory -p logripper-storage-sqlite -p logripper-server",
+                _repositoryPaths.RepoRoot,
+                RequiresProtoc: true),
+            new(
                 "dotnet-test",
                 "Run .NET workspace tests",
                 "Runs the full .NET workspace test suite through the root src\\dotnet\\LogRipper.slnx solution.",

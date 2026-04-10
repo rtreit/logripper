@@ -127,6 +127,22 @@ cargo run -p logripper-server
 
 This starts the developer gRPC server on `127.0.0.1:50051` by default so the .NET CLI and debug workbench can validate transport and service wiring against a live Rust host.
 
+The server can now swap storage implementations at startup:
+
+```powershell
+cd src\rust
+cargo run -p logripper-server -- --storage memory
+cargo run -p logripper-server -- --storage sqlite --sqlite-path .\data\logripper.db
+```
+
+Equivalent environment variables are also supported:
+
+```powershell
+$env:LOGRIPPER_STORAGE_BACKEND = "sqlite"
+$env:LOGRIPPER_SQLITE_PATH = ".\data\logripper.db"
+cargo run -p logripper-server
+```
+
 ### QRZ local configuration
 
 Use `.env.example` as the local template for QRZ settings:

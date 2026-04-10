@@ -12,13 +12,27 @@
 
 <EditForm Model="this" OnSubmit="SaveEndpointAsync">
     <div class="row g-3 align-items-end">
-        <div class="col-lg-8">
+        <div class="col-lg-5">
             <label class="form-label" for="engine-endpoint">Engine endpoint</label>
             <InputText id="engine-endpoint" class="form-control" @bind-Value="endpoint" />
+        </div>
+        <div class="col-lg-3">
+            <label class="form-label" for="engine-storage-backend">Storage backend</label>
+            <InputSelect id="engine-storage-backend" class="form-select" @bind-Value="storageBackend">
+                <option value="@EngineStorageBackend.Memory">Memory</option>
+                <option value="@EngineStorageBackend.Sqlite">SQLite</option>
+            </InputSelect>
         </div>
         <div class="col-lg-4 d-flex gap-2">
             <button type="submit" class="btn btn-primary">Save endpoint</button>
             <button type="button" class="btn btn-outline-primary" @onclick="ProbeAsync">Probe engine</button>
+        </div>
+    </div>
+    <div class="row g-3 mt-1">
+        <div class="col-lg-8">
+            <label class="form-label" for="engine-sqlite-path">SQLite path</label>
+            <InputText id="engine-sqlite-path" class="form-control" @bind-Value="sqlitePath" />
+            <div class="form-text">Only used when the engine is started with the SQLite backend.</div>
         </div>
     </div>
 </EditForm>
@@ -72,8 +86,8 @@
                 <ul class="mb-0">
                     <li>The workbench stores endpoint selection per Blazor server circuit.</li>
                     <li>Use <code>http://localhost:50051</code> by default for local Rust gRPC development.</li>
-                    <li>Start the current developer host with <code>cargo run --manifest-path src\rust\logripper-server\Cargo.toml</code>.</li>
-                    <li>The lookup page and future logbook pages use this endpoint automatically.</li>
+                    <li>Switch storage backend here, restart the Rust host, then rerun the storage workbench against the same endpoint.</li>
+                    <li>The lookup and storage workbench pages use this endpoint automatically.</li>
                 </ul>
             </div>
         </div>
@@ -110,27 +124,48 @@
     </div>
 </div>
 
+<div class="card shadow-sm mt-4">
+    <div class="card-body">
+        <h2 class="h5">Rust host launch preview</h2>
+        <div class="small text-muted mb-2">
+            The command below matches the storage session configured in this page.
+        </div>
+        <pre class="payload-view">@WorkbenchState.BuildRustServerCommand()</pre>
+        <div class="small text-muted mt-2 mb-1">Equivalent environment</div>
+        @foreach (var variable in WorkbenchState.GetEngineEnvironmentOverrides())
+        {
+            <div><code>@variable.Key=@variable.Value</code></div>
+        }
+    </div>
+</div>
+
 @code {
     private string endpoint = string.Empty;
+    private EngineStorageBackend storageBackend;
+    private string sqlitePath = string.Empty;
     private string? statusMessage;
     private IReadOnlyList<ToolAvailability> tools = Array.Empty<ToolAvailability>();
 
     protected override void OnInitialized()
     {
         endpoint = WorkbenchState.EngineEndpoint;
+        storageBackend = WorkbenchState.EngineStorageBackend;
+        sqlitePath = WorkbenchState.EngineSqlitePath;
         tools = ToolchainLocator.GetToolAvailability();
     }
 
     private Task SaveEndpointAsync()
     {
         WorkbenchState.UpdateEngineEndpoint(endpoint);
-        statusMessage = $"Saved endpoint '{WorkbenchState.EngineEndpoint}'.";
+        WorkbenchState.UpdateStorageOptions(storageBackend, sqlitePath);
+        statusMessage = $"Saved engine session for '{WorkbenchState.EngineEndpoint}' using {WorkbenchState.GetStorageBackendDisplayName()} storage.";
         return Task.CompletedTask;
     }
 
     private async Task ProbeAsync()
     {
         WorkbenchState.UpdateEngineEndpoint(endpoint);
+        WorkbenchState.UpdateStorageOptions(storageBackend, sqlitePath);
         statusMessage = "Probing engine transport...";
         await WorkbenchState.ProbeAsync();
         statusMessage = null;
