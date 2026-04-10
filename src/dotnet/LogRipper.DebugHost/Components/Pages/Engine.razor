@@ -1,4 +1,5 @@
 @page "/engine"
+@using LogRipper.DebugHost.Models
 @inject DebugWorkbenchState WorkbenchState
 @inject ToolchainLocator ToolchainLocator
 
@@ -6,7 +7,7 @@
 
 <h1 class="mb-3">Engine Session</h1>
 <p class="text-muted">
-    Configure the Rust engine endpoint the debug workbench should target. Transport probing confirms that the host and port are reachable; method success still depends on the Rust engine exposing the corresponding gRPC service.
+    Configure the Rust engine endpoint the debug workbench should target. The probe checks TCP reachability then performs a live gRPC call to <code>GetSyncStatus</code> to verify that the engine is actually serving the expected LogRipper services.
 </p>
 
 <EditForm Model="this" OnSubmit="SaveEndpointAsync">
@@ -17,7 +18,7 @@
         </div>
         <div class="col-lg-4 d-flex gap-2">
             <button type="submit" class="btn btn-primary">Save endpoint</button>
-            <button type="button" class="btn btn-outline-primary" @onclick="ProbeAsync">Probe transport</button>
+            <button type="button" class="btn btn-outline-primary" @onclick="ProbeAsync">Probe engine</button>
         </div>
     </div>
 </EditForm>
@@ -29,9 +30,37 @@
 
 @if (WorkbenchState.LastProbe is not null)
 {
-    <div class="alert mt-3 @(WorkbenchState.LastProbe.IsSuccess ? "alert-success" : "alert-danger")">
-        <div><strong>Probe result:</strong> @WorkbenchState.LastProbe.Summary</div>
-        <div class="small text-muted mt-1">Attempted @WorkbenchState.LastProbe.AttemptedAtUtc.LocalDateTime.ToString("g") against @WorkbenchState.LastProbe.Endpoint</div>
+    var probe = WorkbenchState.LastProbe;
+    var alertClass = probe.Stage switch
+    {
+        EngineProbeStage.MethodSucceeded => "alert-success",
+        EngineProbeStage.MethodUnimplemented => "alert-warning",
+        _ => "alert-danger",
+    };
+    var stageBadgeClass = probe.Stage switch
+    {
+        EngineProbeStage.MethodSucceeded => "text-bg-success",
+        EngineProbeStage.MethodUnimplemented => "text-bg-warning",
+        EngineProbeStage.GrpcUnavailable or EngineProbeStage.TcpUnreachable => "text-bg-danger",
+        _ => "text-bg-secondary",
+    };
+    var stageLabel = probe.Stage switch
+    {
+        EngineProbeStage.InvalidEndpoint => "Invalid endpoint",
+        EngineProbeStage.TcpUnreachable => "TCP unreachable",
+        EngineProbeStage.GrpcUnavailable => "gRPC unavailable",
+        EngineProbeStage.MethodUnimplemented => "Method unimplemented",
+        EngineProbeStage.MethodSucceeded => "Method succeeded",
+        _ => probe.Stage.ToString(),
+    };
+
+    <div class="alert mt-3 @alertClass">
+        <div class="d-flex align-items-center gap-2 mb-1">
+            <span class="badge @stageBadgeClass">@stageLabel</span>
+            <strong>@probe.Summary</strong>
+        </div>
+        <div class="small mt-1"><em>Next action:</em> @probe.NextAction</div>
+        <div class="small text-muted mt-1">Attempted @probe.AttemptedAtUtc.LocalDateTime.ToString("g") against @probe.Endpoint</div>
     </div>
 }
 
