@@ -11,45 +11,48 @@ pub struct BandRange {
 
 /// All ADIF 3.1.7 band definitions with frequency ranges.
 const BAND_TABLE: &[(&str, Band, f64, f64)] = &[
-    ("2190M",  Band::Band2190m,  0.1357,     0.1378),
-    ("630M",   Band::Band630m,   0.472,      0.479),
-    ("560M",   Band::Band560m,   0.501,      0.504),
-    ("160M",   Band::Band160m,   1.8,        2.0),
-    ("80M",    Band::Band80m,    3.5,        4.0),
-    ("60M",    Band::Band60m,    5.06,       5.45),
-    ("40M",    Band::Band40m,    7.0,        7.3),
-    ("30M",    Band::Band30m,    10.1,       10.15),
-    ("20M",    Band::Band20m,    14.0,       14.35),
-    ("17M",    Band::Band17m,    18.068,     18.168),
-    ("15M",    Band::Band15m,    21.0,       21.45),
-    ("12M",    Band::Band12m,    24.89,      24.99),
-    ("10M",    Band::Band10m,    28.0,       29.7),
-    ("8M",     Band::Band8m,     40.0,       45.0),
-    ("6M",     Band::Band6m,     50.0,       54.0),
-    ("5M",     Band::Band5m,     54.000001,  69.9),
-    ("4M",     Band::Band4m,     70.0,       71.0),
-    ("2M",     Band::Band2m,     144.0,      148.0),
-    ("1.25M",  Band::Band125m,   222.0,      225.0),
-    ("70CM",   Band::Band70cm,   420.0,      450.0),
-    ("33CM",   Band::Band33cm,   902.0,      928.0),
-    ("23CM",   Band::Band23cm,   1240.0,     1300.0),
-    ("13CM",   Band::Band13cm,   2300.0,     2450.0),
-    ("9CM",    Band::Band9cm,    3300.0,     3500.0),
-    ("6CM",    Band::Band6cm,    5650.0,     5925.0),
-    ("3CM",    Band::Band3cm,    10000.0,    10500.0),
-    ("1.25CM", Band::Band125cm,  24000.0,    24250.0),
-    ("6MM",    Band::Band6mm,    47000.0,    47200.0),
-    ("4MM",    Band::Band4mm,    75500.0,    81000.0),
-    ("2.5MM",  Band::Band25mm,   119980.0,   123000.0),
-    ("2MM",    Band::Band2mm,    134000.0,   149000.0),
-    ("1MM",    Band::Band1mm,    241000.0,   250000.0),
-    ("SUBMM",  Band::Submm,      300000.0,   7500000.0),
+    ("2190M", Band::Band2190m, 0.1357, 0.1378),
+    ("630M", Band::Band630m, 0.472, 0.479),
+    ("560M", Band::Band560m, 0.501, 0.504),
+    ("160M", Band::Band160m, 1.8, 2.0),
+    ("80M", Band::Band80m, 3.5, 4.0),
+    ("60M", Band::Band60m, 5.06, 5.45),
+    ("40M", Band::Band40m, 7.0, 7.3),
+    ("30M", Band::Band30m, 10.1, 10.15),
+    ("20M", Band::Band20m, 14.0, 14.35),
+    ("17M", Band::Band17m, 18.068, 18.168),
+    ("15M", Band::Band15m, 21.0, 21.45),
+    ("12M", Band::Band12m, 24.89, 24.99),
+    ("10M", Band::Band10m, 28.0, 29.7),
+    ("8M", Band::Band8m, 40.0, 45.0),
+    ("6M", Band::Band6m, 50.0, 54.0),
+    ("5M", Band::Band5m, 54.000001, 69.9),
+    ("4M", Band::Band4m, 70.0, 71.0),
+    ("2M", Band::Band2m, 144.0, 148.0),
+    ("1.25M", Band::Band125m, 222.0, 225.0),
+    ("70CM", Band::Band70cm, 420.0, 450.0),
+    ("33CM", Band::Band33cm, 902.0, 928.0),
+    ("23CM", Band::Band23cm, 1240.0, 1300.0),
+    ("13CM", Band::Band13cm, 2300.0, 2450.0),
+    ("9CM", Band::Band9cm, 3300.0, 3500.0),
+    ("6CM", Band::Band6cm, 5650.0, 5925.0),
+    ("3CM", Band::Band3cm, 10000.0, 10500.0),
+    ("1.25CM", Band::Band125cm, 24000.0, 24250.0),
+    ("6MM", Band::Band6mm, 47000.0, 47200.0),
+    ("4MM", Band::Band4mm, 75500.0, 81000.0),
+    ("2.5MM", Band::Band25mm, 119980.0, 123000.0),
+    ("2MM", Band::Band2mm, 134000.0, 149000.0),
+    ("1MM", Band::Band1mm, 241000.0, 250000.0),
+    ("SUBMM", Band::Submm, 300000.0, 7500000.0),
 ];
 
 /// Parse an ADIF band string (case-insensitive) into a Band enum value.
 pub fn band_from_adif(s: &str) -> Option<Band> {
     let upper = s.to_uppercase();
-    BAND_TABLE.iter().find(|(name, _, _, _)| *name == upper).map(|(_, band, _, _)| *band)
+    BAND_TABLE
+        .iter()
+        .find(|(name, _, _, _)| *name == upper)
+        .map(|(_, band, _, _)| *band)
 }
 
 /// Convert a Band enum value to its canonical ADIF string representation.
@@ -57,7 +60,10 @@ pub fn band_to_adif(band: Band) -> Option<&'static str> {
     if band == Band::Unspecified {
         return None;
     }
-    BAND_TABLE.iter().find(|(_, b, _, _)| *b == band).map(|(name, _, _, _)| *name)
+    BAND_TABLE
+        .iter()
+        .find(|(_, b, _, _)| *b == band)
+        .map(|(name, _, _, _)| *name)
 }
 
 /// Derive the Band from a frequency in MHz.
@@ -87,10 +93,12 @@ mod tests {
     #[test]
     fn all_bands_round_trip_through_adif_string() {
         for (name, band, _, _) in BAND_TABLE {
-            let parsed = band_from_adif(name).unwrap_or_else(|| panic!("Failed to parse band: {name}"));
+            let parsed =
+                band_from_adif(name).unwrap_or_else(|| panic!("Failed to parse band: {name}"));
             assert_eq!(parsed, *band, "Band mismatch for {name}");
 
-            let back = band_to_adif(parsed).unwrap_or_else(|| panic!("Failed to convert band back: {name}"));
+            let back = band_to_adif(parsed)
+                .unwrap_or_else(|| panic!("Failed to convert band back: {name}"));
             assert_eq!(back, *name, "Round-trip mismatch for {name}");
         }
     }

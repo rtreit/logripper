@@ -12,3 +12,6 @@ tokio = { workspace = true }
 tonic = { workspace = true }
 tokio-stream = "0.1"
 
+[lints]
+workspace = true
+

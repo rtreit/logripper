@@ -1,0 +1,61 @@
+name: "Copilot Setup Steps"
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/copilot-setup-steps.yml"
+      - "rust-toolchain.toml"
+      - "src/rust/rustfmt.toml"
+      - "src/rust/deny.toml"
+  pull_request:
+    paths:
+      - ".github/workflows/copilot-setup-steps.yml"
+      - "rust-toolchain.toml"
+      - "src/rust/rustfmt.toml"
+      - "src/rust/deny.toml"
+
+jobs:
+  copilot-setup-steps:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Install Rust toolchain and components
+        run: |
+          rustup toolchain install 1.88.0 --profile minimal --component rustfmt --component clippy
+          rustup default 1.88.0
+          rustc --version
+          cargo --version
+
+      - name: Install protobuf and C build prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler build-essential pkg-config
+          protoc --version
+
+      - name: Install Buf CLI
+        uses: bufbuild/buf-setup-action@v1
+
+      - name: Install Rust quality tooling
+        run: |
+          cargo install cargo-deny --locked
+          cargo install cargo-audit --locked
+
+      - name: Verify key developer tools
+        run: |
+          cargo fmt --version
+          cargo clippy --version
+          cargo deny --version
+          cargo audit --version
+          buf --version
+          dotnet --version

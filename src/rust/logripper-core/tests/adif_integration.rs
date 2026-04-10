@@ -6,7 +6,9 @@ use logripper_core::adif::AdifMapper;
 use logripper_core::proto::logripper::domain::{Band, Mode, QslStatus};
 
 /// Helper: parse an ADI byte slice and return all QSO records (skip header).
-async fn parse_adi_to_qsos(data: &[u8]) -> Vec<logripper_core::proto::logripper::domain::QsoRecord> {
+async fn parse_adi_to_qsos(
+    data: &[u8],
+) -> Vec<logripper_core::proto::logripper::domain::QsoRecord> {
     let mut stream = RecordStream::new(data, true);
     let mut qsos = Vec::new();
 
@@ -129,15 +131,35 @@ async fn parse_extra_fields_preserved() {
     assert_eq!(q.sat_mode.as_deref(), Some("V"));
 
     // MY_ fields and other extras go to extra_fields map
-    assert_eq!(q.extra_fields.get("MY_RIG").map(|s| s.as_str()), Some("Icom IC-7300"));
-    assert_eq!(q.extra_fields.get("MY_ANTENNA").map(|s| s.as_str()), Some("Yagi 3-element"));
-    assert_eq!(q.extra_fields.get("MY_CITY").map(|s| s.as_str()), Some("Seattle"));
-    assert_eq!(q.extra_fields.get("MY_STATE").map(|s| s.as_str()), Some("WA"));
-    assert_eq!(q.extra_fields.get("MY_GRIDSQUARE").map(|s| s.as_str()), Some("CN87up"));
-    assert_eq!(q.extra_fields.get("ANT_AZ").map(|s| s.as_str()), Some("045"));
+    assert_eq!(
+        q.extra_fields.get("MY_RIG").map(|s| s.as_str()),
+        Some("Icom IC-7300")
+    );
+    assert_eq!(
+        q.extra_fields.get("MY_ANTENNA").map(|s| s.as_str()),
+        Some("Yagi 3-element")
+    );
+    assert_eq!(
+        q.extra_fields.get("MY_CITY").map(|s| s.as_str()),
+        Some("Seattle")
+    );
+    assert_eq!(
+        q.extra_fields.get("MY_STATE").map(|s| s.as_str()),
+        Some("WA")
+    );
+    assert_eq!(
+        q.extra_fields.get("MY_GRIDSQUARE").map(|s| s.as_str()),
+        Some("CN87up")
+    );
+    assert_eq!(
+        q.extra_fields.get("ANT_AZ").map(|s| s.as_str()),
+        Some("045")
+    );
     assert_eq!(q.extra_fields.get("ANT_EL").map(|s| s.as_str()), Some("15"));
     assert_eq!(
-        q.extra_fields.get("APP_LOGRIPPER_SYNC_STATUS").map(|s| s.as_str()),
+        q.extra_fields
+            .get("APP_LOGRIPPER_SYNC_STATUS")
+            .map(|s| s.as_str()),
         Some("synced")
     );
 }
@@ -165,10 +187,14 @@ async fn round_trip_qso_through_adif() {
     assert_eq!(round_tripped.band, original.band);
     assert_eq!(round_tripped.mode, original.mode);
     assert_eq!(round_tripped.frequency_khz, original.frequency_khz);
-    assert_eq!(round_tripped.rst_sent.as_ref().map(|r| r.raw.as_str()),
-               original.rst_sent.as_ref().map(|r| r.raw.as_str()));
-    assert_eq!(round_tripped.rst_received.as_ref().map(|r| r.raw.as_str()),
-               original.rst_received.as_ref().map(|r| r.raw.as_str()));
+    assert_eq!(
+        round_tripped.rst_sent.as_ref().map(|r| r.raw.as_str()),
+        original.rst_sent.as_ref().map(|r| r.raw.as_str())
+    );
+    assert_eq!(
+        round_tripped.rst_received.as_ref().map(|r| r.raw.as_str()),
+        original.rst_received.as_ref().map(|r| r.raw.as_str())
+    );
     assert_eq!(round_tripped.comment, original.comment);
 }
 
@@ -191,7 +217,13 @@ async fn round_trip_extra_fields_preserved() {
         original.extra_fields.get("MY_RIG").map(|s| s.as_str()),
     );
     assert_eq!(
-        round_tripped.extra_fields.get("APP_LOGRIPPER_SYNC_STATUS").map(|s| s.as_str()),
-        original.extra_fields.get("APP_LOGRIPPER_SYNC_STATUS").map(|s| s.as_str()),
+        round_tripped
+            .extra_fields
+            .get("APP_LOGRIPPER_SYNC_STATUS")
+            .map(|s| s.as_str()),
+        original
+            .extra_fields
+            .get("APP_LOGRIPPER_SYNC_STATUS")
+            .map(|s| s.as_str()),
     );
 }

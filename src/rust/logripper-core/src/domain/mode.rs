@@ -6,58 +6,58 @@ use crate::proto::logripper::domain::Mode;
 /// Submodes are NOT enumerated here — they're stored as freeform strings
 /// since there are 100+ and they change over time.
 const MODE_TABLE: &[(&str, Mode)] = &[
-    ("AM",           Mode::Am),
-    ("ARDOP",        Mode::Ardop),
-    ("ATV",          Mode::Atv),
-    ("CHIP",         Mode::Chip),
-    ("CLO",          Mode::Clo),
-    ("CONTESTI",     Mode::Contesti),
-    ("CW",           Mode::Cw),
+    ("AM", Mode::Am),
+    ("ARDOP", Mode::Ardop),
+    ("ATV", Mode::Atv),
+    ("CHIP", Mode::Chip),
+    ("CLO", Mode::Clo),
+    ("CONTESTI", Mode::Contesti),
+    ("CW", Mode::Cw),
     ("DIGITALVOICE", Mode::Digitalvoice),
-    ("DOMINO",       Mode::Domino),
-    ("DYNAMIC",      Mode::Dynamic),
-    ("FAX",          Mode::Fax),
-    ("FM",           Mode::Fm),
-    ("FSK",          Mode::Fsk),
-    ("FT8",          Mode::Ft8),
-    ("HELL",         Mode::Hell),
-    ("ISCAT",        Mode::Iscat),
-    ("JT4",          Mode::Jt4),
-    ("JT9",          Mode::Jt9),
-    ("JT44",         Mode::Jt44),
-    ("JT65",         Mode::Jt65),
-    ("MFSK",         Mode::Mfsk),
-    ("MTONE",        Mode::Mtone),
-    ("MSK144",       Mode::Msk144),
-    ("OFDM",         Mode::Ofdm),
-    ("OLIVIA",       Mode::Olivia),
-    ("OPERA",        Mode::Opera),
-    ("PAC",          Mode::Pac),
-    ("PAX",          Mode::Pax),
-    ("PKT",          Mode::Pkt),
-    ("PSK",          Mode::Psk),
-    ("Q15",          Mode::Q15),
-    ("QRA64",        Mode::Qra64),
-    ("ROS",          Mode::Ros),
-    ("RTTY",         Mode::Rtty),
-    ("RTTYM",        Mode::Rttym),
-    ("SSB",          Mode::Ssb),
-    ("SSTV",         Mode::Sstv),
-    ("T10",          Mode::T10),
-    ("THOR",         Mode::Thor),
-    ("THRB",         Mode::Thrb),
-    ("TOR",          Mode::Tor),
-    ("V4",           Mode::V4),
-    ("VOI",          Mode::Voi),
-    ("WINMOR",       Mode::Winmor),
-    ("WSPR",         Mode::Wspr),
+    ("DOMINO", Mode::Domino),
+    ("DYNAMIC", Mode::Dynamic),
+    ("FAX", Mode::Fax),
+    ("FM", Mode::Fm),
+    ("FSK", Mode::Fsk),
+    ("FT8", Mode::Ft8),
+    ("HELL", Mode::Hell),
+    ("ISCAT", Mode::Iscat),
+    ("JT4", Mode::Jt4),
+    ("JT9", Mode::Jt9),
+    ("JT44", Mode::Jt44),
+    ("JT65", Mode::Jt65),
+    ("MFSK", Mode::Mfsk),
+    ("MTONE", Mode::Mtone),
+    ("MSK144", Mode::Msk144),
+    ("OFDM", Mode::Ofdm),
+    ("OLIVIA", Mode::Olivia),
+    ("OPERA", Mode::Opera),
+    ("PAC", Mode::Pac),
+    ("PAX", Mode::Pax),
+    ("PKT", Mode::Pkt),
+    ("PSK", Mode::Psk),
+    ("Q15", Mode::Q15),
+    ("QRA64", Mode::Qra64),
+    ("ROS", Mode::Ros),
+    ("RTTY", Mode::Rtty),
+    ("RTTYM", Mode::Rttym),
+    ("SSB", Mode::Ssb),
+    ("SSTV", Mode::Sstv),
+    ("T10", Mode::T10),
+    ("THOR", Mode::Thor),
+    ("THRB", Mode::Thrb),
+    ("TOR", Mode::Tor),
+    ("V4", Mode::V4),
+    ("VOI", Mode::Voi),
+    ("WINMOR", Mode::Winmor),
+    ("WSPR", Mode::Wspr),
 ];
 
 /// ADIF import-only modes that should be mapped to their replacement.
 /// These are deprecated in ADIF 3.1.7 but must be accepted on import.
 const IMPORT_ONLY_MODES: &[(&str, Mode, &str)] = &[
-    ("C4FM",  Mode::Digitalvoice, "C4FM"),   // → DIGITALVOICE + submode C4FM
-    ("DSTAR", Mode::Digitalvoice, "DSTAR"),   // → DIGITALVOICE + submode DSTAR
+    ("C4FM", Mode::Digitalvoice, "C4FM"), // → DIGITALVOICE + submode C4FM
+    ("DSTAR", Mode::Digitalvoice, "DSTAR"), // → DIGITALVOICE + submode DSTAR
 ];
 
 /// Parse an ADIF mode string (case-insensitive) into a Mode enum value.
@@ -66,7 +66,11 @@ pub fn mode_from_adif(s: &str) -> Option<Mode> {
     let upper = s.to_uppercase();
 
     // Check standard modes first
-    if let Some(mode) = MODE_TABLE.iter().find(|(name, _)| *name == upper).map(|(_, mode)| *mode) {
+    if let Some(mode) = MODE_TABLE
+        .iter()
+        .find(|(name, _)| *name == upper)
+        .map(|(_, mode)| *mode)
+    {
         return Some(mode);
     }
 
@@ -93,7 +97,10 @@ pub fn mode_to_adif(mode: Mode) -> Option<&'static str> {
     if mode == Mode::Unspecified {
         return None;
     }
-    MODE_TABLE.iter().find(|(_, m)| *m == mode).map(|(name, _)| *name)
+    MODE_TABLE
+        .iter()
+        .find(|(_, m)| *m == mode)
+        .map(|(name, _)| *name)
 }
 
 /// Validate that a submode string is recognized for the given mode.
@@ -107,7 +114,7 @@ pub fn is_known_submode(mode: Mode, submode: &str) -> bool {
         Mode::Digitalvoice => matches!(upper.as_str(), "C4FM" | "DMR" | "DSTAR" | "FREEDV" | "M17"),
         Mode::Cw => matches!(upper.as_str(), "PCW"),
         Mode::Ft8 | Mode::Wspr | Mode::Msk144 => false, // no submodes
-        _ => true, // permissive for modes with many submodes
+        _ => true,                                      // permissive for modes with many submodes
     }
 }
 
@@ -118,10 +125,12 @@ mod tests {
     #[test]
     fn all_modes_round_trip_through_adif_string() {
         for (name, mode) in MODE_TABLE {
-            let parsed = mode_from_adif(name).unwrap_or_else(|| panic!("Failed to parse mode: {name}"));
+            let parsed =
+                mode_from_adif(name).unwrap_or_else(|| panic!("Failed to parse mode: {name}"));
             assert_eq!(parsed, *mode, "Mode mismatch for {name}");
 
-            let back = mode_to_adif(parsed).unwrap_or_else(|| panic!("Failed to convert mode back: {name}"));
+            let back = mode_to_adif(parsed)
+                .unwrap_or_else(|| panic!("Failed to convert mode back: {name}"));
             assert_eq!(back, *name, "Round-trip mismatch for {name}");
         }
     }
