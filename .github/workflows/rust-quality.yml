@@ -48,6 +48,9 @@ jobs:
           sudo apt-get install -y protobuf-compiler build-essential pkg-config
           protoc --version
 
+      - name: Install Buf CLI
+        uses: bufbuild/buf-setup-action@v1
+
       - name: Install cargo-deny
         run: |
           cargo install cargo-deny --locked
@@ -60,6 +63,9 @@ jobs:
 
       - name: Run Rust tests
         run: cargo test --manifest-path src/rust/Cargo.toml
+
+      - name: Run buf lint
+        run: buf lint
 
       - name: Run cargo-deny
         working-directory: src/rust

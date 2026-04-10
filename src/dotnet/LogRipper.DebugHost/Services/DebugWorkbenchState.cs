@@ -11,7 +11,7 @@ internal sealed class DebugWorkbenchState
     public DebugWorkbenchState(IOptions<DebugWorkbenchOptions> options)
     {
         ArgumentNullException.ThrowIfNull(options);
-        
+
         _options = options.Value;
         EngineEndpoint = _options.DefaultEngineEndpoint;
     }
@@ -23,7 +23,7 @@ internal sealed class DebugWorkbenchState
     public void UpdateEngineEndpoint(string endpoint)
     {
         ArgumentNullException.ThrowIfNull(endpoint);
-        
+
         EngineEndpoint = endpoint.Trim();
     }
 

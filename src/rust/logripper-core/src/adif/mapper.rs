@@ -3,11 +3,16 @@
 //! This is the edge adapter between the ADIF file format and `LogRipper`'s
 //! internal domain types. All ADIF-specific logic is contained here.
 
+use std::{borrow::Cow, fmt::Write as _};
+
 use crate::domain::band::band_from_adif;
 use crate::domain::mode::{import_only_submode, mode_from_adif};
 use crate::domain::qso::{new_local_id, qsl_status_from_adif};
 use crate::proto::logripper::domain::{Band, Mode, QsoRecord, SyncStatus};
 use difa::Record;
+
+/// Borrowed or owned ADIF field data suitable for ADI serialization.
+type AdifField<'a> = (Cow<'a, str>, Cow<'a, str>);
 
 /// Maps ADIF records to and from proto `QsoRecord` values.
 pub struct AdifMapper;
@@ -27,43 +32,44 @@ impl AdifMapper {
         };
 
         // Collect QSO_DATE and TIME_ON separately for timestamp construction
-        let mut qso_date: Option<String> = None;
-        let mut time_on: Option<String> = None;
+        let mut qso_date: Option<Cow<'_, str>> = None;
+        let mut time_on: Option<Cow<'_, str>> = None;
 
         for (key, datum) in record.fields() {
-            let value_str = datum.as_str().to_string();
+            let value = datum.as_str();
+            let value_str = value.as_ref();
             let key_upper = key.to_uppercase();
 
             match key_upper.as_str() {
                 // --- Core fields ---
-                "CALL" => qso.worked_callsign = value_str,
-                "STATION_CALLSIGN" => qso.station_callsign = value_str,
+                "CALL" => value_str.clone_into(&mut qso.worked_callsign),
+                "STATION_CALLSIGN" => value_str.clone_into(&mut qso.station_callsign),
                 "OPERATOR" => {
                     if qso.station_callsign.is_empty() {
-                        qso.station_callsign = value_str;
+                        value_str.clone_into(&mut qso.station_callsign);
                     } else {
-                        qso.extra_fields.insert(key_upper, value_str);
+                        qso.extra_fields.insert(key_upper, value_str.to_owned());
                     }
                 }
-                "QSO_DATE" => qso_date = Some(value_str),
-                "TIME_ON" => time_on = Some(value_str),
+                "QSO_DATE" => qso_date = Some(value.clone()),
+                "TIME_ON" => time_on = Some(value.clone()),
                 "BAND" => {
-                    if let Some(band) = band_from_adif(&value_str) {
+                    if let Some(band) = band_from_adif(value_str) {
                         qso.band = band.into();
                     }
                 }
                 "MODE" => {
-                    if let Some(mode) = mode_from_adif(&value_str) {
+                    if let Some(mode) = mode_from_adif(value_str) {
                         qso.mode = mode.into();
                         // Handle import-only modes that map to submode
-                        if let Some(sub) = import_only_submode(&value_str) {
+                        if let Some(sub) = import_only_submode(value_str) {
                             if qso.submode.is_none() {
                                 qso.submode = Some(sub.to_string());
                             }
                         }
                     }
                 }
-                "SUBMODE" => qso.submode = Some(value_str),
+                "SUBMODE" => qso.submode = Some(value_str.to_owned()),
                 "FREQ" => {
                     if let Ok(mhz) = value_str.parse::<f64>() {
                         qso.frequency_khz = mhz_to_khz(mhz);
@@ -72,30 +78,30 @@ impl AdifMapper {
                 // --- Signal reports ---
                 "RST_SENT" => {
                     qso.rst_sent = Some(crate::proto::logripper::domain::RstReport {
-                        raw: value_str,
+                        raw: value_str.to_owned(),
                         ..Default::default()
                     });
                 }
                 "RST_RCVD" => {
                     qso.rst_received = Some(crate::proto::logripper::domain::RstReport {
-                        raw: value_str,
+                        raw: value_str.to_owned(),
                         ..Default::default()
                     });
                 }
-                "TX_PWR" => qso.tx_power = Some(value_str),
+                "TX_PWR" => qso.tx_power = Some(value_str.to_owned()),
 
                 // --- Geographic / enrichment ---
-                "NAME" => qso.worked_operator_name = Some(value_str),
-                "GRIDSQUARE" => qso.worked_grid = Some(value_str),
-                "COUNTRY" => qso.worked_country = Some(value_str),
+                "NAME" => qso.worked_operator_name = Some(value_str.to_owned()),
+                "GRIDSQUARE" => qso.worked_grid = Some(value_str.to_owned()),
+                "COUNTRY" => qso.worked_country = Some(value_str.to_owned()),
                 "DXCC" => {
                     if let Ok(code) = value_str.parse::<u32>() {
                         qso.worked_dxcc = Some(code);
                     }
                 }
-                "STATE" => qso.worked_state = Some(value_str),
-                "CNTY" => qso.worked_county = Some(value_str),
-                "CONT" => qso.worked_continent = Some(value_str),
+                "STATE" => qso.worked_state = Some(value_str.to_owned()),
+                "CNTY" => qso.worked_county = Some(value_str.to_owned()),
+                "CONT" => qso.worked_continent = Some(value_str.to_owned()),
                 "CQZ" => {
                     if let Ok(zone) = value_str.parse::<u32>() {
                         qso.worked_cq_zone = Some(zone);
@@ -106,61 +112,61 @@ impl AdifMapper {
                         qso.worked_itu_zone = Some(zone);
                     }
                 }
-                "IOTA" => qso.worked_iota = Some(value_str),
+                "IOTA" => qso.worked_iota = Some(value_str.to_owned()),
 
                 // --- QSL ---
-                "QSL_SENT" => qso.qsl_sent_status = qsl_status_from_adif(&value_str).into(),
-                "QSL_RCVD" => qso.qsl_received_status = qsl_status_from_adif(&value_str).into(),
+                "QSL_SENT" => qso.qsl_sent_status = qsl_status_from_adif(value_str).into(),
+                "QSL_RCVD" => qso.qsl_received_status = qsl_status_from_adif(value_str).into(),
                 "LOTW_QSL_SENT" => map_confirmation_field(
                     &mut qso.lotw_sent,
                     &mut qso.extra_fields,
-                    key_upper,
+                    key_upper.as_str(),
                     value_str,
                 ),
                 "LOTW_QSL_RCVD" => map_confirmation_field(
                     &mut qso.lotw_received,
                     &mut qso.extra_fields,
-                    key_upper,
+                    key_upper.as_str(),
                     value_str,
                 ),
                 "EQSL_QSL_SENT" => map_confirmation_field(
                     &mut qso.eqsl_sent,
                     &mut qso.extra_fields,
-                    key_upper,
+                    key_upper.as_str(),
                     value_str,
                 ),
                 "EQSL_QSL_RCVD" => map_confirmation_field(
                     &mut qso.eqsl_received,
                     &mut qso.extra_fields,
-                    key_upper,
+                    key_upper.as_str(),
                     value_str,
                 ),
 
                 // --- Contest ---
-                "CONTEST_ID" => qso.contest_id = Some(value_str),
-                "SRX" => qso.serial_received = Some(value_str),
-                "STX" => qso.serial_sent = Some(value_str),
-                "SRX_STRING" => qso.exchange_received = Some(value_str),
-                "STX_STRING" => qso.exchange_sent = Some(value_str),
+                "CONTEST_ID" => qso.contest_id = Some(value_str.to_owned()),
+                "SRX" => qso.serial_received = Some(value_str.to_owned()),
+                "STX" => qso.serial_sent = Some(value_str.to_owned()),
+                "SRX_STRING" => qso.exchange_received = Some(value_str.to_owned()),
+                "STX_STRING" => qso.exchange_sent = Some(value_str.to_owned()),
 
                 // --- Propagation ---
-                "PROP_MODE" => qso.prop_mode = Some(value_str),
-                "SAT_NAME" => qso.sat_name = Some(value_str),
-                "SAT_MODE" => qso.sat_mode = Some(value_str),
+                "PROP_MODE" => qso.prop_mode = Some(value_str.to_owned()),
+                "SAT_NAME" => qso.sat_name = Some(value_str.to_owned()),
+                "SAT_MODE" => qso.sat_mode = Some(value_str.to_owned()),
 
                 // --- Notes ---
-                "COMMENT" => qso.comment = Some(value_str),
-                "NOTES" => qso.notes = Some(value_str),
+                "COMMENT" => qso.comment = Some(value_str.to_owned()),
+                "NOTES" => qso.notes = Some(value_str.to_owned()),
 
                 // --- Everything else → extra_fields for round-trip ---
                 _ => {
-                    qso.extra_fields.insert(key_upper, value_str);
+                    qso.extra_fields.insert(key_upper, value_str.to_owned());
                 }
             }
         }
 
         // Combine QSO_DATE + TIME_ON into UTC timestamp
-        if let Some(ref date_str) = qso_date {
+        if let Some(date_str) = qso_date.as_deref() {
             if let Some(ts) = parse_adif_datetime(date_str, time_on.as_deref()) {
                 qso.utc_timestamp = Some(ts);
             }
@@ -172,89 +178,112 @@ impl AdifMapper {
     /// Convert a proto `QsoRecord` into a list of ADIF field key-value pairs.
     /// Suitable for generating ADI output.
     #[must_use]
-    #[allow(clippy::too_many_lines)]
     pub fn qso_to_adif_fields(qso: &QsoRecord) -> Vec<(String, String)> {
-        let mut fields = Vec::new();
+        Self::qso_to_adif_fields_borrowed(qso)
+            .into_iter()
+            .map(|(key, value)| (key.into_owned(), value.into_owned()))
+            .collect()
+    }
+
+    /// Convert a proto `QsoRecord` directly into an ADI-formatted string.
+    #[must_use]
+    pub fn qso_to_adi(qso: &QsoRecord) -> String {
+        let fields = Self::qso_to_adif_fields_borrowed(qso);
+        Self::fields_to_adi(&fields)
+    }
+
+    #[must_use]
+    #[allow(clippy::too_many_lines)]
+    fn qso_to_adif_fields_borrowed(qso: &QsoRecord) -> Vec<AdifField<'_>> {
+        let mut fields = Vec::with_capacity(qso.extra_fields.len() + 32);
 
         // Core
         if !qso.station_callsign.is_empty() {
-            fields.push(("STATION_CALLSIGN".into(), qso.station_callsign.clone()));
+            push_field(
+                &mut fields,
+                "STATION_CALLSIGN",
+                qso.station_callsign.as_str(),
+            );
         }
         if !qso.worked_callsign.is_empty() {
-            fields.push(("CALL".into(), qso.worked_callsign.clone()));
+            push_field(&mut fields, "CALL", qso.worked_callsign.as_str());
         }
 
         // Timestamp → QSO_DATE + TIME_ON
         if let Some(ref ts) = qso.utc_timestamp {
             if let Some((date_str, time_str)) = format_adif_datetime(ts) {
-                fields.push(("QSO_DATE".into(), date_str));
-                fields.push(("TIME_ON".into(), time_str));
+                push_field(&mut fields, "QSO_DATE", date_str);
+                push_field(&mut fields, "TIME_ON", time_str);
             }
         }
 
         // Band
         let band = Band::try_from(qso.band).unwrap_or(Band::Unspecified);
         if let Some(band_str) = crate::domain::band::band_to_adif(band) {
-            fields.push(("BAND".into(), band_str.to_string()));
+            push_field(&mut fields, "BAND", band_str);
         }
 
         // Mode + submode
         let mode = Mode::try_from(qso.mode).unwrap_or(Mode::Unspecified);
         if let Some(mode_str) = crate::domain::mode::mode_to_adif(mode) {
-            fields.push(("MODE".into(), mode_str.to_string()));
+            push_field(&mut fields, "MODE", mode_str);
         }
         if let Some(ref sub) = qso.submode {
-            fields.push(("SUBMODE".into(), sub.clone()));
+            push_field(&mut fields, "SUBMODE", sub.as_str());
         }
 
         // Frequency
         if let Some(khz) = qso.frequency_khz {
             let whole_mhz = khz / 1000;
             let fractional_khz = khz % 1000;
-            fields.push(("FREQ".into(), format!("{whole_mhz}.{fractional_khz:03}")));
+            push_field(
+                &mut fields,
+                "FREQ",
+                format!("{whole_mhz}.{fractional_khz:03}"),
+            );
         }
 
         // Signal reports
         if let Some(ref rst) = qso.rst_sent {
-            fields.push(("RST_SENT".into(), rst.raw.clone()));
+            push_field(&mut fields, "RST_SENT", rst.raw.as_str());
         }
         if let Some(ref rst) = qso.rst_received {
-            fields.push(("RST_RCVD".into(), rst.raw.clone()));
+            push_field(&mut fields, "RST_RCVD", rst.raw.as_str());
         }
         if let Some(ref pwr) = qso.tx_power {
-            fields.push(("TX_PWR".into(), pwr.clone()));
+            push_field(&mut fields, "TX_PWR", pwr.as_str());
         }
 
         // Geographic
-        if let Some(ref v) = qso.worked_operator_name {
-            fields.push(("NAME".into(), v.clone()));
+        if let Some(v) = qso.worked_operator_name.as_deref() {
+            push_field(&mut fields, "NAME", v);
         }
-        if let Some(ref v) = qso.worked_grid {
-            fields.push(("GRIDSQUARE".into(), v.clone()));
+        if let Some(v) = qso.worked_grid.as_deref() {
+            push_field(&mut fields, "GRIDSQUARE", v);
         }
-        if let Some(ref v) = qso.worked_country {
-            fields.push(("COUNTRY".into(), v.clone()));
+        if let Some(v) = qso.worked_country.as_deref() {
+            push_field(&mut fields, "COUNTRY", v);
         }
         if let Some(dxcc) = qso.worked_dxcc {
-            fields.push(("DXCC".into(), dxcc.to_string()));
+            push_field(&mut fields, "DXCC", dxcc.to_string());
         }
-        if let Some(ref v) = qso.worked_state {
-            fields.push(("STATE".into(), v.clone()));
+        if let Some(v) = qso.worked_state.as_deref() {
+            push_field(&mut fields, "STATE", v);
         }
-        if let Some(ref v) = qso.worked_county {
-            fields.push(("CNTY".into(), v.clone()));
+        if let Some(v) = qso.worked_county.as_deref() {
+            push_field(&mut fields, "CNTY", v);
         }
-        if let Some(ref v) = qso.worked_continent {
-            fields.push(("CONT".into(), v.clone()));
+        if let Some(v) = qso.worked_continent.as_deref() {
+            push_field(&mut fields, "CONT", v);
         }
         if let Some(z) = qso.worked_cq_zone {
-            fields.push(("CQZ".into(), z.to_string()));
+            push_field(&mut fields, "CQZ", z.to_string());
         }
         if let Some(z) = qso.worked_itu_zone {
-            fields.push(("ITUZ".into(), z.to_string()));
+            push_field(&mut fields, "ITUZ", z.to_string());
         }
-        if let Some(ref v) = qso.worked_iota {
-            fields.push(("IOTA".into(), v.clone()));
+        if let Some(v) = qso.worked_iota.as_deref() {
+            push_field(&mut fields, "IOTA", v);
         }
 
         // QSL
@@ -263,7 +292,7 @@ impl AdifMapper {
                 .unwrap_or(crate::proto::logripper::domain::QslStatus::Unspecified),
         );
         if let Some(s) = sent {
-            fields.push(("QSL_SENT".into(), s.to_string()));
+            push_field(&mut fields, "QSL_SENT", s);
         }
 
         let rcvd = crate::domain::qso::qsl_status_to_adif(
@@ -271,7 +300,7 @@ impl AdifMapper {
                 .unwrap_or(crate::proto::logripper::domain::QslStatus::Unspecified),
         );
         if let Some(s) = rcvd {
-            fields.push(("QSL_RCVD".into(), s.to_string()));
+            push_field(&mut fields, "QSL_RCVD", s);
         }
 
         push_confirmation_field(&mut fields, "LOTW_QSL_SENT", qso.lotw_sent);
@@ -280,39 +309,39 @@ impl AdifMapper {
         push_confirmation_field(&mut fields, "EQSL_QSL_RCVD", qso.eqsl_received);
 
         // Contest
-        if let Some(ref v) = qso.contest_id {
-            fields.push(("CONTEST_ID".into(), v.clone()));
+        if let Some(v) = qso.contest_id.as_deref() {
+            push_field(&mut fields, "CONTEST_ID", v);
         }
-        if let Some(ref v) = qso.serial_sent {
-            fields.push(("STX".into(), v.clone()));
+        if let Some(v) = qso.serial_sent.as_deref() {
+            push_field(&mut fields, "STX", v);
         }
-        if let Some(ref v) = qso.serial_received {
-            fields.push(("SRX".into(), v.clone()));
+        if let Some(v) = qso.serial_received.as_deref() {
+            push_field(&mut fields, "SRX", v);
         }
-        if let Some(ref v) = qso.exchange_sent {
-            fields.push(("STX_STRING".into(), v.clone()));
+        if let Some(v) = qso.exchange_sent.as_deref() {
+            push_field(&mut fields, "STX_STRING", v);
         }
-        if let Some(ref v) = qso.exchange_received {
-            fields.push(("SRX_STRING".into(), v.clone()));
+        if let Some(v) = qso.exchange_received.as_deref() {
+            push_field(&mut fields, "SRX_STRING", v);
         }
 
         // Propagation
-        if let Some(ref v) = qso.prop_mode {
-            fields.push(("PROP_MODE".into(), v.clone()));
+        if let Some(v) = qso.prop_mode.as_deref() {
+            push_field(&mut fields, "PROP_MODE", v);
         }
-        if let Some(ref v) = qso.sat_name {
-            fields.push(("SAT_NAME".into(), v.clone()));
+        if let Some(v) = qso.sat_name.as_deref() {
+            push_field(&mut fields, "SAT_NAME", v);
         }
-        if let Some(ref v) = qso.sat_mode {
-            fields.push(("SAT_MODE".into(), v.clone()));
+        if let Some(v) = qso.sat_mode.as_deref() {
+            push_field(&mut fields, "SAT_MODE", v);
         }
 
         // Notes
-        if let Some(ref v) = qso.comment {
-            fields.push(("COMMENT".into(), v.clone()));
+        if let Some(v) = qso.comment.as_deref() {
+            push_field(&mut fields, "COMMENT", v);
         }
-        if let Some(ref v) = qso.notes {
-            fields.push(("NOTES".into(), v.clone()));
+        if let Some(v) = qso.notes.as_deref() {
+            push_field(&mut fields, "NOTES", v);
         }
 
         // Extra fields (round-trip overflow)
@@ -320,7 +349,7 @@ impl AdifMapper {
             if confirmation_field_is_overridden(qso, k) {
                 continue;
             }
-            fields.push((k.clone(), v.clone()));
+            push_field(&mut fields, k.as_str(), v.as_str());
         }
 
         fields
@@ -328,21 +357,37 @@ impl AdifMapper {
 
     /// Generate an ADI-format string from ADIF field pairs.
     #[must_use]
-    pub fn fields_to_adi(fields: &[(String, String)]) -> String {
-        let mut out = String::new();
+    pub fn fields_to_adi<K, V>(fields: &[(K, V)]) -> String
+    where
+        K: AsRef<str>,
+        V: AsRef<str>,
+    {
+        let capacity = fields.iter().fold(6, |acc, (key, value)| {
+            acc + key.as_ref().len() + value.as_ref().len() + 16
+        });
+        let mut out = String::with_capacity(capacity);
+
         for (key, value) in fields {
-            let len = value.len();
+            let key = key.as_ref();
+            let value = value.as_ref();
             out.push('<');
             out.push_str(key);
             out.push(':');
-            out.push_str(&len.to_string());
-            out.push('>');
+            let _ = write!(out, "{}>", value.len());
             out.push_str(value);
             out.push('\n');
         }
         out.push_str("<eor>\n");
         out
     }
+}
+
+fn push_field<'a>(
+    fields: &mut Vec<AdifField<'a>>,
+    key: impl Into<Cow<'a, str>>,
+    value: impl Into<Cow<'a, str>>,
+) {
+    fields.push((key.into(), value.into()));
 }
 
 /// Parse ADIF date (YYYYMMDD) + optional time (HHMM or HHMMSS) into prost Timestamp.
@@ -425,24 +470,24 @@ fn parse_confirmation_bool(value: &str) -> Option<bool> {
 fn map_confirmation_field(
     target: &mut Option<bool>,
     extra_fields: &mut std::collections::HashMap<String, String>,
-    key: String,
-    value: String,
+    key: &str,
+    value: &str,
 ) {
-    if let Some(parsed) = parse_confirmation_bool(&value) {
+    if let Some(parsed) = parse_confirmation_bool(value) {
         *target = Some(parsed);
     } else {
-        extra_fields.insert(key, value);
+        extra_fields.insert(key.to_owned(), value.to_owned());
     }
 }
 
 fn push_confirmation_field(
-    fields: &mut Vec<(String, String)>,
+    fields: &mut Vec<AdifField<'_>>,
     key: &'static str,
     value: Option<bool>,
 ) {
     match value {
-        Some(true) => fields.push((key.into(), "Y".into())),
-        Some(false) => fields.push((key.into(), "N".into())),
+        Some(true) => push_field(fields, key, "Y"),
+        Some(false) => push_field(fields, key, "N"),
         None => {}
     }
 }

@@ -190,6 +190,8 @@ buf generate
 - **Field numbering**: Group related fields in ranges (identity: 1-9, name: 10-19, address: 20-29, etc.)
 - **Field naming**: snake_case in proto files (auto-converted to PascalCase in C#, snake_case in Rust)
 - **Optional fields**: Use `optional` keyword for fields that may not be present from the provider
-- **Enums**: Use `_UNSPECIFIED = 0` as the default/unknown value
+- **Enums**: Prefer `_UNSPECIFIED = 0` when the schema has a neutral default; operational defaults may intentionally keep a domain-specific zero value
 - **Timestamps**: Use `google.protobuf.Timestamp` for all date/time fields
 - **C# namespace**: Set via `option csharp_namespace = "LogRipper.Domain"` or `"LogRipper.Services"`
+- **Packages**: Keep the current `proto/domain` and `proto/services` layout with `logripper.domain` / `logripper.services` packages until the project deliberately introduces versioned external contracts
+- **RPC message shapes**: Reuse shared domain messages like `LookupResult` and `QsoRecord` directly when they are already the app-facing contract; add method-specific wrapper messages only when they carry distinct semantics

@@ -173,9 +173,8 @@ async fn round_trip_qso_through_adif() {
     let qsos = parse_adi_to_qsos(data).await;
     let original = &qsos[0];
 
-    // Convert back to ADIF fields
-    let adif_fields = AdifMapper::qso_to_adif_fields(original);
-    let adi_string = AdifMapper::fields_to_adi(&adif_fields);
+    // Convert back to ADIF
+    let adi_string = AdifMapper::qso_to_adi(original);
 
     // Parse the generated ADIF back
     let mut stream = RecordStream::new(adi_string.as_bytes(), true);
@@ -207,8 +206,7 @@ async fn round_trip_extra_fields_preserved() {
     let original = &qsos[0];
 
     // Round-trip
-    let adif_fields = AdifMapper::qso_to_adif_fields(original);
-    let adi_string = AdifMapper::fields_to_adi(&adif_fields);
+    let adi_string = AdifMapper::qso_to_adi(original);
     let mut stream = RecordStream::new(adi_string.as_bytes(), true);
     let parsed_back = stream.next().await.unwrap().expect("Failed to re-parse");
     let round_tripped = AdifMapper::record_to_qso(&parsed_back);
