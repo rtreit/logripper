@@ -1,0 +1,45 @@
+name: .NET Quality
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/dotnet-quality.yml"
+      - "global.json"
+      - "src/dotnet/**"
+      - "proto/**"
+  pull_request:
+    paths:
+      - ".github/workflows/dotnet-quality.yml"
+      - "global.json"
+      - "src/dotnet/**"
+      - "proto/**"
+
+permissions:
+  contents: read
+
+jobs:
+  dotnet-quality:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Install .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Verify formatting
+        run: dotnet format src/dotnet/LogRipper.slnx --verify-no-changes
+
+      - name: Build
+        run: dotnet build src/dotnet/LogRipper.slnx
+
+      - name: Run tests
+        run: dotnet test src/dotnet/LogRipper.slnx --no-build
+
+      - name: Check for vulnerable packages
+        run: dotnet list src/dotnet/LogRipper.slnx package --vulnerable --include-transitive
