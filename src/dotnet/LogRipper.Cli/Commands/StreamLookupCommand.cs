@@ -44,7 +44,7 @@ internal static class StreamLookupCommand
             LookupCommand.PrintRecord(record);
         }
 
-        var finalState = lastResult is null ? LookupState.Unspecified : lastResult.State;
+        var finalState = (lastResult?.State) ?? LookupState.Unspecified;
         return finalState == LookupState.Found ? 0 : 1;
     }
 }

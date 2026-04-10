@@ -48,9 +48,9 @@ internal static class CliArgumentParser
             {
                 command = arg;
             }
-            else if (callsign is null)
+            else
             {
-                callsign = arg.ToUpperInvariant();
+                callsign ??= arg.ToUpperInvariant();
             }
         }
 
