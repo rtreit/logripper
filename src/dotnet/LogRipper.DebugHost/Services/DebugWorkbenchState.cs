@@ -4,12 +4,14 @@ using Microsoft.Extensions.Options;
 
 namespace LogRipper.DebugHost.Services;
 
-public sealed class DebugWorkbenchState
+internal sealed class DebugWorkbenchState
 {
     private readonly DebugWorkbenchOptions _options;
 
     public DebugWorkbenchState(IOptions<DebugWorkbenchOptions> options)
     {
+        ArgumentNullException.ThrowIfNull(options);
+        
         _options = options.Value;
         EngineEndpoint = _options.DefaultEngineEndpoint;
     }
@@ -20,6 +22,8 @@ public sealed class DebugWorkbenchState
 
     public void UpdateEngineEndpoint(string endpoint)
     {
+        ArgumentNullException.ThrowIfNull(endpoint);
+        
         EngineEndpoint = endpoint.Trim();
     }
 
@@ -51,7 +55,17 @@ public sealed class DebugWorkbenchState
                 EngineEndpoint);
             return LastProbe;
         }
-        catch (Exception ex)
+        catch (OperationCanceledException ex)
+        {
+            LastProbe = new TransportProbeResult(false, ex.Message, attemptedAt, EngineEndpoint);
+            return LastProbe;
+        }
+        catch (SocketException ex)
+        {
+            LastProbe = new TransportProbeResult(false, ex.Message, attemptedAt, EngineEndpoint);
+            return LastProbe;
+        }
+        catch (IOException ex)
         {
             LastProbe = new TransportProbeResult(false, ex.Message, attemptedAt, EngineEndpoint);
             return LastProbe;

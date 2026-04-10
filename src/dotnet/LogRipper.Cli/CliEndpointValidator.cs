@@ -1,6 +1,6 @@
 namespace LogRipper.Cli;
 
-public static class CliEndpointValidator
+internal static class CliEndpointValidator
 {
     public static bool TryCreateEndpointUri(string endpoint, out Uri? uri)
     {

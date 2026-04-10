@@ -3,7 +3,7 @@ using LogRipper.Services;
 
 namespace LogRipper.Cli.Commands;
 
-public static class StatusCommand
+internal static class StatusCommand
 {
     public static async Task<int> RunAsync(GrpcChannel channel)
     {

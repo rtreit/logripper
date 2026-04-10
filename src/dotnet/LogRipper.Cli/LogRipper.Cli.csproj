@@ -23,4 +23,8 @@
               GrpcServices="Client" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="LogRipper.Cli.Tests" />
+  </ItemGroup>
+
 </Project>

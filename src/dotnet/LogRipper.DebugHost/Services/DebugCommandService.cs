@@ -4,7 +4,7 @@ using Microsoft.Extensions.Options;
 
 namespace LogRipper.DebugHost.Services;
 
-public sealed class DebugCommandService
+internal sealed class DebugCommandService
 {
     private readonly RepositoryPaths _repositoryPaths;
     private readonly ToolchainLocator _toolchainLocator;
@@ -15,6 +15,10 @@ public sealed class DebugCommandService
         ToolchainLocator toolchainLocator,
         IOptions<DebugWorkbenchOptions> options)
     {
+        ArgumentNullException.ThrowIfNull(repositoryPaths);
+        ArgumentNullException.ThrowIfNull(toolchainLocator);
+        ArgumentNullException.ThrowIfNull(options);
+        
         _repositoryPaths = repositoryPaths;
         _toolchainLocator = toolchainLocator;
         _options = options.Value;
@@ -60,6 +64,8 @@ public sealed class DebugCommandService
 
     public async Task<CommandExecutionResult> RunAsync(string key, CancellationToken cancellationToken = default)
     {
+        ArgumentNullException.ThrowIfNull(key);
+        
         var command = GetCommands().Single(command => command.Key == key);
         var effectiveEnvironment = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 

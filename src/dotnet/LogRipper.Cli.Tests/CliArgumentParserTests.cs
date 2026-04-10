@@ -2,6 +2,7 @@ using LogRipper.Cli;
 
 namespace LogRipper.Cli.Tests;
 
+#pragma warning disable CA1707 // Remove underscores from member names - xUnit allows underscores in test methods
 public class CliArgumentParserTests
 {
     [Fact]
@@ -51,3 +52,4 @@ public class CliArgumentParserTests
         }
     }
 }
+#pragma warning restore CA1707

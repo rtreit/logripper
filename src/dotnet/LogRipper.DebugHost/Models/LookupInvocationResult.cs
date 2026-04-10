@@ -2,7 +2,7 @@ using LogRipper.Domain;
 
 namespace LogRipper.DebugHost.Models;
 
-public sealed record LookupInvocationResult(
+internal sealed record LookupInvocationResult(
     LookupRequest Request,
     IReadOnlyList<LookupResult> Responses,
     string? ErrorMessage,

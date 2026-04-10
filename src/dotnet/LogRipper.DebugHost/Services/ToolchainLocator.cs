@@ -2,8 +2,9 @@ using LogRipper.DebugHost.Models;
 
 namespace LogRipper.DebugHost.Services;
 
-public sealed class ToolchainLocator
+internal sealed class ToolchainLocator
 {
+#pragma warning disable CA1822 // Mark members as static
     public string? FindCargo() => FindOnPath("cargo");
 
     public string? FindDotnet() => FindOnPath("dotnet");
@@ -50,6 +51,7 @@ public sealed class ToolchainLocator
             new("protoc", FindProtoc() is not null, FindProtoc())
         ];
     }
+#pragma warning restore CA1822 // Mark members as static
 
     private static IEnumerable<string> EnumerateNuGetPackageRoots()
     {

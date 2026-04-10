@@ -1,6 +1,6 @@
 namespace LogRipper.DebugHost.Models;
 
-public enum SampleMessageType
+internal enum SampleMessageType
 {
     LookupRequest,
     LookupResult,

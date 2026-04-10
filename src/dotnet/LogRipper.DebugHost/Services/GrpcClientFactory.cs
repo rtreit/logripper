@@ -3,12 +3,14 @@ using LogRipper.Services;
 
 namespace LogRipper.DebugHost.Services;
 
-public sealed class GrpcClientFactory
+internal sealed class GrpcClientFactory
 {
     private readonly DebugWorkbenchState _state;
 
     public GrpcClientFactory(DebugWorkbenchState state)
     {
+        ArgumentNullException.ThrowIfNull(state);
+        
         _state = state;
     }
 

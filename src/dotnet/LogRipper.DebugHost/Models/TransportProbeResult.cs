@@ -1,6 +1,6 @@
 namespace LogRipper.DebugHost.Models;
 
-public sealed record TransportProbeResult(
+internal sealed record TransportProbeResult(
     bool IsSuccess,
     string Summary,
     DateTimeOffset AttemptedAtUtc,

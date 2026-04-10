@@ -4,6 +4,8 @@ using LogRipper.DebugHost.Services;
 
 namespace LogRipper.DebugHost.Tests;
 
+#pragma warning disable CA1707 // Remove underscores from member names - xUnit allows underscores in test methods
+#pragma warning disable CA1307 // Use StringComparison for string comparison
 public class ProtoJsonServiceTests
 {
     [Fact]
@@ -40,3 +42,5 @@ public class ProtoJsonServiceTests
         Assert.DoesNotContain("\"submode\":", payload.Json);
     }
 }
+#pragma warning restore CA1707
+#pragma warning restore CA1307
