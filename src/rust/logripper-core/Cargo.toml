@@ -11,15 +11,17 @@ repository.workspace = true
 prost = { workspace = true }
 prost-types = { workspace = true }
 tonic = { workspace = true }
-tokio = { workspace = true }
 uuid = { workspace = true }
 difa = "0.1"
 thiserror = "2"
 chrono = "0.4"
-futures = "0.3"
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true }
+futures = "0.3"
 
 [build-dependencies]
 tonic-build = "0.12"

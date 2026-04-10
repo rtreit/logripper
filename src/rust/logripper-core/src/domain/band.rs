@@ -2,16 +2,6 @@
 
 use crate::proto::logripper::domain::Band;
 
-/// Frequency range in MHz for a band.
-pub struct BandRange {
-    /// The band associated with the range.
-    pub band: Band,
-    /// Lower edge of the band in MHz.
-    pub lower_mhz: f64,
-    /// Upper edge of the band in MHz.
-    pub upper_mhz: f64,
-}
-
 /// All ADIF 3.1.7 band definitions with frequency ranges.
 const BAND_TABLE: &[(&str, Band, f64, f64)] = &[
     ("2190M", Band::Band2190m, 0.1357, 0.1378),
