@@ -7,25 +7,36 @@ option csharp_namespace = "LogRipper.Domain";
 import "domain/callsign.proto";
 
 // The state of an in-flight or completed lookup operation.
+//
+// State machine for streaming lookups (StreamLookup):
+//   LOADING → (STALE)? → FOUND | NOT_FOUND | ERROR
+//
+// For unary lookups (Lookup, GetCachedCallsign) the response state will be
+// one of the terminal states: FOUND, NOT_FOUND, ERROR, or UNSPECIFIED (error).
 enum LookupState {
-  LOOKUP_STATE_UNSPECIFIED = 0;  // Default/uninitialized state
-  LOOKUP_STATE_LOADING     = 1;  // Request in flight
-  LOOKUP_STATE_FOUND       = 2;  // Callsign resolved successfully
-  LOOKUP_STATE_NOT_FOUND   = 3;  // Callsign does not exist in provider
-  LOOKUP_STATE_ERROR       = 4;  // Provider error (network, auth, rate limit)
-  LOOKUP_STATE_STALE       = 5;  // Returning cached data, refresh pending
-  LOOKUP_STATE_CANCELLED   = 6;  // Superseded by a newer lookup
+  LOOKUP_STATE_UNSPECIFIED = 0;  // Default/zero value — should not appear in normal responses
+  LOOKUP_STATE_LOADING     = 1;  // Request in flight; emitted first by StreamLookup
+  LOOKUP_STATE_FOUND       = 2;  // Callsign resolved successfully; record field is populated
+  LOOKUP_STATE_NOT_FOUND   = 3;  // Callsign does not exist in the provider
+  LOOKUP_STATE_ERROR       = 4;  // Provider error (network, auth, rate limit); see error_message
+  LOOKUP_STATE_STALE       = 5;  // Returning cached data while a background refresh is pending
+  LOOKUP_STATE_CANCELLED   = 6;  // Lookup was superseded by a newer request
 }
 
-// Result of a callsign lookup, wrapping the async state machine
-// described in architecture principle #11 (structured concurrency).
+// Result of a callsign lookup.
+//
+// Used by both unary (Lookup, GetCachedCallsign) and streaming (StreamLookup) RPCs.
+// The state field always carries the semantic outcome. gRPC status is OK in all normal cases.
+//
+// Clients should handle all LookupState values including future additions — use a
+// default/fallback branch when switching on state.
 message LookupResult {
-  LookupState state            = 1;
-  optional CallsignRecord record = 2;
-  optional string error_message  = 3;
-  bool cache_hit               = 4;
-  uint32 lookup_latency_ms     = 5;
-  string queried_callsign      = 6;  // The original input callsign
+  LookupState state            = 1;  // Outcome of the lookup
+  optional CallsignRecord record = 2;  // Populated when state == FOUND
+  optional string error_message  = 3;  // Human-readable error when state == ERROR
+  bool cache_hit               = 4;  // True if result was served from L1 cache
+  uint32 lookup_latency_ms     = 5;  // Round-trip latency in milliseconds
+  string queried_callsign      = 6;  // Echo of the original requested callsign
 }
 
 // Request to look up a callsign.

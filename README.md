@@ -51,6 +51,8 @@ Proto files under `proto/` are the **single source of truth** for all shared typ
 | **LookupService** | Callsign lookups -- single, streaming, batch, cached, DXCC |
 | **LogbookService** | QSO CRUD, QRZ logbook sync, ADIF import/export |
 
+**Building a client?** See the [Engine API Documentation](docs/api/README.md) for a client-facing reference covering service contracts, implementation status, stub generation, transport options, and workflow examples.
+
 ### ADIF
 
 ADIF (Amateur Data Interchange Format) is used **only at the edges** -- QRZ API calls and file I/O. Internal communication always uses protobuf. The Rust ADIF parser converts to/from proto types at the boundary, with an `extra_fields` map for lossless round-tripping.
