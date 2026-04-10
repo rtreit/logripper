@@ -52,6 +52,10 @@ nunit-*.xml
 .env.*
 !.env.example
 
+# Local SQLite runtime files
+logripper.db*
+.playwright-mcp/
+
 # Rust
 target/
 Cargo.lock
