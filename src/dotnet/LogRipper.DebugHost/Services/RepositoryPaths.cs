@@ -12,7 +12,7 @@ internal sealed class RepositoryPaths
     public RepositoryPaths(string contentRootPath)
     {
         ArgumentNullException.ThrowIfNull(contentRootPath);
-        
+
         ContentRoot = Path.GetFullPath(contentRootPath);
         RepoRoot = Path.GetFullPath(Path.Combine(ContentRoot, "..", "..", ".."));
         RustWorkspaceRoot = Path.Combine(RepoRoot, "src", "rust");

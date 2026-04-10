@@ -11,7 +11,7 @@ internal sealed class SampleProtoFactory
     public LookupRequest CreateLookupRequest(string callsign, bool skipCache = false)
     {
         ArgumentNullException.ThrowIfNull(callsign);
-        
+
         return new LookupRequest
         {
             Callsign = NormalizeCallsign(callsign),
@@ -22,7 +22,7 @@ internal sealed class SampleProtoFactory
     public CallsignRecord CreateCallsignRecord(string callsign)
     {
         ArgumentNullException.ThrowIfNull(callsign);
-        
+
         var normalizedCallsign = NormalizeCallsign(callsign);
         return new CallsignRecord
         {
@@ -53,7 +53,7 @@ internal sealed class SampleProtoFactory
     public LookupResult CreateLookupResult(string callsign, bool cacheHit = true)
     {
         ArgumentNullException.ThrowIfNull(callsign);
-        
+
         var normalizedCallsign = NormalizeCallsign(callsign);
         return new LookupResult
         {
@@ -68,7 +68,7 @@ internal sealed class SampleProtoFactory
     public QsoRecord CreateQsoRecord(string workedCallsign)
     {
         ArgumentNullException.ThrowIfNull(workedCallsign);
-        
+
         return CreateQsoRecord(workedCallsign, new QsoSampleOptions());
     }
 
@@ -76,7 +76,7 @@ internal sealed class SampleProtoFactory
     {
         ArgumentNullException.ThrowIfNull(workedCallsign);
         ArgumentNullException.ThrowIfNull(options);
-        
+
         var utcNow = DateTime.SpecifyKind(DateTime.UtcNow, DateTimeKind.Utc);
         var normalizedCallsign = NormalizeCallsign(workedCallsign);
         var sampleRst = CreateSampleRst(options.Mode);
@@ -133,7 +133,7 @@ internal sealed class SampleProtoFactory
     public IMessage CreateSampleMessage(SampleMessageType sampleType, string callsign, QsoSampleOptions? qsoOptions = null)
     {
         ArgumentNullException.ThrowIfNull(callsign);
-        
+
         return sampleType switch
         {
             SampleMessageType.LookupRequest => CreateLookupRequest(callsign),

@@ -11,14 +11,14 @@ internal sealed class LookupWorkbenchService
     public LookupWorkbenchService(GrpcClientFactory clientFactory)
     {
         ArgumentNullException.ThrowIfNull(clientFactory);
-        
+
         _clientFactory = clientFactory;
     }
 
     public async Task<LookupInvocationResult> RunLookupAsync(LookupRequest request, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
-        
+
         try
         {
             using var channel = _clientFactory.CreateChannel();
@@ -39,7 +39,7 @@ internal sealed class LookupWorkbenchService
     public async Task<LookupInvocationResult> RunStreamingLookupAsync(LookupRequest request, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
-        
+
         var responses = new List<LookupResult>();
 
         try
