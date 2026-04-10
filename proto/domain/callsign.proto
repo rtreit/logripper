@@ -54,8 +54,8 @@ message CallsignRecord {
 
   // --- License ---
   optional string license_class    = 40;
-  optional string effective_date   = 41;
-  optional string expiration_date  = 42;
+  optional google.protobuf.Timestamp effective_date   = 41;  // Provider-normalized license date
+  optional google.protobuf.Timestamp expiration_date  = 42;  // Provider-normalized license date
   optional string license_codes    = 43;
 
   // --- Contact ---
@@ -78,7 +78,7 @@ message CallsignRecord {
   optional string dxcc_continent    = 81;  // 2-letter: NA, SA, EU, AF, AS, OC
 
   // --- Metadata ---
-  optional string born           = 90;  // Year of birth
+  optional uint32 birth_year     = 90;   // Operator's year of birth
   optional uint64 qrz_serial    = 91;
   optional google.protobuf.Timestamp last_modified = 92;
   optional uint32 bio_length     = 93;
@@ -86,7 +86,7 @@ message CallsignRecord {
   optional string msa            = 95;   // Metro Service Area
   optional string area_code      = 96;
   optional string time_zone      = 97;
-  optional string gmt_offset     = 98;
+  optional double gmt_offset     = 98;   // Hours offset from GMT, may be fractional
   optional bool   dst_observed   = 99;
   optional uint32 profile_views  = 100;
 }

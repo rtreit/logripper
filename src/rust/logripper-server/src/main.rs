@@ -233,7 +233,7 @@ fn placeholder_lookup_error(callsign: &str) -> LookupResult {
             iota: None,
             dxcc_country_name: None,
             dxcc_continent: None,
-            born: None,
+            birth_year: None,
             qrz_serial: None,
             last_modified: None,
             bio_length: None,
