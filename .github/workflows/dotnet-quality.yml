@@ -34,8 +34,44 @@ jobs:
       - name: Build
         run: dotnet build src/dotnet/LogRipper.slnx
 
-      - name: Run tests
-        run: dotnet test src/dotnet/LogRipper.slnx --no-build
+      - name: Run tests with coverage
+        run: dotnet test src/dotnet/LogRipper.slnx --no-build --collect:"XPlat Code Coverage" --results-directory coverage
+
+      - name: Install ReportGenerator
+        run: dotnet tool install -g dotnet-reportgenerator-globaltool
+
+      - name: Generate coverage report
+        run: |
+          reportgenerator \
+            -reports:"coverage/**/coverage.cobertura.xml" \
+            -targetdir:"coverage/report" \
+            -reporttypes:"Html;TextSummary" \
+            -verbosity:Warning
+
+      - name: Check .NET coverage threshold
+        run: |
+          python3 - <<'EOF'
+          import re, sys
+          text = open("coverage/report/Summary.txt").read()
+          m = re.search(r"Line coverage:\s+(\d+\.?\d*)%", text)
+          if not m:
+              print("ERROR: Could not parse line coverage from summary.")
+              sys.exit(1)
+          cov = float(m.group(1))
+          threshold = 8.0
+          print(f"Line coverage: {cov:.1f}%  (threshold: {threshold:.0f}%)")
+          if cov < threshold:
+              print(f"FAIL: coverage {cov:.1f}% is below the minimum threshold of {threshold:.0f}%")
+              sys.exit(1)
+          print("PASS: coverage threshold met.")
+          EOF
+
+      - name: Upload .NET coverage artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dotnet-coverage
+          path: coverage/report/
 
       - name: Check for vulnerable packages
         run: dotnet list src/dotnet/LogRipper.slnx package --vulnerable --include-transitive

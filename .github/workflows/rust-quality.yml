@@ -26,7 +26,7 @@ jobs:
 
       - name: Install Rust toolchain
         run: |
-          rustup toolchain install 1.88.0 --profile minimal --component rustfmt --component clippy
+          rustup toolchain install 1.88.0 --profile minimal --component rustfmt --component clippy --component llvm-tools-preview
           rustup default 1.88.0
           rustc --version
           cargo --version
@@ -50,14 +50,31 @@ jobs:
         run: |
           cargo install cargo-deny --locked
 
+      - name: Install cargo-llvm-cov
+        run: |
+          cargo install cargo-llvm-cov --locked
+
       - name: Check formatting
         run: cargo fmt --manifest-path src/rust/Cargo.toml --all -- --check
 
       - name: Run clippy with warnings denied
         run: cargo clippy --manifest-path src/rust/Cargo.toml --all-targets -- -D warnings
 
-      - name: Run Rust tests
-        run: cargo test --manifest-path src/rust/Cargo.toml
+      - name: Run Rust tests with coverage
+        run: |
+          cargo llvm-cov \
+            --manifest-path src/rust/Cargo.toml \
+            --all \
+            --lcov \
+            --output-path rust-coverage.lcov \
+            --fail-under-lines 80
+
+      - name: Upload Rust coverage artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rust-coverage
+          path: rust-coverage.lcov
 
       - name: Run buf lint
         run: buf lint

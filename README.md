@@ -137,6 +137,46 @@ dotnet test LogRipper.slnx
 
 This builds the shared .NET workspace, including the developer debug host and the CLI tool that validates engine connectivity over gRPC.
 
+### Code Coverage
+
+Both the Rust engine and .NET components are instrumented for coverage on every CI run. Coverage reports are uploaded as workflow artifacts.
+
+**Thresholds:**
+
+| Surface  | Tool             | Threshold | Measured baseline |
+|----------|------------------|-----------|-------------------|
+| Rust     | cargo-llvm-cov   | 80% lines | ~86% lines        |
+| .NET     | Coverlet         | 8% lines  | ~10% lines        |
+
+> **Note:** The .NET threshold is intentionally low because coverage is currently skewed by auto-generated protobuf/gRPC stubs which have no direct unit tests. The hand-written service and model code has significantly higher coverage. Ratchet the threshold up incrementally as tests are added and generated code is excluded.
+
+**Run Rust coverage locally** (requires `llvm-tools-preview` component and `cargo-llvm-cov`):
+
+```
+rustup component add llvm-tools-preview
+cargo install cargo-llvm-cov --locked
+cd src/rust
+cargo llvm-cov --all --open
+```
+
+To check the threshold locally:
+
+```
+cd src/rust
+cargo llvm-cov --all --fail-under-lines 80
+```
+
+**Run .NET coverage locally** (requires `dotnet-reportgenerator-globaltool`):
+
+```
+dotnet tool install -g dotnet-reportgenerator-globaltool
+cd src/dotnet
+dotnet test LogRipper.slnx --collect:"XPlat Code Coverage" --results-directory coverage
+reportgenerator -reports:"coverage/**/coverage.cobertura.xml" -targetdir:"coverage/report" -reporttypes:"Html"
+```
+
+Then open `src/dotnet/coverage/report/index.html` in a browser.
+
 ### Developer Debug Workbench
 
 The repository now includes a **developer-only Blazor Server debug host** under `src/dotnet/LogRipper.DebugHost`. This is not the product logger UX. It is an internal workbench for:
