@@ -1,6 +1,6 @@
-using LogRipper.Domain;
 using LogRipper.DebugHost.Models;
 using LogRipper.DebugHost.Services;
+using LogRipper.Domain;
 
 namespace LogRipper.DebugHost.Tests;
 

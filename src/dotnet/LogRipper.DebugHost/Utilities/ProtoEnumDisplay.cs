@@ -1,6 +1,6 @@
-using LogRipper.Domain;
 using System.Reflection;
 using Google.Protobuf.Reflection;
+using LogRipper.Domain;
 
 namespace LogRipper.DebugHost.Utilities;
 

@@ -7,7 +7,7 @@ internal static class CliArgumentParser
     public static CliArguments Parse(string[] args)
     {
         ArgumentNullException.ThrowIfNull(args);
-        
+
         var endpoint = Environment.GetEnvironmentVariable("LOGRIPPER_ENDPOINT") ?? DefaultEndpoint;
         string? command = null;
 

@@ -10,7 +10,7 @@ internal sealed class GrpcClientFactory
     public GrpcClientFactory(DebugWorkbenchState state)
     {
         ArgumentNullException.ThrowIfNull(state);
-        
+
         _state = state;
     }
 

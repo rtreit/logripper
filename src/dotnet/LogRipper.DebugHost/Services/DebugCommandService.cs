@@ -18,7 +18,7 @@ internal sealed class DebugCommandService
         ArgumentNullException.ThrowIfNull(repositoryPaths);
         ArgumentNullException.ThrowIfNull(toolchainLocator);
         ArgumentNullException.ThrowIfNull(options);
-        
+
         _repositoryPaths = repositoryPaths;
         _toolchainLocator = toolchainLocator;
         _options = options.Value;
@@ -65,7 +65,7 @@ internal sealed class DebugCommandService
     public async Task<CommandExecutionResult> RunAsync(string key, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(key);
-        
+
         var command = GetCommands().Single(command => command.Key == key);
         var effectiveEnvironment = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
