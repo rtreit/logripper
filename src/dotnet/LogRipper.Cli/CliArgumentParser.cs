@@ -1,11 +1,13 @@
 namespace LogRipper.Cli;
 
-public static class CliArgumentParser
+internal static class CliArgumentParser
 {
     public const string DefaultEndpoint = "http://localhost:50051";
 
     public static CliArguments Parse(string[] args)
     {
+        ArgumentNullException.ThrowIfNull(args);
+        
         var endpoint = Environment.GetEnvironmentVariable("LOGRIPPER_ENDPOINT") ?? DefaultEndpoint;
         string? command = null;
 
@@ -29,7 +31,7 @@ public static class CliArgumentParser
                 continue;
             }
 
-            if (arg.StartsWith("-", StringComparison.Ordinal))
+            if (arg.StartsWith('-'))
             {
                 return new CliArguments("help", endpoint, ShowHelp: true, Error: $"Unknown option: {arg}");
             }

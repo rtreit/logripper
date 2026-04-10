@@ -2,7 +2,7 @@ using Microsoft.Extensions.Hosting;
 
 namespace LogRipper.DebugHost.Services;
 
-public sealed class RepositoryPaths
+internal sealed class RepositoryPaths
 {
     public RepositoryPaths(IHostEnvironment hostEnvironment)
         : this(hostEnvironment.ContentRootPath)
@@ -11,6 +11,8 @@ public sealed class RepositoryPaths
 
     public RepositoryPaths(string contentRootPath)
     {
+        ArgumentNullException.ThrowIfNull(contentRootPath);
+        
         ContentRoot = Path.GetFullPath(contentRootPath);
         RepoRoot = Path.GetFullPath(Path.Combine(ContentRoot, "..", "..", ".."));
         RustWorkspaceRoot = Path.Combine(RepoRoot, "src", "rust");

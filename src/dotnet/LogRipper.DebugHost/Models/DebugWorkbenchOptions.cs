@@ -1,6 +1,6 @@
 namespace LogRipper.DebugHost.Models;
 
-public sealed class DebugWorkbenchOptions
+internal sealed class DebugWorkbenchOptions
 {
     public const string SectionName = "DebugWorkbench";
 

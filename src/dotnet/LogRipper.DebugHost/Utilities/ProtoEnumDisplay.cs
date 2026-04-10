@@ -4,7 +4,7 @@ using Google.Protobuf.Reflection;
 
 namespace LogRipper.DebugHost.Utilities;
 
-public static class ProtoEnumDisplay
+internal static class ProtoEnumDisplay
 {
     public static string ForBand(Band band) => FormatEnumValue(band, "BAND");
 

@@ -35,6 +35,7 @@ csharp_style_prefer_pattern_matching = true:suggestion
 csharp_style_prefer_not_pattern = true:suggestion
 csharp_prefer_simple_using_statement = true:suggestion
 csharp_style_namespace_declarations = file_scoped:warning
+csharp_style_prefer_primary_constructors = true:suggestion
 
 dotnet_style_prefer_is_null_check_over_reference_equality_method = true:warning
 dotnet_style_prefer_collection_expression = true:suggestion
@@ -46,3 +47,12 @@ csharp_new_line_before_finally = true
 csharp_indent_case_contents = true
 csharp_space_after_cast = false
 csharp_preserve_single_line_statements = false
+
+# CA1303: Do not pass literals as localized parameters (not localizing a CLI tool)
+dotnet_diagnostic.CA1303.severity = none
+
+# CA2007: ConfigureAwait (not relevant for application code, only libraries)
+dotnet_diagnostic.CA2007.severity = none
+
+# CA1849: Sync over async for Console.Error.WriteLine (acceptable in CLI error paths)
+dotnet_diagnostic.CA1849.severity = suggestion

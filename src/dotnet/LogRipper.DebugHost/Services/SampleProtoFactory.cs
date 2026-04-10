@@ -5,10 +5,13 @@ using LogRipper.DebugHost.Models;
 
 namespace LogRipper.DebugHost.Services;
 
-public sealed class SampleProtoFactory
+internal sealed class SampleProtoFactory
 {
+#pragma warning disable CA1822 // Mark members as static
     public LookupRequest CreateLookupRequest(string callsign, bool skipCache = false)
     {
+        ArgumentNullException.ThrowIfNull(callsign);
+        
         return new LookupRequest
         {
             Callsign = NormalizeCallsign(callsign),
@@ -18,6 +21,8 @@ public sealed class SampleProtoFactory
 
     public CallsignRecord CreateCallsignRecord(string callsign)
     {
+        ArgumentNullException.ThrowIfNull(callsign);
+        
         var normalizedCallsign = NormalizeCallsign(callsign);
         return new CallsignRecord
         {
@@ -47,6 +52,8 @@ public sealed class SampleProtoFactory
 
     public LookupResult CreateLookupResult(string callsign, bool cacheHit = true)
     {
+        ArgumentNullException.ThrowIfNull(callsign);
+        
         var normalizedCallsign = NormalizeCallsign(callsign);
         return new LookupResult
         {
@@ -60,11 +67,16 @@ public sealed class SampleProtoFactory
 
     public QsoRecord CreateQsoRecord(string workedCallsign)
     {
+        ArgumentNullException.ThrowIfNull(workedCallsign);
+        
         return CreateQsoRecord(workedCallsign, new QsoSampleOptions());
     }
 
     public QsoRecord CreateQsoRecord(string workedCallsign, QsoSampleOptions options)
     {
+        ArgumentNullException.ThrowIfNull(workedCallsign);
+        ArgumentNullException.ThrowIfNull(options);
+        
         var utcNow = DateTime.SpecifyKind(DateTime.UtcNow, DateTimeKind.Utc);
         var normalizedCallsign = NormalizeCallsign(workedCallsign);
         var sampleRst = CreateSampleRst(options.Mode);
@@ -120,6 +132,8 @@ public sealed class SampleProtoFactory
 
     public IMessage CreateSampleMessage(SampleMessageType sampleType, string callsign, QsoSampleOptions? qsoOptions = null)
     {
+        ArgumentNullException.ThrowIfNull(callsign);
+        
         return sampleType switch
         {
             SampleMessageType.LookupRequest => CreateLookupRequest(callsign),
@@ -130,6 +144,7 @@ public sealed class SampleProtoFactory
             _ => CreateLookupRequest(callsign)
         };
     }
+#pragma warning restore CA1822 // Mark members as static
 
     private static (RstReport Sent, RstReport Received) CreateSampleRst(Mode mode)
     {

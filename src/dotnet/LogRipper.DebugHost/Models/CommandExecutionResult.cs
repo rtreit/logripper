@@ -1,6 +1,6 @@
 namespace LogRipper.DebugHost.Models;
 
-public sealed record CommandExecutionResult(
+internal sealed record CommandExecutionResult(
     DebugCommandDefinition Command,
     int ExitCode,
     string StandardOutput,

@@ -2,6 +2,7 @@ using LogRipper.DebugHost.Services;
 
 namespace LogRipper.DebugHost.Tests;
 
+#pragma warning disable CA1707 // Remove underscores from member names - xUnit allows underscores in test methods
 public class RepositoryPathsTests
 {
     [Fact]
@@ -14,3 +15,4 @@ public class RepositoryPathsTests
         Assert.Equal(Path.Combine(@"C:\repo", "src", "dotnet", "LogRipper.slnx"), paths.DotnetWorkspaceSolutionPath);
     }
 }
+#pragma warning restore CA1707

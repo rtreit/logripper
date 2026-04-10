@@ -1,6 +1,6 @@
 namespace LogRipper.DebugHost.Models;
 
-public sealed record DebugCommandDefinition(
+internal sealed record DebugCommandDefinition(
     string Key,
     string DisplayName,
     string Description,

@@ -4,6 +4,7 @@ using LogRipper.DebugHost.Services;
 
 namespace LogRipper.DebugHost.Tests;
 
+#pragma warning disable CA1707 // Remove underscores from member names - xUnit allows underscores in test methods
 public class SampleProtoFactoryTests
 {
     private readonly SampleProtoFactory _factory = new();
@@ -34,7 +35,7 @@ public class SampleProtoFactoryTests
     [InlineData(SampleMessageType.CallsignRecord)]
     [InlineData(SampleMessageType.QsoRecord)]
     [InlineData(SampleMessageType.DxccEntity)]
-    public void Sample_message_generation_supports_all_registered_types(SampleMessageType sampleType)
+    internal void Sample_message_generation_supports_all_registered_types(SampleMessageType sampleType)
     {
         var message = _factory.CreateSampleMessage(sampleType, "AA7BQ");
 
@@ -73,3 +74,4 @@ public class SampleProtoFactoryTests
         Assert.Equal("59", record.RstSent.Raw);
     }
 }
+#pragma warning restore CA1707

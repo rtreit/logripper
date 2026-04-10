@@ -4,17 +4,21 @@ using LogRipper.DebugHost.Models;
 
 namespace LogRipper.DebugHost.Services;
 
-public sealed class LookupWorkbenchService
+internal sealed class LookupWorkbenchService
 {
     private readonly GrpcClientFactory _clientFactory;
 
     public LookupWorkbenchService(GrpcClientFactory clientFactory)
     {
+        ArgumentNullException.ThrowIfNull(clientFactory);
+        
         _clientFactory = clientFactory;
     }
 
     public async Task<LookupInvocationResult> RunLookupAsync(LookupRequest request, CancellationToken cancellationToken = default)
     {
+        ArgumentNullException.ThrowIfNull(request);
+        
         try
         {
             using var channel = _clientFactory.CreateChannel();
@@ -22,7 +26,11 @@ public sealed class LookupWorkbenchService
             var response = await client.LookupAsync(request, cancellationToken: cancellationToken);
             return new LookupInvocationResult(request, [response], null, false, DateTimeOffset.UtcNow);
         }
-        catch (Exception ex)
+        catch (RpcException ex)
+        {
+            return new LookupInvocationResult(request, Array.Empty<LookupResult>(), ex.Status.Detail, false, DateTimeOffset.UtcNow);
+        }
+        catch (OperationCanceledException ex)
         {
             return new LookupInvocationResult(request, Array.Empty<LookupResult>(), ex.Message, false, DateTimeOffset.UtcNow);
         }
@@ -30,6 +38,8 @@ public sealed class LookupWorkbenchService
 
     public async Task<LookupInvocationResult> RunStreamingLookupAsync(LookupRequest request, CancellationToken cancellationToken = default)
     {
+        ArgumentNullException.ThrowIfNull(request);
+        
         var responses = new List<LookupResult>();
 
         try
@@ -49,7 +59,7 @@ public sealed class LookupWorkbenchService
         {
             return new LookupInvocationResult(request, responses, ex.Status.Detail, true, DateTimeOffset.UtcNow);
         }
-        catch (Exception ex)
+        catch (OperationCanceledException ex)
         {
             return new LookupInvocationResult(request, responses, ex.Message, true, DateTimeOffset.UtcNow);
         }
