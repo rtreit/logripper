@@ -56,7 +56,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn load_dotenv_if_present() {
-    dotenvy::dotenv().ok();
+    match dotenvy::dotenv() {
+        Ok(path) => println!("Loaded config from {}", path.display()),
+        Err(dotenvy::Error::Io(_)) => {}
+        Err(error) => eprintln!("Warning: failed to parse .env file: {error}"),
+    }
 }
 
 #[derive(Clone)]
@@ -612,6 +616,37 @@ mod tests {
             PathBuf::from("data/test-logripper.db"),
             options.storage.sqlite_path
         );
+
+        process_state.restore_current_dir();
+        fs::remove_file(env_path).expect("remove temp .env");
+        fs::remove_dir(temp_dir).expect("remove temp dir");
+    }
+
+    #[test]
+    fn load_dotenv_if_present_does_not_panic_on_malformed_env() {
+        let _process_state_lock = PROCESS_STATE_LOCK.lock().expect("lock process state");
+        let process_state = ProcessStateGuard::capture();
+
+        let temp_dir = std::env::temp_dir().join(format!(
+            "logripper-dotenv-bad-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system clock")
+                .as_nanos()
+        ));
+        fs::create_dir_all(&temp_dir).expect("create temp dir");
+        let env_path = temp_dir.join(".env");
+        // Unquoted parentheses are invalid dotenvy syntax
+        fs::write(
+            &env_path,
+            "LOGRIPPER_QRZ_USER_AGENT=LogRipper/0.1.0 (AE7XI)\n",
+        )
+        .expect("write temp .env");
+
+        std::env::set_current_dir(&temp_dir).expect("switch to temp dir");
+        // Should not panic; parse errors are reported to stderr but not fatal
+        load_dotenv_if_present();
 
         process_state.restore_current_dir();
         fs::remove_file(env_path).expect("remove temp .env");
