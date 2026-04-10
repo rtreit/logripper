@@ -1,0 +1,18 @@
+name: Full-Stack Quality
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 8 * * *'  # Daily at 08:00 UTC
+
+permissions:
+  contents: read
+
+jobs:
+  rust:
+    name: Rust Quality
+    uses: ./.github/workflows/rust-quality.yml
+
+  dotnet:
+    name: .NET Quality
+    uses: ./.github/workflows/dotnet-quality.yml

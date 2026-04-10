@@ -2,6 +2,7 @@ name: .NET Quality
 
 on:
   workflow_dispatch:
+  workflow_call:
   push:
     paths:
       - ".github/workflows/dotnet-quality.yml"
