@@ -8,7 +8,7 @@
 
 <h1 class="mb-3">Callsign Lookup Workbench</h1>
 <p class="text-muted">
-    This page is the first feature-shaped debugging slice: build a lookup request, inspect its protobuf payload, preview the result UI with sample data, and switch to a live gRPC call the moment the Rust lookup service host is ready.
+    This page is the first feature-shaped debugging slice: build a lookup request, inspect its protobuf payload, preview the result UI with sample data, and exercise live unary, streaming, and cache-only lookup calls against the Rust service host.
 </p>
 
 <div class="alert alert-secondary">
@@ -32,6 +32,7 @@
                 <button class="btn btn-outline-primary" @onclick="Preview">Preview</button>
                 <button class="btn btn-primary" @onclick="RunUnaryAsync">Live lookup</button>
                 <button class="btn btn-outline-secondary" @onclick="RunStreamingAsync">Stream lookup</button>
+                <button class="btn btn-outline-dark" @onclick="RunCacheAsync">Cache lookup</button>
             </div>
         </div>
     </div>
@@ -67,7 +68,7 @@
         else
         {
             <div class="mb-3">
-                <strong>Mode:</strong> @(liveResult.WasStreaming ? "Streaming lookup" : "Unary lookup")<br />
+                <strong>Mode:</strong> @liveResult.InvocationMode<br />
                 <strong>Completed:</strong> @liveResult.CompletedAtUtc.LocalDateTime.ToString("g")
             </div>
 
@@ -129,6 +130,13 @@
         Preview();
         var request = SampleProtoFactory.CreateLookupRequest(callsign, skipCache);
         liveResult = await LookupWorkbenchService.RunStreamingLookupAsync(request);
+        livePayloads = liveResult.Responses.Select(ProtoJsonService.Describe).ToList();
+    }
+
+    private async Task RunCacheAsync()
+    {
+        Preview();
+        liveResult = await LookupWorkbenchService.RunCachedLookupAsync(callsign);
         livePayloads = liveResult.Responses.Select(ProtoJsonService.Describe).ToList();
     }
 }

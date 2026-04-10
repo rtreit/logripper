@@ -7,5 +7,7 @@ pub mod adif;
 pub mod domain;
 /// FFI boundary for DSP helpers.
 pub mod ffi;
+/// Lookup orchestration, providers, and cache policy.
+pub mod lookup;
 /// Generated protobuf and gRPC bindings.
 pub mod proto;

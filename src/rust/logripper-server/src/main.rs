@@ -1,14 +1,18 @@
 //! Runnable tonic gRPC host for the `LogRipper` Rust engine.
 
-use logripper_core::domain::lookup::{normalize_callsign, placeholder_lookup_error};
-use std::net::SocketAddr;
+use std::{net::SocketAddr, sync::Arc};
+
+use logripper_core::lookup::{
+    CallsignProvider, DisabledCallsignProvider, LookupCoordinator, LookupCoordinatorConfig,
+    QrzXmlConfig, QrzXmlProvider,
+};
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::transport::Server;
 use tonic::{Request, Response, Status};
 
 use logripper_core::proto::logripper::domain::{
     BatchLookupRequest, BatchLookupResponse, CachedCallsignRequest, DxccEntity, DxccRequest,
-    LookupRequest, LookupResult, LookupState, QsoRecord,
+    LookupRequest, LookupResult, QsoRecord,
 };
 use logripper_core::proto::logripper::services::{
     logbook_service_server::{LogbookService, LogbookServiceServer},
@@ -22,12 +26,13 @@ use logripper_core::proto::logripper::services::{
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let options = ServerOptions::from_env_and_args(std::env::args().skip(1))?;
     let address = options.listen_address;
+    let lookup_service = DeveloperLookupService::new(create_lookup_coordinator());
 
     println!("Starting LogRipper gRPC server on {address}");
 
     Server::builder()
         .add_service(LogbookServiceServer::new(DeveloperLogbookService))
-        .add_service(LookupServiceServer::new(DeveloperLookupService))
+        .add_service(LookupServiceServer::new(lookup_service))
         .serve(address)
         .await?;
 
@@ -113,8 +118,16 @@ impl LogbookService for DeveloperLogbookService {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-struct DeveloperLookupService;
+#[derive(Clone)]
+struct DeveloperLookupService {
+    coordinator: Arc<LookupCoordinator>,
+}
+
+impl DeveloperLookupService {
+    fn new(coordinator: Arc<LookupCoordinator>) -> Self {
+        Self { coordinator }
+    }
+}
 
 #[tonic::async_trait]
 impl LookupService for DeveloperLookupService {
@@ -125,7 +138,11 @@ impl LookupService for DeveloperLookupService {
         request: Request<LookupRequest>,
     ) -> Result<Response<LookupResult>, Status> {
         let request = request.into_inner();
-        Ok(Response::new(placeholder_lookup_error(&request.callsign)))
+        Ok(Response::new(
+            self.coordinator
+                .lookup(&request.callsign, request.skip_cache)
+                .await,
+        ))
     }
 
     async fn stream_lookup(
@@ -133,23 +150,17 @@ impl LookupService for DeveloperLookupService {
         request: Request<LookupRequest>,
     ) -> Result<Response<Self::StreamLookupStream>, Status> {
         let request = request.into_inner();
-        let (sender, receiver) = tokio::sync::mpsc::channel(4);
-        let queried_callsign = normalize_callsign(&request.callsign);
-
-        let _ = sender
-            .send(Ok(LookupResult {
-                state: LookupState::Loading as i32,
-                record: None,
-                error_message: None,
-                cache_hit: false,
-                lookup_latency_ms: 0,
-                queried_callsign: queried_callsign.clone(),
-            }))
+        let updates = self
+            .coordinator
+            .stream_lookup(&request.callsign, request.skip_cache)
             .await;
+        let (sender, receiver) = tokio::sync::mpsc::channel(8);
 
-        let _ = sender
-            .send(Ok(placeholder_lookup_error(&queried_callsign)))
-            .await;
+        for update in updates {
+            if sender.send(Ok(update)).await.is_err() {
+                break;
+            }
+        }
 
         Ok(Response::new(ReceiverStream::new(receiver)))
     }
@@ -159,14 +170,11 @@ impl LookupService for DeveloperLookupService {
         request: Request<CachedCallsignRequest>,
     ) -> Result<Response<LookupResult>, Status> {
         let request = request.into_inner();
-        Ok(Response::new(LookupResult {
-            state: LookupState::NotFound as i32,
-            record: None,
-            error_message: None,
-            cache_hit: false,
-            lookup_latency_ms: 0,
-            queried_callsign: normalize_callsign(&request.callsign),
-        }))
+        Ok(Response::new(
+            self.coordinator
+                .get_cached_callsign(&request.callsign)
+                .await,
+        ))
     }
 
     async fn get_dxcc_entity(
@@ -174,22 +182,40 @@ impl LookupService for DeveloperLookupService {
         _request: Request<DxccRequest>,
     ) -> Result<Response<DxccEntity>, Status> {
         Err(Status::unimplemented(
-            "GetDxccEntity is not implemented yet.",
+            "GetDxccEntity is out of scope for the first lookup slice.",
         ))
     }
 
     async fn batch_lookup(
         &self,
-        request: Request<BatchLookupRequest>,
+        _request: Request<BatchLookupRequest>,
     ) -> Result<Response<BatchLookupResponse>, Status> {
-        let request = request.into_inner();
-        Ok(Response::new(BatchLookupResponse {
-            results: request
-                .callsigns
-                .into_iter()
-                .map(|callsign| placeholder_lookup_error(&callsign))
-                .collect(),
-        }))
+        Err(Status::unimplemented(
+            "BatchLookup is out of scope for the first lookup slice.",
+        ))
+    }
+}
+
+fn create_lookup_coordinator() -> Arc<LookupCoordinator> {
+    Arc::new(LookupCoordinator::new(
+        build_provider_from_env(),
+        LookupCoordinatorConfig::default(),
+    ))
+}
+
+fn build_provider_from_env() -> Arc<dyn CallsignProvider> {
+    match QrzXmlConfig::from_env() {
+        Ok(config) => match QrzXmlProvider::new(config) {
+            Ok(provider) => Arc::new(provider),
+            Err(error) => {
+                eprintln!("QRZ XML lookup disabled: {error}");
+                Arc::new(DisabledCallsignProvider::new(error.to_string()))
+            }
+        },
+        Err(error) => {
+            eprintln!("QRZ XML lookup disabled: {error}");
+            Arc::new(DisabledCallsignProvider::new(error.to_string()))
+        }
     }
 }
 
@@ -234,10 +260,32 @@ fn print_help() {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)]
+#[allow(clippy::expect_used, clippy::unwrap_used)]
 mod tests {
-    use super::ServerOptions;
-    use logripper_core::proto::logripper::domain::{LookupResult, LookupState};
+    use std::sync::Arc;
+
+    use super::{DeveloperLogbookService, DeveloperLookupService, ServerOptions};
+    use logripper_core::lookup::{
+        DisabledCallsignProvider, LookupCoordinator, LookupCoordinatorConfig,
+    };
+    use logripper_core::proto::logripper::domain::{
+        dxcc_request, BatchLookupRequest, CachedCallsignRequest, DxccRequest, LookupRequest,
+        LookupResult, LookupState,
+    };
+    use logripper_core::proto::logripper::services::{
+        logbook_service_server::LogbookService, lookup_service_server::LookupService,
+        SyncStatusRequest,
+    };
+    use tokio_stream::StreamExt;
+    use tonic::{Code, Request};
+
+    fn test_lookup_service() -> DeveloperLookupService {
+        let coordinator = Arc::new(LookupCoordinator::new(
+            Arc::new(DisabledCallsignProvider::new("lookup disabled")),
+            LookupCoordinatorConfig::default(),
+        ));
+        DeveloperLookupService::new(coordinator)
+    }
 
     #[test]
     fn server_options_default_to_localhost_port_50051() {
@@ -266,5 +314,115 @@ mod tests {
         let result = LookupResult::default();
 
         assert_eq!(LookupState::Unspecified as i32, result.state);
+    }
+
+    #[tokio::test]
+    async fn lookup_service_lookup_returns_error_state_when_provider_is_disabled() {
+        let service = test_lookup_service();
+
+        let response = LookupService::lookup(
+            &service,
+            Request::new(LookupRequest {
+                callsign: "W1AW".to_string(),
+                skip_cache: false,
+            }),
+        )
+        .await
+        .expect("lookup response")
+        .into_inner();
+
+        assert_eq!(LookupState::Error as i32, response.state);
+        assert_eq!(
+            Some("Provider configuration error: lookup disabled"),
+            response.error_message.as_deref()
+        );
+    }
+
+    #[tokio::test]
+    async fn stream_lookup_emits_loading_then_error_when_provider_is_disabled() {
+        let service = test_lookup_service();
+
+        let response = LookupService::stream_lookup(
+            &service,
+            Request::new(LookupRequest {
+                callsign: "W1AW".to_string(),
+                skip_cache: false,
+            }),
+        )
+        .await
+        .expect("stream response")
+        .into_inner();
+        let updates = response
+            .map(|result| result.expect("stream item"))
+            .collect::<Vec<_>>()
+            .await;
+
+        assert_eq!(2, updates.len());
+        assert_eq!(
+            LookupState::Loading as i32,
+            updates.first().expect("loading update").state
+        );
+        assert_eq!(
+            LookupState::Error as i32,
+            updates.get(1).expect("error update").state
+        );
+    }
+
+    #[tokio::test]
+    async fn cache_lookup_defaults_to_unspecified_without_cached_value() {
+        let service = test_lookup_service();
+
+        let response = LookupService::get_cached_callsign(
+            &service,
+            Request::new(CachedCallsignRequest {
+                callsign: "W1AW".to_string(),
+            }),
+        )
+        .await
+        .expect("cache response")
+        .into_inner();
+
+        assert_eq!(LookupState::NotFound as i32, response.state);
+        assert!(!response.cache_hit);
+    }
+
+    #[tokio::test]
+    async fn dxcc_and_batch_lookup_remain_unimplemented_for_first_slice() {
+        let service = test_lookup_service();
+
+        let dxcc_error = LookupService::get_dxcc_entity(
+            &service,
+            Request::new(DxccRequest {
+                query: Some(dxcc_request::Query::Prefix("W1AW".to_string())),
+            }),
+        )
+        .await
+        .expect_err("dxcc should be unimplemented");
+        let batch_error = LookupService::batch_lookup(
+            &service,
+            Request::new(BatchLookupRequest { callsigns: vec![] }),
+        )
+        .await
+        .expect_err("batch should be unimplemented");
+
+        assert_eq!(Code::Unimplemented, dxcc_error.code());
+        assert_eq!(Code::Unimplemented, batch_error.code());
+    }
+
+    #[tokio::test]
+    async fn logbook_sync_status_returns_zeroed_placeholder_values() {
+        let response = LogbookService::get_sync_status(
+            &DeveloperLogbookService,
+            Request::new(SyncStatusRequest {}),
+        )
+        .await
+        .expect("sync status")
+        .into_inner();
+
+        assert_eq!(0, response.local_qso_count);
+        assert_eq!(0, response.qrz_qso_count);
+        assert_eq!(0, response.pending_upload);
+        assert!(response.last_sync.is_none());
+        assert!(response.qrz_logbook_owner.is_none());
     }
 }

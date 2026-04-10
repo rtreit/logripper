@@ -11,17 +11,20 @@ repository.workspace = true
 prost = { workspace = true }
 prost-types = { workspace = true }
 tonic = { workspace = true }
+tokio = { workspace = true }
 uuid = { workspace = true }
 difa = "0.1"
 thiserror = "2"
 chrono = "0.4"
+futures = "0.3"
+quick-xml = { version = "0.37", features = ["serialize"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
 
 [lints]
 workspace = true
 
 [dev-dependencies]
-tokio = { workspace = true }
-futures = "0.3"
 
 [build-dependencies]
 tonic-build = "0.12"

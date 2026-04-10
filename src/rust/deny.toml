@@ -11,6 +11,10 @@ allow = [
   "Apache-2.0",
   "BSD-2-Clause",
   "BSD-3-Clause",
+  # rustls/ring/untrusted transitive crates
+  "ISC",
+  # webpki-roots certificate bundle data
+  "CDLA-Permissive-2.0",
   "Unicode-3.0",
 ]
 confidence-threshold = 0.8

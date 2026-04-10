@@ -66,15 +66,66 @@ jobs:
             --manifest-path src/rust/Cargo.toml \
             --all \
             --lcov \
-            --output-path rust-coverage.lcov \
-            --fail-under-lines 80
+            --output-path rust-coverage.lcov
+
+      - name: Check Rust coverage threshold
+        run: |
+          cargo llvm-cov report \
+            --manifest-path src/rust/Cargo.toml \
+            --json \
+            --summary-only \
+            --output-path rust-coverage-summary.json
+          python3 - <<'EOF'
+          import json
+          import os
+          import sys
+
+          with open("rust-coverage-summary.json", encoding="utf-8") as f:
+              payload = json.load(f)
+
+          report = payload["data"][0]
+          totals = report["totals"]["lines"]
+          coverage = float(totals["percent"])
+          covered = int(totals["covered"])
+          count = int(totals["count"])
+          threshold = 80.0
+
+          print(f"Rust line coverage: {coverage:.2f}% ({covered}/{count} lines)  (threshold: {threshold:.0f}%)")
+
+          files = []
+          for file_data in report["files"]:
+              line_summary = file_data["summary"]["lines"]
+              line_count = int(line_summary["count"])
+              if line_count == 0:
+                  continue
+              files.append(
+                  (
+                      float(line_summary["percent"]),
+                      int(line_summary["covered"]),
+                      line_count,
+                      os.path.relpath(file_data["filename"]).replace("\\", "/"),
+                  )
+              )
+
+          print("Lowest line coverage files:")
+          for percent, file_covered, file_count, filename in sorted(files, key=lambda item: item[0])[:5]:
+              print(f"  - {filename}: {percent:.2f}% ({file_covered}/{file_count})")
+
+          if coverage < threshold:
+              print(f"FAIL: Rust line coverage {coverage:.2f}% is below the minimum threshold of {threshold:.0f}%")
+              sys.exit(1)
+
+          print("PASS: Rust coverage threshold met.")
+          EOF
 
       - name: Upload Rust coverage artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: rust-coverage
-          path: rust-coverage.lcov
+          path: |
+            rust-coverage.lcov
+            rust-coverage-summary.json
 
       - name: Run buf lint
         run: buf lint

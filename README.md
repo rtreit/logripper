@@ -127,6 +127,95 @@ cargo run -p logripper-server
 
 This starts the developer gRPC server on `127.0.0.1:50051` by default so the .NET CLI and debug workbench can validate transport and service wiring against a live Rust host.
 
+### QRZ local configuration
+
+Use `.env.example` as the local template for QRZ settings:
+
+```
+Copy-Item .env.example .env
+```
+
+The QRZ credentials are easy to mix up, so keep this split in mind:
+
+| Setting | What it must contain |
+|---|---|
+| `LOGRIPPER_QRZ_XML_USERNAME` | Your QRZ account username |
+| `LOGRIPPER_QRZ_XML_PASSWORD` | Your **actual QRZ account password** for the XML lookup service |
+| `LOGRIPPER_QRZ_LOGBOOK_API_KEY` | Your separate **QRZ Logbook API access key** from the QRZ website |
+
+**Important:** `LOGRIPPER_QRZ_XML_PASSWORD` and `LOGRIPPER_QRZ_LOGBOOK_API_KEY` are **not** the same value and are **not** interchangeable. Using the logbook API key as the XML password will cause QRZ XML login failures and may trigger a temporary lockout.
+
+For lockout-safe debugging, you can temporarily set:
+
+```
+LOGRIPPER_QRZ_XML_CAPTURE_ONLY=true
+```
+
+In capture mode, LogRipper builds the outgoing QRZ XML request and returns redacted request diagnostics without sending any HTTP traffic to QRZ.
+
+### Local lookup debug workflow
+
+For local QRZ lookup debugging, use two terminals: one for the Rust engine and one for the .NET debug workbench.
+
+1. Copy the local template and fill in your real QRZ values:
+
+   ```powershell
+   Copy-Item .env.example .env
+   notepad .env
+   ```
+
+2. Optional PowerShell profile helper for loading `.env` into the current terminal session:
+
+   ```powershell
+   # Load .env file into current terminal session
+   function loadenv {
+       Get-Content .env | ForEach-Object {
+           if ($_ -notmatch '^\s*#' -and $_ -match '=') {
+               $name, $value = $_ -split '=', 2
+               Set-Item -Path "Env:$($name.Trim())" -Value $value.Trim()
+           }
+       }
+   }
+
+   Set-Alias -Name env -Value loadenv
+   ```
+
+   After adding that to your PowerShell profile, run `env` from the repository root whenever you want to load `.env` into the current shell.
+
+3. Start the Rust engine in the first terminal:
+
+   ```powershell
+   Set-Location C:\path\to\logripper
+   env
+   Set-Location src\rust
+   cargo run -p logripper-server
+   ```
+
+   The developer engine listens on `http://localhost:50051` by default.
+
+4. Start the developer debug workbench in a second terminal:
+
+   ```powershell
+   Set-Location C:\path\to\logripper
+   env
+   Set-Location src\dotnet
+   dotnet run --project LogRipper.DebugHost
+   ```
+
+5. Open the workbench in a browser:
+
+   ```
+   http://localhost:5082/lookup-workbench
+   ```
+
+6. Exercise the lookup flow:
+
+   - **Live lookup** calls the engine's unary lookup.
+   - **Stream lookup** shows the state transition flow.
+   - **Cache lookup** checks only the engine cache.
+
+If you want to inspect request shape without touching QRZ, set `LOGRIPPER_QRZ_XML_CAPTURE_ONLY=true` in `.env`, run `env` again in the engine shell, and restart `logripper-server`.
+
 **.NET workspace:**
 
 ```
