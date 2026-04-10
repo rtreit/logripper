@@ -23,6 +23,7 @@ public class SampleProtoFactoryTests
     {
         var result = _factory.CreateLookupResult("w1aw");
 
+        Assert.Equal(LookupState.Found, result.State);
         Assert.Equal("W1AW", result.QueriedCallsign);
         Assert.NotNull(result.Record);
         Assert.Equal("W1AW", result.Record.Callsign);

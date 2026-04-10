@@ -57,7 +57,7 @@ internal sealed class SampleProtoFactory
         var normalizedCallsign = NormalizeCallsign(callsign);
         return new LookupResult
         {
-            State = (LookupState)1,
+            State = LookupState.Found,
             Record = CreateCallsignRecord(normalizedCallsign),
             CacheHit = cacheHit,
             LookupLatencyMs = 42,

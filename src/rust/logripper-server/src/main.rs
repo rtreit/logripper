@@ -308,6 +308,7 @@ fn print_help() {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::ServerOptions;
+    use logripper_core::proto::logripper::domain::{LookupResult, LookupState};
 
     #[test]
     fn server_options_default_to_localhost_port_50051() {
@@ -329,5 +330,12 @@ mod tests {
         .unwrap();
 
         assert_eq!("127.0.0.1:60051", options.listen_address.to_string());
+    }
+
+    #[test]
+    fn lookup_result_defaults_to_unspecified_state() {
+        let result = LookupResult::default();
+
+        assert_eq!(LookupState::Unspecified as i32, result.state);
     }
 }
