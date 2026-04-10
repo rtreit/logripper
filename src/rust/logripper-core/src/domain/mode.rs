@@ -1,5 +1,8 @@
 //! Mode enum ↔ ADIF string mapping.
 
+use std::collections::HashMap;
+use std::sync::LazyLock;
+
 use crate::proto::logripper::domain::Mode;
 
 /// Mapping between ADIF mode strings and proto Mode enum values.
@@ -60,26 +63,35 @@ const IMPORT_ONLY_MODES: &[(&str, Mode, &str)] = &[
     ("DSTAR", Mode::Digitalvoice, "DSTAR"), // → DIGITALVOICE + submode DSTAR
 ];
 
+/// Map from uppercase ADIF mode string → Mode enum value, built once at first use.
+///
+/// Standard modes are inserted first; import-only modes fill in the remaining
+/// keys so that a standard name is never overwritten.
+static ADIF_TO_MODE: LazyLock<HashMap<&'static str, Mode>> = LazyLock::new(|| {
+    let mut map: HashMap<&'static str, Mode> = MODE_TABLE
+        .iter()
+        .map(|(name, mode)| (*name, *mode))
+        .collect();
+    for (name, mode, _) in IMPORT_ONLY_MODES {
+        map.entry(name).or_insert(*mode);
+    }
+    map
+});
+
+/// Map from Mode enum value → canonical ADIF string, built once at first use.
+static MODE_TO_ADIF_MAP: LazyLock<HashMap<Mode, &'static str>> = LazyLock::new(|| {
+    MODE_TABLE
+        .iter()
+        .map(|(name, mode)| (*mode, *name))
+        .collect()
+});
+
 /// Parse an ADIF mode string (case-insensitive) into a Mode enum value.
 /// For import-only modes (C4FM, DSTAR), returns the replacement mode.
 #[must_use]
 pub fn mode_from_adif(s: &str) -> Option<Mode> {
     let upper = s.to_uppercase();
-
-    // Check standard modes first
-    if let Some(mode) = MODE_TABLE
-        .iter()
-        .find(|(name, _)| *name == upper)
-        .map(|(_, mode)| *mode)
-    {
-        return Some(mode);
-    }
-
-    // Check import-only mappings
-    IMPORT_ONLY_MODES
-        .iter()
-        .find(|(name, _, _)| *name == upper)
-        .map(|(_, mode, _)| *mode)
+    ADIF_TO_MODE.get(upper.as_str()).copied()
 }
 
 /// For import-only modes, returns the submode string that should be set.
@@ -100,10 +112,7 @@ pub fn mode_to_adif(mode: Mode) -> Option<&'static str> {
     if mode == Mode::Unspecified {
         return None;
     }
-    MODE_TABLE
-        .iter()
-        .find(|(_, m)| *m == mode)
-        .map(|(name, _)| *name)
+    MODE_TO_ADIF_MAP.get(&mode).copied()
 }
 
 /// Validate that a submode string is recognized for the given mode.

@@ -1,5 +1,8 @@
 //! Band enum ↔ ADIF string mapping and frequency-to-band derivation.
 
+use std::collections::HashMap;
+use std::sync::LazyLock;
+
 use crate::proto::logripper::domain::Band;
 
 /// All ADIF 3.1.7 band definitions with frequency ranges.
@@ -39,14 +42,27 @@ const BAND_TABLE: &[(&str, Band, f64, f64)] = &[
     ("SUBMM", Band::Submm, 300_000.0, 7_500_000.0),
 ];
 
+/// Map from uppercase ADIF band string → Band enum value, built once at first use.
+static ADIF_TO_BAND: LazyLock<HashMap<&'static str, Band>> = LazyLock::new(|| {
+    BAND_TABLE
+        .iter()
+        .map(|(name, band, _, _)| (*name, *band))
+        .collect()
+});
+
+/// Map from Band enum value → (ADIF string, lower MHz, upper MHz), built once at first use.
+static BAND_TO_ENTRY: LazyLock<HashMap<Band, (&'static str, f64, f64)>> = LazyLock::new(|| {
+    BAND_TABLE
+        .iter()
+        .map(|(n, b, lo, hi)| (*b, (*n, *lo, *hi)))
+        .collect()
+});
+
 /// Parse an ADIF band string (case-insensitive) into a Band enum value.
 #[must_use]
 pub fn band_from_adif(s: &str) -> Option<Band> {
     let upper = s.to_uppercase();
-    BAND_TABLE
-        .iter()
-        .find(|(name, _, _, _)| *name == upper)
-        .map(|(_, band, _, _)| *band)
+    ADIF_TO_BAND.get(upper.as_str()).copied()
 }
 
 /// Convert a Band enum value to its canonical ADIF string representation.
@@ -55,20 +71,20 @@ pub fn band_to_adif(band: Band) -> Option<&'static str> {
     if band == Band::Unspecified {
         return None;
     }
-    BAND_TABLE
-        .iter()
-        .find(|(_, b, _, _)| *b == band)
-        .map(|(name, _, _, _)| *name)
+    BAND_TO_ENTRY.get(&band).map(|(name, _, _)| *name)
 }
 
-/// Derive the Band from a frequency in MHz.
-/// Returns the first band whose range contains the frequency.
+/// Derive the Band from a frequency in MHz using binary search.
+///
+/// `BAND_TABLE` is sorted by lower bound, so `partition_point` locates the
+/// rightmost candidate in O(log n) rather than scanning all 33 entries.
 #[must_use]
 pub fn band_from_frequency_mhz(freq_mhz: f64) -> Option<Band> {
-    BAND_TABLE
-        .iter()
-        .find(|(_, _, lower, upper)| freq_mhz >= *lower && freq_mhz <= *upper)
-        .map(|(_, band, _, _)| *band)
+    // Find the first entry whose lower bound exceeds freq_mhz.
+    let idx = BAND_TABLE.partition_point(|(_, _, lower, _)| *lower <= freq_mhz);
+    // The candidate is the last entry with lower ≤ freq_mhz (idx − 1).
+    let (_, band, _, upper) = BAND_TABLE.get(idx.checked_sub(1)?)?;
+    (freq_mhz <= *upper).then_some(*band)
 }
 
 /// Get the frequency range (lower, upper) in MHz for a Band.
@@ -77,10 +93,7 @@ pub fn band_frequency_range_mhz(band: Band) -> Option<(f64, f64)> {
     if band == Band::Unspecified {
         return None;
     }
-    BAND_TABLE
-        .iter()
-        .find(|(_, b, _, _)| *b == band)
-        .map(|(_, _, lower, upper)| (*lower, *upper))
+    BAND_TO_ENTRY.get(&band).map(|(_, lo, hi)| (*lo, *hi))
 }
 
 #[cfg(test)]
