@@ -1,13 +1,14 @@
 //! Runnable tonic gRPC host for the `LogRipper` Rust engine.
 
+use logripper_core::domain::lookup::{normalize_callsign, placeholder_lookup_error};
 use std::net::SocketAddr;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::transport::Server;
 use tonic::{Request, Response, Status};
 
 use logripper_core::proto::logripper::domain::{
-    BatchLookupRequest, BatchLookupResponse, CachedCallsignRequest, CallsignRecord, DxccEntity,
-    DxccRequest, LookupRequest, LookupResult, LookupState, QsoRecord,
+    BatchLookupRequest, BatchLookupResponse, CachedCallsignRequest, DxccEntity, DxccRequest,
+    LookupRequest, LookupResult, LookupState, QsoRecord,
 };
 use logripper_core::proto::logripper::services::{
     logbook_service_server::{LogbookService, LogbookServiceServer},
@@ -189,78 +190,6 @@ impl LookupService for DeveloperLookupService {
                 .map(|callsign| placeholder_lookup_error(&callsign))
                 .collect(),
         }))
-    }
-}
-
-fn placeholder_lookup_error(callsign: &str) -> LookupResult {
-    LookupResult {
-        state: LookupState::Error as i32,
-        record: Some(CallsignRecord {
-            callsign: normalize_callsign(callsign),
-            cross_ref: normalize_callsign(callsign),
-            aliases: Vec::new(),
-            previous_call: String::new(),
-            dxcc_entity_id: 0,
-            first_name: "Developer".into(),
-            last_name: "Placeholder".into(),
-            nickname: None,
-            formatted_name: Some("Developer Placeholder".into()),
-            attention: None,
-            addr1: None,
-            addr2: Some("Local server stub".into()),
-            state: None,
-            zip: None,
-            country: Some("Unavailable".into()),
-            country_code: None,
-            latitude: None,
-            longitude: None,
-            grid_square: None,
-            county: None,
-            fips: None,
-            geo_source: 7,
-            license_class: None,
-            effective_date: None,
-            expiration_date: None,
-            license_codes: None,
-            email: None,
-            web_url: None,
-            qsl_manager: None,
-            eqsl: 0,
-            lotw: 0,
-            paper_qsl: 0,
-            cq_zone: None,
-            itu_zone: None,
-            iota: None,
-            dxcc_country_name: None,
-            dxcc_continent: None,
-            birth_year: None,
-            qrz_serial: None,
-            last_modified: None,
-            bio_length: None,
-            image_url: None,
-            msa: None,
-            area_code: None,
-            time_zone: None,
-            gmt_offset: None,
-            dst_observed: None,
-            profile_views: None,
-        }),
-        error_message: Some(
-            "Lookup transport is live, but provider-backed callsign lookup is not implemented yet."
-                .into(),
-        ),
-        cache_hit: false,
-        lookup_latency_ms: 0,
-        queried_callsign: normalize_callsign(callsign),
-    }
-}
-
-fn normalize_callsign(callsign: &str) -> String {
-    let trimmed = callsign.trim();
-    if trimmed.is_empty() {
-        "K7DBG".to_string()
-    } else {
-        trimmed.to_ascii_uppercase()
     }
 }
 
