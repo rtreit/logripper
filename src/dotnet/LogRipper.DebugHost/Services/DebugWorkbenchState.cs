@@ -1,10 +1,10 @@
+using System.Linq;
 using System.Net.Sockets;
 using Grpc.Core;
 using Grpc.Net.Client;
 using LogRipper.DebugHost.Models;
 using LogRipper.Services;
 using Microsoft.Extensions.Options;
-using System.Linq;
 
 namespace LogRipper.DebugHost.Services;
 

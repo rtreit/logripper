@@ -59,6 +59,15 @@ Primary goals:
 - Use `rg` for text search operations.
 - Keep build and test loops fast to support tight iteration.
 
+## Quality and Coverage Gates
+
+- Treat the existing CI quality and coverage thresholds as local pre-push requirements, not something to discover only after opening a PR.
+- When implementing a new feature, behavior change, or new error path, add or expand automated tests in the same change so the new code is directly covered.
+- Do not rely on existing coverage headroom to carry new code. If a feature adds meaningful logic, it should add meaningful test coverage too.
+- For Rust changes, keep `cargo fmt`, `cargo clippy`, `cargo test`, `cargo llvm-cov`, `buf lint`, and `cargo deny` green when those gates apply.
+- For .NET changes, keep `dotnet format`, `dotnet build`, and `dotnet test` with coverage green when those gates apply.
+- Do not push code that you already know will fail an existing quality or coverage gate.
+
 ## Markdown Code Fences
 
 When writing markdown that will be rendered on GitHub, such as PR descriptions, issue bodies, review comments, or other repository comments:

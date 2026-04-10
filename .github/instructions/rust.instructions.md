@@ -25,6 +25,7 @@ These instructions govern Rust work in LogRipper, especially under `src/rust/`, 
 - Keep unsafe usage explicit and narrow. If unsafe behavior is required, document the invariant locally and avoid broad unsafe regions.
 - Prefer narrow lint suppressions with justification. Use `#[expect(...)]` instead of broad `#[allow(...)]` when the lint should stay visible if the underlying issue disappears.
 - Use `thiserror` for typed Rust error surfaces rather than ad hoc stringly errors.
+- New Rust features, behavior changes, and non-trivial new branches must include tests in the same change. If coverage is hard to reach, refactor the seams for testability rather than leaving the logic effectively untested.
 
 ## Validation
 
@@ -32,6 +33,10 @@ These instructions govern Rust work in LogRipper, especially under `src/rust/`, 
   - `cargo fmt --manifest-path src/rust/Cargo.toml --all -- --check`
   - `cargo test --manifest-path src/rust/Cargo.toml`
   - `cargo clippy --manifest-path src/rust/Cargo.toml --all-targets -- -D warnings`
+- For new Rust behavior and substantial Rust changes, also run the coverage gate locally:
+  - `cargo llvm-cov --manifest-path src/rust/Cargo.toml --all --lcov --output-path rust-coverage.lcov`
+  - `cargo llvm-cov report --manifest-path src/rust/Cargo.toml --summary-only`
+- Keep Rust line coverage at or above the current CI threshold (80%) and do not push Rust changes that already fail formatting, lint, test, coverage, `buf lint`, or `cargo deny` gates that apply to the change.
 - Rust formatting rules live in `src/rust/rustfmt.toml`; prefer changing that file over arguing style ad hoc.
 - Workspace lint policy lives in `src/rust/Cargo.toml`; keep shared Clippy and rustc lint defaults centralized there.
 - When proto or service contracts change, also run:

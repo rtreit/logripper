@@ -10,19 +10,18 @@ use logripper_core::storage::{
     QsoSortOrder, StorageError, SyncMetadata,
 };
 use prost::Message;
-use rusqlite::types::Value;
-use rusqlite::{params, params_from_iter, Connection, ErrorCode, OptionalExtension};
+use sqlite::{ConnectionThreadSafe, ReadableWithIndex, State, Statement, Value};
 use std::sync::{Mutex, MutexGuard};
 
 pub use builder::SqliteStorageBuilder;
 
 /// SQLite-backed storage implementation for engine-owned persistence.
 pub struct SqliteStorage {
-    pub(crate) connection: Mutex<Connection>,
+    pub(crate) connection: Mutex<ConnectionThreadSafe>,
 }
 
 impl SqliteStorage {
-    fn connection(&self) -> Result<MutexGuard<'_, Connection>, StorageError> {
+    fn connection(&self) -> Result<MutexGuard<'_, ConnectionThreadSafe>, StorageError> {
         self.connection
             .lock()
             .map_err(|_| StorageError::backend("SQLite connection mutex was poisoned"))
@@ -48,41 +47,40 @@ impl LogbookStore for SqliteStorage {
     async fn insert_qso(&self, qso: &QsoRecord) -> Result<(), StorageError> {
         let connection = self.connection()?;
         let encoded = encode_message(qso);
-
-        connection
-            .execute(
-                "INSERT INTO qsos (
-                    local_id,
-                    qrz_logid,
-                    qrz_bookid,
-                    station_callsign,
-                    worked_callsign,
-                    utc_timestamp_ms,
-                    band,
-                    mode,
-                    contest_id,
-                    created_at_ms,
-                    updated_at_ms,
-                    sync_status,
-                    record
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                params![
-                    qso.local_id,
-                    qso.qrz_logid,
-                    qso.qrz_bookid,
-                    qso.station_callsign,
-                    qso.worked_callsign,
-                    timestamp_to_millis(qso.utc_timestamp.as_ref()),
-                    qso.band,
-                    qso.mode,
-                    qso.contest_id,
-                    timestamp_to_millis(qso.created_at.as_ref()),
-                    timestamp_to_millis(qso.updated_at.as_ref()),
-                    qso.sync_status,
-                    encoded,
-                ],
-            )
-            .map_err(|err| map_insert_error(err, &qso.local_id))?;
+        execute_statement(
+            &connection,
+            "INSERT INTO qsos (
+                local_id,
+                qrz_logid,
+                qrz_bookid,
+                station_callsign,
+                worked_callsign,
+                utc_timestamp_ms,
+                band,
+                mode,
+                contest_id,
+                created_at_ms,
+                updated_at_ms,
+                sync_status,
+                record
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            &[
+                Value::from(qso.local_id.as_str()),
+                Value::from(qso.qrz_logid.as_deref()),
+                Value::from(qso.qrz_bookid.as_deref()),
+                Value::from(qso.station_callsign.as_str()),
+                Value::from(qso.worked_callsign.as_str()),
+                Value::from(timestamp_to_millis(qso.utc_timestamp.as_ref())),
+                Value::Integer(i64::from(qso.band)),
+                Value::Integer(i64::from(qso.mode)),
+                Value::from(qso.contest_id.as_deref()),
+                Value::from(timestamp_to_millis(qso.created_at.as_ref())),
+                Value::from(timestamp_to_millis(qso.updated_at.as_ref())),
+                Value::Integer(i64::from(qso.sync_status)),
+                Value::Binary(encoded),
+            ],
+        )
+        .map_err(|err| map_insert_error(err, &qso.local_id))?;
 
         Ok(())
     }
@@ -90,62 +88,64 @@ impl LogbookStore for SqliteStorage {
     async fn update_qso(&self, qso: &QsoRecord) -> Result<bool, StorageError> {
         let connection = self.connection()?;
         let encoded = encode_message(qso);
-        let rows = connection
-            .execute(
-                "UPDATE qsos
-                 SET qrz_logid = ?,
-                     qrz_bookid = ?,
-                     station_callsign = ?,
-                     worked_callsign = ?,
-                     utc_timestamp_ms = ?,
-                     band = ?,
-                     mode = ?,
-                     contest_id = ?,
-                     created_at_ms = ?,
-                     updated_at_ms = ?,
-                     sync_status = ?,
-                     record = ?
-                 WHERE local_id = ?",
-                params![
-                    qso.qrz_logid,
-                    qso.qrz_bookid,
-                    qso.station_callsign,
-                    qso.worked_callsign,
-                    timestamp_to_millis(qso.utc_timestamp.as_ref()),
-                    qso.band,
-                    qso.mode,
-                    qso.contest_id,
-                    timestamp_to_millis(qso.created_at.as_ref()),
-                    timestamp_to_millis(qso.updated_at.as_ref()),
-                    qso.sync_status,
-                    encoded,
-                    qso.local_id,
-                ],
-            )
-            .map_err(|err| StorageError::backend(err.to_string()))?;
+        let rows = execute_statement(
+            &connection,
+            "UPDATE qsos
+             SET qrz_logid = ?,
+                 qrz_bookid = ?,
+                 station_callsign = ?,
+                 worked_callsign = ?,
+                 utc_timestamp_ms = ?,
+                 band = ?,
+                 mode = ?,
+                 contest_id = ?,
+                 created_at_ms = ?,
+                 updated_at_ms = ?,
+                 sync_status = ?,
+                 record = ?
+             WHERE local_id = ?",
+            &[
+                Value::from(qso.qrz_logid.as_deref()),
+                Value::from(qso.qrz_bookid.as_deref()),
+                Value::from(qso.station_callsign.as_str()),
+                Value::from(qso.worked_callsign.as_str()),
+                Value::from(timestamp_to_millis(qso.utc_timestamp.as_ref())),
+                Value::Integer(i64::from(qso.band)),
+                Value::Integer(i64::from(qso.mode)),
+                Value::from(qso.contest_id.as_deref()),
+                Value::from(timestamp_to_millis(qso.created_at.as_ref())),
+                Value::from(timestamp_to_millis(qso.updated_at.as_ref())),
+                Value::Integer(i64::from(qso.sync_status)),
+                Value::Binary(encoded),
+                Value::from(qso.local_id.as_str()),
+            ],
+        )
+        .map_err(map_sqlite_error)?;
 
         Ok(rows > 0)
     }
 
     async fn delete_qso(&self, local_id: &str) -> Result<bool, StorageError> {
         let connection = self.connection()?;
-        let rows = connection
-            .execute("DELETE FROM qsos WHERE local_id = ?", params![local_id])
-            .map_err(|err| StorageError::backend(err.to_string()))?;
+        let rows = execute_statement(
+            &connection,
+            "DELETE FROM qsos WHERE local_id = ?",
+            &[Value::from(local_id)],
+        )
+        .map_err(map_sqlite_error)?;
 
         Ok(rows > 0)
     }
 
     async fn get_qso(&self, local_id: &str) -> Result<Option<QsoRecord>, StorageError> {
         let connection = self.connection()?;
-        let payload = connection
-            .query_row(
-                "SELECT record FROM qsos WHERE local_id = ?",
-                params![local_id],
-                |row| row.get::<_, Vec<u8>>(0),
-            )
-            .optional()
-            .map_err(|err| StorageError::backend(err.to_string()))?;
+        let payload = query_optional::<Vec<u8>>(
+            &connection,
+            "SELECT record FROM qsos WHERE local_id = ?",
+            &[Value::from(local_id)],
+            0,
+        )
+        .map_err(map_sqlite_error)?;
 
         payload.map(|bytes| decode_qso(&bytes)).transpose()
     }
@@ -172,8 +172,8 @@ impl LogbookStore for SqliteStorage {
         if let Some(filter) = query.callsign_filter.as_deref() {
             let pattern = format!("%{}%", filter.trim().to_ascii_uppercase());
             sql.push_str(" AND (UPPER(station_callsign) LIKE ? OR UPPER(worked_callsign) LIKE ?)");
-            values.push(Value::Text(pattern.clone()));
-            values.push(Value::Text(pattern));
+            values.push(Value::String(pattern.clone()));
+            values.push(Value::String(pattern));
         }
 
         if let Some(band) = query.band_filter {
@@ -188,7 +188,7 @@ impl LogbookStore for SqliteStorage {
 
         if let Some(contest_id) = query.contest_id.as_deref() {
             sql.push_str(" AND contest_id = ?");
-            values.push(Value::Text(contest_id.to_string()));
+            values.push(Value::String(contest_id.to_string()));
         }
 
         match query.sort {
@@ -209,16 +209,12 @@ impl LogbookStore for SqliteStorage {
             values.push(Value::Integer(i64::from(query.offset)));
         }
 
-        let mut statement = connection
-            .prepare(&sql)
-            .map_err(|err| StorageError::backend(err.to_string()))?;
-        let rows = statement
-            .query_map(params_from_iter(values), |row| row.get::<_, Vec<u8>>(0))
-            .map_err(|err| StorageError::backend(err.to_string()))?;
-
-        let payloads = rows
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|err| StorageError::backend(err.to_string()))?;
+        let mut statement =
+            prepare_statement(&connection, &sql, &values).map_err(map_sqlite_error)?;
+        let mut payloads = Vec::new();
+        while let State::Row = statement.next().map_err(map_sqlite_error)? {
+            payloads.push(statement.read::<Vec<u8>, _>(0).map_err(map_sqlite_error)?);
+        }
 
         payloads
             .into_iter()
@@ -228,16 +224,18 @@ impl LogbookStore for SqliteStorage {
 
     async fn qso_counts(&self) -> Result<LogbookCounts, StorageError> {
         let connection = self.connection()?;
-        let local_qso_count = connection
-            .query_row("SELECT COUNT(*) FROM qsos", [], |row| row.get::<_, i64>(0))
-            .map_err(|err| StorageError::backend(err.to_string()))?;
-        let pending_upload_count = connection
-            .query_row(
-                "SELECT COUNT(*) FROM qsos WHERE sync_status != ?",
-                params![SyncStatus::Synced as i32],
-                |row| row.get::<_, i64>(0),
-            )
-            .map_err(|err| StorageError::backend(err.to_string()))?;
+        let local_qso_count =
+            query_optional::<i64>(&connection, "SELECT COUNT(*) FROM qsos", &[], 0)
+                .map_err(map_sqlite_error)?
+                .unwrap_or(0);
+        let pending_upload_count = query_optional::<i64>(
+            &connection,
+            "SELECT COUNT(*) FROM qsos WHERE sync_status != ?",
+            &[Value::Integer(i64::from(SyncStatus::Synced as i32))],
+            0,
+        )
+        .map_err(map_sqlite_error)?
+        .unwrap_or(0);
 
         Ok(LogbookCounts {
             local_qso_count: u32::try_from(local_qso_count)
@@ -249,40 +247,51 @@ impl LogbookStore for SqliteStorage {
 
     async fn get_sync_metadata(&self) -> Result<SyncMetadata, StorageError> {
         let connection = self.connection()?;
-        connection
-            .query_row(
-                "SELECT qrz_qso_count, last_sync_ms, qrz_logbook_owner
-                 FROM sync_metadata
-                 WHERE id = 1",
-                [],
-                |row| {
-                    Ok(SyncMetadata {
-                        qrz_qso_count: row.get::<_, u32>(0)?,
-                        last_sync: millis_to_timestamp(row.get::<_, Option<i64>>(1)?),
-                        qrz_logbook_owner: row.get::<_, Option<String>>(2)?,
-                    })
-                },
-            )
-            .map_err(|err| StorageError::backend(err.to_string()))
+        let mut statement = prepare_statement(
+            &connection,
+            "SELECT qrz_qso_count, last_sync_ms, qrz_logbook_owner
+             FROM sync_metadata
+             WHERE id = 1",
+            &[],
+        )
+        .map_err(map_sqlite_error)?;
+
+        match statement.next().map_err(map_sqlite_error)? {
+            State::Row => Ok(SyncMetadata {
+                qrz_qso_count: u32::try_from(
+                    statement.read::<i64, _>(0).map_err(map_sqlite_error)?,
+                )
+                .map_err(|_| StorageError::backend("qrz_qso_count exceeds u32"))?,
+                last_sync: millis_to_timestamp(
+                    statement
+                        .read::<Option<i64>, _>(1)
+                        .map_err(map_sqlite_error)?,
+                ),
+                qrz_logbook_owner: statement
+                    .read::<Option<String>, _>(2)
+                    .map_err(map_sqlite_error)?,
+            }),
+            State::Done => Ok(SyncMetadata::default()),
+        }
     }
 
     async fn upsert_sync_metadata(&self, metadata: &SyncMetadata) -> Result<(), StorageError> {
         let connection = self.connection()?;
-        connection
-            .execute(
-                "INSERT INTO sync_metadata (id, qrz_qso_count, last_sync_ms, qrz_logbook_owner)
-                 VALUES (1, ?, ?, ?)
-                 ON CONFLICT(id) DO UPDATE SET
-                    qrz_qso_count = excluded.qrz_qso_count,
-                    last_sync_ms = excluded.last_sync_ms,
-                    qrz_logbook_owner = excluded.qrz_logbook_owner",
-                params![
-                    metadata.qrz_qso_count,
-                    timestamp_to_millis(metadata.last_sync.as_ref()),
-                    metadata.qrz_logbook_owner,
-                ],
-            )
-            .map_err(|err| StorageError::backend(err.to_string()))?;
+        execute_statement(
+            &connection,
+            "INSERT INTO sync_metadata (id, qrz_qso_count, last_sync_ms, qrz_logbook_owner)
+             VALUES (1, ?, ?, ?)
+             ON CONFLICT(id) DO UPDATE SET
+                qrz_qso_count = excluded.qrz_qso_count,
+                last_sync_ms = excluded.last_sync_ms,
+                qrz_logbook_owner = excluded.qrz_logbook_owner",
+            &[
+                Value::Integer(i64::from(metadata.qrz_qso_count)),
+                Value::from(timestamp_to_millis(metadata.last_sync.as_ref())),
+                Value::from(metadata.qrz_logbook_owner.as_deref()),
+            ],
+        )
+        .map_err(map_sqlite_error)?;
 
         Ok(())
     }
@@ -295,33 +304,39 @@ impl LookupSnapshotStore for SqliteStorage {
         callsign: &str,
     ) -> Result<Option<LookupSnapshot>, StorageError> {
         let connection = self.connection()?;
-        connection
-            .query_row(
-                "SELECT callsign, result, stored_at_ms, expires_at_ms
-                 FROM lookup_snapshots
-                 WHERE callsign = ?",
-                params![normalize_callsign(callsign)],
-                |row| {
-                    let payload = row.get::<_, Vec<u8>>(1)?;
-                    let result = LookupResult::decode(payload.as_slice()).map_err(|err| {
-                        rusqlite::Error::FromSqlConversionFailure(
-                            1,
-                            rusqlite::types::Type::Blob,
-                            Box::new(err),
-                        )
-                    })?;
+        let mut statement = prepare_statement(
+            &connection,
+            "SELECT callsign, result, stored_at_ms, expires_at_ms
+             FROM lookup_snapshots
+             WHERE callsign = ?",
+            &[Value::from(normalize_callsign(callsign))],
+        )
+        .map_err(map_sqlite_error)?;
 
-                    Ok(LookupSnapshot {
-                        callsign: row.get::<_, String>(0)?,
-                        result,
-                        stored_at: millis_to_timestamp(row.get::<_, Option<i64>>(2)?)
-                            .unwrap_or_default(),
-                        expires_at: millis_to_timestamp(row.get::<_, Option<i64>>(3)?),
-                    })
-                },
-            )
-            .optional()
-            .map_err(|err| StorageError::backend(err.to_string()))
+        match statement.next().map_err(map_sqlite_error)? {
+            State::Row => {
+                let payload = statement.read::<Vec<u8>, _>(1).map_err(map_sqlite_error)?;
+                let result = LookupResult::decode(payload.as_slice())
+                    .map_err(|err| StorageError::CorruptData(err.to_string()))?;
+
+                Ok(Some(LookupSnapshot {
+                    callsign: statement.read::<String, _>(0).map_err(map_sqlite_error)?,
+                    result,
+                    stored_at: millis_to_timestamp(
+                        statement
+                            .read::<Option<i64>, _>(2)
+                            .map_err(map_sqlite_error)?,
+                    )
+                    .unwrap_or_default(),
+                    expires_at: millis_to_timestamp(
+                        statement
+                            .read::<Option<i64>, _>(3)
+                            .map_err(map_sqlite_error)?,
+                    ),
+                }))
+            }
+            State::Done => Ok(None),
+        }
     }
 
     async fn upsert_lookup_snapshot(&self, snapshot: &LookupSnapshot) -> Result<(), StorageError> {
@@ -329,34 +344,34 @@ impl LookupSnapshotStore for SqliteStorage {
         let normalized_callsign = normalize_callsign(&snapshot.callsign);
         let encoded = encode_message(&snapshot.result);
 
-        connection
-            .execute(
-                "INSERT INTO lookup_snapshots (callsign, result, stored_at_ms, expires_at_ms)
-                 VALUES (?, ?, ?, ?)
-                 ON CONFLICT(callsign) DO UPDATE SET
-                    result = excluded.result,
-                    stored_at_ms = excluded.stored_at_ms,
-                    expires_at_ms = excluded.expires_at_ms",
-                params![
-                    normalized_callsign,
-                    encoded,
-                    timestamp_to_millis(Some(&snapshot.stored_at)),
-                    timestamp_to_millis(snapshot.expires_at.as_ref()),
-                ],
-            )
-            .map_err(|err| StorageError::backend(err.to_string()))?;
+        execute_statement(
+            &connection,
+            "INSERT INTO lookup_snapshots (callsign, result, stored_at_ms, expires_at_ms)
+             VALUES (?, ?, ?, ?)
+             ON CONFLICT(callsign) DO UPDATE SET
+                result = excluded.result,
+                stored_at_ms = excluded.stored_at_ms,
+                expires_at_ms = excluded.expires_at_ms",
+            &[
+                Value::from(normalized_callsign.as_str()),
+                Value::Binary(encoded),
+                Value::from(timestamp_to_millis(Some(&snapshot.stored_at))),
+                Value::from(timestamp_to_millis(snapshot.expires_at.as_ref())),
+            ],
+        )
+        .map_err(map_sqlite_error)?;
 
         Ok(())
     }
 
     async fn delete_lookup_snapshot(&self, callsign: &str) -> Result<bool, StorageError> {
         let connection = self.connection()?;
-        let rows = connection
-            .execute(
-                "DELETE FROM lookup_snapshots WHERE callsign = ?",
-                params![normalize_callsign(callsign)],
-            )
-            .map_err(|err| StorageError::backend(err.to_string()))?;
+        let rows = execute_statement(
+            &connection,
+            "DELETE FROM lookup_snapshots WHERE callsign = ?",
+            &[Value::from(normalize_callsign(callsign))],
+        )
+        .map_err(map_sqlite_error)?;
 
         Ok(rows > 0)
     }
@@ -370,15 +385,65 @@ fn decode_qso(payload: &[u8]) -> Result<QsoRecord, StorageError> {
     QsoRecord::decode(payload).map_err(|err| StorageError::CorruptData(err.to_string()))
 }
 
-fn map_insert_error(error: rusqlite::Error, local_id: &str) -> StorageError {
-    match error {
-        rusqlite::Error::SqliteFailure(result, _)
-            if result.code == ErrorCode::ConstraintViolation =>
+fn prepare_statement<'a>(
+    connection: &'a ConnectionThreadSafe,
+    sql: &str,
+    values: &[Value],
+) -> Result<Statement<'a>, sqlite::Error> {
+    let mut statement = connection.prepare(sql)?;
+    if !values.is_empty() {
+        statement.bind(values)?;
+    }
+
+    Ok(statement)
+}
+
+fn execute_statement(
+    connection: &ConnectionThreadSafe,
+    sql: &str,
+    values: &[Value],
+) -> Result<usize, sqlite::Error> {
+    let mut statement = prepare_statement(connection, sql, values)?;
+    while let State::Row = statement.next()? {}
+    Ok(connection.change_count())
+}
+
+fn query_optional<T>(
+    connection: &ConnectionThreadSafe,
+    sql: &str,
+    values: &[Value],
+    column_index: usize,
+) -> Result<Option<T>, sqlite::Error>
+where
+    T: ReadableWithIndex,
+{
+    let mut statement = prepare_statement(connection, sql, values)?;
+    match statement.next()? {
+        State::Row => statement.read::<T, _>(column_index).map(Some),
+        State::Done => Ok(None),
+    }
+}
+
+fn map_insert_error(error: sqlite::Error, local_id: &str) -> StorageError {
+    match error.code {
+        Some(code)
+            if code == isize::try_from(sqlite::ffi::SQLITE_CONSTRAINT).unwrap_or_default() =>
         {
             StorageError::duplicate("qso", local_id)
         }
-        other => StorageError::backend(other.to_string()),
+        _ => map_sqlite_error(error),
     }
+}
+
+fn map_sqlite_error(error: sqlite::Error) -> StorageError {
+    let message = match (error.code, error.message) {
+        (Some(code), Some(message)) => format!("{message} (code {code})"),
+        (Some(code), None) => format!("an SQLite error (code {code})"),
+        (None, Some(message)) => message,
+        (None, None) => "an SQLite error".to_string(),
+    };
+
+    StorageError::backend(message)
 }
 
 fn timestamp_to_millis(timestamp: Option<&prost_types::Timestamp>) -> Option<i64> {

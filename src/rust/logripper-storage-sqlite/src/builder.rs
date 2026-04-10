@@ -3,7 +3,7 @@
 use crate::migrations::INITIAL_SCHEMA;
 use crate::SqliteStorage;
 use logripper_core::storage::StorageError;
-use rusqlite::Connection;
+use sqlite::Connection;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -60,29 +60,29 @@ impl SqliteStorageBuilder {
     /// Returns [`StorageError`] when the database cannot be opened, configured,
     /// or migrated.
     pub fn build(self) -> Result<SqliteStorage, StorageError> {
-        let connection = match self.path.as_ref() {
+        let mut connection = match self.path.as_ref() {
             Some(path) => {
                 ensure_parent_directory(path)?;
-                Connection::open(path).map_err(|err| StorageError::backend(err.to_string()))?
+                Connection::open_thread_safe(path).map_err(map_sqlite_error)?
             }
-            None => Connection::open_in_memory()
-                .map_err(|err| StorageError::backend(err.to_string()))?,
+            None => Connection::open_thread_safe(":memory:").map_err(map_sqlite_error)?,
         };
 
+        let timeout_ms = usize::try_from(self.busy_timeout.as_millis()).unwrap_or(usize::MAX);
         connection
-            .busy_timeout(self.busy_timeout)
-            .map_err(|err| StorageError::backend(err.to_string()))?;
+            .set_busy_timeout(timeout_ms)
+            .map_err(map_sqlite_error)?;
         connection
-            .pragma_update(None, "foreign_keys", "ON")
-            .map_err(|err| StorageError::backend(err.to_string()))?;
+            .execute("PRAGMA foreign_keys = ON;")
+            .map_err(map_sqlite_error)?;
         if self.path.is_some() {
             connection
-                .pragma_update(None, "journal_mode", "WAL")
-                .map_err(|err| StorageError::backend(err.to_string()))?;
+                .execute("PRAGMA journal_mode = WAL;")
+                .map_err(map_sqlite_error)?;
         }
         connection
-            .execute_batch(INITIAL_SCHEMA)
-            .map_err(|err| StorageError::backend(err.to_string()))?;
+            .execute(INITIAL_SCHEMA)
+            .map_err(map_sqlite_error)?;
 
         Ok(SqliteStorage {
             connection: Mutex::new(connection),
@@ -98,4 +98,15 @@ fn ensure_parent_directory(path: &Path) -> Result<(), StorageError> {
     }
 
     Ok(())
+}
+
+fn map_sqlite_error(error: sqlite::Error) -> StorageError {
+    let message = match (error.code, error.message) {
+        (Some(code), Some(message)) => format!("{message} (code {code})"),
+        (Some(code), None) => format!("an SQLite error (code {code})"),
+        (None, Some(message)) => message,
+        (None, None) => "an SQLite error".to_string(),
+    };
+
+    StorageError::backend(message)
 }

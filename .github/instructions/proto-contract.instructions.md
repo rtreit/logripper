@@ -30,6 +30,10 @@ These instructions govern schema and gRPC contract work in `proto/` and any Rust
   - `buf lint`
   - `cargo test --manifest-path src/rust/Cargo.toml`
   - `dotnet build src/dotnet/LogRipper.slnx`
+- If the contract change introduces or changes runtime behavior in Rust or .NET, add coverage for the affected paths and rerun the relevant local quality gates before pushing:
+  - Rust: `cargo llvm-cov --manifest-path src/rust/Cargo.toml --all --lcov --output-path rust-coverage.lcov`
+  - .NET: `dotnet test src/dotnet/LogRipper.slnx --collect:"XPlat Code Coverage" --settings src/dotnet/CodeCoverage.runsettings --results-directory coverage`
+- Do not push proto/service changes that you already know will fail the corresponding quality or coverage gates in CI.
 - If the change affects runtime behavior, also smoke-test the live server with:
   - `cargo run --manifest-path src/rust/Cargo.toml -p logripper-server`
   - `dotnet run --project src/dotnet/LogRipper.Cli -- status`
