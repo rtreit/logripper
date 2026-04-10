@@ -7,39 +7,76 @@ option csharp_namespace = "LogRipper.Services";
 import "google/protobuf/timestamp.proto";
 import "domain/qso.proto";
 
-// Core logbook operations. The Rust engine implements this service.
+// Core logbook operations. Covers QSO CRUD, QRZ logbook sync, and ADIF import/export.
+//
+// Implementation status:
+//   LogQso       — planned (returns UNIMPLEMENTED)
+//   UpdateQso    — planned (returns UNIMPLEMENTED)
+//   DeleteQso    — planned (returns UNIMPLEMENTED)
+//   GetQso       — planned (returns UNIMPLEMENTED)
+//   ListQsos     — planned (returns UNIMPLEMENTED)
+//   SyncWithQrz  — planned (returns UNIMPLEMENTED)
+//   GetSyncStatus — partial (returns zeroed placeholder values; storage not yet wired)
+//   ImportAdif   — planned (returns UNIMPLEMENTED)
+//   ExportAdif   — planned (returns UNIMPLEMENTED)
+//
+// Transport: native gRPC (HTTP/2 + binary protobuf).
+// Browser clients must go through a gRPC-Web proxy — see docs/api/client-integration.md.
+//
+// Client reference: docs/api/logbook-service.md
 service LogbookService {
   // --- QSO CRUD ---
 
-  // Log a new QSO. Returns the assigned local_id and optional QRZ sync result.
+  // Log a new QSO. Returns the engine-assigned local_id and optional QRZ sync result.
+  //
+  // Do not set QsoRecord.local_id in the request — the engine assigns a UUID.
+  // Required fields: station_callsign, worked_callsign, utc_timestamp, band, mode.
+  // A QRZ sync failure does not fail the local log — check sync_success in the response.
   rpc LogQso(LogQsoRequest) returns (LogQsoResponse);
 
-  // Update an existing QSO.
+  // Update an existing QSO identified by QsoRecord.local_id.
+  // Returns NOT_FOUND if local_id does not exist.
   rpc UpdateQso(UpdateQsoRequest) returns (UpdateQsoResponse);
 
-  // Delete a QSO. Irreversible locally; optional QRZ-side delete.
+  // Delete a QSO from the local logbook.
+  //
+  // Setting delete_from_qrz=true also removes the record from QRZ (permanent, irreversible).
+  // Prompt the user before calling with delete_from_qrz=true.
   rpc DeleteQso(DeleteQsoRequest) returns (DeleteQsoResponse);
 
-  // Get a single QSO by local ID.
+  // Get a single QSO by local UUID.
+  // Returns NOT_FOUND if local_id does not exist.
   rpc GetQso(GetQsoRequest) returns (GetQsoResponse);
 
-  // List QSOs with filtering and pagination.
+  // List QSOs with optional filters. Results are server-streamed.
+  //
+  // All filter fields are optional; omitting all filters returns all QSOs (subject to limit/offset).
+  // Clients should consume incrementally rather than buffering the full stream.
   rpc ListQsos(ListQsosRequest) returns (stream logripper.domain.QsoRecord);
 
   // --- QRZ Sync ---
 
-  // Trigger a full or incremental sync with QRZ logbook.
+  // Trigger a full or incremental sync with the QRZ logbook.
+  //
+  // Progress is streamed back as SyncProgress messages. The stream closes after
+  // a message with complete=true. An auth failure produces an early terminal message
+  // with complete=true and error set.
   rpc SyncWithQrz(SyncRequest) returns (stream SyncProgress);
 
-  // Get current sync/logbook status.
+  // Get current sync/logbook statistics (counts, last sync time, logbook owner).
+  //
+  // Currently returns zeroed placeholder values — use for transport connectivity checks.
   rpc GetSyncStatus(SyncStatusRequest) returns (SyncStatusResponse);
 
   // --- ADIF Import/Export ---
 
-  // Import QSOs from ADIF data (file or paste).
+  // Import QSOs from ADIF data. The client streams raw ADIF bytes in one or more chunks;
+  // the server parses and imports after the client closes the send side.
+  // Returns a summary with counts and any per-record warnings.
   rpc ImportAdif(stream AdifChunk) returns (ImportResult);
 
-  // Export QSOs to ADIF format.
+  // Export QSOs to ADIF format. The server streams raw ADIF bytes back.
+  // Clients should concatenate received chunks to reconstruct the full ADIF payload.
   rpc ExportAdif(ExportRequest) returns (stream AdifChunk);
 }
 
