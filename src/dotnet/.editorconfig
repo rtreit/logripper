@@ -56,3 +56,10 @@ dotnet_diagnostic.CA2007.severity = none
 
 # CA1849: Sync over async for Console.Error.WriteLine (acceptable in CLI error paths)
 dotnet_diagnostic.CA1849.severity = suggestion
+
+[*Tests/*.cs]
+# CA1515: xUnit requires test classes to be public
+dotnet_diagnostic.CA1515.severity = none
+
+# CA1812: xUnit instantiates test classes via reflection
+dotnet_diagnostic.CA1812.severity = none
