@@ -151,35 +151,38 @@ See `docs/integrations/adif-specification.md` for the complete ADIF 3.1.7 refere
 ### Tooling
 
 - **buf** — schema linting (`buf lint`) and breaking change detection (`buf breaking`)
-- **prost + tonic-build** — Rust struct/gRPC generation
-- **Grpc.Tools** — C# class/gRPC generation
+- **prost + tonic-build** — Rust struct/gRPC generation during Cargo builds
+- **Grpc.Tools** — C# class/gRPC generation during MSBuild
 
 ### Build integration
 
-```bash
+```
 # Lint proto files
 buf lint
 
 # Check for breaking changes against main branch
 buf breaking --against '.git#branch=main'
 
-# Generate code (configured in buf.gen.yaml)
-buf generate
+# Regenerate Rust bindings
+cargo build --manifest-path src/rust/Cargo.toml
+
+# Regenerate C# bindings
+dotnet build src/dotnet/LogRipper.slnx
 ```
 
 ### Generated output locations
 
 | Language | Output path | Notes |
 |---|---|---|
-| Rust | `src/generated/rust/` | Checked into repo or generated at build time via `build.rs` |
-| C# | `src/generated/csharp/` | Generated at build time by `Grpc.Tools` NuGet package |
+| Rust | Cargo `OUT_DIR` under `src/rust/target/` | Generated at build time by `src/rust/logripper-core/build.rs`; not checked in |
+| C# | MSBuild intermediate output under `src/dotnet/**/obj/` | Generated at build time by `Grpc.Tools`; not checked in |
 
 ## Adding a New Field
 
 1. Add the field to the appropriate `.proto` file with the next available field number
 2. Run `buf lint` to verify naming conventions
 3. Run `buf breaking` to verify backward compatibility
-4. Regenerate code: `buf generate`
+4. Rebuild the Rust workspace and .NET consumers so generated bindings refresh
 5. Update the provider adapter (e.g., QRZ XML parser) to populate the new field
 6. Update the UI components that should display the field
 
