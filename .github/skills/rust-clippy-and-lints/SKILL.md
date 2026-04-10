@@ -13,7 +13,7 @@ description: >-
 - Running or fixing `cargo clippy`
 - Running `cargo fmt --check`
 - Working on `src/rust/rustfmt.toml`, `src/rust/deny.toml`, or workspace lint settings in `src/rust/Cargo.toml`
-- Adding dependency-audit checks like `cargo deny` or `cargo audit`
+- Adding dependency-audit checks like `cargo deny` or planning a manual `cargo audit` pass
 - Deciding whether to suppress or address a lint
 - Cleaning up Rust style and consistency issues
 - Reviewing unsafe code and modern lint expectations
@@ -25,15 +25,18 @@ description: >-
 3. Prefer `#[expect(...)]` for narrow, intentional exceptions.
 4. Avoid crate-wide or module-wide `allow` attributes unless there is a strong, documented reason.
 5. Recheck unsafe-related guidance against current stable Rust and edition guidance.
-6. Use `cargo deny` and `cargo audit` for dependency risk and supply-chain checks instead of relying on memory or ad hoc CVE review.
+6. Use `cargo deny` for routine dependency risk checks, and reserve `cargo audit` for occasional manual review instead of every CI run.
 
 ## Standard Commands
 
 ```powershell
 cargo fmt --manifest-path src\rust\Cargo.toml --all -- --check
 cargo clippy --manifest-path src\rust\Cargo.toml --all-targets -- -D warnings
-cargo deny check --manifest-path src\rust\Cargo.toml --config src\rust\deny.toml
+Push-Location src\rust
+cargo deny check --config deny.toml
+# Optional manual review
 cargo audit
+Pop-Location
 ```
 
 ## Current References

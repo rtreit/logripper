@@ -1,0 +1,66 @@
+name: Rust Quality
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/rust-quality.yml"
+      - "rust-toolchain.toml"
+      - "src/c/**"
+      - "src/rust/**"
+      - "proto/**"
+  pull_request:
+    paths:
+      - ".github/workflows/rust-quality.yml"
+      - "rust-toolchain.toml"
+      - "src/c/**"
+      - "src/rust/**"
+      - "proto/**"
+
+permissions:
+  contents: read
+
+jobs:
+  rust-quality:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install 1.88.0 --profile minimal --component rustfmt --component clippy
+          rustup default 1.88.0
+          rustc --version
+          cargo --version
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            src/rust -> target
+
+      - name: Install protobuf and C build prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler build-essential pkg-config
+          protoc --version
+
+      - name: Install cargo-deny
+        run: |
+          cargo install cargo-deny --locked
+
+      - name: Check formatting
+        run: cargo fmt --manifest-path src/rust/Cargo.toml --all -- --check
+
+      - name: Run clippy with warnings denied
+        run: cargo clippy --manifest-path src/rust/Cargo.toml --all-targets -- -D warnings
+
+      - name: Run Rust tests
+        run: cargo test --manifest-path src/rust/Cargo.toml
+
+      - name: Run cargo-deny
+        working-directory: src/rust
+        run: cargo deny check --config deny.toml

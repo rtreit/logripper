@@ -62,6 +62,7 @@ const IMPORT_ONLY_MODES: &[(&str, Mode, &str)] = &[
 
 /// Parse an ADIF mode string (case-insensitive) into a Mode enum value.
 /// For import-only modes (C4FM, DSTAR), returns the replacement mode.
+#[must_use]
 pub fn mode_from_adif(s: &str) -> Option<Mode> {
     let upper = s.to_uppercase();
 
@@ -84,6 +85,7 @@ pub fn mode_from_adif(s: &str) -> Option<Mode> {
 /// For import-only modes, returns the submode string that should be set.
 /// E.g., "C4FM" → Some("C4FM"), "DSTAR" → Some("DSTAR").
 /// For standard modes, returns None.
+#[must_use]
 pub fn import_only_submode(mode_str: &str) -> Option<&'static str> {
     let upper = mode_str.to_uppercase();
     IMPORT_ONLY_MODES
@@ -93,6 +95,7 @@ pub fn import_only_submode(mode_str: &str) -> Option<&'static str> {
 }
 
 /// Convert a Mode enum value to its canonical ADIF string representation.
+#[must_use]
 pub fn mode_to_adif(mode: Mode) -> Option<&'static str> {
     if mode == Mode::Unspecified {
         return None;
@@ -107,6 +110,7 @@ pub fn mode_to_adif(mode: Mode) -> Option<&'static str> {
 /// This is a non-exhaustive check for the most common submodes.
 /// Returns true if the submode is known to belong to the given mode,
 /// or if the mode has no known submode list (permissive).
+#[must_use]
 pub fn is_known_submode(mode: Mode, submode: &str) -> bool {
     let upper = submode.to_uppercase();
     match mode {
@@ -119,19 +123,18 @@ pub fn is_known_submode(mode: Mode, submode: &str) -> bool {
 }
 
 #[cfg(test)]
+#[allow(clippy::panic)]
 mod tests {
     use super::*;
 
     #[test]
     fn all_modes_round_trip_through_adif_string() {
         for (name, mode) in MODE_TABLE {
-            let parsed =
-                mode_from_adif(name).unwrap_or_else(|| panic!("Failed to parse mode: {name}"));
-            assert_eq!(parsed, *mode, "Mode mismatch for {name}");
+            let parsed = mode_from_adif(name);
+            assert_eq!(parsed, Some(*mode), "Mode mismatch for {name}");
 
-            let back = mode_to_adif(parsed)
-                .unwrap_or_else(|| panic!("Failed to convert mode back: {name}"));
-            assert_eq!(back, *name, "Round-trip mismatch for {name}");
+            let back = mode_to_adif(*mode);
+            assert_eq!(back, Some(*name), "Round-trip mismatch for {name}");
         }
     }
 

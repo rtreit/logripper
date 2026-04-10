@@ -39,8 +39,8 @@ These instructions govern Rust work in LogRipper, especially under `src/rust/`, 
   - `cargo run --manifest-path src/rust/Cargo.toml -p logripper-server`
   - `dotnet run --project src/dotnet/LogRipper.Cli -- status`
 - When changing Rust dependencies or supply-chain-sensitive infrastructure, also run:
-  - `cargo deny check --manifest-path src/rust/Cargo.toml --config src/rust/deny.toml`
-  - `cargo audit`
+  - `Push-Location src\rust; cargo deny check --config deny.toml; Pop-Location`
+- Treat `cargo audit` as a manual/occasional vulnerability review rather than a per-PR CI requirement unless the team explicitly changes that policy.
 
 ## Authoritative Sources
 

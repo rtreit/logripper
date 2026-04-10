@@ -1,3 +1,5 @@
+//! Build script for generating protobuf bindings and compiling the DSP C library.
+
 use std::path::PathBuf;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {

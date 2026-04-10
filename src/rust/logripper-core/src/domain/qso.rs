@@ -1,9 +1,10 @@
-//! QsoRecord helpers: construction, QSL status mapping, ADIF field mapping.
+//! `QsoRecord` helpers: construction, QSL status mapping, and ADIF field mapping.
 
 use crate::proto::logripper::domain::{Band, Mode, QslStatus, QsoRecord, SyncStatus};
 use uuid::Uuid;
 
-/// Map ADIF QSL Sent/Received status character to QslStatus enum.
+/// Map an ADIF QSL Sent/Received status character to the `QslStatus` enum.
+#[must_use]
 pub fn qsl_status_from_adif(s: &str) -> QslStatus {
     match s.to_uppercase().as_str() {
         "Y" => QslStatus::Yes,
@@ -15,7 +16,8 @@ pub fn qsl_status_from_adif(s: &str) -> QslStatus {
     }
 }
 
-/// Convert QslStatus enum to ADIF character representation.
+/// Convert the `QslStatus` enum to its ADIF character representation.
+#[must_use]
 pub fn qsl_status_to_adif(status: QslStatus) -> Option<&'static str> {
     match status {
         QslStatus::Yes => Some("Y"),
@@ -27,12 +29,13 @@ pub fn qsl_status_to_adif(status: QslStatus) -> Option<&'static str> {
     }
 }
 
-/// Builder for constructing QsoRecord with sensible defaults.
+/// Builder for constructing `QsoRecord` values with sensible defaults.
 pub struct QsoRecordBuilder {
     record: QsoRecord,
 }
 
 impl QsoRecordBuilder {
+    /// Create a builder for a QSO between the local station and the worked station.
     pub fn new(station_callsign: impl Into<String>, worked_callsign: impl Into<String>) -> Self {
         Self {
             record: QsoRecord {
@@ -45,62 +48,84 @@ impl QsoRecordBuilder {
         }
     }
 
+    #[must_use]
+    /// Set the band for the QSO.
     pub fn band(mut self, band: Band) -> Self {
         self.record.band = band.into();
         self
     }
 
+    #[must_use]
+    /// Set the mode for the QSO.
     pub fn mode(mut self, mode: Mode) -> Self {
         self.record.mode = mode.into();
         self
     }
 
+    #[must_use]
+    /// Set the submode for the QSO.
     pub fn submode(mut self, submode: impl Into<String>) -> Self {
         self.record.submode = Some(submode.into());
         self
     }
 
+    #[must_use]
+    /// Set the transmit frequency in kHz.
     pub fn frequency_khz(mut self, khz: u64) -> Self {
         self.record.frequency_khz = Some(khz);
         self
     }
 
+    #[must_use]
+    /// Set the UTC timestamp for the QSO.
     pub fn timestamp(mut self, ts: prost_types::Timestamp) -> Self {
         self.record.utc_timestamp = Some(ts);
         self
     }
 
+    #[must_use]
+    /// Set the contest identifier for the QSO.
     pub fn contest(mut self, contest_id: impl Into<String>) -> Self {
         self.record.contest_id = Some(contest_id.into());
         self
     }
 
+    #[must_use]
+    /// Set the operator comment for the QSO.
     pub fn comment(mut self, comment: impl Into<String>) -> Self {
         self.record.comment = Some(comment.into());
         self
     }
 
+    #[must_use]
+    /// Set operator notes for the QSO.
     pub fn notes(mut self, notes: impl Into<String>) -> Self {
         self.record.notes = Some(notes.into());
         self
     }
 
+    #[must_use]
+    /// Add an extra ADIF field for round-trip preservation.
     pub fn extra_field(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
         self.record.extra_fields.insert(key.into(), value.into());
         self
     }
 
+    #[must_use]
+    /// Finalize and return the built `QsoRecord`.
     pub fn build(self) -> QsoRecord {
         self.record
     }
 }
 
 /// Generate a QSO local ID using the documented UUID format.
+#[must_use]
 pub fn new_local_id() -> String {
     Uuid::new_v4().to_string()
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 
@@ -163,11 +188,11 @@ mod tests {
             .build();
 
         assert_eq!(
-            record.extra_fields.get("MY_RIG").map(|s| s.as_str()),
+            record.extra_fields.get("MY_RIG").map(String::as_str),
             Some("Icom IC-7300")
         );
         assert_eq!(
-            record.extra_fields.get("ANT_AZ").map(|s| s.as_str()),
+            record.extra_fields.get("ANT_AZ").map(String::as_str),
             Some("270")
         );
         assert_eq!(record.extra_fields.len(), 2);
@@ -231,7 +256,7 @@ mod tests {
         assert_eq!(decoded.frequency_khz, Some(7_030));
         assert_eq!(decoded.comment.as_deref(), Some("CW contest"));
         assert_eq!(
-            decoded.extra_fields.get("CHECK").map(|s| s.as_str()),
+            decoded.extra_fields.get("CHECK").map(String::as_str),
             Some("73")
         );
     }

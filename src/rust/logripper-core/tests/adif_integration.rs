@@ -1,4 +1,6 @@
-//! Integration tests: parse real ADI files using `difa` and map to QsoRecord.
+#![allow(clippy::expect_used, clippy::indexing_slicing, clippy::unwrap_used)]
+
+//! Integration tests: parse real ADI files using `difa` and map to `QsoRecord`.
 
 use difa::RecordStream;
 use futures::StreamExt;
@@ -132,34 +134,34 @@ async fn parse_extra_fields_preserved() {
 
     // MY_ fields and other extras go to extra_fields map
     assert_eq!(
-        q.extra_fields.get("MY_RIG").map(|s| s.as_str()),
+        q.extra_fields.get("MY_RIG").map(String::as_str),
         Some("Icom IC-7300")
     );
     assert_eq!(
-        q.extra_fields.get("MY_ANTENNA").map(|s| s.as_str()),
+        q.extra_fields.get("MY_ANTENNA").map(String::as_str),
         Some("Yagi 3-element")
     );
     assert_eq!(
-        q.extra_fields.get("MY_CITY").map(|s| s.as_str()),
+        q.extra_fields.get("MY_CITY").map(String::as_str),
         Some("Seattle")
     );
     assert_eq!(
-        q.extra_fields.get("MY_STATE").map(|s| s.as_str()),
+        q.extra_fields.get("MY_STATE").map(String::as_str),
         Some("WA")
     );
     assert_eq!(
-        q.extra_fields.get("MY_GRIDSQUARE").map(|s| s.as_str()),
+        q.extra_fields.get("MY_GRIDSQUARE").map(String::as_str),
         Some("CN87up")
     );
     assert_eq!(
-        q.extra_fields.get("ANT_AZ").map(|s| s.as_str()),
+        q.extra_fields.get("ANT_AZ").map(String::as_str),
         Some("045")
     );
-    assert_eq!(q.extra_fields.get("ANT_EL").map(|s| s.as_str()), Some("15"));
+    assert_eq!(q.extra_fields.get("ANT_EL").map(String::as_str), Some("15"));
     assert_eq!(
         q.extra_fields
             .get("APP_LOGRIPPER_SYNC_STATUS")
-            .map(|s| s.as_str()),
+            .map(String::as_str),
         Some("synced")
     );
 }
@@ -213,17 +215,17 @@ async fn round_trip_extra_fields_preserved() {
 
     // Extra fields should survive
     assert_eq!(
-        round_tripped.extra_fields.get("MY_RIG").map(|s| s.as_str()),
-        original.extra_fields.get("MY_RIG").map(|s| s.as_str()),
+        round_tripped.extra_fields.get("MY_RIG").map(String::as_str),
+        original.extra_fields.get("MY_RIG").map(String::as_str),
     );
     assert_eq!(
         round_tripped
             .extra_fields
             .get("APP_LOGRIPPER_SYNC_STATUS")
-            .map(|s| s.as_str()),
+            .map(String::as_str),
         original
             .extra_fields
             .get("APP_LOGRIPPER_SYNC_STATUS")
-            .map(|s| s.as_str()),
+            .map(String::as_str),
     );
 }

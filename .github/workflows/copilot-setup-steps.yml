@@ -49,13 +49,11 @@ jobs:
       - name: Install Rust quality tooling
         run: |
           cargo install cargo-deny --locked
-          cargo install cargo-audit --locked
 
       - name: Verify key developer tools
         run: |
           cargo fmt --version
           cargo clippy --version
           cargo deny --version
-          cargo audit --version
           buf --version
           dotnet --version

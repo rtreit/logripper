@@ -1,6 +1,6 @@
-//! Maps difa::Record → proto QsoRecord and back.
+//! Maps `difa::Record` values to the proto `QsoRecord` and back.
 //!
-//! This is the edge adapter between the ADIF file format and LogRipper's
+//! This is the edge adapter between the ADIF file format and `LogRipper`'s
 //! internal domain types. All ADIF-specific logic is contained here.
 
 use crate::domain::band::band_from_adif;
@@ -9,14 +9,16 @@ use crate::domain::qso::{new_local_id, qsl_status_from_adif};
 use crate::proto::logripper::domain::{Band, Mode, QsoRecord, SyncStatus};
 use difa::Record;
 
-/// Maps difa ADIF records to/from proto QsoRecords.
+/// Maps ADIF records to and from proto `QsoRecord` values.
 pub struct AdifMapper;
 
 impl AdifMapper {
-    /// Convert a difa::Record (parsed ADIF QSO) into a proto QsoRecord.
+    /// Convert a `difa::Record` (parsed ADIF QSO) into a proto `QsoRecord`.
     ///
-    /// Recognized ADIF fields are mapped to dedicated QsoRecord fields.
+    /// Recognized ADIF fields are mapped to dedicated `QsoRecord` fields.
     /// Unrecognized fields are stored in `extra_fields` for round-trip fidelity.
+    #[must_use]
+    #[allow(clippy::too_many_lines)]
     pub fn record_to_qso(record: &Record) -> QsoRecord {
         let mut qso = QsoRecord {
             local_id: new_local_id(),
@@ -50,9 +52,6 @@ impl AdifMapper {
                         qso.band = band.into();
                     }
                 }
-                "BAND_RX" => {
-                    qso.extra_fields.insert(key_upper, value_str);
-                }
                 "MODE" => {
                     if let Some(mode) = mode_from_adif(&value_str) {
                         qso.mode = mode.into();
@@ -67,13 +66,9 @@ impl AdifMapper {
                 "SUBMODE" => qso.submode = Some(value_str),
                 "FREQ" => {
                     if let Ok(mhz) = value_str.parse::<f64>() {
-                        qso.frequency_khz = Some((mhz * 1000.0).round() as u64);
+                        qso.frequency_khz = mhz_to_khz(mhz);
                     }
                 }
-                "FREQ_RX" => {
-                    qso.extra_fields.insert(key_upper, value_str);
-                }
-
                 // --- Signal reports ---
                 "RST_SENT" => {
                     qso.rst_sent = Some(crate::proto::logripper::domain::RstReport {
@@ -154,8 +149,10 @@ impl AdifMapper {
         qso
     }
 
-    /// Convert a proto QsoRecord into a list of ADIF field key-value pairs.
+    /// Convert a proto `QsoRecord` into a list of ADIF field key-value pairs.
     /// Suitable for generating ADI output.
+    #[must_use]
+    #[allow(clippy::too_many_lines)]
     pub fn qso_to_adif_fields(qso: &QsoRecord) -> Vec<(String, String)> {
         let mut fields = Vec::new();
 
@@ -169,9 +166,10 @@ impl AdifMapper {
 
         // Timestamp → QSO_DATE + TIME_ON
         if let Some(ref ts) = qso.utc_timestamp {
-            let (date_str, time_str) = format_adif_datetime(ts);
-            fields.push(("QSO_DATE".into(), date_str));
-            fields.push(("TIME_ON".into(), time_str));
+            if let Some((date_str, time_str)) = format_adif_datetime(ts) {
+                fields.push(("QSO_DATE".into(), date_str));
+                fields.push(("TIME_ON".into(), time_str));
+            }
         }
 
         // Band
@@ -191,8 +189,9 @@ impl AdifMapper {
 
         // Frequency
         if let Some(khz) = qso.frequency_khz {
-            let mhz = khz as f64 / 1000.0;
-            fields.push(("FREQ".into(), format!("{mhz:.3}")));
+            let whole_mhz = khz / 1000;
+            let fractional_khz = khz % 1000;
+            fields.push(("FREQ".into(), format!("{whole_mhz}.{fractional_khz:03}")));
         }
 
         // Signal reports
@@ -313,11 +312,18 @@ impl AdifMapper {
     }
 
     /// Generate an ADI-format string from ADIF field pairs.
+    #[must_use]
     pub fn fields_to_adi(fields: &[(String, String)]) -> String {
         let mut out = String::new();
         for (key, value) in fields {
             let len = value.len();
-            out.push_str(&format!("<{key}:{len}>{value}\n"));
+            out.push('<');
+            out.push_str(key);
+            out.push(':');
+            out.push_str(&len.to_string());
+            out.push('>');
+            out.push_str(value);
+            out.push('\n');
         }
         out.push_str("<eor>\n");
         out
@@ -326,8 +332,14 @@ impl AdifMapper {
 
 /// Parse ADIF date (YYYYMMDD) + optional time (HHMM or HHMMSS) into prost Timestamp.
 fn parse_adif_datetime(date_str: &str, time_str: Option<&str>) -> Option<prost_types::Timestamp> {
-    if date_str.len() != 8 {
+    if date_str.len() != 8 || !date_str.is_ascii() {
         return None;
+    }
+
+    if let Some(ts) = time_str {
+        if !ts.is_ascii() {
+            return None;
+        }
     }
 
     let year: i32 = date_str[0..4].parse().ok()?;
@@ -364,16 +376,29 @@ fn parse_adif_datetime(date_str: &str, time_str: Option<&str>) -> Option<prost_t
 }
 
 /// Format a prost Timestamp as ADIF date + time strings.
-fn format_adif_datetime(ts: &prost_types::Timestamp) -> (String, String) {
-    let dt = chrono::DateTime::from_timestamp(ts.seconds, ts.nanos as u32)
-        .unwrap_or_default()
-        .naive_utc();
+fn format_adif_datetime(ts: &prost_types::Timestamp) -> Option<(String, String)> {
+    let nanos = u32::try_from(ts.nanos).ok()?;
+    let dt = chrono::DateTime::from_timestamp(ts.seconds, nanos)?.naive_utc();
     let date = dt.format("%Y%m%d").to_string();
     let time = dt.format("%H%M%S").to_string();
-    (date, time)
+    Some((date, time))
+}
+
+fn mhz_to_khz(mhz: f64) -> Option<u64> {
+    if !mhz.is_finite() || mhz.is_sign_negative() {
+        return None;
+    }
+
+    let rounded = (mhz * 1000.0).round();
+    if rounded < 0.0 {
+        return None;
+    }
+
+    format!("{rounded:.0}").parse().ok()
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
     use uuid::Uuid;
@@ -537,21 +562,21 @@ mod tests {
 
         let qso = AdifMapper::record_to_qso(&rec);
         assert_eq!(
-            qso.extra_fields.get("MY_RIG").map(|s| s.as_str()),
+            qso.extra_fields.get("MY_RIG").map(String::as_str),
             Some("Icom IC-7300")
         );
         assert_eq!(
-            qso.extra_fields.get("MY_ANTENNA").map(|s| s.as_str()),
+            qso.extra_fields.get("MY_ANTENNA").map(String::as_str),
             Some("Yagi 3-element")
         );
         assert_eq!(
-            qso.extra_fields.get("ANT_AZ").map(|s| s.as_str()),
+            qso.extra_fields.get("ANT_AZ").map(String::as_str),
             Some("045")
         );
         assert_eq!(
             qso.extra_fields
                 .get("APP_LOGRIPPER_SYNC_STATUS")
-                .map(|s| s.as_str()),
+                .map(String::as_str),
             Some("synced")
         );
     }

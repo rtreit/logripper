@@ -3,6 +3,7 @@ name = "logripper-core"
 description = "Core engine for LogRipper ham radio logging system"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 

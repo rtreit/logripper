@@ -4,8 +4,11 @@ use crate::proto::logripper::domain::Band;
 
 /// Frequency range in MHz for a band.
 pub struct BandRange {
+    /// The band associated with the range.
     pub band: Band,
+    /// Lower edge of the band in MHz.
     pub lower_mhz: f64,
+    /// Upper edge of the band in MHz.
     pub upper_mhz: f64,
 }
 
@@ -26,7 +29,7 @@ const BAND_TABLE: &[(&str, Band, f64, f64)] = &[
     ("10M", Band::Band10m, 28.0, 29.7),
     ("8M", Band::Band8m, 40.0, 45.0),
     ("6M", Band::Band6m, 50.0, 54.0),
-    ("5M", Band::Band5m, 54.000001, 69.9),
+    ("5M", Band::Band5m, 54.000_001, 69.9),
     ("4M", Band::Band4m, 70.0, 71.0),
     ("2M", Band::Band2m, 144.0, 148.0),
     ("1.25M", Band::Band125m, 222.0, 225.0),
@@ -40,13 +43,14 @@ const BAND_TABLE: &[(&str, Band, f64, f64)] = &[
     ("1.25CM", Band::Band125cm, 24000.0, 24250.0),
     ("6MM", Band::Band6mm, 47000.0, 47200.0),
     ("4MM", Band::Band4mm, 75500.0, 81000.0),
-    ("2.5MM", Band::Band25mm, 119980.0, 123000.0),
-    ("2MM", Band::Band2mm, 134000.0, 149000.0),
-    ("1MM", Band::Band1mm, 241000.0, 250000.0),
-    ("SUBMM", Band::Submm, 300000.0, 7500000.0),
+    ("2.5MM", Band::Band25mm, 119_980.0, 123_000.0),
+    ("2MM", Band::Band2mm, 134_000.0, 149_000.0),
+    ("1MM", Band::Band1mm, 241_000.0, 250_000.0),
+    ("SUBMM", Band::Submm, 300_000.0, 7_500_000.0),
 ];
 
 /// Parse an ADIF band string (case-insensitive) into a Band enum value.
+#[must_use]
 pub fn band_from_adif(s: &str) -> Option<Band> {
     let upper = s.to_uppercase();
     BAND_TABLE
@@ -56,6 +60,7 @@ pub fn band_from_adif(s: &str) -> Option<Band> {
 }
 
 /// Convert a Band enum value to its canonical ADIF string representation.
+#[must_use]
 pub fn band_to_adif(band: Band) -> Option<&'static str> {
     if band == Band::Unspecified {
         return None;
@@ -68,6 +73,7 @@ pub fn band_to_adif(band: Band) -> Option<&'static str> {
 
 /// Derive the Band from a frequency in MHz.
 /// Returns the first band whose range contains the frequency.
+#[must_use]
 pub fn band_from_frequency_mhz(freq_mhz: f64) -> Option<Band> {
     BAND_TABLE
         .iter()
@@ -76,6 +82,7 @@ pub fn band_from_frequency_mhz(freq_mhz: f64) -> Option<Band> {
 }
 
 /// Get the frequency range (lower, upper) in MHz for a Band.
+#[must_use]
 pub fn band_frequency_range_mhz(band: Band) -> Option<(f64, f64)> {
     if band == Band::Unspecified {
         return None;
@@ -87,6 +94,7 @@ pub fn band_frequency_range_mhz(band: Band) -> Option<(f64, f64)> {
 }
 
 #[cfg(test)]
+#[allow(clippy::panic, clippy::unwrap_used, clippy::float_cmp)]
 mod tests {
     use super::*;
 
@@ -156,8 +164,8 @@ mod tests {
     fn frequency_range_round_trips() {
         for (_, band, lower, upper) in BAND_TABLE {
             let range = band_frequency_range_mhz(*band).unwrap();
-            assert_eq!(range.0, *lower, "Lower bound mismatch for {:?}", band);
-            assert_eq!(range.1, *upper, "Upper bound mismatch for {:?}", band);
+            assert_eq!(range.0, *lower, "Lower bound mismatch for {band:?}");
+            assert_eq!(range.1, *upper, "Upper bound mismatch for {band:?}");
         }
     }
 

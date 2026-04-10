@@ -1,3 +1,5 @@
+//! Runnable tonic gRPC host for the `LogRipper` Rust engine.
+
 use std::net::SocketAddr;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::transport::Server;
@@ -122,7 +124,7 @@ impl LookupService for DeveloperLookupService {
         request: Request<LookupRequest>,
     ) -> Result<Response<LookupResult>, Status> {
         let request = request.into_inner();
-        Ok(Response::new(placeholder_lookup_error(request.callsign)))
+        Ok(Response::new(placeholder_lookup_error(&request.callsign)))
     }
 
     async fn stream_lookup(
@@ -145,7 +147,7 @@ impl LookupService for DeveloperLookupService {
             .await;
 
         let _ = sender
-            .send(Ok(placeholder_lookup_error(queried_callsign)))
+            .send(Ok(placeholder_lookup_error(&queried_callsign)))
             .await;
 
         Ok(Response::new(ReceiverStream::new(receiver)))
@@ -184,18 +186,18 @@ impl LookupService for DeveloperLookupService {
             results: request
                 .callsigns
                 .into_iter()
-                .map(placeholder_lookup_error)
+                .map(|callsign| placeholder_lookup_error(&callsign))
                 .collect(),
         }))
     }
 }
 
-fn placeholder_lookup_error(callsign: String) -> LookupResult {
+fn placeholder_lookup_error(callsign: &str) -> LookupResult {
     LookupResult {
         state: LookupState::Error as i32,
         record: Some(CallsignRecord {
-            callsign: normalize_callsign(&callsign),
-            cross_ref: normalize_callsign(&callsign),
+            callsign: normalize_callsign(callsign),
+            cross_ref: normalize_callsign(callsign),
             aliases: Vec::new(),
             previous_call: String::new(),
             dxcc_entity_id: 0,
@@ -249,7 +251,7 @@ fn placeholder_lookup_error(callsign: String) -> LookupResult {
         ),
         cache_hit: false,
         lookup_latency_ms: 0,
-        queried_callsign: normalize_callsign(&callsign),
+        queried_callsign: normalize_callsign(callsign),
     }
 }
 
@@ -303,6 +305,7 @@ fn print_help() {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::ServerOptions;
 

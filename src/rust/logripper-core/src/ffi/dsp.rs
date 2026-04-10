@@ -1,17 +1,25 @@
+#![allow(unsafe_code)]
+
 extern "C" {
     fn lr_dsp_version() -> i32;
     fn lr_dsp_hz_to_khz(freq_hz: u64) -> u64;
     fn lr_dsp_moving_average(samples: *const f64, count: usize) -> f64;
 }
 
+/// Return the version number exposed by the DSP library.
+#[must_use]
 pub fn dsp_version() -> i32 {
     unsafe { lr_dsp_version() }
 }
 
+/// Convert a frequency in Hz to kHz using the DSP helper implementation.
+#[must_use]
 pub fn hz_to_khz(freq_hz: u64) -> u64 {
     unsafe { lr_dsp_hz_to_khz(freq_hz) }
 }
 
+/// Compute the arithmetic mean for the provided sample slice.
+#[must_use]
 pub fn moving_average(samples: &[f64]) -> f64 {
     unsafe { lr_dsp_moving_average(samples.as_ptr(), samples.len()) }
 }
