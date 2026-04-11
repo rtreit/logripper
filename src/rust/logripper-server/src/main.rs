@@ -706,9 +706,9 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::{
-        build_storage, load_dotenv_if_present, parse_storage_backend, server_ready_message,
-        server_starting_message, run_server, DeveloperLogbookService, DeveloperLookupService,
-        Server, ServerOptions, StorageBackendKind, StorageOptions,
+        build_storage, load_dotenv_if_present, parse_storage_backend, run_server,
+        server_ready_message, server_starting_message, DeveloperLogbookService,
+        DeveloperLookupService, Server, ServerOptions, StorageBackendKind, StorageOptions,
     };
     use crate::runtime_config::{
         RuntimeConfigManager, SQLITE_PATH_ENV_VAR, STATION_CALLSIGN_ENV_VAR, STATION_GRID_ENV_VAR,
