@@ -93,7 +93,7 @@
                 <h2 class="h5">Current session notes</h2>
                 <ul class="mb-0">
                     <li>The workbench stores endpoint selection per Blazor server circuit.</li>
-                    <li>Use <code>http://localhost:50051</code> by default for local Rust gRPC development.</li>
+                    <li>Use <code>http://127.0.0.1:50051</code> by default for local Rust gRPC development.</li>
                     <li>The setup and station-profile forms call the same gRPC contracts that <code>grpcurl</code> would use.</li>
                     <li>The lookup and storage workbench pages use this endpoint automatically.</li>
                 </ul>
@@ -906,9 +906,10 @@
         tools = ToolchainLocator.GetToolAvailability();
         ReplaceSetupEditor(SetupEditorModel.Create(null, WorkbenchState.EngineSqlitePath));
         ReplaceStationProfileEditor(StationProfileEditorModel.CreateEmpty());
-        await RefreshSetupStatusAsync();
-        await RefreshStationProfilesAsync();
-        await RefreshRuntimeConfigAsync();
+        await Task.WhenAll(
+            RefreshSetupStatusAsync(),
+            RefreshStationProfilesAsync(),
+            RefreshRuntimeConfigAsync());
     }
 
     private Task SaveEndpointAsync()

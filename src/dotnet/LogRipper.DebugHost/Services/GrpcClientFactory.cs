@@ -1,11 +1,16 @@
+using System.Net.Http;
 using Grpc.Net.Client;
 using LogRipper.Services;
 
 namespace LogRipper.DebugHost.Services;
 
-internal sealed class GrpcClientFactory
+internal sealed class GrpcClientFactory : IDisposable
 {
     private readonly DebugWorkbenchState _state;
+    private readonly Lock _lock = new();
+    private GrpcChannel? _channel;
+    private string? _channelEndpoint;
+    private bool _disposed;
 
     public GrpcClientFactory(DebugWorkbenchState state)
     {
@@ -14,38 +19,81 @@ internal sealed class GrpcClientFactory
         _state = state;
     }
 
-    public GrpcChannel CreateChannel()
+    public GrpcChannel GetOrCreateChannel()
     {
-        if (!Uri.TryCreate(_state.EngineEndpoint, UriKind.Absolute, out var endpointUri))
-        {
-            throw new InvalidOperationException("The engine endpoint must be a valid absolute URI before creating a gRPC channel.");
-        }
+        ObjectDisposedException.ThrowIf(_disposed, this);
 
-        return GrpcChannel.ForAddress(endpointUri);
+        var currentEndpoint = _state.EngineEndpoint;
+
+        lock (_lock)
+        {
+            if (_channel is not null && string.Equals(_channelEndpoint, currentEndpoint, StringComparison.Ordinal))
+            {
+                return _channel;
+            }
+
+            _channel?.Dispose();
+
+            if (!Uri.TryCreate(currentEndpoint, UriKind.Absolute, out var endpointUri))
+            {
+                throw new InvalidOperationException(
+                    "The engine endpoint must be a valid absolute URI before creating a gRPC channel.");
+            }
+
+            _channel = GrpcChannel.ForAddress(endpointUri, CreateChannelOptions());
+            _channelEndpoint = currentEndpoint;
+            return _channel;
+        }
     }
 
     public LookupService.LookupServiceClient CreateLookupClient()
     {
-        return new LookupService.LookupServiceClient(CreateChannel());
+        return new LookupService.LookupServiceClient(GetOrCreateChannel());
     }
 
     public LogbookService.LogbookServiceClient CreateLogbookClient()
     {
-        return new LogbookService.LogbookServiceClient(CreateChannel());
+        return new LogbookService.LogbookServiceClient(GetOrCreateChannel());
     }
 
     public DeveloperControlService.DeveloperControlServiceClient CreateDeveloperControlClient()
     {
-        return new DeveloperControlService.DeveloperControlServiceClient(CreateChannel());
+        return new DeveloperControlService.DeveloperControlServiceClient(GetOrCreateChannel());
     }
 
     public SetupService.SetupServiceClient CreateSetupClient()
     {
-        return new SetupService.SetupServiceClient(CreateChannel());
+        return new SetupService.SetupServiceClient(GetOrCreateChannel());
     }
 
     public StationProfileService.StationProfileServiceClient CreateStationProfileClient()
     {
-        return new StationProfileService.StationProfileServiceClient(CreateChannel());
+        return new StationProfileService.StationProfileServiceClient(GetOrCreateChannel());
+    }
+
+    public void Dispose()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        _disposed = true;
+        _channel?.Dispose();
+        _channel = null;
+    }
+
+    private static GrpcChannelOptions CreateChannelOptions()
+    {
+        return new GrpcChannelOptions
+        {
+            HttpHandler = new SocketsHttpHandler
+            {
+                EnableMultipleHttp2Connections = true,
+                PooledConnectionIdleTimeout = TimeSpan.FromMinutes(5),
+                KeepAlivePingDelay = TimeSpan.FromSeconds(60),
+                KeepAlivePingTimeout = TimeSpan.FromSeconds(30),
+            }
+        };
     }
 }

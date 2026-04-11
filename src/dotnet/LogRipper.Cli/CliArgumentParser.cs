@@ -2,7 +2,7 @@ namespace LogRipper.Cli;
 
 internal static class CliArgumentParser
 {
-    public const string DefaultEndpoint = "http://localhost:50051";
+    public const string DefaultEndpoint = "http://127.0.0.1:50051";
 
     public static CliArguments Parse(string[] args)
     {

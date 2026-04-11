@@ -36,8 +36,7 @@ internal sealed class StorageWorkbenchService
 
         try
         {
-            using var channel = _clientFactory.CreateChannel();
-            var client = new LogbookService.LogbookServiceClient(channel);
+            var client = _clientFactory.CreateLogbookClient();
 
             logResponse = await client.LogQsoAsync(
                 new LogQsoRequest

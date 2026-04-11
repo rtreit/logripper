@@ -45,8 +45,7 @@ internal sealed class StationProfileWorkbenchService
 
         try
         {
-            using var channel = _clientFactory.CreateChannel();
-            var client = new StationProfileService.StationProfileServiceClient(channel);
+            var client = _clientFactory.CreateStationProfileClient();
             var response = await client.GetStationProfileAsync(
                     new GetStationProfileRequest { ProfileId = profileId },
                     cancellationToken: cancellationToken)
@@ -79,8 +78,7 @@ internal sealed class StationProfileWorkbenchService
 
         try
         {
-            using var channel = _clientFactory.CreateChannel();
-            var client = new StationProfileService.StationProfileServiceClient(channel);
+            var client = _clientFactory.CreateStationProfileClient();
             var response = await client.SaveStationProfileAsync(
                     request,
                     cancellationToken: cancellationToken)
@@ -184,8 +182,7 @@ internal sealed class StationProfileWorkbenchService
     {
         try
         {
-            using var channel = _clientFactory.CreateChannel();
-            var client = new StationProfileService.StationProfileServiceClient(channel);
+            var client = _clientFactory.CreateStationProfileClient();
             var catalog = await catalogAction(client);
             var context = await contextAction(client);
             _workbenchState.UpdateStationProfiles(catalog, context);
@@ -210,8 +207,7 @@ internal sealed class StationProfileWorkbenchService
     {
         try
         {
-            using var channel = _clientFactory.CreateChannel();
-            var client = new StationProfileService.StationProfileServiceClient(channel);
+            var client = _clientFactory.CreateStationProfileClient();
             await mutationAction(client);
             await RefreshStateAsync(client, cancellationToken);
             return true;
