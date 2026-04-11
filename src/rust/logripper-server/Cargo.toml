@@ -15,7 +15,7 @@ logripper-storage-sqlite = { path = "../logripper-storage-sqlite", version = "0.
 prost-types = { workspace = true }
 serde = { version = "1", features = ["derive"] }
 tokio = { workspace = true }
-tokio-stream = "0.1"
+tokio-stream = { version = "0.1", features = ["net"] }
 toml = "0.8"
 tonic = { workspace = true }
 

@@ -11,7 +11,7 @@ use logripper_core::application::logbook::LogbookError;
 use logripper_core::storage::{EngineStorage, QsoListQuery, QsoSortOrder, StorageError};
 use logripper_storage_memory::MemoryStorage;
 use logripper_storage_sqlite::SqliteStorageBuilder;
-use tokio_stream::wrappers::ReceiverStream;
+use tokio_stream::wrappers::{ReceiverStream, TcpListenerStream};
 use tonic::transport::Server;
 use tonic::{Request, Response, Status};
 
@@ -58,15 +58,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         StationProfileControlSurface::new(setup_state.clone(), runtime_config.clone());
     let active_storage_backend = runtime_config.active_storage_backend().await;
     let setup_status = setup_state.status().await;
+    let setup_completion = setup_completion_label(setup_status.setup_complete);
+    let config_path = setup_status.config_path.clone();
 
     println!(
-        "Starting LogRipper gRPC server on {address} using {active_storage_backend} storage (setup: {}, config: {})",
-        if setup_status.setup_complete {
-            "complete"
-        } else {
-            "incomplete"
-        },
-        setup_status.config_path
+        "{}",
+        server_starting_message(
+            address,
+            active_storage_backend.as_str(),
+            setup_completion,
+            config_path.as_str(),
+        )
+    );
+
+    let listener = tokio::net::TcpListener::bind(address).await?;
+    let bound_address = listener.local_addr()?;
+
+    println!(
+        "{}",
+        server_ready_message(
+            bound_address,
+            active_storage_backend.as_str(),
+            setup_completion,
+            config_path.as_str(),
+        )
     );
 
     Server::builder()
@@ -77,10 +92,40 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .add_service(DeveloperControlServiceServer::new(
             developer_control_service,
         ))
-        .serve(address)
+        .serve_with_incoming(TcpListenerStream::new(listener))
         .await?;
 
     Ok(())
+}
+
+fn setup_completion_label(setup_complete: bool) -> &'static str {
+    if setup_complete {
+        "complete"
+    } else {
+        "incomplete"
+    }
+}
+
+fn server_starting_message(
+    address: SocketAddr,
+    active_storage_backend: &str,
+    setup_completion: &str,
+    config_path: &str,
+) -> String {
+    format!(
+        "Starting LogRipper gRPC server on {address} using {active_storage_backend} storage (setup: {setup_completion}, config: {config_path})"
+    )
+}
+
+fn server_ready_message(
+    address: SocketAddr,
+    active_storage_backend: &str,
+    setup_completion: &str,
+    config_path: &str,
+) -> String {
+    format!(
+        "LogRipper gRPC server ready on {address} using {active_storage_backend} storage (setup: {setup_completion}, config: {config_path})"
+    )
 }
 
 fn load_dotenv_if_present() {
@@ -635,8 +680,9 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::{
-        build_storage, load_dotenv_if_present, parse_storage_backend, DeveloperLogbookService,
-        DeveloperLookupService, Server, ServerOptions, StorageBackendKind, StorageOptions,
+        build_storage, load_dotenv_if_present, parse_storage_backend, server_ready_message,
+        server_starting_message, DeveloperLogbookService, DeveloperLookupService, Server,
+        ServerOptions, StorageBackendKind, StorageOptions,
     };
     use crate::runtime_config::{
         RuntimeConfigManager, SQLITE_PATH_ENV_VAR, STATION_CALLSIGN_ENV_VAR, STATION_GRID_ENV_VAR,
@@ -1027,6 +1073,36 @@ mod tests {
         process_state.restore_current_dir();
         fs::remove_file(env_path).expect("remove temp .env");
         fs::remove_dir(temp_dir).expect("remove temp dir");
+    }
+
+    #[test]
+    fn server_starting_message_reports_pending_startup() {
+        let message = server_starting_message(
+            "127.0.0.1:50051".parse().expect("address"),
+            "memory",
+            "complete",
+            "config.toml",
+        );
+
+        assert_eq!(
+            "Starting LogRipper gRPC server on 127.0.0.1:50051 using memory storage (setup: complete, config: config.toml)",
+            message
+        );
+    }
+
+    #[test]
+    fn server_ready_message_confirms_bound_listener() {
+        let message = server_ready_message(
+            "127.0.0.1:50051".parse().expect("address"),
+            "sqlite",
+            "incomplete",
+            "config.toml",
+        );
+
+        assert_eq!(
+            "LogRipper gRPC server ready on 127.0.0.1:50051 using sqlite storage (setup: incomplete, config: config.toml)",
+            message
+        );
     }
 
     #[test]
