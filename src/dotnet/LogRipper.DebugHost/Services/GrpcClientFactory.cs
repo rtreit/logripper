@@ -8,9 +8,10 @@ internal sealed class GrpcClientFactory : IDisposable
 {
     private readonly DebugWorkbenchState _state;
     private readonly Lock _lock = new();
-    private GrpcChannel? _channel;
-    private string? _channelEndpoint;
+    private volatile CachedChannel? _cached;
     private bool _disposed;
+
+    private sealed record CachedChannel(GrpcChannel Channel, string Endpoint);
 
     public GrpcClientFactory(DebugWorkbenchState state)
     {
@@ -24,15 +25,22 @@ internal sealed class GrpcClientFactory : IDisposable
         ObjectDisposedException.ThrowIf(_disposed, this);
 
         var currentEndpoint = _state.EngineEndpoint;
+        var cached = _cached;
+
+        if (cached is not null && string.Equals(cached.Endpoint, currentEndpoint, StringComparison.Ordinal))
+        {
+            return cached.Channel;
+        }
 
         lock (_lock)
         {
-            if (_channel is not null && string.Equals(_channelEndpoint, currentEndpoint, StringComparison.Ordinal))
+            cached = _cached;
+            if (cached is not null && string.Equals(cached.Endpoint, currentEndpoint, StringComparison.Ordinal))
             {
-                return _channel;
+                return cached.Channel;
             }
 
-            _channel?.Dispose();
+            cached?.Channel.Dispose();
 
             if (!Uri.TryCreate(currentEndpoint, UriKind.Absolute, out var endpointUri))
             {
@@ -40,9 +48,9 @@ internal sealed class GrpcClientFactory : IDisposable
                     "The engine endpoint must be a valid absolute URI before creating a gRPC channel.");
             }
 
-            _channel = GrpcChannel.ForAddress(endpointUri, CreateChannelOptions());
-            _channelEndpoint = currentEndpoint;
-            return _channel;
+            var channel = GrpcChannel.ForAddress(endpointUri, CreateChannelOptions());
+            _cached = new CachedChannel(channel, currentEndpoint);
+            return channel;
         }
     }
 
@@ -79,8 +87,8 @@ internal sealed class GrpcClientFactory : IDisposable
         }
 
         _disposed = true;
-        _channel?.Dispose();
-        _channel = null;
+        _cached?.Channel.Dispose();
+        _cached = null;
     }
 
     private static GrpcChannelOptions CreateChannelOptions()
