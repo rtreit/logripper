@@ -16,10 +16,15 @@ if (!CliEndpointValidator.TryCreateEndpointUri(arguments.Endpoint, out var endpo
 }
 
 var needsCallsign = arguments.Command is "lookup" or "stream-lookup" or "cache-check" or "log" or "get" or "delete";
+
+if (IsCommandHelp(arguments))
+{
+    return ShowCommandHelp(arguments.Command);
+}
+
 if (needsCallsign && string.IsNullOrEmpty(arguments.Callsign))
 {
-    Console.Error.WriteLine($"The '{arguments.Command}' command requires an argument.");
-    return 1;
+    return ShowCommandHelp(arguments.Command);
 }
 
 try
@@ -94,4 +99,101 @@ static int ShowHelp(string? error = null)
         """);
 
     return error is null ? 0 : 1;
+}
+
+static bool IsCommandHelp(CliArguments arguments)
+{
+    return arguments.Callsign is "HELP" or "-?" or "--HELP"
+        || arguments.RemainingArgs.Any(a => a is "help" or "-?" or "--help");
+}
+
+static int ShowCommandHelp(string command)
+{
+    var help = command switch
+    {
+        "log" => """
+            Usage: log <callsign> <band> <mode> [options]
+
+            Log a new QSO to the engine.
+
+              --station <call>     Your station callsign (if not set via setup)
+              --rst-sent <rst>     RST sent (e.g., 59, 599)
+              --rst-rcvd <rst>     RST received
+              --freq <khz>         Frequency in kHz (e.g., 14074)
+
+            Examples:
+              log W1AW 20m FT8
+              log W1AW 40m CW --station AE7XI --rst-sent 599 --freq 7030
+            """,
+        "get" => """
+            Usage: get <local-id>
+
+            Retrieve a QSO by its local ID (returned by the log command).
+            """,
+        "list" => """
+            Usage: list [options]
+
+            List QSOs with optional filters.
+
+              --callsign <call>    Filter by worked callsign
+              --band <band>        Filter by band (e.g., 20m)
+              --mode <mode>        Filter by mode (e.g., FT8)
+              --limit <n>          Max results (default: 20)
+            """,
+        "delete" => """
+            Usage: delete <local-id>
+
+            Delete a QSO by its local ID.
+            """,
+        "import" => """
+            Usage: import <file-path>
+
+            Import QSOs from an ADIF (.adi) file.
+            """,
+        "export" => """
+            Usage: export [options]
+
+            Export QSOs to ADIF format.
+
+              --file <path>        Write to file (default: stdout)
+              --include-header     Include ADIF header
+            """,
+        "lookup" => """
+            Usage: lookup <callsign> [--skip-cache]
+
+            Look up a callsign via QRZ.
+            """,
+        "stream-lookup" => """
+            Usage: stream-lookup <callsign> [--skip-cache]
+
+            Streaming lookup with progressive state updates.
+            """,
+        "cache-check" => """
+            Usage: cache-check <callsign>
+
+            Check if a callsign is in the engine's cache.
+            """,
+        "config" => """
+            Usage: config [options]
+
+            View or modify runtime configuration.
+
+              --set KEY=VALUE      Set a config value
+              --reset              Reset all overrides to defaults
+            """,
+        "setup" => """
+            Usage: setup
+
+            Check first-run setup status.
+            """,
+        "status" => """
+            Usage: status
+
+            Show engine sync status and QSO counts.
+            """,
+        _ => $"No help available for '{command}'.",
+    };
+
+    Console.WriteLine(help);
+    return 0;
 }

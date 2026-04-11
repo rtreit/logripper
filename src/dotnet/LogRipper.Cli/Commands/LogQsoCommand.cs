@@ -9,9 +9,9 @@ internal static class LogQsoCommand
 {
     public static async Task<int> RunAsync(GrpcChannel channel, string callsign, string[] args)
     {
-        if (args.Length < 2)
+        if (args.Length < 2 || args.Any(a => a is "help" or "-?" or "--help"))
         {
-            Console.Error.WriteLine("Usage: log <callsign> <band> <mode> [--rst-sent 59] [--rst-rcvd 59] [--freq 14074]");
+            Console.Error.WriteLine("Usage: log <callsign> <band> <mode> [--station call] [--rst-sent 59] [--rst-rcvd 59] [--freq khz]");
             return 1;
         }
 
@@ -55,17 +55,20 @@ internal static class LogQsoCommand
 
     private static void ParseOptionalArgs(string[] args, QsoRecord qso)
     {
-        for (var i = 2; i < args.Length - 1; i++)
+        for (var i = 2; i < args.Length; i++)
         {
             switch (args[i])
             {
-                case "--rst-sent":
+                case "--station" when i < args.Length - 1:
+                    qso.StationCallsign = args[++i].ToUpperInvariant();
+                    break;
+                case "--rst-sent" when i < args.Length - 1:
                     qso.RstSent = ParseRst(args[++i]);
                     break;
-                case "--rst-rcvd":
+                case "--rst-rcvd" when i < args.Length - 1:
                     qso.RstReceived = ParseRst(args[++i]);
                     break;
-                case "--freq":
+                case "--freq" when i < args.Length - 1:
                     if (ulong.TryParse(args[++i], out var freq))
                     {
                         qso.FrequencyKhz = freq;
