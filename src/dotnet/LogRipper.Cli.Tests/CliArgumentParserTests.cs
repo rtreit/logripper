@@ -34,6 +34,64 @@ public class CliArgumentParserTests
         Assert.Equal("Missing value for --endpoint.", arguments.Error);
     }
 
+    [Fact]
+    public void Parse_captures_callsign_as_second_positional_arg()
+    {
+        var arguments = CliArgumentParser.Parse(["lookup", "W1AW"]);
+
+        Assert.Equal("lookup", arguments.Command);
+        Assert.Equal("W1AW", arguments.Callsign);
+        Assert.False(arguments.SkipCache);
+    }
+
+    [Fact]
+    public void Parse_normalizes_callsign_to_uppercase()
+    {
+        var arguments = CliArgumentParser.Parse(["lookup", "w1aw"]);
+
+        Assert.Equal("W1AW", arguments.Callsign);
+    }
+
+    [Fact]
+    public void Parse_captures_skip_cache_flag()
+    {
+        var arguments = CliArgumentParser.Parse(["lookup", "K7ABV", "--skip-cache"]);
+
+        Assert.Equal("lookup", arguments.Command);
+        Assert.Equal("K7ABV", arguments.Callsign);
+        Assert.True(arguments.SkipCache);
+    }
+
+    [Fact]
+    public void Parse_skip_cache_before_callsign()
+    {
+        var arguments = CliArgumentParser.Parse(["lookup", "--skip-cache", "N0CALL"]);
+
+        Assert.Equal("lookup", arguments.Command);
+        Assert.Equal("N0CALL", arguments.Callsign);
+        Assert.True(arguments.SkipCache);
+    }
+
+    [Fact]
+    public void Parse_command_without_callsign_leaves_it_null()
+    {
+        var arguments = CliArgumentParser.Parse(["lookup"]);
+
+        Assert.Equal("lookup", arguments.Command);
+        Assert.Null(arguments.Callsign);
+    }
+
+    [Fact]
+    public void Parse_all_options_together()
+    {
+        var arguments = CliArgumentParser.Parse(["--endpoint", "http://host:9090", "stream-lookup", "AA1AA", "--skip-cache"]);
+
+        Assert.Equal("stream-lookup", arguments.Command);
+        Assert.Equal("http://host:9090", arguments.Endpoint);
+        Assert.Equal("AA1AA", arguments.Callsign);
+        Assert.True(arguments.SkipCache);
+    }
+
     [Theory]
     [InlineData("http://localhost:50051", true)]
     [InlineData("https://example.com:7443", true)]

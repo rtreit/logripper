@@ -10,6 +10,8 @@ internal static class CliArgumentParser
 
         var endpoint = Environment.GetEnvironmentVariable("LOGRIPPER_ENDPOINT") ?? DefaultEndpoint;
         string? command = null;
+        string? callsign = null;
+        var skipCache = false;
 
         for (var i = 0; i < args.Length; i++)
         {
@@ -31,14 +33,27 @@ internal static class CliArgumentParser
                 continue;
             }
 
+            if (arg is "--skip-cache")
+            {
+                skipCache = true;
+                continue;
+            }
+
             if (arg.StartsWith('-'))
             {
                 return new CliArguments("help", endpoint, ShowHelp: true, Error: $"Unknown option: {arg}");
             }
 
-            command ??= arg;
+            if (command is null)
+            {
+                command = arg;
+            }
+            else
+            {
+                callsign ??= arg.ToUpperInvariant();
+            }
         }
 
-        return new CliArguments(command ?? "help", endpoint, ShowHelp: command is null);
+        return new CliArguments(command ?? "help", endpoint, ShowHelp: command is null, Callsign: callsign, SkipCache: skipCache);
     }
 }

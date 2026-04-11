@@ -54,8 +54,8 @@ dotnet_diagnostic.CA1303.severity = none
 # CA2007: ConfigureAwait (not relevant for application code, only libraries)
 dotnet_diagnostic.CA2007.severity = none
 
-# CA1849: Sync over async for Console.Error.WriteLine (acceptable in CLI error paths)
-dotnet_diagnostic.CA1849.severity = suggestion
+# CA1849: Sync over async for Console.WriteLine (not applicable to CLI tools)
+dotnet_diagnostic.CA1849.severity = none
 
 [*Tests/*.cs]
 # CA1515: xUnit requires test classes to be public
