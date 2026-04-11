@@ -178,7 +178,7 @@ Calling `StreamLookup` on every keystroke without debounce would generate unnece
 
 ## LogbookService Workflows
 
-> **Note:** The following workflows describe the intended contract behavior. Most `LogbookService` RPCs currently return `UNIMPLEMENTED` from the server. See the [LogbookService Reference](logbook-service.md) for current implementation status.
+> **Note:** Local `LogbookService` CRUD, status, and ADIF import/export flows are implemented today. QRZ sync remains unimplemented; see the [LogbookService Reference](logbook-service.md) for the current status table.
 
 ---
 
@@ -188,7 +188,6 @@ Calling `StreamLookup` on every keystroke without debounce would generate unnece
 ```json
 {
   "qso": {
-    "station_callsign": "W1AW",
     "worked_callsign": "K7ABC",
     "utc_timestamp": "2025-06-15T18:32:00Z",
     "band": "BAND_20M",
@@ -201,6 +200,8 @@ Calling `StreamLookup` on every keystroke without debounce would generate unnece
   "sync_to_qrz": false
 }
 ```
+
+> When an effective active station context exists, `station_callsign` can be omitted from `LogQso` and will be derived from that active context. If no active context exists, the request must still provide `station_callsign` explicitly.
 
 **Response:**
 ```json
@@ -322,11 +323,17 @@ Client closes the send side after all chunks are sent.
   "records_imported": 42,
   "records_skipped": 2,
   "warnings": [
-    "Record 17: unrecognized band '11M', stored in extra_fields",
-    "Record 38: missing worked callsign, skipped"
+    "Record 17: local-station history was absent in ADIF; applied active station profile 'Home'.",
+    "Record 38: duplicate skipped; matched an existing QSO on station_callsign, worked_callsign, utc_timestamp, band, mode, and compatible submode/frequency."
   ]
 }
 ```
+
+Notes:
+- The server buffers all incoming chunks, parses only after the client closes the stream, then imports records.
+- Imported `STATION_CALLSIGN`, `OPERATOR`, and `MY_*` fields are preserved as historical `station_snapshot` data.
+- The active station profile is only used when the ADIF record has no local-station context at all, and that fallback is reported in `warnings`.
+- Records with unrecognized core ADIF values such as `BAND`, `MODE`, or invalid `QSO_DATE`/`TIME_ON` are skipped with warnings; the raw ADIF values remain in `extra_fields` for round-trip export fidelity.
 
 ---
 
@@ -347,6 +354,11 @@ Export all QSOs between two dates:
 
 Clients should concatenate chunk data in order to reconstruct the complete ADIF file.
 
+Notes:
+- Filters already present in `ExportRequest` (`after`, `before`, `contest_id`) are applied before serialization.
+- Export order is chronological (`oldest first`) for predictable migration output.
+- When `include_header` is `true`, the payload starts with an ADIF header containing the LogRipper program metadata.
+
 ---
 
 ## Sync Status Check
@@ -366,4 +378,4 @@ Use `GetSyncStatus` to verify engine connectivity and check logbook statistics:
 }
 ```
 
-> ⚠️ Current server returns all-zero placeholder values. Use this call to validate transport connectivity; do not rely on counts for application logic yet.
+> Current server reports live local counts from the configured backend. Until QRZ sync is implemented, QRZ-specific fields remain `0` or absent.

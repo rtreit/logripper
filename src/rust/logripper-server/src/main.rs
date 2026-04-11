@@ -1,9 +1,12 @@
 //! Runnable tonic gRPC host for the `LogRipper` Rust engine.
 
 mod runtime_config;
+mod setup;
+mod station_profile_support;
 
 use std::{net::SocketAddr, path::PathBuf, sync::Arc};
 
+use logripper_core::adif::{parse_adi_qsos, serialize_adi_qsos};
 use logripper_core::application::logbook::LogbookError;
 use logripper_core::storage::{EngineStorage, QsoListQuery, QsoSortOrder, StorageError};
 use logripper_storage_memory::MemoryStorage;
@@ -20,6 +23,8 @@ use logripper_core::proto::logripper::services::{
     developer_control_service_server::{DeveloperControlService, DeveloperControlServiceServer},
     logbook_service_server::{LogbookService, LogbookServiceServer},
     lookup_service_server::{LookupService, LookupServiceServer},
+    setup_service_server::SetupServiceServer,
+    station_profile_service_server::StationProfileServiceServer,
     AdifChunk, ApplyRuntimeConfigRequest, DeleteQsoRequest, DeleteQsoResponse, ExportRequest,
     GetQsoRequest, GetQsoResponse, GetRuntimeConfigRequest, ImportResult, ListQsosRequest,
     LogQsoRequest, LogQsoResponse, ResetRuntimeConfigRequest, RuntimeConfigSnapshot, SortOrder,
@@ -27,25 +32,48 @@ use logripper_core::proto::logripper::services::{
     UpdateQsoResponse,
 };
 use runtime_config::RuntimeConfigManager;
+use setup::{
+    default_config_path, SetupControlSurface, SetupState, StationProfileControlSurface,
+    CONFIG_PATH_ENV_VAR,
+};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     load_dotenv_if_present();
     let options = ServerOptions::from_env_and_args(std::env::args().skip(1))?;
     let address = options.listen_address;
-    let runtime_config = Arc::new(RuntimeConfigManager::new_from_storage_options(
-        &options.storage,
-    )?);
+    let setup_state = Arc::new(SetupState::load(options.config_path.clone())?);
+    let config_file_values = setup_state.runtime_config_values().await;
+    let runtime_config = Arc::new(
+        RuntimeConfigManager::new_with_config_file_values_and_cli_storage_overrides(
+            config_file_values,
+            &options.runtime_config_cli_storage_overrides(),
+        )?,
+    );
     let logbook_service = DeveloperLogbookService::new(runtime_config.clone());
     let lookup_service = DeveloperLookupService::new(runtime_config.clone());
     let developer_control_service = DeveloperControlSurface::new(runtime_config.clone());
+    let setup_service = SetupControlSurface::new(setup_state.clone(), runtime_config.clone());
+    let station_profile_service =
+        StationProfileControlSurface::new(setup_state.clone(), runtime_config.clone());
     let active_storage_backend = runtime_config.active_storage_backend().await;
+    let setup_status = setup_state.status().await;
 
-    println!("Starting LogRipper gRPC server on {address} using {active_storage_backend} storage");
+    println!(
+        "Starting LogRipper gRPC server on {address} using {active_storage_backend} storage (setup: {}, config: {})",
+        if setup_status.setup_complete {
+            "complete"
+        } else {
+            "incomplete"
+        },
+        setup_status.config_path
+    );
 
     Server::builder()
         .add_service(LogbookServiceServer::new(logbook_service))
         .add_service(LookupServiceServer::new(lookup_service))
+        .add_service(SetupServiceServer::new(setup_service))
+        .add_service(StationProfileServiceServer::new(station_profile_service))
         .add_service(DeveloperControlServiceServer::new(
             developer_control_service,
         ))
@@ -203,16 +231,56 @@ impl LogbookService for DeveloperLogbookService {
 
     async fn import_adif(
         &self,
-        _request: Request<tonic::Streaming<AdifChunk>>,
+        request: Request<tonic::Streaming<AdifChunk>>,
     ) -> Result<Response<ImportResult>, Status> {
-        Err(Status::unimplemented("ImportAdif is not implemented yet."))
+        let (engine, active_station_profile) = self.runtime_config.logbook_context().await;
+        let mut stream = request.into_inner();
+        let mut adif_bytes = Vec::new();
+
+        while let Some(chunk) = stream.message().await? {
+            adif_bytes.extend_from_slice(&chunk.data);
+        }
+
+        let qsos = parse_adi_qsos(&adif_bytes)
+            .await
+            .map_err(Status::invalid_argument)?;
+        let summary = engine
+            .import_adif_qsos(qsos, active_station_profile.as_ref())
+            .await
+            .map_err(map_logbook_error)?;
+
+        Ok(Response::new(ImportResult {
+            records_imported: summary.records_imported,
+            records_skipped: summary.records_skipped,
+            warnings: summary.warnings,
+        }))
     }
 
     async fn export_adif(
         &self,
-        _request: Request<ExportRequest>,
+        request: Request<ExportRequest>,
     ) -> Result<Response<Self::ExportAdifStream>, Status> {
-        Err(Status::unimplemented("ExportAdif is not implemented yet."))
+        let engine = self.runtime_config.logbook_engine().await;
+        let request = request.into_inner();
+        let query = export_qso_list_query_from_request(&request);
+        let qsos = engine.list_qsos(&query).await.map_err(map_logbook_error)?;
+        let adif_bytes = serialize_adi_qsos(&qsos, request.include_header);
+        let chunk_count = adif_bytes.len().div_ceil(ADIF_CHUNK_SIZE).max(1);
+        let (sender, receiver) = tokio::sync::mpsc::channel(chunk_count);
+
+        for chunk in adif_bytes.chunks(ADIF_CHUNK_SIZE) {
+            if sender
+                .send(Ok(AdifChunk {
+                    data: chunk.to_vec(),
+                }))
+                .await
+                .is_err()
+            {
+                break;
+            }
+        }
+
+        Ok(Response::new(ReceiverStream::new(receiver)))
     }
 }
 
@@ -342,7 +410,10 @@ impl DeveloperControlService for DeveloperControlSurface {
 #[derive(Debug, Clone)]
 struct ServerOptions {
     listen_address: SocketAddr,
+    config_path: PathBuf,
+    #[cfg(test)]
     storage: StorageOptions,
+    storage_cli_overrides: std::collections::BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -364,12 +435,16 @@ impl ServerOptions {
     {
         let mut listen = std::env::var("LOGRIPPER_SERVER_ADDR")
             .unwrap_or_else(|_| "127.0.0.1:50051".to_string());
+        let mut config_path = std::env::var(CONFIG_PATH_ENV_VAR)
+            .map(PathBuf::from)
+            .unwrap_or(default_config_path()?);
         let mut storage_backend = parse_storage_backend(
             &std::env::var("LOGRIPPER_STORAGE_BACKEND").unwrap_or_else(|_| "memory".to_string()),
         )?;
         let mut sqlite_path = PathBuf::from(
             std::env::var("LOGRIPPER_SQLITE_PATH").unwrap_or_else(|_| "logripper.db".to_string()),
         );
+        let mut storage_cli_overrides = std::collections::BTreeMap::new();
         let mut args = args.into_iter();
 
         while let Some(arg) = args.next() {
@@ -378,13 +453,28 @@ impl ServerOptions {
                     let value = args.next().ok_or("Missing value for --listen")?;
                     listen = value;
                 }
+                "--config" => {
+                    let value = args.next().ok_or("Missing value for --config")?;
+                    config_path = PathBuf::from(value);
+                }
                 "--storage" => {
                     let value = args.next().ok_or("Missing value for --storage")?;
                     storage_backend = parse_storage_backend(&value)?;
+                    storage_cli_overrides.insert(
+                        runtime_config::STORAGE_BACKEND_ENV_VAR.to_string(),
+                        match storage_backend {
+                            StorageBackendKind::Memory => "memory".to_string(),
+                            StorageBackendKind::Sqlite => "sqlite".to_string(),
+                        },
+                    );
                 }
                 "--sqlite-path" => {
                     let value = args.next().ok_or("Missing value for --sqlite-path")?;
                     sqlite_path = PathBuf::from(value);
+                    storage_cli_overrides.insert(
+                        runtime_config::SQLITE_PATH_ENV_VAR.to_string(),
+                        sqlite_path.display().to_string(),
+                    );
                 }
                 "--help" | "-h" => {
                     print_help();
@@ -394,19 +484,36 @@ impl ServerOptions {
             }
         }
 
+        if storage_backend == StorageBackendKind::Sqlite
+            && storage_cli_overrides.contains_key(runtime_config::STORAGE_BACKEND_ENV_VAR)
+            && !storage_cli_overrides.contains_key(runtime_config::SQLITE_PATH_ENV_VAR)
+        {
+            storage_cli_overrides.insert(
+                runtime_config::SQLITE_PATH_ENV_VAR.to_string(),
+                sqlite_path.display().to_string(),
+            );
+        }
+
         Ok(Self {
             listen_address: listen.parse()?,
+            config_path,
+            #[cfg(test)]
             storage: StorageOptions {
                 backend: storage_backend,
                 sqlite_path,
             },
+            storage_cli_overrides,
         })
+    }
+
+    fn runtime_config_cli_storage_overrides(&self) -> std::collections::BTreeMap<String, String> {
+        self.storage_cli_overrides.clone()
     }
 }
 
 fn print_help() {
     println!(
-        "LogRipper gRPC server\n\nUsage:\n  cargo run -p logripper-server -- [--listen 127.0.0.1:50051] [--storage memory|sqlite] [--sqlite-path path\\to\\logripper.db]\n\nEnvironment:\n  LOGRIPPER_SERVER_ADDR       Overrides the bind address\n  LOGRIPPER_STORAGE_BACKEND   Selects memory or sqlite storage (default: memory)\n  LOGRIPPER_SQLITE_PATH       SQLite path when sqlite storage is selected (default: logripper.db)"
+        "LogRipper gRPC server\n\nUsage:\n  cargo run -p logripper-server -- [--listen 127.0.0.1:50051] [--config path\\to\\config.toml] [--storage memory|sqlite] [--sqlite-path path\\to\\logripper.db]\n\nEnvironment:\n  LOGRIPPER_SERVER_ADDR       Overrides the bind address\n  LOGRIPPER_CONFIG_PATH       Overrides the persisted setup config path\n  LOGRIPPER_STORAGE_BACKEND   Selects memory or sqlite storage (default: memory)\n  LOGRIPPER_SQLITE_PATH       SQLite path when sqlite storage is selected (default: logripper.db)"
     );
 }
 
@@ -483,6 +590,18 @@ fn qso_list_query_from_request(request: &ListQsosRequest) -> Result<QsoListQuery
     })
 }
 
+const ADIF_CHUNK_SIZE: usize = 16 * 1024;
+
+fn export_qso_list_query_from_request(request: &ExportRequest) -> QsoListQuery {
+    QsoListQuery {
+        after: request.after,
+        before: request.before,
+        contest_id: request.contest_id.as_deref().and_then(non_empty_string),
+        sort: QsoSortOrder::OldestFirst,
+        ..QsoListQuery::default()
+    }
+}
+
 fn non_empty_string(value: &str) -> Option<String> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
@@ -508,28 +627,38 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::Arc;
     use std::sync::Mutex;
+    use std::time::Duration;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::{
         build_storage, load_dotenv_if_present, parse_storage_backend, DeveloperLogbookService,
-        DeveloperLookupService, ServerOptions, StorageBackendKind, StorageOptions,
+        DeveloperLookupService, Server, ServerOptions, StorageBackendKind, StorageOptions,
     };
-    use crate::runtime_config::RuntimeConfigManager;
+    use crate::runtime_config::{
+        RuntimeConfigManager, SQLITE_PATH_ENV_VAR, STATION_CALLSIGN_ENV_VAR, STATION_GRID_ENV_VAR,
+        STATION_OPERATOR_CALLSIGN_ENV_VAR, STATION_PROFILE_NAME_ENV_VAR, STORAGE_BACKEND_ENV_VAR,
+    };
     use logripper_core::proto::logripper::domain::{
-        dxcc_request, BatchLookupRequest, CachedCallsignRequest, DxccRequest, LookupRequest,
-        LookupResult, LookupState,
+        dxcc_request, Band, BatchLookupRequest, CachedCallsignRequest, DxccRequest, LookupRequest,
+        LookupResult, LookupState, Mode, QsoRecord,
     };
     use logripper_core::proto::logripper::services::{
-        logbook_service_server::LogbookService, lookup_service_server::LookupService,
-        SyncStatusRequest,
+        logbook_service_client::LogbookServiceClient,
+        logbook_service_server::{LogbookService, LogbookServiceServer},
+        lookup_service_server::LookupService,
+        AdifChunk, DeleteQsoRequest, ExportRequest, GetQsoRequest, ImportResult, ListQsosRequest,
+        LogQsoRequest, SortOrder, SyncStatusRequest, UpdateQsoRequest,
     };
+    use prost_types::Timestamp;
     use tokio_stream::StreamExt;
+    use tonic::transport::Channel;
     use tonic::{Code, Request};
 
     static PROCESS_STATE_LOCK: Mutex<()> = Mutex::new(());
 
-    const SERVER_ENV_KEYS: [&str; 3] = [
+    const SERVER_ENV_KEYS: [&str; 4] = [
         "LOGRIPPER_SERVER_ADDR",
+        "LOGRIPPER_CONFIG_PATH",
         "LOGRIPPER_STORAGE_BACKEND",
         "LOGRIPPER_SQLITE_PATH",
     ];
@@ -573,6 +702,250 @@ mod tests {
 
     fn test_runtime_config() -> Arc<RuntimeConfigManager> {
         Arc::new(RuntimeConfigManager::new(BTreeMap::new()).expect("runtime config"))
+    }
+
+    fn test_runtime_config_with_logbook(
+        backend: StorageBackendKind,
+        sqlite_path: Option<&std::path::Path>,
+        include_active_station: bool,
+    ) -> Arc<RuntimeConfigManager> {
+        let mut startup_values = BTreeMap::new();
+        startup_values.insert(
+            STORAGE_BACKEND_ENV_VAR.to_string(),
+            match backend {
+                StorageBackendKind::Memory => "memory".to_string(),
+                StorageBackendKind::Sqlite => "sqlite".to_string(),
+            },
+        );
+
+        if let Some(path) = sqlite_path {
+            startup_values.insert(
+                SQLITE_PATH_ENV_VAR.to_string(),
+                path.to_string_lossy().into_owned(),
+            );
+        }
+
+        if include_active_station {
+            startup_values.insert(STATION_PROFILE_NAME_ENV_VAR.to_string(), "Home".to_string());
+            startup_values.insert(STATION_CALLSIGN_ENV_VAR.to_string(), "K7RND".to_string());
+            startup_values.insert(
+                STATION_OPERATOR_CALLSIGN_ENV_VAR.to_string(),
+                "K7RND".to_string(),
+            );
+            startup_values.insert(STATION_GRID_ENV_VAR.to_string(), "CN87".to_string());
+        }
+
+        Arc::new(RuntimeConfigManager::new(startup_values).expect("runtime config"))
+    }
+
+    fn unique_sqlite_test_path(label: &str) -> PathBuf {
+        let unique_suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock")
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "logripper-{label}-{}-{unique_suffix}.db",
+            std::process::id()
+        ))
+    }
+
+    fn sample_qso_without_station_callsign(worked_callsign: &str) -> QsoRecord {
+        QsoRecord {
+            worked_callsign: worked_callsign.to_string(),
+            utc_timestamp: Some(Timestamp {
+                seconds: 1_731_600_000,
+                nanos: 0,
+            }),
+            band: Band::Band20m as i32,
+            mode: Mode::Ssb as i32,
+            notes: Some("Logged from gRPC test".to_string()),
+            ..QsoRecord::default()
+        }
+    }
+
+    #[expect(
+        clippy::too_many_lines,
+        reason = "This test helper exercises the full CRUD flow end-to-end in one place."
+    )]
+    async fn exercise_logbook_crud_flow(service: &DeveloperLogbookService) {
+        let log_response = LogbookService::log_qso(
+            service,
+            Request::new(LogQsoRequest {
+                qso: Some(sample_qso_without_station_callsign("W1AW")),
+                sync_to_qrz: false,
+            }),
+        )
+        .await
+        .expect("log response")
+        .into_inner();
+
+        assert!(log_response.sync_success);
+        assert!(log_response.sync_error.is_none());
+
+        let loaded = LogbookService::get_qso(
+            service,
+            Request::new(GetQsoRequest {
+                local_id: log_response.local_id.clone(),
+            }),
+        )
+        .await
+        .expect("get response")
+        .into_inner()
+        .qso
+        .expect("loaded qso");
+
+        assert_eq!("K7RND", loaded.station_callsign);
+        let loaded_snapshot = loaded
+            .station_snapshot
+            .as_ref()
+            .expect("station snapshot should be materialized");
+        assert_eq!("K7RND", loaded_snapshot.station_callsign);
+        assert_eq!(Some("Home"), loaded_snapshot.profile_name.as_deref());
+        assert_eq!(Some("CN87"), loaded_snapshot.grid.as_deref());
+
+        let listed = LogbookService::list_qsos(
+            service,
+            Request::new(ListQsosRequest {
+                callsign_filter: Some("W1AW".to_string()),
+                limit: 10,
+                sort: SortOrder::NewestFirst as i32,
+                ..ListQsosRequest::default()
+            }),
+        )
+        .await
+        .expect("list response")
+        .into_inner()
+        .map(|result| result.expect("list item"))
+        .collect::<Vec<_>>()
+        .await;
+
+        assert_eq!(1, listed.len());
+        assert_eq!(
+            log_response.local_id,
+            listed.first().expect("expected listed QSO").local_id
+        );
+
+        let mut updated = loaded.clone();
+        updated.station_callsign.clear();
+        updated.station_snapshot = None;
+        updated.notes = Some("Updated through gRPC".to_string());
+        let update_response = LogbookService::update_qso(
+            service,
+            Request::new(UpdateQsoRequest {
+                qso: Some(updated),
+                sync_to_qrz: false,
+            }),
+        )
+        .await
+        .expect("update response")
+        .into_inner();
+
+        assert!(update_response.success);
+        assert!(update_response.sync_success);
+        assert!(update_response.sync_error.is_none());
+
+        let reloaded = LogbookService::get_qso(
+            service,
+            Request::new(GetQsoRequest {
+                local_id: log_response.local_id.clone(),
+            }),
+        )
+        .await
+        .expect("reload response")
+        .into_inner()
+        .qso
+        .expect("reloaded qso");
+
+        assert_eq!("K7RND", reloaded.station_callsign);
+        assert_eq!(Some("Updated through gRPC"), reloaded.notes.as_deref());
+        assert_eq!(
+            Some("Home"),
+            reloaded
+                .station_snapshot
+                .as_ref()
+                .and_then(|snapshot| snapshot.profile_name.as_deref())
+        );
+
+        let sync_status =
+            LogbookService::get_sync_status(service, Request::new(SyncStatusRequest {}))
+                .await
+                .expect("sync status response")
+                .into_inner();
+
+        assert_eq!(1, sync_status.local_qso_count);
+        assert_eq!(1, sync_status.pending_upload);
+        assert_eq!(0, sync_status.qrz_qso_count);
+        assert!(sync_status.last_sync.is_none());
+        assert!(sync_status.qrz_logbook_owner.is_none());
+
+        let delete_response = LogbookService::delete_qso(
+            service,
+            Request::new(DeleteQsoRequest {
+                local_id: log_response.local_id.clone(),
+                delete_from_qrz: false,
+            }),
+        )
+        .await
+        .expect("delete response")
+        .into_inner();
+
+        assert!(delete_response.success);
+        assert!(delete_response.qrz_delete_success);
+        assert!(delete_response.qrz_delete_error.is_none());
+
+        let get_error = LogbookService::get_qso(
+            service,
+            Request::new(GetQsoRequest {
+                local_id: log_response.local_id,
+            }),
+        )
+        .await
+        .expect_err("deleted record should not load");
+        assert_eq!(Code::NotFound, get_error.code());
+    }
+
+    async fn grpc_logbook_client(
+        service: DeveloperLogbookService,
+    ) -> (LogbookServiceClient<Channel>, tokio::task::JoinHandle<()>) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind test listener");
+        let address = listener.local_addr().expect("listener address");
+        drop(listener);
+
+        let handle = tokio::spawn(async move {
+            Server::builder()
+                .add_service(LogbookServiceServer::new(service))
+                .serve(address)
+                .await
+                .expect("serve test gRPC server");
+        });
+
+        let endpoint = format!("http://{address}");
+        for attempt in 0..20 {
+            match LogbookServiceClient::connect(endpoint.clone()).await {
+                Ok(client) => return (client, handle),
+                Err(error) => {
+                    assert!(
+                        attempt < 19,
+                        "failed to connect to test gRPC server at {endpoint}: {error}"
+                    );
+                    std::thread::sleep(Duration::from_millis(25));
+                }
+            }
+        }
+        unreachable!("connection loop should have returned or asserted");
+    }
+
+    async fn import_adif_payload(
+        client: &mut LogbookServiceClient<Channel>,
+        chunks: Vec<Vec<u8>>,
+    ) -> ImportResult {
+        let stream = tokio_stream::iter(chunks.into_iter().map(|chunk| AdifChunk { data: chunk }));
+
+        client
+            .import_adif(Request::new(stream))
+            .await
+            .expect("import response")
+            .into_inner()
     }
 
     #[test]
@@ -631,6 +1004,7 @@ mod tests {
 
         assert_eq!("127.0.0.1:50051", options.listen_address.to_string());
         assert_eq!(options.storage.backend, StorageBackendKind::Memory);
+        assert!(options.runtime_config_cli_storage_overrides().is_empty());
     }
 
     #[test]
@@ -667,6 +1041,43 @@ mod tests {
         assert_eq!(
             options.storage.sqlite_path,
             std::path::PathBuf::from("data\\logripper.db")
+        );
+        assert_eq!(
+            Some("sqlite"),
+            options
+                .runtime_config_cli_storage_overrides()
+                .get(STORAGE_BACKEND_ENV_VAR)
+                .map(String::as_str)
+        );
+        assert_eq!(
+            Some("data\\logripper.db"),
+            options
+                .runtime_config_cli_storage_overrides()
+                .get(SQLITE_PATH_ENV_VAR)
+                .map(String::as_str)
+        );
+    }
+
+    #[test]
+    fn server_options_emit_default_sqlite_path_when_cli_selects_sqlite_without_path() {
+        let options =
+            ServerOptions::from_env_and_args(["--storage".to_string(), "sqlite".to_string()])
+                .unwrap();
+
+        assert_eq!(options.storage.backend, StorageBackendKind::Sqlite);
+        assert_eq!(
+            Some("sqlite"),
+            options
+                .runtime_config_cli_storage_overrides()
+                .get(STORAGE_BACKEND_ENV_VAR)
+                .map(String::as_str)
+        );
+        assert_eq!(
+            Some("logripper.db"),
+            options
+                .runtime_config_cli_storage_overrides()
+                .get(SQLITE_PATH_ENV_VAR)
+                .map(String::as_str)
         );
     }
 
@@ -803,8 +1214,80 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn logbook_sync_status_returns_zeroed_placeholder_values() {
+    async fn logbook_crud_flow_works_through_memory_grpc_surface() {
+        let service = DeveloperLogbookService::new(test_runtime_config_with_logbook(
+            StorageBackendKind::Memory,
+            None,
+            true,
+        ));
+
+        exercise_logbook_crud_flow(&service).await;
+    }
+
+    #[tokio::test]
+    async fn logbook_crud_flow_works_through_sqlite_grpc_surface() {
+        let sqlite_path = unique_sqlite_test_path("logbook-grpc");
+        let service = DeveloperLogbookService::new(test_runtime_config_with_logbook(
+            StorageBackendKind::Sqlite,
+            Some(&sqlite_path),
+            true,
+        ));
+
+        exercise_logbook_crud_flow(&service).await;
+
+        drop(service);
+        if sqlite_path.exists() {
+            fs::remove_file(sqlite_path).expect("remove sqlite test database");
+        }
+    }
+
+    #[tokio::test]
+    async fn logbook_sync_status_reports_live_local_counts() {
         let service = DeveloperLogbookService::new(test_runtime_config());
+
+        let logged = LogbookService::log_qso(
+            &service,
+            Request::new(LogQsoRequest {
+                qso: Some(QsoRecord {
+                    station_callsign: "K7RND".to_string(),
+                    worked_callsign: "W1AW".to_string(),
+                    utc_timestamp: Some(Timestamp {
+                        seconds: 1_731_600_000,
+                        nanos: 0,
+                    }),
+                    band: Band::Band20m as i32,
+                    mode: Mode::Ssb as i32,
+                    ..QsoRecord::default()
+                }),
+                sync_to_qrz: false,
+            }),
+        )
+        .await
+        .expect("log response")
+        .into_inner();
+
+        let mut second_qso = QsoRecord {
+            station_callsign: "K7RND".to_string(),
+            worked_callsign: "K7XYZ".to_string(),
+            utc_timestamp: Some(Timestamp {
+                seconds: 1_731_600_100,
+                nanos: 0,
+            }),
+            band: Band::Band40m as i32,
+            mode: Mode::Cw as i32,
+            ..QsoRecord::default()
+        };
+        second_qso.sync_status =
+            logripper_core::proto::logripper::domain::SyncStatus::Synced as i32;
+        let _ = LogbookService::log_qso(
+            &service,
+            Request::new(LogQsoRequest {
+                qso: Some(second_qso),
+                sync_to_qrz: false,
+            }),
+        )
+        .await
+        .expect("second log response");
 
         let response =
             LogbookService::get_sync_status(&service, Request::new(SyncStatusRequest {}))
@@ -812,10 +1295,305 @@ mod tests {
                 .expect("sync status")
                 .into_inner();
 
-        assert_eq!(0, response.local_qso_count);
+        assert_eq!(2, response.local_qso_count);
         assert_eq!(0, response.qrz_qso_count);
-        assert_eq!(0, response.pending_upload);
+        assert_eq!(1, response.pending_upload);
         assert!(response.last_sync.is_none());
         assert!(response.qrz_logbook_owner.is_none());
+
+        let _ = LogbookService::delete_qso(
+            &service,
+            Request::new(DeleteQsoRequest {
+                local_id: logged.local_id,
+                delete_from_qrz: false,
+            }),
+        )
+        .await
+        .expect("delete first qso");
+    }
+
+    #[tokio::test]
+    async fn adif_import_preserves_station_history_and_reports_duplicates() {
+        let service = DeveloperLogbookService::new(test_runtime_config_with_logbook(
+            StorageBackendKind::Memory,
+            None,
+            true,
+        ));
+        let (mut client, server_handle) = grpc_logbook_client(service).await;
+        let payload = concat!(
+            "<ADIF_VER:5>3.1.7\n<EOH>\n",
+            "<CALL:4>W1AW<STATION_CALLSIGN:5>K1ABC<OPERATOR:5>N1OPS<MY_GRIDSQUARE:6>FN42aa<QSO_DATE:8>20250102<TIME_ON:6>010203<BAND:3>20M<MODE:3>SSB<EOR>\n",
+            "<CALL:4>W1AW<STATION_CALLSIGN:5>K1ABC<OPERATOR:5>N1OPS<MY_GRIDSQUARE:6>FN42aa<QSO_DATE:8>20250102<TIME_ON:6>010203<BAND:3>20M<MODE:3>SSB<EOR>\n"
+        )
+        .as_bytes();
+
+        let (first_chunk, second_chunk) = payload.split_at(40);
+        let result = import_adif_payload(
+            &mut client,
+            vec![first_chunk.to_vec(), second_chunk.to_vec()],
+        )
+        .await;
+
+        assert_eq!(1, result.records_imported);
+        assert_eq!(1, result.records_skipped);
+        assert!(result
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("duplicate skipped")));
+
+        let imported = client
+            .list_qsos(Request::new(ListQsosRequest {
+                limit: 10,
+                sort: SortOrder::OldestFirst as i32,
+                ..ListQsosRequest::default()
+            }))
+            .await
+            .expect("list response")
+            .into_inner()
+            .map(|result| result.expect("list item"))
+            .collect::<Vec<_>>()
+            .await;
+
+        assert_eq!(1, imported.len());
+        let imported = imported.first().expect("imported qso");
+        assert_eq!("K1ABC", imported.station_callsign);
+        let snapshot = imported
+            .station_snapshot
+            .as_ref()
+            .expect("station snapshot");
+        assert_eq!("K1ABC", snapshot.station_callsign);
+        assert_eq!(Some("N1OPS"), snapshot.operator_callsign.as_deref());
+        assert_eq!(Some("FN42aa"), snapshot.grid.as_deref());
+        assert_eq!(
+            None,
+            snapshot.profile_name.as_deref(),
+            "imported station history should not be overwritten by the active profile"
+        );
+
+        server_handle.abort();
+    }
+
+    #[tokio::test]
+    async fn adif_import_uses_active_station_profile_only_as_explicit_fallback() {
+        let service = DeveloperLogbookService::new(test_runtime_config_with_logbook(
+            StorageBackendKind::Memory,
+            None,
+            true,
+        ));
+        let (mut client, server_handle) = grpc_logbook_client(service).await;
+        let payload =
+            b"<CALL:5>DL1AA<QSO_DATE:8>20250103<TIME_ON:6>030405<BAND:3>20M<MODE:2>CW<EOR>\n";
+
+        let result = import_adif_payload(&mut client, vec![payload.to_vec()]).await;
+
+        assert_eq!(1, result.records_imported);
+        assert_eq!(0, result.records_skipped);
+        assert!(result
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("applied active station profile")));
+
+        let imported = client
+            .list_qsos(Request::new(ListQsosRequest {
+                limit: 1,
+                sort: SortOrder::OldestFirst as i32,
+                ..ListQsosRequest::default()
+            }))
+            .await
+            .expect("list response")
+            .into_inner()
+            .next()
+            .await
+            .expect("list item")
+            .expect("qso");
+
+        assert_eq!("K7RND", imported.station_callsign);
+        assert_eq!(
+            Some("Home"),
+            imported
+                .station_snapshot
+                .as_ref()
+                .and_then(|snapshot| snapshot.profile_name.as_deref())
+        );
+
+        server_handle.abort();
+    }
+
+    #[tokio::test]
+    async fn adif_import_reports_invalid_records_without_active_station_fallback() {
+        let service = DeveloperLogbookService::new(test_runtime_config());
+        let (mut client, server_handle) = grpc_logbook_client(service).await;
+        let payload = b"<CALL:5>DL1AA<STATION_CALLSIGN:5>K1ABC<QSO_DATE:8>20250103<TIME_ON:6>030405<BAND:3>11M<MODE:2>CW<EOR>\n";
+
+        let result = import_adif_payload(&mut client, vec![payload.to_vec()]).await;
+
+        assert_eq!(0, result.records_imported);
+        assert_eq!(1, result.records_skipped);
+        assert!(result
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("unrecognized ADIF band '11M'")));
+
+        server_handle.abort();
+    }
+
+    #[tokio::test]
+    async fn adif_export_streams_filtered_qsos_in_adif_order() {
+        let service = DeveloperLogbookService::new(test_runtime_config_with_logbook(
+            StorageBackendKind::Memory,
+            None,
+            true,
+        ));
+        let (mut client, server_handle) = grpc_logbook_client(service.clone()).await;
+
+        let first = QsoRecord {
+            station_callsign: "K7RND".to_string(),
+            worked_callsign: "W1AW".to_string(),
+            utc_timestamp: Some(Timestamp {
+                seconds: 1_735_689_600,
+                nanos: 0,
+            }),
+            band: Band::Band20m as i32,
+            mode: Mode::Ssb as i32,
+            contest_id: Some("FIELD-DAY".to_string()),
+            ..QsoRecord::default()
+        };
+        let second = QsoRecord {
+            station_callsign: "K7RND".to_string(),
+            worked_callsign: "K3LR".to_string(),
+            utc_timestamp: Some(Timestamp {
+                seconds: 1_735_689_900,
+                nanos: 0,
+            }),
+            band: Band::Band40m as i32,
+            mode: Mode::Cw as i32,
+            ..QsoRecord::default()
+        };
+
+        let _ = client
+            .log_qso(Request::new(LogQsoRequest {
+                qso: Some(first),
+                sync_to_qrz: false,
+            }))
+            .await
+            .expect("log first qso");
+        let _ = client
+            .log_qso(Request::new(LogQsoRequest {
+                qso: Some(second),
+                sync_to_qrz: false,
+            }))
+            .await
+            .expect("log second qso");
+
+        let response = client
+            .export_adif(Request::new(ExportRequest {
+                contest_id: Some("FIELD-DAY".to_string()),
+                include_header: true,
+                ..ExportRequest::default()
+            }))
+            .await
+            .expect("export response")
+            .into_inner();
+        let chunks = response
+            .map(|result| result.expect("chunk"))
+            .collect::<Vec<_>>()
+            .await;
+        let bytes = chunks.into_iter().fold(Vec::new(), |mut output, chunk| {
+            output.extend_from_slice(&chunk.data);
+            output
+        });
+        let text = String::from_utf8(bytes).expect("utf8 payload");
+
+        assert!(text.contains("<ADIF_VER:5>3.1.7"));
+        assert!(text.contains("<PROGRAMID:9>LogRipper"));
+        assert!(text.contains("<CALL:4>W1AW"));
+        assert!(!text.contains("<CALL:4>K3LR"));
+        assert!(text.contains("<CONTEST_ID:9>FIELD-DAY"));
+
+        server_handle.abort();
+    }
+
+    #[tokio::test]
+    async fn logbook_requires_station_context_when_station_callsign_is_missing() {
+        let service = DeveloperLogbookService::new(test_runtime_config());
+
+        let error = LogbookService::log_qso(
+            &service,
+            Request::new(LogQsoRequest {
+                qso: Some(sample_qso_without_station_callsign("W1AW")),
+                sync_to_qrz: false,
+            }),
+        )
+        .await
+        .expect_err("missing station context should fail");
+
+        assert_eq!(Code::InvalidArgument, error.code());
+        assert_eq!("station_callsign is required.", error.message());
+    }
+
+    #[tokio::test]
+    async fn logbook_requires_timestamp_band_and_mode() {
+        let service = DeveloperLogbookService::new(test_runtime_config_with_logbook(
+            StorageBackendKind::Memory,
+            None,
+            true,
+        ));
+
+        let error = LogbookService::log_qso(
+            &service,
+            Request::new(LogQsoRequest {
+                qso: Some(QsoRecord {
+                    worked_callsign: "W1AW".to_string(),
+                    ..QsoRecord::default()
+                }),
+                sync_to_qrz: false,
+            }),
+        )
+        .await
+        .expect_err("missing timestamp/band/mode should fail");
+
+        assert_eq!(Code::InvalidArgument, error.code());
+        assert_eq!("utc_timestamp is required.", error.message());
+
+        let band_error = LogbookService::log_qso(
+            &service,
+            Request::new(LogQsoRequest {
+                qso: Some(QsoRecord {
+                    worked_callsign: "W1AW".to_string(),
+                    utc_timestamp: Some(Timestamp {
+                        seconds: 1_731_600_000,
+                        nanos: 0,
+                    }),
+                    ..QsoRecord::default()
+                }),
+                sync_to_qrz: false,
+            }),
+        )
+        .await
+        .expect_err("missing band should fail");
+
+        assert_eq!(Code::InvalidArgument, band_error.code());
+        assert_eq!("band is required.", band_error.message());
+
+        let mode_error = LogbookService::log_qso(
+            &service,
+            Request::new(LogQsoRequest {
+                qso: Some(QsoRecord {
+                    worked_callsign: "W1AW".to_string(),
+                    utc_timestamp: Some(Timestamp {
+                        seconds: 1_731_600_000,
+                        nanos: 0,
+                    }),
+                    band: Band::Band20m as i32,
+                    ..QsoRecord::default()
+                }),
+                sync_to_qrz: false,
+            }),
+        )
+        .await
+        .expect_err("missing mode should fail");
+
+        assert_eq!(Code::InvalidArgument, mode_error.code());
+        assert_eq!("mode is required.", mode_error.message());
     }
 }

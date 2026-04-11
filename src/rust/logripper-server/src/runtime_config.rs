@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use logripper_core::application::logbook::LogbookEngine;
+use logripper_core::domain::lookup::normalize_callsign;
 use logripper_core::domain::station::station_profile_has_values;
 use logripper_core::lookup::{
     CallsignProvider, DisabledCallsignProvider, LookupCoordinator, LookupCoordinatorConfig,
@@ -17,7 +18,10 @@ use logripper_core::proto::logripper::services::{
 };
 use tokio::sync::RwLock;
 
-use crate::{build_storage, parse_storage_backend, StorageBackendKind, StorageOptions};
+use crate::station_profile_support::{
+    insert_station_profile_runtime_values, normalize_station_profile,
+};
+use crate::{build_storage, parse_storage_backend, StorageOptions};
 
 pub(crate) const STORAGE_BACKEND_ENV_VAR: &str = "LOGRIPPER_STORAGE_BACKEND";
 pub(crate) const SQLITE_PATH_ENV_VAR: &str = "LOGRIPPER_SQLITE_PATH";
@@ -48,30 +52,58 @@ struct RuntimeBindings {
 }
 
 pub(crate) struct RuntimeConfigManager {
-    base_values: BTreeMap<String, String>,
+    config_file_values: RwLock<BTreeMap<String, String>>,
+    startup_values: BTreeMap<String, String>,
+    session_station_profile_override: RwLock<Option<StationProfile>>,
     overrides: RwLock<BTreeMap<String, String>>,
     bindings: RwLock<RuntimeBindings>,
 }
 
 impl RuntimeConfigManager {
-    pub(crate) fn new_from_storage_options(storage: &StorageOptions) -> Result<Self, String> {
-        let base_values = capture_supported_env();
-        Self::new(seed_storage_values(base_values, storage))
+    pub(crate) fn new_with_config_file_values_and_cli_storage_overrides(
+        config_file_values: BTreeMap<String, String>,
+        cli_storage_overrides: &BTreeMap<String, String>,
+    ) -> Result<Self, String> {
+        let startup_values = capture_supported_env();
+        Self::new_with_config_file_values(
+            merge_values(&startup_values, cli_storage_overrides),
+            config_file_values,
+        )
     }
 
-    pub(crate) fn new(base_values: BTreeMap<String, String>) -> Result<Self, String> {
-        let bindings = build_runtime_bindings(&base_values)?;
+    #[cfg(test)]
+    pub(crate) fn new(startup_values: BTreeMap<String, String>) -> Result<Self, String> {
+        Self::new_with_config_file_values(startup_values, BTreeMap::new())
+    }
+
+    pub(crate) fn new_with_config_file_values(
+        startup_values: BTreeMap<String, String>,
+        config_file_values: BTreeMap<String, String>,
+    ) -> Result<Self, String> {
+        let effective_values = merged_base_values(&config_file_values, &startup_values);
+        let bindings = build_runtime_bindings(&effective_values)?;
         Ok(Self {
-            base_values,
+            config_file_values: RwLock::new(config_file_values),
+            startup_values,
+            session_station_profile_override: RwLock::new(None),
             overrides: RwLock::new(BTreeMap::new()),
             bindings: RwLock::new(bindings),
         })
     }
 
     pub(crate) async fn snapshot(&self) -> RuntimeConfigSnapshot {
+        let config_file_values = self.config_file_values.read().await.clone();
+        let session_station_profile_override =
+            self.session_station_profile_override.read().await.clone();
         let overrides = self.overrides.read().await.clone();
         let bindings = self.bindings.read().await.clone();
-        build_snapshot(&self.base_values, &overrides, &bindings)
+        let base_values = merged_base_values(&config_file_values, &self.startup_values);
+        build_snapshot(
+            &base_values,
+            session_station_profile_override.as_ref(),
+            &overrides,
+            &bindings,
+        )
     }
 
     pub(crate) async fn apply_request(
@@ -125,12 +157,105 @@ impl RuntimeConfigManager {
         self.bindings.read().await.active_storage_backend.clone()
     }
 
+    pub(crate) async fn preview_config_file_values(
+        &self,
+        next_config_file_values: BTreeMap<String, String>,
+    ) -> Result<(), String> {
+        let session_station_profile_override =
+            self.session_station_profile_override.read().await.clone();
+        let overrides = self.overrides.read().await.clone();
+        let base_values = merged_base_values(&next_config_file_values, &self.startup_values);
+        let effective_values = build_effective_values(
+            &base_values,
+            session_station_profile_override.as_ref(),
+            &overrides,
+        );
+        build_runtime_bindings(&effective_values).map(|_| ())
+    }
+
+    pub(crate) async fn replace_config_file_values(
+        &self,
+        next_config_file_values: BTreeMap<String, String>,
+    ) -> Result<RuntimeConfigSnapshot, String> {
+        let session_station_profile_override =
+            self.session_station_profile_override.read().await.clone();
+        let overrides = self.overrides.read().await.clone();
+        let base_values = merged_base_values(&next_config_file_values, &self.startup_values);
+        let effective_values = build_effective_values(
+            &base_values,
+            session_station_profile_override.as_ref(),
+            &overrides,
+        );
+        let next_bindings = build_runtime_bindings(&effective_values)?;
+
+        {
+            let mut bindings = self.bindings.write().await;
+            *bindings = next_bindings;
+        }
+
+        {
+            let mut config_file_values = self.config_file_values.write().await;
+            *config_file_values = next_config_file_values;
+        }
+
+        Ok(self.snapshot().await)
+    }
+
+    pub(crate) async fn set_session_station_profile_override(
+        &self,
+        profile: Option<StationProfile>,
+    ) -> Result<Option<StationProfile>, String> {
+        let normalized = profile
+            .map(|profile| {
+                normalize_station_profile(
+                    profile,
+                    normalize_optional_station_callsign,
+                    normalize_optional_runtime_string,
+                )
+            })
+            .transpose()?;
+        let config_file_values = self.config_file_values.read().await.clone();
+        let overrides = self.overrides.read().await.clone();
+        let base_values = merged_base_values(&config_file_values, &self.startup_values);
+        let effective_values =
+            build_effective_values(&base_values, normalized.as_ref(), &overrides);
+        let next_bindings = build_runtime_bindings(&effective_values)?;
+
+        {
+            let mut bindings = self.bindings.write().await;
+            *bindings = next_bindings;
+        }
+
+        {
+            let mut session_override = self.session_station_profile_override.write().await;
+            session_override.clone_from(&normalized);
+        }
+
+        Ok(normalized)
+    }
+
+    pub(crate) async fn session_station_profile_override(&self) -> Option<StationProfile> {
+        self.session_station_profile_override.read().await.clone()
+    }
+
+    pub(crate) async fn effective_station_profile(&self) -> Option<StationProfile> {
+        self.bindings.read().await.active_station_profile.clone()
+    }
+
     async fn swap_runtime(
         &self,
         next_overrides: BTreeMap<String, String>,
     ) -> Result<RuntimeConfigSnapshot, String> {
-        let merged = merge_values(&self.base_values, &next_overrides);
-        let next_bindings = build_runtime_bindings(&merged)?;
+        let config_file_values = self.config_file_values.read().await.clone();
+        let session_station_profile_override =
+            self.session_station_profile_override.read().await.clone();
+        let base_values = merged_base_values(&config_file_values, &self.startup_values);
+        let effective_values = build_effective_values(
+            &base_values,
+            session_station_profile_override.as_ref(),
+            &next_overrides,
+        );
+        let next_bindings = build_runtime_bindings(&effective_values)?;
 
         {
             let mut bindings = self.bindings.write().await;
@@ -376,24 +501,6 @@ fn capture_supported_env() -> BTreeMap<String, String> {
     values
 }
 
-fn seed_storage_values(
-    mut base_values: BTreeMap<String, String>,
-    storage: &StorageOptions,
-) -> BTreeMap<String, String> {
-    base_values.insert(
-        STORAGE_BACKEND_ENV_VAR.to_string(),
-        match storage.backend {
-            StorageBackendKind::Memory => "memory".to_string(),
-            StorageBackendKind::Sqlite => "sqlite".to_string(),
-        },
-    );
-    base_values.insert(
-        SQLITE_PATH_ENV_VAR.to_string(),
-        storage.sqlite_path.display().to_string(),
-    );
-    base_values
-}
-
 fn apply_mutation(
     overrides: &mut BTreeMap<String, String>,
     mutation: RuntimeConfigMutation,
@@ -518,6 +625,31 @@ fn merge_values(
     merged
 }
 
+fn merged_base_values(
+    config_file_values: &BTreeMap<String, String>,
+    startup_values: &BTreeMap<String, String>,
+) -> BTreeMap<String, String> {
+    merge_values(config_file_values, startup_values)
+}
+
+fn build_effective_values(
+    base_values: &BTreeMap<String, String>,
+    session_station_profile_override: Option<&StationProfile>,
+    overrides: &BTreeMap<String, String>,
+) -> BTreeMap<String, String> {
+    let session_values = station_profile_override_values(session_station_profile_override);
+    let with_session_override = merge_values(base_values, &session_values);
+    merge_values(&with_session_override, overrides)
+}
+
+fn station_profile_override_values(profile: Option<&StationProfile>) -> BTreeMap<String, String> {
+    let mut values = BTreeMap::new();
+    if let Some(profile) = profile {
+        insert_station_profile_runtime_values(&mut values, profile);
+    }
+    values
+}
+
 fn build_runtime_bindings(values: &BTreeMap<String, String>) -> Result<RuntimeBindings, String> {
     let storage = build_storage(
         &parse_storage_options_from_values(values).map_err(|error| error.to_string())?,
@@ -639,10 +771,11 @@ fn build_lookup_provider(values: &BTreeMap<String, String>) -> (Arc<dyn Callsign
 
 fn build_snapshot(
     base_values: &BTreeMap<String, String>,
+    session_station_profile_override: Option<&StationProfile>,
     overrides: &BTreeMap<String, String>,
     bindings: &RuntimeBindings,
 ) -> RuntimeConfigSnapshot {
-    let merged = merge_values(base_values, overrides);
+    let merged = build_effective_values(base_values, session_station_profile_override, overrides);
     let definitions = SUPPORTED_FIELDS
         .iter()
         .map(|field| RuntimeConfigDefinition {
@@ -672,6 +805,12 @@ fn build_snapshot(
                 .to_string(),
         );
     }
+    if session_station_profile_override.is_some() {
+        warnings.push(
+            "A process-session station override is active; new QSOs use it until the override is cleared."
+                .to_string(),
+        );
+    }
 
     RuntimeConfigSnapshot {
         definitions,
@@ -681,6 +820,19 @@ fn build_snapshot(
         warnings,
         active_station_profile: bindings.active_station_profile.clone(),
     }
+}
+
+fn normalize_optional_runtime_string(value: Option<&str>) -> Option<String> {
+    let trimmed = value?.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+fn normalize_optional_station_callsign(value: Option<&str>) -> Option<String> {
+    normalize_optional_runtime_string(value).map(|value| normalize_callsign(&value))
 }
 
 fn build_value(
@@ -715,7 +867,7 @@ mod tests {
     use std::collections::BTreeMap;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    use logripper_core::proto::logripper::domain::{Band, Mode, QsoRecord};
+    use logripper_core::proto::logripper::domain::{Band, Mode, QsoRecord, StationProfile};
 
     use super::{
         ApplyRuntimeConfigRequest, ResetRuntimeConfigRequest, RuntimeConfigManager,
@@ -730,6 +882,10 @@ mod tests {
             local_id: local_id.to_string(),
             station_callsign: "K7DBG".to_string(),
             worked_callsign: "W1AW".to_string(),
+            utc_timestamp: Some(prost_types::Timestamp {
+                seconds: 1_731_600_000,
+                nanos: 0,
+            }),
             band: Band::Band20m as i32,
             mode: Mode::Ssb as i32,
             ..QsoRecord::default()
@@ -872,6 +1028,51 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn runtime_manager_prefers_config_file_storage_when_no_cli_override_is_present() {
+        let sqlite_path = unique_sqlite_path();
+        let mut config_values = BTreeMap::new();
+        config_values.insert(STORAGE_BACKEND_ENV_VAR.to_string(), "sqlite".to_string());
+        config_values.insert(SQLITE_PATH_ENV_VAR.to_string(), sqlite_path.clone());
+
+        let manager = RuntimeConfigManager::new_with_config_file_values_and_cli_storage_overrides(
+            config_values,
+            &BTreeMap::new(),
+        )
+        .expect("manager");
+
+        let snapshot = manager.snapshot().await;
+        assert_eq!("sqlite", snapshot.active_storage_backend);
+        assert_eq!(
+            sqlite_path,
+            snapshot
+                .values
+                .iter()
+                .find(|value| value.key == SQLITE_PATH_ENV_VAR)
+                .expect("sqlite path value")
+                .display_value
+        );
+    }
+
+    #[tokio::test]
+    async fn runtime_manager_prefers_cli_storage_override_over_config_file_storage() {
+        let mut config_values = BTreeMap::new();
+        config_values.insert(STORAGE_BACKEND_ENV_VAR.to_string(), "sqlite".to_string());
+        config_values.insert(SQLITE_PATH_ENV_VAR.to_string(), unique_sqlite_path());
+
+        let mut cli_overrides = BTreeMap::new();
+        cli_overrides.insert(STORAGE_BACKEND_ENV_VAR.to_string(), "memory".to_string());
+
+        let manager = RuntimeConfigManager::new_with_config_file_values_and_cli_storage_overrides(
+            config_values,
+            &cli_overrides,
+        )
+        .expect("manager");
+
+        let snapshot = manager.snapshot().await;
+        assert_eq!("memory", snapshot.active_storage_backend);
+    }
+
+    #[tokio::test]
     async fn runtime_manager_applies_station_profile_overrides() {
         let manager = RuntimeConfigManager::new(BTreeMap::new()).expect("manager");
 
@@ -902,6 +1103,54 @@ mod tests {
         assert!(
             actual.contains(expected),
             "expected '{actual}' to contain '{expected}'"
+        );
+    }
+
+    #[tokio::test]
+    async fn runtime_manager_applies_process_session_station_override() {
+        let mut config_values = BTreeMap::new();
+        config_values.insert(STATION_CALLSIGN_ENV_VAR.to_string(), "K7RND".to_string());
+        config_values.insert(STATION_GRID_ENV_VAR.to_string(), "CN87".to_string());
+        let manager =
+            RuntimeConfigManager::new_with_config_file_values(BTreeMap::new(), config_values)
+                .expect("manager");
+
+        let override_profile = manager
+            .set_session_station_profile_override(Some(StationProfile {
+                profile_name: Some("POTA".to_string()),
+                station_callsign: "K7RND/P".to_string(),
+                grid: Some("CN88".to_string()),
+                ..StationProfile::default()
+            }))
+            .await
+            .expect("session override")
+            .expect("profile");
+        assert_eq!("K7RND/P", override_profile.station_callsign);
+
+        let snapshot = manager.snapshot().await;
+        assert_eq!(
+            Some("K7RND/P"),
+            snapshot
+                .active_station_profile
+                .as_ref()
+                .map(|profile| profile.station_callsign.as_str())
+        );
+        assert!(snapshot
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("process-session")));
+
+        manager
+            .set_session_station_profile_override(None)
+            .await
+            .expect("clear override");
+        let cleared = manager.snapshot().await;
+        assert_eq!(
+            Some("K7RND"),
+            cleared
+                .active_station_profile
+                .as_ref()
+                .map(|profile| profile.station_callsign.as_str())
         );
     }
 }

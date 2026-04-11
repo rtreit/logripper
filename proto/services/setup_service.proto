@@ -1,0 +1,57 @@
+syntax = "proto3";
+
+package logripper.services;
+
+option csharp_namespace = "LogRipper.Services";
+
+import "domain/station.proto";
+
+// Production setup/bootstrap surface for first-run configuration.
+//
+// This service owns persisted engine configuration, not ephemeral developer
+// runtime overrides. Clients can use it to detect missing setup, present the
+// recommended config/data paths, and save the initial station/storage settings.
+service SetupService {
+  // Read the current persisted setup status and suggested default paths.
+  rpc GetSetupStatus(GetSetupStatusRequest) returns (SetupStatusResponse);
+
+  // Validate and persist the initial setup payload, then hot-apply it to the
+  // running engine for new requests.
+  rpc SaveSetup(SaveSetupRequest) returns (SaveSetupResponse);
+}
+
+message GetSetupStatusRequest {}
+
+message SetupStatusResponse {
+  bool config_file_exists = 1;
+  bool setup_complete = 2;
+  string config_path = 3;
+  StorageBackend storage_backend = 4;
+  optional string sqlite_path = 5;
+  bool has_station_profile = 6;
+  logripper.domain.StationProfile station_profile = 7;
+  optional string qrz_xml_username = 8;
+  bool has_qrz_xml_password = 9;
+  string suggested_sqlite_path = 10;
+  repeated string warnings = 11;
+  optional string active_station_profile_id = 12;
+  uint32 station_profile_count = 13;
+}
+
+message SaveSetupRequest {
+  StorageBackend storage_backend = 1;
+  optional string sqlite_path = 2;
+  logripper.domain.StationProfile station_profile = 3;
+  optional string qrz_xml_username = 4;
+  optional string qrz_xml_password = 5;
+}
+
+message SaveSetupResponse {
+  SetupStatusResponse status = 1;
+}
+
+enum StorageBackend {
+  STORAGE_BACKEND_UNSPECIFIED = 0;
+  STORAGE_BACKEND_MEMORY = 1;
+  STORAGE_BACKEND_SQLITE = 2;
+}

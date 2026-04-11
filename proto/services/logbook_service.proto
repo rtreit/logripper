@@ -7,18 +7,18 @@ option csharp_namespace = "LogRipper.Services";
 import "google/protobuf/timestamp.proto";
 import "domain/qso.proto";
 
-// Core logbook operations. Covers QSO CRUD, QRZ logbook sync, and ADIF import/export.
+// Core logbook operations. Covers local QSO CRUD, QRZ logbook sync, and ADIF import/export.
 //
 // Implementation status:
-//   LogQso       — planned (returns UNIMPLEMENTED)
-//   UpdateQso    — planned (returns UNIMPLEMENTED)
-//   DeleteQso    — planned (returns UNIMPLEMENTED)
-//   GetQso       — planned (returns UNIMPLEMENTED)
-//   ListQsos     — planned (returns UNIMPLEMENTED)
+//   LogQso        — implemented for local storage; optional QRZ sync still reports unimplemented
+//   UpdateQso     — implemented for local storage; optional QRZ sync still reports unimplemented
+//   DeleteQso     — implemented for local storage; optional QRZ delete still reports unimplemented
+//   GetQso        — implemented for local storage
+//   ListQsos      — implemented for local storage
 //   SyncWithQrz  — planned (returns UNIMPLEMENTED)
-//   GetSyncStatus — partial (returns zeroed placeholder values; storage not yet wired)
-//   ImportAdif   — planned (returns UNIMPLEMENTED)
-//   ExportAdif   — planned (returns UNIMPLEMENTED)
+//   GetSyncStatus — implemented for local storage counts; QRZ metadata remains absent until sync lands
+//   ImportAdif   — implemented for local ADIF migration import with duplicate/warning reporting
+//   ExportAdif   — implemented for filtered ADIF export
 //
 // Transport: native gRPC (HTTP/2 + binary protobuf).
 // Browser clients must go through a gRPC-Web proxy — see docs/api/client-integration.md.
@@ -27,11 +27,12 @@ import "domain/qso.proto";
 service LogbookService {
   // --- QSO CRUD ---
 
-  // Log a new QSO. Returns the engine-assigned local_id and optional QRZ sync result.
-  //
-  // Do not set QsoRecord.local_id in the request — the engine assigns a UUID.
-  // Required fields: station_callsign, worked_callsign, utc_timestamp, band, mode.
-  // A QRZ sync failure does not fail the local log — check sync_success in the response.
+// Log a new QSO. Returns the engine-assigned local_id and optional QRZ sync result.
+//
+// Do not set QsoRecord.local_id in the request — the engine assigns a UUID.
+// Required fields: worked_callsign, utc_timestamp, band, mode, plus station_callsign unless the
+// effective active station context already provides it.
+// A QRZ sync failure does not fail the local log — check sync_success/sync_error in the response.
   rpc LogQso(LogQsoRequest) returns (LogQsoResponse);
 
   // Update an existing QSO identified by QsoRecord.local_id.
@@ -63,20 +64,24 @@ service LogbookService {
   // with complete=true and error set.
   rpc SyncWithQrz(SyncRequest) returns (stream SyncProgress);
 
-  // Get current sync/logbook statistics (counts, last sync time, logbook owner).
-  //
-  // Currently returns zeroed placeholder values — use for transport connectivity checks.
-  rpc GetSyncStatus(SyncStatusRequest) returns (SyncStatusResponse);
+// Get current sync/logbook statistics (counts, last sync time, logbook owner).
+//
+// Local counts are derived from current storage. QRZ-specific fields stay zero/absent until QRZ
+// sync is implemented.
+rpc GetSyncStatus(SyncStatusRequest) returns (SyncStatusResponse);
 
   // --- ADIF Import/Export ---
 
   // Import QSOs from ADIF data. The client streams raw ADIF bytes in one or more chunks;
   // the server parses and imports after the client closes the send side.
   // Returns a summary with counts and any per-record warnings.
+  // Duplicate policy: an incoming record is skipped when it matches an existing QSO on
+  // station_callsign, worked_callsign, utc_timestamp, band, mode, and compatible submode/frequency.
   rpc ImportAdif(stream AdifChunk) returns (ImportResult);
 
   // Export QSOs to ADIF format. The server streams raw ADIF bytes back.
   // Clients should concatenate received chunks to reconstruct the full ADIF payload.
+  // Export order is chronological (oldest first) after applying the request filters.
   rpc ExportAdif(ExportRequest) returns (stream AdifChunk);
 }
 

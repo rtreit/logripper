@@ -34,6 +34,16 @@ internal sealed class DebugWorkbenchState
 
     public string? RuntimeConfigErrorMessage { get; private set; }
 
+    public SetupStatusResponse? SetupStatus { get; private set; }
+
+    public string? SetupErrorMessage { get; private set; }
+
+    public ListStationProfilesResponse? StationProfileCatalog { get; private set; }
+
+    public GetActiveStationContextResponse? ActiveStationContext { get; private set; }
+
+    public string? StationProfileErrorMessage { get; private set; }
+
     public void UpdateEngineEndpoint(string endpoint)
     {
         ArgumentNullException.ThrowIfNull(endpoint);
@@ -70,6 +80,56 @@ internal sealed class DebugWorkbenchState
         RuntimeConfigErrorMessage = string.IsNullOrWhiteSpace(message)
             ? null
             : message.Trim();
+    }
+
+    public void UpdateSetupStatus(SetupStatusResponse status)
+    {
+        ArgumentNullException.ThrowIfNull(status);
+
+        SetupStatus = status;
+        SetupErrorMessage = null;
+
+        if (status.StorageBackend == StorageBackend.Sqlite && !string.IsNullOrWhiteSpace(status.SqlitePath))
+        {
+            EngineStorageBackend = EngineStorageBackend.Sqlite;
+            EngineSqlitePath = NormalizeSqlitePath(status.SqlitePath);
+        }
+    }
+
+    public void UpdateSetupError(string? message)
+    {
+        SetupErrorMessage = string.IsNullOrWhiteSpace(message)
+            ? null
+            : message.Trim();
+    }
+
+    public void ClearSetupError()
+    {
+        SetupErrorMessage = null;
+    }
+
+    public void UpdateStationProfiles(
+        ListStationProfilesResponse catalog,
+        GetActiveStationContextResponse context)
+    {
+        ArgumentNullException.ThrowIfNull(catalog);
+        ArgumentNullException.ThrowIfNull(context);
+
+        StationProfileCatalog = catalog;
+        ActiveStationContext = context;
+        StationProfileErrorMessage = null;
+    }
+
+    public void UpdateStationProfileError(string? message)
+    {
+        StationProfileErrorMessage = string.IsNullOrWhiteSpace(message)
+            ? null
+            : message.Trim();
+    }
+
+    public void ClearStationProfileError()
+    {
+        StationProfileErrorMessage = null;
     }
 
     public string GetStorageBackendDisplayName()

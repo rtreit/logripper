@@ -38,4 +38,14 @@ internal sealed class GrpcClientFactory
     {
         return new DeveloperControlService.DeveloperControlServiceClient(CreateChannel());
     }
+
+    public SetupService.SetupServiceClient CreateSetupClient()
+    {
+        return new SetupService.SetupServiceClient(CreateChannel());
+    }
+
+    public StationProfileService.StationProfileServiceClient CreateStationProfileClient()
+    {
+        return new StationProfileService.StationProfileServiceClient(CreateChannel());
+    }
 }

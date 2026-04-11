@@ -12,9 +12,12 @@ dotenvy = "0.15"
 logripper-core = { path = "../logripper-core", version = "0.1.0" }
 logripper-storage-memory = { path = "../logripper-storage-memory", version = "0.1.0" }
 logripper-storage-sqlite = { path = "../logripper-storage-sqlite", version = "0.1.0" }
+prost-types = { workspace = true }
+serde = { version = "1", features = ["derive"] }
 tokio = { workspace = true }
-tonic = { workspace = true }
 tokio-stream = "0.1"
+toml = "0.8"
+tonic = { workspace = true }
 
 [lints]
 workspace = true

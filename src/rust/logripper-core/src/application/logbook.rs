@@ -3,8 +3,9 @@
 use crate::domain::qso::new_local_id;
 use crate::domain::station::{
     materialize_station_snapshot_for_create, materialize_station_snapshot_for_update,
+    station_snapshot_has_values,
 };
-use crate::proto::logripper::domain::{QsoRecord, SyncStatus};
+use crate::proto::logripper::domain::{Band, Mode, QsoRecord, StationProfile, SyncStatus};
 use crate::storage::{EngineStorage, LogbookCounts, QsoListQuery, StorageError, SyncMetadata};
 use chrono::Utc;
 use prost_types::Timestamp;
@@ -38,7 +39,8 @@ impl LogbookEngine {
     /// [`LogbookError::Storage`] when the configured backend rejects the write.
     pub async fn log_qso(&self, mut qso: QsoRecord) -> Result<QsoRecord, LogbookError> {
         materialize_station_snapshot_for_create(&mut qso, None);
-        validate_required_callsigns(&qso)?;
+        normalize_qso_for_persistence(&mut qso);
+        validate_qso_for_persistence(&qso)?;
 
         if qso.local_id.trim().is_empty() {
             qso.local_id = new_local_id();
@@ -66,7 +68,8 @@ impl LogbookEngine {
         active_station_profile: Option<&crate::proto::logripper::domain::StationProfile>,
     ) -> Result<QsoRecord, LogbookError> {
         materialize_station_snapshot_for_create(&mut qso, active_station_profile);
-        validate_required_callsigns(&qso)?;
+        normalize_qso_for_persistence(&mut qso);
+        validate_qso_for_persistence(&qso)?;
 
         if qso.local_id.trim().is_empty() {
             qso.local_id = new_local_id();
@@ -99,7 +102,8 @@ impl LogbookEngine {
         let existing = self.storage.logbook().get_qso(&qso.local_id).await?;
         let existing = existing.ok_or_else(|| LogbookError::NotFound(qso.local_id.clone()))?;
         materialize_station_snapshot_for_update(&mut qso, Some(&existing));
-        validate_required_callsigns(&qso)?;
+        normalize_qso_for_persistence(&mut qso);
+        validate_qso_for_persistence(&qso)?;
 
         qso.created_at = existing.created_at.or_else(|| Some(now_timestamp()));
         qso.updated_at = Some(now_timestamp());
@@ -180,6 +184,39 @@ impl LogbookEngine {
         Ok(LogbookSyncStatus::from_parts(counts, metadata))
     }
 
+    /// Import ADIF-mapped QSOs into the logbook with duplicate detection and explicit fallback rules.
+    ///
+    /// Imported station history wins. The active station profile is only applied when a record carries
+    /// no local-station context at all, and that fallback is reported in the returned warnings.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`LogbookError::Storage`] when the backend fails while checking duplicates or
+    /// persisting an imported record.
+    pub async fn import_adif_qsos(
+        &self,
+        qsos: Vec<QsoRecord>,
+        active_station_profile: Option<&StationProfile>,
+    ) -> Result<AdifImportSummary, LogbookError> {
+        let mut summary = AdifImportSummary::default();
+
+        for (index, qso) in qsos.into_iter().enumerate() {
+            let outcome = self
+                .import_single_adif_qso(index + 1, qso, active_station_profile)
+                .await?;
+
+            if outcome.imported {
+                summary.records_imported = summary.records_imported.saturating_add(1);
+            } else {
+                summary.records_skipped = summary.records_skipped.saturating_add(1);
+            }
+
+            summary.warnings.extend(outcome.warnings);
+        }
+
+        Ok(summary)
+    }
+
     /// Update the stored remote sync metadata.
     ///
     /// # Errors
@@ -191,6 +228,77 @@ impl LogbookEngine {
             .upsert_sync_metadata(metadata)
             .await
             .map_err(Into::into)
+    }
+
+    async fn import_single_adif_qso(
+        &self,
+        record_number: usize,
+        mut qso: QsoRecord,
+        active_station_profile: Option<&StationProfile>,
+    ) -> Result<AdifImportOutcome, LogbookError> {
+        let had_imported_station_context = qso_has_station_context(&qso);
+        let mut warnings = Vec::new();
+
+        if had_imported_station_context {
+            materialize_station_snapshot_for_create(&mut qso, None);
+        } else if let Some(active_station_profile) = active_station_profile {
+            materialize_station_snapshot_for_create(&mut qso, Some(active_station_profile));
+            warnings.push(format!(
+                "Record {record_number}: local-station history was absent in ADIF; applied active station profile '{}'.",
+                station_profile_label(active_station_profile)
+            ));
+        } else {
+            return Ok(AdifImportOutcome::skipped(format!(
+                "Record {record_number}: local-station history was absent in ADIF and no active station profile is configured; skipped."
+            )));
+        }
+
+        normalize_qso_for_persistence(&mut qso);
+
+        if let Some(reason) = invalid_import_reason(&qso) {
+            return Ok(AdifImportOutcome::skipped(format!(
+                "Record {record_number}: {reason} Skipped."
+            )));
+        }
+
+        if self.is_duplicate_import(&qso).await? {
+            warnings.push(format!(
+                "Record {record_number}: duplicate skipped; matched an existing QSO on station_callsign, worked_callsign, utc_timestamp, band, mode, and compatible submode/frequency."
+            ));
+            return Ok(AdifImportOutcome {
+                imported: false,
+                warnings,
+            });
+        }
+
+        let _ = self.log_qso(qso).await?;
+        Ok(AdifImportOutcome {
+            imported: true,
+            warnings,
+        })
+    }
+
+    async fn is_duplicate_import(&self, candidate: &QsoRecord) -> Result<bool, LogbookError> {
+        let Some(timestamp) = candidate.utc_timestamp else {
+            return Ok(false);
+        };
+
+        let callsign_filter = non_empty_trimmed(&candidate.worked_callsign)
+            .or_else(|| non_empty_trimmed(&candidate.station_callsign));
+        let existing = self
+            .storage
+            .logbook()
+            .list_qsos(&QsoListQuery {
+                after: Some(timestamp),
+                before: Some(timestamp),
+                callsign_filter,
+                ..QsoListQuery::default()
+            })
+            .await?;
+
+        Ok(existing
+            .iter()
+            .any(|existing_qso| qsos_match_for_duplicate(existing_qso, candidate)))
     }
 }
 
@@ -207,6 +315,17 @@ pub struct LogbookSyncStatus {
     pub last_sync: Option<Timestamp>,
     /// Remote logbook owner reported by QRZ, if known.
     pub qrz_logbook_owner: Option<String>,
+}
+
+/// Summary of an ADIF import run.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct AdifImportSummary {
+    /// Number of records inserted into storage.
+    pub records_imported: u32,
+    /// Number of records skipped due to duplicates or validation problems.
+    pub records_skipped: u32,
+    /// Human-readable warnings collected during import.
+    pub warnings: Vec<String>,
 }
 
 impl LogbookSyncStatus {
@@ -235,7 +354,27 @@ pub enum LogbookError {
     Storage(#[from] StorageError),
 }
 
-fn validate_required_callsigns(qso: &QsoRecord) -> Result<(), LogbookError> {
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AdifImportOutcome {
+    imported: bool,
+    warnings: Vec<String>,
+}
+
+impl AdifImportOutcome {
+    fn skipped(warning: String) -> Self {
+        Self {
+            imported: false,
+            warnings: vec![warning],
+        }
+    }
+}
+
+fn normalize_qso_for_persistence(qso: &mut QsoRecord) {
+    qso.station_callsign = qso.station_callsign.trim().to_string();
+    qso.worked_callsign = qso.worked_callsign.trim().to_string();
+}
+
+fn validate_qso_for_persistence(qso: &QsoRecord) -> Result<(), LogbookError> {
     if qso.station_callsign.trim().is_empty() {
         return Err(LogbookError::Validation(
             "station_callsign is required.".into(),
@@ -248,7 +387,136 @@ fn validate_required_callsigns(qso: &QsoRecord) -> Result<(), LogbookError> {
         ));
     }
 
+    if qso.utc_timestamp.is_none() {
+        return Err(LogbookError::Validation(
+            "utc_timestamp is required.".into(),
+        ));
+    }
+
+    match Band::try_from(qso.band) {
+        Ok(Band::Unspecified) => {
+            return Err(LogbookError::Validation("band is required.".into()));
+        }
+        Ok(_) => {}
+        Err(_) => {
+            return Err(LogbookError::Validation("band is invalid.".into()));
+        }
+    }
+
+    match Mode::try_from(qso.mode) {
+        Ok(Mode::Unspecified) => {
+            return Err(LogbookError::Validation("mode is required.".into()));
+        }
+        Ok(_) => {}
+        Err(_) => {
+            return Err(LogbookError::Validation("mode is invalid.".into()));
+        }
+    }
+
     Ok(())
+}
+
+fn invalid_import_reason(qso: &QsoRecord) -> Option<String> {
+    if qso.station_callsign.trim().is_empty() {
+        Some("station_callsign is required.".to_string())
+    } else if qso.worked_callsign.trim().is_empty() {
+        Some("worked_callsign is required.".to_string())
+    } else if qso.utc_timestamp.is_none() {
+        if let Some(raw_date) = qso.extra_fields.get("QSO_DATE") {
+            Some(format!(
+                "invalid ADIF date/time '{raw_date}{}'.",
+                qso.extra_fields
+                    .get("TIME_ON")
+                    .map_or(String::new(), |time| format!("/{time}"))
+            ))
+        } else {
+            Some("utc_timestamp is required.".to_string())
+        }
+    } else {
+        match Band::try_from(qso.band) {
+            Ok(Band::Unspecified) => Some(match qso.extra_fields.get("BAND") {
+                Some(raw_band) => format!("unrecognized ADIF band '{raw_band}'."),
+                None => "band is required.".to_string(),
+            }),
+            Ok(_) => match Mode::try_from(qso.mode) {
+                Ok(Mode::Unspecified) => Some(match qso.extra_fields.get("MODE") {
+                    Some(raw_mode) => format!("unrecognized ADIF mode '{raw_mode}'."),
+                    None => "mode is required.".to_string(),
+                }),
+                Ok(_) => None,
+                Err(_) => Some("mode is invalid.".to_string()),
+            },
+            Err(_) => Some("band is invalid.".to_string()),
+        }
+    }
+}
+
+fn qso_has_station_context(qso: &QsoRecord) -> bool {
+    !qso.station_callsign.trim().is_empty()
+        || qso
+            .station_snapshot
+            .as_ref()
+            .is_some_and(station_snapshot_has_values)
+}
+
+fn station_profile_label(profile: &StationProfile) -> String {
+    non_empty_trimmed_option(profile.profile_name.as_deref())
+        .or_else(|| non_empty_trimmed_option(Some(profile.station_callsign.as_str())))
+        .unwrap_or_else(|| "active station profile".to_string())
+}
+
+fn qsos_match_for_duplicate(existing: &QsoRecord, candidate: &QsoRecord) -> bool {
+    timestamps_match(
+        existing.utc_timestamp.as_ref(),
+        candidate.utc_timestamp.as_ref(),
+    ) && existing.band == candidate.band
+        && existing.mode == candidate.mode
+        && strings_equal_ignore_ascii_case(
+            existing.station_callsign.as_str(),
+            candidate.station_callsign.as_str(),
+        )
+        && strings_equal_ignore_ascii_case(
+            existing.worked_callsign.as_str(),
+            candidate.worked_callsign.as_str(),
+        )
+        && optional_strings_compatible(existing.submode.as_deref(), candidate.submode.as_deref())
+        && optional_u64_compatible(existing.frequency_khz, candidate.frequency_khz)
+}
+
+fn timestamps_match(left: Option<&Timestamp>, right: Option<&Timestamp>) -> bool {
+    left == right
+}
+
+fn strings_equal_ignore_ascii_case(left: &str, right: &str) -> bool {
+    left.trim().eq_ignore_ascii_case(right.trim())
+}
+
+fn optional_strings_compatible(left: Option<&str>, right: Option<&str>) -> bool {
+    match (
+        non_empty_trimmed_option(left),
+        non_empty_trimmed_option(right),
+    ) {
+        (Some(left), Some(right)) => left.eq_ignore_ascii_case(&right),
+        _ => true,
+    }
+}
+
+fn optional_u64_compatible(left: Option<u64>, right: Option<u64>) -> bool {
+    match (left, right) {
+        (Some(left), Some(right)) => left == right,
+        _ => true,
+    }
+}
+
+fn non_empty_trimmed(value: &str) -> Option<String> {
+    non_empty_trimmed_option(Some(value))
+}
+
+fn non_empty_trimmed_option(value: Option<&str>) -> Option<String> {
+    value.and_then(|value| {
+        let trimmed = value.trim();
+        (!trimmed.is_empty()).then(|| trimmed.to_string())
+    })
 }
 
 fn now_timestamp() -> Timestamp {

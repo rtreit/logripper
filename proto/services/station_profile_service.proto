@@ -1,0 +1,108 @@
+syntax = "proto3";
+
+package logripper.services;
+
+option csharp_namespace = "LogRipper.Services";
+
+import "domain/station.proto";
+
+// Persisted station-profile lifecycle plus bounded process-session override support.
+service StationProfileService {
+  // List every persisted station profile and indicate which one is active.
+  rpc ListStationProfiles(ListStationProfilesRequest) returns (ListStationProfilesResponse);
+
+  // Read a single persisted station profile by id.
+  rpc GetStationProfile(GetStationProfileRequest) returns (GetStationProfileResponse);
+
+  // Create or update a persisted station profile. When profile_id is omitted, the
+  // server generates a stable id from the profile metadata.
+  rpc SaveStationProfile(SaveStationProfileRequest) returns (SaveStationProfileResponse);
+
+  // Delete a persisted station profile. The active profile cannot be deleted.
+  rpc DeleteStationProfile(DeleteStationProfileRequest) returns (DeleteStationProfileResponse);
+
+  // Switch the persisted active station profile used as the default station context.
+  rpc SetActiveStationProfile(SetActiveStationProfileRequest) returns (SetActiveStationProfileResponse);
+
+  // Read the effective active station context used for new QSO saves.
+  rpc GetActiveStationContext(GetActiveStationContextRequest) returns (GetActiveStationContextResponse);
+
+  // Apply an explicit process-session station override without mutating persisted profiles.
+  rpc SetSessionStationProfileOverride(SetSessionStationProfileOverrideRequest) returns (SetSessionStationProfileOverrideResponse);
+
+  // Clear the process-session station override and fall back to the persisted active profile.
+  rpc ClearSessionStationProfileOverride(ClearSessionStationProfileOverrideRequest) returns (ClearSessionStationProfileOverrideResponse);
+}
+
+message ListStationProfilesRequest {}
+
+message ListStationProfilesResponse {
+  repeated StationProfileRecord profiles = 1;
+  optional string active_profile_id = 2;
+}
+
+message GetStationProfileRequest {
+  string profile_id = 1;
+}
+
+message GetStationProfileResponse {
+  StationProfileRecord profile = 1;
+}
+
+message SaveStationProfileRequest {
+  optional string profile_id = 1;
+  logripper.domain.StationProfile profile = 2;
+  bool make_active = 3;
+}
+
+message SaveStationProfileResponse {
+  StationProfileRecord profile = 1;
+  optional string active_profile_id = 2;
+}
+
+message DeleteStationProfileRequest {
+  string profile_id = 1;
+}
+
+message DeleteStationProfileResponse {
+  optional string active_profile_id = 1;
+}
+
+message SetActiveStationProfileRequest {
+  string profile_id = 1;
+}
+
+message SetActiveStationProfileResponse {
+  StationProfileRecord profile = 1;
+}
+
+message GetActiveStationContextRequest {}
+
+message GetActiveStationContextResponse {
+  optional string persisted_active_profile_id = 1;
+  logripper.domain.StationProfile persisted_active_profile = 2;
+  logripper.domain.StationProfile effective_active_profile = 3;
+  bool has_session_override = 4;
+  logripper.domain.StationProfile session_override_profile = 5;
+  repeated string warnings = 6;
+}
+
+message SetSessionStationProfileOverrideRequest {
+  logripper.domain.StationProfile profile = 1;
+}
+
+message SetSessionStationProfileOverrideResponse {
+  GetActiveStationContextResponse context = 1;
+}
+
+message ClearSessionStationProfileOverrideRequest {}
+
+message ClearSessionStationProfileOverrideResponse {
+  GetActiveStationContextResponse context = 1;
+}
+
+message StationProfileRecord {
+  string profile_id = 1;
+  logripper.domain.StationProfile profile = 2;
+  bool is_active = 3;
+}

@@ -71,6 +71,8 @@ impl AdifMapper {
                 "BAND" => {
                     if let Some(band) = band_from_adif(value_str) {
                         qso.band = band.into();
+                    } else {
+                        qso.extra_fields.insert(key_upper, value_str.to_owned());
                     }
                 }
                 "MODE" => {
@@ -82,12 +84,20 @@ impl AdifMapper {
                                 qso.submode = Some(sub.to_string());
                             }
                         }
+                    } else {
+                        qso.extra_fields.insert(key_upper, value_str.to_owned());
                     }
                 }
                 "SUBMODE" => qso.submode = Some(value_str.to_owned()),
                 "FREQ" => {
                     if let Ok(mhz) = value_str.parse::<f64>() {
-                        qso.frequency_khz = mhz_to_khz(mhz);
+                        if let Some(khz) = mhz_to_khz(mhz) {
+                            qso.frequency_khz = Some(khz);
+                        } else {
+                            qso.extra_fields.insert(key_upper, value_str.to_owned());
+                        }
+                    } else {
+                        qso.extra_fields.insert(key_upper, value_str.to_owned());
                     }
                 }
                 // --- Signal reports ---
@@ -249,7 +259,17 @@ impl AdifMapper {
         if let Some(date_str) = qso_date.as_deref() {
             if let Some(ts) = parse_adif_datetime(date_str, time_on.as_deref()) {
                 qso.utc_timestamp = Some(ts);
+            } else {
+                qso.extra_fields
+                    .insert("QSO_DATE".to_string(), date_str.to_owned());
+                if let Some(time_on) = time_on.as_deref() {
+                    qso.extra_fields
+                        .insert("TIME_ON".to_string(), time_on.to_owned());
+                }
             }
+        } else if let Some(time_on) = time_on.as_deref() {
+            qso.extra_fields
+                .insert("TIME_ON".to_string(), time_on.to_owned());
         }
 
         if let Some(snapshot) = station_snapshot.filter(station_snapshot_has_values) {
@@ -906,6 +926,41 @@ mod tests {
         assert_eq!(qso.serial_received.as_deref(), Some("142"));
         assert_eq!(qso.serial_sent.as_deref(), Some("033"));
         assert_eq!(qso.exchange_sent.as_deref(), Some("05 OH"));
+    }
+
+    #[test]
+    fn invalid_core_fields_are_preserved_for_round_trip() {
+        let mut rec = Record::new();
+        rec.insert("CALL", "W1AW").unwrap();
+        rec.insert("QSO_DATE", "2025ABCD").unwrap();
+        rec.insert("TIME_ON", "250000").unwrap();
+        rec.insert("BAND", "11M").unwrap();
+        rec.insert("MODE", "TOTALLYNEW").unwrap();
+        rec.insert("FREQ", "-1").unwrap();
+
+        let qso = AdifMapper::record_to_qso(&rec);
+
+        assert!(qso.utc_timestamp.is_none());
+        assert_eq!(qso.band, Band::Unspecified as i32);
+        assert_eq!(qso.mode, Mode::Unspecified as i32);
+        assert_eq!(qso.frequency_khz, None);
+        assert_eq!(
+            qso.extra_fields.get("QSO_DATE").map(String::as_str),
+            Some("2025ABCD")
+        );
+        assert_eq!(
+            qso.extra_fields.get("TIME_ON").map(String::as_str),
+            Some("250000")
+        );
+        assert_eq!(
+            qso.extra_fields.get("BAND").map(String::as_str),
+            Some("11M")
+        );
+        assert_eq!(
+            qso.extra_fields.get("MODE").map(String::as_str),
+            Some("TOTALLYNEW")
+        );
+        assert_eq!(qso.extra_fields.get("FREQ").map(String::as_str), Some("-1"));
     }
 
     #[test]

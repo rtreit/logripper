@@ -1,6 +1,6 @@
 # LogbookService Reference
 
-The `LogbookService` is the core QSO lifecycle interface. It covers logging new contacts, editing or deleting existing ones, syncing with the QRZ logbook, and ADIF import/export.
+The `LogbookService` is the core QSO lifecycle interface. It covers local QSO CRUD and ADIF import/export today, with QRZ sync reserved for a later slice.
 
 Proto definition: [`proto/services/logbook_service.proto`](../../proto/services/logbook_service.proto)
 
@@ -10,15 +10,15 @@ Domain types: [`proto/domain/qso.proto`](../../proto/domain/qso.proto)
 
 | RPC | Status | Notes |
 |---|---|---|
-| `LogQso` | ⚠️ Planned | Contract defined; returns `UNIMPLEMENTED` |
-| `UpdateQso` | ⚠️ Planned | Contract defined; returns `UNIMPLEMENTED` |
-| `DeleteQso` | ⚠️ Planned | Contract defined; returns `UNIMPLEMENTED` |
-| `GetQso` | ⚠️ Planned | Contract defined; returns `UNIMPLEMENTED` |
-| `ListQsos` | ⚠️ Planned | Contract defined; returns `UNIMPLEMENTED` |
+| `LogQso` | ✅ Implemented | Saves locally through the configured backend; QRZ sync still reports unimplemented when requested |
+| `UpdateQso` | ✅ Implemented | Updates local storage; QRZ sync still reports unimplemented when requested |
+| `DeleteQso` | ✅ Implemented | Deletes from local storage; QRZ delete still reports unimplemented when requested |
+| `GetQso` | ✅ Implemented | Loads a single local QSO by `local_id` |
+| `ListQsos` | ✅ Implemented | Streams locally stored QSOs with filters, sorting, limit, and offset |
 | `SyncWithQrz` | ⚠️ Planned | Contract defined; returns `UNIMPLEMENTED` |
-| `GetSyncStatus` | ✅ Partial | Returns zeroed placeholder values (storage not yet wired) |
-| `ImportAdif` | ⚠️ Planned | Contract defined; returns `UNIMPLEMENTED` |
-| `ExportAdif` | ⚠️ Planned | Contract defined; returns `UNIMPLEMENTED` |
+| `GetSyncStatus` | ✅ Implemented | Returns live local counts from storage; QRZ-specific fields remain zero/absent until sync is implemented |
+| `ImportAdif` | ✅ Implemented | Streams ADIF in, imports after client close, reports duplicates/fallback warnings |
+| `ExportAdif` | ✅ Implemented | Streams filtered ADIF out in chronological order |
 
 ## RPCs
 
@@ -30,7 +30,7 @@ Log a new QSO (contact). Optionally syncs the new record to QRZ immediately.
 rpc LogQso(LogQsoRequest) returns (LogQsoResponse)
 ```
 
-> ⚠️ **Status:** Planned. Currently returns `UNIMPLEMENTED`.
+> ✅ **Status:** Implemented for local storage.
 
 **Request:** `LogQsoRequest`
 
@@ -45,17 +45,18 @@ rpc LogQso(LogQsoRequest) returns (LogQsoResponse)
 |---|---|---|
 | `local_id` | `string` | Engine-assigned UUID for the new QSO |
 | `qrz_logid` | `string` (optional) | QRZ logbook record ID, set only when `sync_to_qrz` was `true` and sync succeeded |
-| `sync_success` | `bool` | Whether the optional QRZ sync succeeded (always `false` when `sync_to_qrz` was `false`) |
-| `sync_error` | `string` (optional) | Human-readable sync error message when `sync_success == false` and sync was requested |
+| `sync_success` | `bool` | `true` when the local save completed and no QRZ request failed; `false` when QRZ work was requested but is not yet implemented |
+| `sync_error` | `string` (optional) | Human-readable sync error message when `sync_to_qrz == true` and the QRZ step failed |
 
 **Behavior:**
 - The engine always assigns a new `local_id` (UUID). Do not set `QsoRecord.local_id` in the request.
-- If `sync_to_qrz == false`, the QSO is logged locally only. `sync_success` will be `false` and `qrz_logid` will be absent.
-- A QRZ sync failure does not cause the local log to fail. The QSO is logged locally regardless. Check `sync_success` and `sync_error` to determine the sync outcome.
+- Required user input is `worked_callsign`, `utc_timestamp`, `band`, and `mode`, plus `station_callsign` unless the effective active station context already supplies the local station identity.
+- When active station context is available, the server materializes `station_snapshot` from that context and uses it as the source of default local-station values for the new record.
+- If `sync_to_qrz == false`, the QSO is logged locally only. `sync_success` will be `true` and QRZ fields remain absent.
+- A QRZ sync failure does not cause the local log to fail. The QSO is logged locally regardless. Check `sync_success` and `sync_error` to determine the QRZ outcome.
 
 **Notable status codes:**
-- `UNIMPLEMENTED` — current server response.
-- `INVALID_ARGUMENT` — future: missing required fields (`station_callsign`, `worked_callsign`, `utc_timestamp`, `band`, `mode`).
+- `INVALID_ARGUMENT` — missing required fields or invalid enum values.
 
 ---
 
@@ -67,7 +68,7 @@ Update an existing QSO identified by `local_id`.
 rpc UpdateQso(UpdateQsoRequest) returns (UpdateQsoResponse)
 ```
 
-> ⚠️ **Status:** Planned. Currently returns `UNIMPLEMENTED`.
+> ✅ **Status:** Implemented for local storage.
 
 **Request:** `UpdateQsoRequest`
 
@@ -86,8 +87,8 @@ rpc UpdateQso(UpdateQsoRequest) returns (UpdateQsoResponse)
 | `sync_error` | `string` (optional) | Sync error message |
 
 **Notable status codes:**
-- `UNIMPLEMENTED` — current server response.
-- `NOT_FOUND` — future: `local_id` does not exist in the local logbook.
+- `NOT_FOUND` — `local_id` does not exist in the local logbook.
+- `INVALID_ARGUMENT` — the request is missing `local_id` or other required fields.
 
 ---
 
@@ -99,7 +100,7 @@ Delete a QSO from the local logbook. Optionally also deletes it from QRZ logbook
 rpc DeleteQso(DeleteQsoRequest) returns (DeleteQsoResponse)
 ```
 
-> ⚠️ **Status:** Planned. Currently returns `UNIMPLEMENTED`.
+> ✅ **Status:** Implemented for local storage.
 
 **Request:** `DeleteQsoRequest`
 
@@ -120,8 +121,8 @@ rpc DeleteQso(DeleteQsoRequest) returns (DeleteQsoResponse)
 > ⚠️ **Warning:** Setting `delete_from_qrz = true` is **permanent and irreversible** on the QRZ side. Prompt the user to confirm before calling this with `delete_from_qrz = true`.
 
 **Notable status codes:**
-- `UNIMPLEMENTED` — current server response.
-- `NOT_FOUND` — future: `local_id` does not exist.
+- `NOT_FOUND` — `local_id` does not exist.
+- `INVALID_ARGUMENT` — `local_id` is blank.
 
 ---
 
@@ -133,7 +134,7 @@ Retrieve a single QSO by its local UUID.
 rpc GetQso(GetQsoRequest) returns (GetQsoResponse)
 ```
 
-> ⚠️ **Status:** Planned. Currently returns `UNIMPLEMENTED`.
+> ✅ **Status:** Implemented for local storage.
 
 **Request:** `GetQsoRequest`
 
@@ -148,8 +149,8 @@ rpc GetQso(GetQsoRequest) returns (GetQsoResponse)
 | `qso` | `QsoRecord` | The retrieved QSO record |
 
 **Notable status codes:**
-- `UNIMPLEMENTED` — current server response.
-- `NOT_FOUND` — future: `local_id` does not exist.
+- `NOT_FOUND` — `local_id` does not exist.
+- `INVALID_ARGUMENT` — `local_id` is blank.
 
 ---
 
@@ -161,7 +162,7 @@ List QSOs with optional filters, returning results as a server-streaming respons
 rpc ListQsos(ListQsosRequest) returns (stream QsoRecord)
 ```
 
-> ⚠️ **Status:** Planned. Currently returns `UNIMPLEMENTED`.
+> ✅ **Status:** Implemented for local storage.
 
 **Request:** `ListQsosRequest`
 
@@ -184,7 +185,7 @@ rpc ListQsos(ListQsosRequest) returns (stream QsoRecord)
 - All filter fields are optional; omitting all filters returns all QSOs (subject to `limit`/`offset`).
 
 **Notable status codes:**
-- `UNIMPLEMENTED` — current server response.
+- `OK` — zero or more `QsoRecord` items streamed back.
 
 ---
 
@@ -196,7 +197,7 @@ Trigger a full or incremental sync with the QRZ logbook. Progress is streamed ba
 rpc SyncWithQrz(SyncRequest) returns (stream SyncProgress)
 ```
 
-> ⚠️ **Status:** Planned. Currently returns `UNIMPLEMENTED`.
+> ✅ **Status:** Implemented for local ADIF migration import.
 
 **Request:** `SyncRequest`
 
@@ -238,7 +239,7 @@ Get the current sync state and logbook statistics.
 rpc GetSyncStatus(SyncStatusRequest) returns (SyncStatusResponse)
 ```
 
-> ✅ **Status:** Partial. Returns zeroed placeholder values — storage is not yet wired to persistent state.
+> ✅ **Status:** Implemented for local storage counts. QRZ metadata remains zero/absent until QRZ sync is implemented.
 
 **Request:** `SyncStatusRequest` — empty message, no fields.
 
@@ -252,7 +253,7 @@ rpc GetSyncStatus(SyncStatusRequest) returns (SyncStatusResponse)
 | `last_sync` | `Timestamp` (optional) | Timestamp of the most recent successful sync |
 | `qrz_logbook_owner` | `string` (optional) | QRZ logbook owner callsign |
 
-**Current behavior:** All fields return `0` or absent — the engine server is not yet wired to a persistent storage backend. Use `GetSyncStatus` to verify transport connectivity; do not rely on field values for application logic yet.
+**Current behavior:** `local_qso_count` and `pending_upload` are derived from current storage contents. Until QRZ sync exists, `qrz_qso_count` remains `0`, `last_sync` is absent, and `qrz_logbook_owner` is absent.
 
 **Notable status codes:**
 - `OK` — always returned; check field values for substantive data.
@@ -278,6 +279,10 @@ rpc ImportAdif(stream AdifChunk) returns (ImportResult)
 **Behavior:**
 - Clients may split large ADIF files into multiple chunks to avoid large single messages.
 - The server accumulates chunks and parses the complete ADIF payload after the client closes the send side.
+- Imported `STATION_CALLSIGN`, `OPERATOR`, and `MY_*` fields are preserved through `station_snapshot`; the current active station profile does **not** overwrite imported local-station history.
+- If an ADIF record has no local-station context at all, the server uses the current active station profile as an explicit fallback and adds a warning describing that fallback.
+- Duplicate policy: a record is skipped when it matches an existing QSO on `station_callsign`, `worked_callsign`, `utc_timestamp`, `band`, `mode`, and compatible `submode` / `frequency_khz`.
+- Invalid core ADIF values such as unknown `BAND`, unknown `MODE`, or invalid `QSO_DATE` / `TIME_ON` combinations are skipped with warnings. Raw ADIF values are still retained in `extra_fields` so later exports stay predictable.
 
 **Response:** `ImportResult`
 
@@ -288,8 +293,9 @@ rpc ImportAdif(stream AdifChunk) returns (ImportResult)
 | `warnings` | `repeated string` | Human-readable warnings for individual record issues |
 
 **Notable status codes:**
-- `UNIMPLEMENTED` — current server response.
-- `INVALID_ARGUMENT` — future: malformed ADIF data.
+- `OK` — import completed; inspect counts and warnings for duplicates or skipped records.
+- `INVALID_ARGUMENT` — malformed ADIF payload that could not be parsed.
+- `INTERNAL` — storage failure during import.
 
 ---
 
@@ -301,7 +307,7 @@ Export QSOs to ADIF format. The server streams chunks of raw ADIF bytes back to 
 rpc ExportAdif(ExportRequest) returns (stream AdifChunk)
 ```
 
-> ⚠️ **Status:** Planned. Currently returns `UNIMPLEMENTED`.
+> ✅ **Status:** Implemented for local ADIF export.
 
 **Request:** `ExportRequest`
 
@@ -317,9 +323,12 @@ rpc ExportAdif(ExportRequest) returns (stream AdifChunk)
 **Behavior:**
 - Clients should concatenate received chunks to reconstruct the full ADIF payload.
 - Omitting all filters exports all QSOs.
+- Export order is chronological (`oldest first`) after applying the filters.
+- `include_header=true` prepends an ADIF header with version/program metadata.
 
 **Notable status codes:**
-- `UNIMPLEMENTED` — current server response.
+- `OK` — export stream opened successfully.
+- `INTERNAL` — storage failure while enumerating records for export.
 
 ---
 

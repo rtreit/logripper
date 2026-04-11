@@ -8,6 +8,8 @@ LogRipper is an **engine-first** project. The engine exposes everything through 
 
 | Service | Purpose | Reference |
 |---|---|---|
+| **SetupService** | First-run setup, persisted config status, bootstrap storage/station defaults | [setup-service.md](setup-service.md) |
+| **StationProfileService** | Persisted station profile CRUD, active selection, bounded session override state | [station-profile-service.md](station-profile-service.md) |
 | **LookupService** | Callsign lookups — single, streaming, batch, cached, DXCC | [lookup-service.md](lookup-service.md) |
 | **LogbookService** | QSO CRUD, QRZ logbook sync, ADIF import/export | [logbook-service.md](logbook-service.md) |
 
@@ -20,10 +22,14 @@ proto/
 ├── domain/
 │   ├── callsign.proto   # CallsignRecord, DxccEntity, GeoSource, QslPreference
 │   ├── qso.proto        # QsoRecord, Band, Mode, RstReport, SyncStatus, QslStatus
-│   └── lookup.proto     # LookupResult, LookupState, LookupRequest, BatchLookup
+│   ├── lookup.proto     # LookupResult, LookupState, LookupRequest, BatchLookup
+│   └── station.proto    # StationProfile, StationSnapshot
 └── services/
+    ├── setup_service.proto    # SetupService gRPC definitions
+    ├── station_profile_service.proto # StationProfileService gRPC definitions
     ├── lookup_service.proto   # LookupService gRPC definitions
-    └── logbook_service.proto  # LogbookService gRPC definitions
+    ├── logbook_service.proto  # LogbookService gRPC definitions
+    └── debug_control_service.proto # DeveloperControlService gRPC definitions
 ```
 
 The `.proto` files are the durable reference source. Comments inside them document individual field and RPC semantics. The reference docs in this directory provide higher-level integration guidance and implementation-status tables on top of those definitions.
@@ -46,7 +52,8 @@ Not all contract entries in the proto files are fully implemented in the current
 In general:
 
 - `LookupService` callsign lookups (unary, streaming, cached) are implemented.
-- `LogbookService` QSO CRUD, sync, and ADIF flows are contract-complete but currently return `UNIMPLEMENTED` from the server. `GetSyncStatus` returns placeholder zeroed values.
+- `SetupService` can report persisted setup status and save the initial storage/station bootstrap config.
+- `LogbookService` local QSO CRUD, ADIF import/export, and local sync-status reporting are implemented against the active storage backend. QRZ sync remains planned, and `GetSyncStatus` still reports QRZ fields as zero/absent until remote sync lands.
 
 The proto contract is considered stable for additive changes. Client code generated from the proto files will continue to compile as new fields and RPCs are added. See [client-integration.md](client-integration.md#schema-evolution-and-compatibility) for field tolerance guidance.
 
@@ -54,6 +61,8 @@ The proto contract is considered stable for additive changes. Client code genera
 
 - [Client Integration Guide](client-integration.md) — generating stubs, connecting, browser transport
 - [Workflow Examples](workflows.md) — request/response shapes for common flows
+- [SetupService Reference](setup-service.md)
+- [StationProfileService Reference](station-profile-service.md)
 - [LookupService Reference](lookup-service.md)
 - [LogbookService Reference](logbook-service.md)
 - [Data Model Architecture](../architecture/data-model.md) — architecture-oriented context for domain types

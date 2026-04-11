@@ -26,6 +26,12 @@
     <Protobuf Include="..\..\..\proto\services\debug_control_service.proto"
               ProtoRoot="..\..\..\proto"
               GrpcServices="Client" />
+    <Protobuf Include="..\..\..\proto\services\setup_service.proto"
+              ProtoRoot="..\..\..\proto"
+              GrpcServices="Client" />
+    <Protobuf Include="..\..\..\proto\services\station_profile_service.proto"
+              ProtoRoot="..\..\..\proto"
+              GrpcServices="Client" />
   </ItemGroup>
 
   <ItemGroup>

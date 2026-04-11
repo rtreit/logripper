@@ -122,5 +122,82 @@ public class DebugWorkbenchStateTests
         Assert.Equal("CN87", state.GetEngineEnvironmentOverrides()["LOGRIPPER_STATION_GRID"]);
         Assert.Equal(EngineStorageBackend.Memory, state.EngineStorageBackend);
     }
+
+    [Fact]
+    public void Update_setup_status_syncs_persisted_sqlite_defaults()
+    {
+        var state = new DebugWorkbenchState(Options.Create(new DebugWorkbenchOptions()));
+
+        state.UpdateSetupStatus(new SetupStatusResponse
+        {
+            ConfigFileExists = true,
+            SetupComplete = true,
+            ConfigPath = @".\config\config.toml",
+            StorageBackend = StorageBackend.Sqlite,
+            SqlitePath = @".\data\portable-logripper.db",
+            StationProfile = new StationProfile
+            {
+                StationCallsign = "K7RND",
+                Grid = "CN87"
+            }
+        });
+
+        Assert.NotNull(state.SetupStatus);
+        Assert.Null(state.SetupErrorMessage);
+        Assert.Equal(EngineStorageBackend.Sqlite, state.EngineStorageBackend);
+        Assert.Equal(@".\data\portable-logripper.db", state.EngineSqlitePath);
+    }
+
+    [Fact]
+    public void Update_station_profiles_tracks_catalog_and_effective_context()
+    {
+        var state = new DebugWorkbenchState(Options.Create(new DebugWorkbenchOptions()));
+        var catalog = new ListStationProfilesResponse
+        {
+            ActiveProfileId = "home",
+            Profiles =
+            {
+                new StationProfileRecord
+                {
+                    ProfileId = "home",
+                    IsActive = true,
+                    Profile = new StationProfile
+                    {
+                        ProfileName = "Home",
+                        StationCallsign = "K7RND"
+                    }
+                }
+            }
+        };
+        var context = new GetActiveStationContextResponse
+        {
+            PersistedActiveProfileId = "home",
+            PersistedActiveProfile = new StationProfile
+            {
+                ProfileName = "Home",
+                StationCallsign = "K7RND"
+            },
+            EffectiveActiveProfile = new StationProfile
+            {
+                ProfileName = "POTA",
+                StationCallsign = "K7RND/P"
+            },
+            HasSessionOverride = true,
+            SessionOverrideProfile = new StationProfile
+            {
+                ProfileName = "POTA",
+                StationCallsign = "K7RND/P"
+            }
+        };
+
+        state.UpdateStationProfiles(catalog, context);
+
+        Assert.NotNull(state.StationProfileCatalog);
+        Assert.NotNull(state.ActiveStationContext);
+        Assert.Null(state.StationProfileErrorMessage);
+        Assert.Equal("home", state.StationProfileCatalog.ActiveProfileId);
+        Assert.Equal("K7RND/P", state.ActiveStationContext.EffectiveActiveProfile.StationCallsign);
+        Assert.True(state.ActiveStationContext.HasSessionOverride);
+    }
 }
 #pragma warning restore CA1707

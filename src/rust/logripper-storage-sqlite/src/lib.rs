@@ -478,6 +478,10 @@ mod tests {
         let qso = QsoRecordBuilder::new("W1AW", "K7ABC")
             .band(Band::Band20m)
             .mode(Mode::Ft8)
+            .timestamp(Timestamp {
+                seconds: 1_700_000_000,
+                nanos: 0,
+            })
             .build();
 
         let stored = engine.log_qso(qso).await.unwrap();

@@ -48,6 +48,8 @@ Proto files under `proto/` are the **single source of truth** for all shared typ
 
 | Service | Purpose |
 |---|---|
+| **SetupService** | First-run setup, persisted config status, bootstrap storage/station defaults |
+| **StationProfileService** | Persisted station profile CRUD, active profile selection, bounded session overrides |
 | **LookupService** | Callsign lookups -- single, streaming, batch, cached, DXCC |
 | **LogbookService** | QSO CRUD, QRZ logbook sync, ADIF import/export |
 
@@ -135,6 +137,7 @@ The server can now swap storage implementations at startup:
 cd src\rust
 cargo run -p logripper-server -- --storage memory
 cargo run -p logripper-server -- --storage sqlite --sqlite-path .\data\logripper.db
+cargo run -p logripper-server -- --config .\config\logripper.toml
 ```
 
 Equivalent environment variables are also supported:
@@ -142,8 +145,14 @@ Equivalent environment variables are also supported:
 ```powershell
 $env:LOGRIPPER_STORAGE_BACKEND = "sqlite"
 $env:LOGRIPPER_SQLITE_PATH = ".\data\logripper.db"
+$env:LOGRIPPER_CONFIG_PATH = ".\config\logripper.toml"
 cargo run -p logripper-server
 ```
+
+When no explicit config override is provided, the server uses a persisted setup file at:
+
+- **Windows:** `%APPDATA%\logripper\config.toml`
+- **Linux:** `~/.config/logripper/config.toml` (or `XDG_CONFIG_HOME`)
 
 ### Local engine configuration
 
@@ -172,6 +181,8 @@ LOGRIPPER_QRZ_XML_CAPTURE_ONLY=true
 In capture mode, LogRipper builds the outgoing QRZ XML request and returns redacted request diagnostics without sending any HTTP traffic to QRZ.
 
 You can also set `LOGRIPPER_STATION_*` values in `.env` to define the active station profile that the Rust engine snapshots into newly logged QSOs.
+
+For the new first-run bootstrap surface, `SetupService` persists the engine's storage choice, initial station profile, and optional QRZ XML credentials to `config.toml`, then hot-applies those persisted values to the running engine. After setup, `StationProfileService` manages additional station profiles, persisted active-profile selection, and bounded in-memory session overrides for portable or event operation. The Debug Host `/engine` page now exposes setup and station-profile editor forms for these contract surfaces, so local bootstrap/profile lifecycle testing no longer requires `grpcurl`.
 
 ### Local lookup debug workflow
 
