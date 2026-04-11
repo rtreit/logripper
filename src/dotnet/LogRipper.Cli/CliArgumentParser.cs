@@ -54,7 +54,9 @@ internal static class CliArgumentParser
                 continue;
             }
 
-            if (command is not null && callsign is null && !arg.StartsWith('-'))
+            var commandNeedsCallsign = command is "lookup" or "stream-lookup" or "cache-check" or "log" or "get" or "delete" or "import";
+
+            if (command is not null && callsign is null && !arg.StartsWith('-') && commandNeedsCallsign)
             {
                 callsign = arg;
                 continue;

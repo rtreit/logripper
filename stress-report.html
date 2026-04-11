@@ -1,0 +1,413 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>LogRipper Stress Test Report</title>
+<style>
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; margin: 2rem; background: #f8f9fa; color: #212529; }
+    h1 { margin-bottom: 0.25rem; }
+    .timestamp { color: #6c757d; margin-bottom: 1.5rem; }
+    .status-badge { display: inline-block; padding: 0.4rem 1rem; border-radius: 4px; color: white; font-weight: bold; font-size: 1.1rem; }
+    .section { background: white; border: 1px solid #dee2e6; border-radius: 6px; padding: 1.5rem; margin-bottom: 1.5rem; }
+    .section h2 { margin-top: 0; }
+    table { border-collapse: collapse; width: 100%; }
+    th, td { text-align: left; padding: 0.5rem 0.75rem; border-bottom: 1px solid #dee2e6; }
+    th { background: #e9ecef; }
+    .metric { display: inline-block; margin-right: 2rem; }
+    .metric-value { font-size: 1.5rem; font-weight: bold; }
+    .metric-label { color: #6c757d; font-size: 0.85rem; }
+    code { background: #e9ecef; padding: 0.15rem 0.4rem; border-radius: 3px; font-size: 0.9rem; }
+    pre { background: #1e1e1e; color: #d4d4d4; padding: 1rem; border-radius: 6px; overflow-x: auto; font-size: 0.8rem; max-height: 400px; }
+</style>
+</head>
+<body>
+<h1>LogRipper Stress Test Report</h1>
+<div class="timestamp">2026-04-11 15:57:54</div>
+
+<div class="section">
+    <h2>Overall Status</h2>
+    <span class="status-badge" style="background: #dc3545;">PANICS FOUND (1 unique)</span>
+    <div style="margin-top: 1rem;">
+        <div class="metric"><div class="metric-value">60,082</div><div class="metric-label">gRPC calls</div></div>
+        <div class="metric"><div class="metric-value">0</div><div class="metric-label">INTERNAL errors</div></div>
+        <div class="metric"><div class="metric-value">31</div><div class="metric-label">server panics (total hits)</div></div>
+        <div class="metric"><div class="metric-value">1</div><div class="metric-label">unique panic sites</div></div>
+    </div>
+</div>
+
+<div class="section">
+    <h2>Configuration</h2>
+    <table>
+        <tr><td>Parallelism</td><td>100 concurrent tasks</td></tr>
+        <tr><td>Duration</td><td>15s</td></tr>
+        <tr><td>Server port</td><td>50051</td></tr>
+        <tr><td>Storage backend</td><td>memory</td></tr>
+        <tr><td>RUST_BACKTRACE</td><td>1</td></tr>
+    </table>
+</div>
+
+<div class="section">
+    <h2>Layer 1: Rust In-Process Test</h2>
+    <span class="status-badge" style="background: #28a745;">PASSED (0 panics)</span>
+    <p style="margin-top: 0.5rem;">Calls engine library functions directly with adversarial inputs (ADIF fuzzing, QSO chaos, concurrent lookups, FFI abuse, band/mode parsing).</p>
+</div>
+
+<div class="section">
+    <h2>Layer 2: C# gRPC Stress Client</h2>
+    <p>Fires 100 parallel tasks for 15s against the running server.</p>
+    <h3>Server Panics Detected</h3>
+    <table>
+        <thead><tr><th>#</th><th>Location</th><th>Message</th><th>Thread</th></tr></thead>
+        <tbody>
+            <tr>
+                <td>1</td>
+                <td><code>logripper-storage-memory\src\lib.rs:240:9:</code></td>
+                <td>attempt to add with overflow</td>
+                <td>tokio-rt-worker</td>
+            </tr>
+        </tbody>
+    </table>
+</div>
+
+<div class="section">
+    <h2>Server Panic Backtraces</h2>
+    <pre>
+thread &#39;tokio-rt-worker&#39; panicked at logripper-storage-memory\src\lib.rs:240:9:
+attempt to add with overflow
+stack backtrace:
+   0: std::panicking::begin_panic_handler
+             at /rustc/6b00bc3880198600130e1cf62b8f8a93494488cc/library\std\src\panicking.rs:697
+   1: core::panicking::panic_fmt
+             at /rustc/6b00bc3880198600130e1cf62b8f8a93494488cc/library\core\src\panicking.rs:75
+   2: core::panicking::panic_const::panic_const_add_overflow
+             at /rustc/6b00bc3880198600130e1cf62b8f8a93494488cc/library\core\src\panicking.rs:175
+   3: logripper_storage_memory::timestamp_to_millis::closure$0
+             at C:\src\github\rtreit\logripper\src\rust\logripper-storage-memory\src\lib.rs:240
+   4: enum2$&lt;core::option::Option&lt;ref$&lt;prost_types::protobuf::Timestamp&gt; &gt; &gt;::map_or&lt;ref$&lt;prost_types::protobuf::Timestamp&gt;,i64,logripper_storage_memory::timestamp_to_millis::closure_env$0&gt;
+             at /rustc/6b00bc3880198600130e1cf62b8f8a93494488cc\library\core\src\option.rs:1203
+   5: logripper_storage_memory::timestamp_to_millis
+             at C:\src\github\rtreit\logripper\src\rust\logripper-storage-memory\src\lib.rs:239
+   6: logripper_storage_memory::matches_query
+             at C:\src\github\rtreit\logripper\src\rust\logripper-storage-memory\src\lib.rs:190
+   7: logripper_storage_memory::impl$5::list_qsos::async_block$0::closure$0
+             at C:\src\github\rtreit\logripper\src\rust\logripper-storage-memory\src\lib.rs:86
+   8: core::ops::function::impls::impl$3::call_mut&lt;tuple$&lt;ref$&lt;ref$&lt;logripper_core::proto::logripper::domain::QsoRecord&gt; &gt; &gt;,logripper_storage_memory::impl$5::list_qsos::async_block$0::closure_env$0&gt;
+             at /rustc/6b00bc3880198600130e1cf62b8f8a93494488cc\library\core\src\ops\function.rs:294
+   9: core::iter::traits::iterator::Iterator::find::check::closure$0&lt;ref$&lt;logripper_core::proto::logripper::domain::QsoRecord&gt;,ref_mut$&lt;logripper_storage_memory::impl$5::list_qsos::async_block$0::closure_env$0&gt; &gt;
+             at /rustc/6b00bc3880198600130e1cf62b8f8a93494488cc\library\core\src\iter\traits\iterator.rs:2858
+  10: core::iter::traits::iterator::Iterator::try_fold&lt;alloc::collections::btree::map::Values&lt;alloc::string::String,logripper_core::proto::logripper::domain::QsoRecord&gt;,tuple$&lt;&gt;,core::iter::traits::iterator::Iterator::find::check::closure_env$0&lt;ref$&lt;logripper_co
+             at /rustc/6b00bc3880198600130e1cf62b8f8a93494488cc\library\core\src\iter\traits\iterator.rs:2400
+  11: core::iter::traits::iterator::Iterator::find&lt;alloc::collections::btree::map::Values&lt;alloc::string::String,logripper_core::proto::logripper::domain::QsoRecord&gt;,ref_mut$&lt;logripper_storage_memory::impl$5::list_qsos::async_block$0::closure_env$0&gt; &gt;
+             at /rustc/6b00bc3880198600130e1cf62b8f8a93494488cc\library\core\src\iter\traits\iterator.rs:2862
+  12: core::iter::adapters::filter::impl$3::next&lt;alloc::collections::btree::map::Values&lt;alloc::string::String,logripper_core::proto::logripper::domain::QsoRecord&gt;,logripper_storage_memory::impl$5::list_qsos::async_block$0::closure_env$0&gt;
+             at /rustc/6b00bc3880198600130e1cf62b8f8a93494488cc\library\core\src\iter\adapters\filter.rs:98
+  13: core::iter::adapters::cloned::impl$1::next&lt;core::iter::adapters::filter::Filter&lt;alloc::collections::btree::map::Values&lt;alloc::string::String,logripper_core::proto::logripper::domain::QsoRecord&gt;,logripper_storage_memory::impl$5::list_qsos::async_block$0::cl
+             at /rustc/6b00bc3880198600130e1cf62b8f8a93494488cc\library\core\src\iter\adapters\cloned.rs:41
+  14: alloc::vec::spec_from_iter_nested::impl$0::from_iter&lt;logripper_core::proto::logripper::domain::QsoRecord,core::iter::adapters::cloned::Cloned&lt;core::iter::adapters::filter::Filter&lt;alloc::collections::btree::map::Values&lt;alloc::string::String,logripper_core::
+             at /rustc/6b00bc3880198600130e1cf62b8f8a93494488cc\library\alloc\src\vec\spec_from_iter_nested.rs:25
+  15: alloc::vec::spec_from_iter::impl$0::from_iter&lt;logripper_core::proto::logripper::domain::QsoRecord,core::iter::adapters::cloned::Cloned&lt;core::iter::adapters::filter::Filter&lt;alloc::collections::btree::map::Values&lt;alloc::string::String,logripper_core::proto::
+             at /rustc/6b00bc3880198600130e1cf62b8f8a93494488cc\library\alloc\src\vec\spec_from_iter.rs:34
+  16: alloc::vec::impl$15::from_iter&lt;logripper_core::proto::logripper::domain::QsoRecord,core::iter::adapters::cloned::Cloned&lt;core::iter::adapters::filter::Filter&lt;alloc::collections::btree::map::Values&lt;alloc::string::String,logripper_core::proto::logripper::doma
+             at /rustc/6b00bc3880198600130e1cf62b8f8a93494488cc\library\alloc\src\vec\mod.rs:3438
+  17: core::iter::traits::iterator::Iterator::collect&lt;core::iter::adapters::cloned::Cloned&lt;core::iter::adapters::filter::Filter&lt;alloc::collections::btree::map::Values&lt;alloc::string::String,logripper_core::proto::logripper::domain::QsoRecord&gt;,logripper_storage_me
+             at /rustc/6b00bc3880198600130e1cf62b8f8a93494488cc\library\core\src\iter\traits\iterator.rs:2001
+  18: logripper_storage_memory::impl$5::list_qsos::async_block$0
+             at C:\src\github\rtreit\logripper\src\rust\logripper-storage-memory\src\lib.rs:83
+  19: core::future::future::impl$1::poll&lt;alloc::boxed::Box&lt;dyn$&lt;core::future::future::Future&lt;assoc$&lt;Output,enum2$&lt;core::result::Result&lt;alloc::vec::Vec&lt;logripper_core::proto::logripper::domain::QsoRecord,alloc::alloc::Global&gt;,enum2$&lt;logripper_core::storage::error
+             at /rustc/6b00bc3880198600130e1cf62b8f8a93494488cc\library\core\src\future\future.rs:124
+  20: logripper_core::application::logbook::impl$0::list_qsos::async_fn$0
+             at C:\src\github\rtreit\logripper\src\rust\logripper-core\src\application\logbook.rs:171
+  21: logripper_server::impl$5::export_adif::async_block$0
+             at C:\src\github\rtreit\logripper\src\rust\logripper-server\src\main.rs:430
+  22: core::future::future::impl$1::poll&lt;alloc::boxed::Box&lt;dyn$&lt;core::future::future::Future&lt;assoc$&lt;Output,enum2$&lt;core::result::Result&lt;tonic::response::Response&lt;tokio_stream::wrappers::mpsc_bounded::ReceiverStream&lt;enum2$&lt;core::result::Result&lt;logripper_core::prot
+             at /rustc/6b00bc3880198600130e1cf62b8f8a93494488cc\library\core\src\future\future.rs:124
+  23: logripper_core::proto::logripper::services::logbook_service_server::impl$1::call::impl$8::call::async_block$0&lt;logripper_server::DeveloperLogbookService&gt;
+             at C:\src\github\rtreit\logripper\src\rust\target\debug\build\logripper-core-38fccdae57ed09f8\out\logripper.services.rs:1959
+  24: core::future::future::impl$1::poll&lt;alloc::boxed::Box&lt;dyn$&lt;core::future::future::Future&lt;assoc$&lt;Output,enum2$&lt;core::result::Result&lt;tonic::response::Response&lt;tokio_stream::wrappers::mpsc_bounded::ReceiverStream&lt;enum2$&lt;core::result::Result&lt;logripper_core::prot
+             at /rustc/6b00bc3880198600130e1cf62b8f8a93494488cc\library\core\src\future\future.rs:124
+  25: tonic::server::grpc::impl$0::server_streaming::async_fn$0&lt;tonic::codec::prost::ProstCodec&lt;logripper_core::proto::logripper::services::ExportAdifResponse,logripper_core::proto::logripper::services::ExportAdifRequest&gt;,logripper_core::proto::logripper::servic
+             at C:\Users\mtreit\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tonic-0.12.3\src\server\grpc.rs:294
+  26: logripper_core::proto::logripper::services::logbook_service_server::impl$1::call::async_block$8&lt;logripper_server::DeveloperLogbookService,http_body_util::combinators::box_body::UnsyncBoxBody&lt;bytes::bytes::Bytes,tonic::status::Status&gt; &gt;
+             at C:\src\github\rtreit\logripper\src\rust\target\debug\build\logripper-core-38fccdae57ed09f8\out\logripper.services.rs:1981
+  27: core::future::future::impl$1::poll&lt;alloc::boxed::Box&lt;dyn$&lt;core::future::future::Future&lt;assoc$&lt;Output,enum2$&lt;core::result::Result&lt;http::response::Response&lt;http_body_util::combinators::box_body::UnsyncBoxBody&lt;bytes::bytes::Bytes,tonic::status::Status&gt; &gt;,enum
+             at /rustc/6b00bc3880198600130e1cf62b8f8a93494488cc\library\core\src\future\future.rs:124
+  28: futures_core::future::impl$2::try_poll&lt;core::pin::Pin&lt;alloc::boxed::Box&lt;dyn$&lt;core::future::future::Future&lt;assoc$&lt;Output,enum2$&lt;core::result::Result&lt;http::response::Response&lt;http_body_util::combinators::box_body::UnsyncBoxBody&lt;bytes::bytes::Bytes,tonic::sta
+             at C:\Users\mtreit\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\futures-core-0.3.32\src\future.rs:92
+  29: futures_util::future::try_future::into_future::impl$2::poll&lt;core::pin::Pin&lt;alloc::boxed::Box&lt;dyn$&lt;core::future::future::Future&lt;assoc$&lt;Output,enum2$&lt;core::result::Result&lt;http::response::Response&lt;http_body_util::combinators::box_body::UnsyncBoxBody&lt;bytes::by
+             at C:\Users\mtreit\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\futures-util-0.3.32\src\future\try_future\into_future.rs:34
+  30: futures_util::future::future::map::impl$2::poll&lt;futures_util::future::try_future::into_future::IntoFuture&lt;core::pin::Pin&lt;alloc::boxed::Box&lt;dyn$&lt;core::future::future::Future&lt;assoc$&lt;Output,enum2$&lt;core::result::Result&lt;http::response::Response&lt;http_body_util::
+             at C:\Users\mtreit\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\futures-util-0.3.32\src\future\future\map.rs:55
+  31: futures_util::future::future::impl$15::poll&lt;futures_util::future::try_future::into_future::IntoFuture&lt;core::pin::Pin&lt;alloc::boxed::Box&lt;dyn$&lt;core::future::future::Future&lt;assoc$&lt;Output,enum2$&lt;core::result::Result&lt;http::response::Response&lt;http_body_util::comb
+             at C:\Users\mtreit\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\futures-util-0.3.32\src\lib.rs:85
+  32: futures_util::future::try_future::impl$56::poll&lt;core::pin::Pin&lt;alloc::boxed::Box&lt;dyn$&lt;core::future::future::Future&lt;assoc$&lt;Output,enum2$&lt;core::result::Result&lt;http::response::Response&lt;http_body_util::combinators::box_body::UnsyncBoxBody&lt;bytes::bytes::Bytes,t
+             at C:\Users\mtreit\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\futures-util-0.3.32\src\lib.rs:85
+  33: tower::util::map_response::impl$10::poll&lt;core::pin::Pin&lt;alloc::boxed::Box&lt;dyn$&lt;core::future::future::Future&lt;assoc$&lt;Output,enum2$&lt;core::result::Result&lt;http::response::Response&lt;http_body_util::combinators::box_body::UnsyncBoxBody&lt;bytes::bytes::Bytes,tonic::s
+             at C:\Users\mtreit\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tower-0.5.3\src\macros.rs:38
+  34: core::future::future::impl$1::poll&lt;alloc::boxed::Box&lt;dyn$&lt;core::future::future::Future&lt;assoc$&lt;Output,enum2$&lt;core::result::Result&lt;http::response::Response&lt;axum_core::body::Body&gt;,enum2$&lt;core::convert::Infallible&gt; &gt; &gt; &gt; &gt;,core::marker::Send&gt;,alloc::alloc::Glo
+             at /rustc/6b00bc3880198600130e1cf62b8f8a93494488cc\library\core\src\future\future.rs:124
+  35: tower::util::oneshot::impl$3::poll&lt;tower::util::boxed_clone::BoxCloneService&lt;http::request::Request&lt;axum_core::body::Body&gt;,http::response::Response&lt;axum_core::body::Body&gt;,enum2$&lt;core::convert::Infallible&gt; &gt;,http::request::Request&lt;axum_core::body::Body&gt; &gt;
+             at C:\Users\mtreit\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tower-0.5.3\src\util\oneshot.rs:96
+  36: axum::routing::route::impl$5::poll&lt;enum2$&lt;core::convert::Infallible&gt; &gt;
+             at C:\Users\mtreit\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\axum-0.7.9\src\routing\route.rs:182
+  37: tonic::service::router::impl$6::poll
+             at C:\Users\mtreit\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tonic-0.12.3\src\service\router.rs:161
+  38: tonic::transport::service::grpc_timeout::impl$2::poll&lt;tonic::service::router::RoutesFuture,http::response::Response&lt;http_body_util::combinators::box_body::UnsyncBoxBody&lt;bytes::bytes::Bytes,tonic::status::Status&gt; &gt;,alloc::boxed::Box&lt;dyn$&lt;core::error::Error,
+             at C:\Users\mtreit\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tonic-0.12.3\src\transport\service\grpc_timeout.rs:83
+  39: tower::util::either::impl$1::poll&lt;tower::limit::concurrency::future::ResponseFuture&lt;tonic::transport::service::grpc_timeout::ResponseFuture&lt;tonic::service::router::RoutesFuture&gt; &gt;,tonic::transport::service::grpc_timeout::ResponseFuture&lt;tonic::service::rout
+             at C:\Users\mtreit\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tower-0.4.13\src\util\either.rs:71
+  40: tonic::transport::server::service::recover_error::impl$2::poll&lt;enum2$&lt;tower::util::either::Either&lt;tower::limit::concurrency::future::ResponseFuture&lt;tonic::transport::service::grpc_timeout::ResponseFuture&lt;tonic::service::router::RoutesFuture&gt; &gt;,tonic::trans
+             at C:\Users\mtreit\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tonic-0.12.3\src\transport\server\service\recover_error.rs:60
+  41: tonic::transport::server::impl$8::poll&lt;tonic::transport::server::service::recover_error::ResponseFuture&lt;enum2$&lt;tower::util::either::Either&lt;tower::limit::concurrency::future::ResponseFuture&lt;tonic::transport::service::grpc_timeout::ResponseFuture&lt;tonic::serv
+             at C:\Users\mtreit\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tonic-0.12.3\src\transport\server\mod.rs:984
+  42: core::future::future::impl$1::poll&lt;alloc::boxed::Box&lt;dyn$&lt;core::future::future::Future&lt;assoc$&lt;Output,enum2$&lt;core::result::Result&lt;http::response::Response&lt;http_body_util::combinators::box_body::UnsyncBoxBody&lt;bytes::bytes::Bytes,tonic::status::Status&gt; &gt;,allo
+             at /rustc/6b00bc3880198600130e1cf62b8f8a93494488cc\library\core\src\future\future.rs:124
+  43: hyper_util::service::oneshot::impl$1::poll&lt;tower::util::map_request::MapRequest&lt;tower::util::boxed_clone::BoxCloneService&lt;http::request::Request&lt;http_body_util::combinators::box_body::UnsyncBoxBody&lt;bytes::bytes::Bytes,tonic::status::Status&gt; &gt;,http::respons
+             at C:\Users\mtreit\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\hyper-util-0.1.20\src\service\oneshot.rs:54
+  44: hyper_util::service::glue::impl$2::poll&lt;tower::util::map_request::MapRequest&lt;tower::util::boxed_clone::BoxCloneService&lt;http::request::Request&lt;http_body_util::combinators::box_body::UnsyncBoxBody&lt;bytes::bytes::Bytes,tonic::status::Status&gt; &gt;,http::response::
+             at C:\Users\mtreit\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\hyper-util-0.1.20\src\service\glue.rs:70
+  45: hyper::proto::h2::server::H2Stream&lt;hyper_util::service::glue::TowerToHyperServiceFuture&lt;tower::util::map_request::MapRequest&lt;tower::util::boxed_clone::BoxCloneService&lt;http::request::Request&lt;http_body_util::combinators::box_body::UnsyncBoxBody&lt;bytes::bytes:
+             at C:\Users\mtreit\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\hyper-1.9.0\src\proto\h2\server.rs:446
+  46: hyper::proto::h2::server::impl$6::poll&lt;hyper_util::service::glue::TowerToHyperServiceFuture&lt;tower::util::map_request::MapRequest&lt;tower::util::boxed_clone::BoxCloneService&lt;http::request::Request&lt;http_body_util::combinators::box_body::UnsyncBoxBody&lt;bytes::by
+             at C:\Users\mtreit\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\hyper-1.9.0\src\proto\h2\server.rs:544
+  47: tokio::runtime::task::core::impl$6::poll::closure$0&lt;hyper::proto::h2::server::H2Stream&lt;hyper_util::service::glue::TowerToHyperServiceFuture&lt;tower::util::map_request::MapRequest&lt;tower::util::boxed_clone::BoxCloneService&lt;http::request::Request&lt;http_body_util
+             at C:\Users\mtreit\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tokio-1.51.1\src\runtime\task\core.rs:375
+  48: tokio::loom::std::unsafe_cell::UnsafeCell&lt;enum2$&lt;tokio::runtime::task::core::Stage&lt;hyper::proto::h2::server::H2Stream&lt;hyper_util::service::glue::TowerToHyperServiceFuture&lt;tower::util::map_request::MapRequest&lt;tower::util::boxed_clone::BoxCloneService&lt;http::
+             at C:\Users\mtreit\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tokio-1.51.1\src\loom\std\unsafe_cell.rs:16
+  49: tokio::runtime::task::core::Core&lt;hyper::proto::h2::server::H2Stream&lt;hyper_util::service::glue::TowerToHyperServiceFuture&lt;tower::util::map_request::MapRequest&lt;tower::util::boxed_clone::BoxCloneService&lt;http::request::Request&lt;http_body_util::combinators::box_
+             at C:\Users\mtreit\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tokio-1.51.1\src\runtime\task\core.rs:364
+  50: tokio::runtime::task::harness::poll_future::closure$0&lt;hyper::proto::h2::server::H2Stream&lt;hyper_util::service::glue::TowerToHyperServiceFuture&lt;tower::util::map_request::MapRequest&lt;tower::util::boxed_clone::BoxCloneService&lt;http::request::Request&lt;http_body_ut
+             at C:\Users\mtreit\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tokio-1.51.1\src\runtime\task\harness.rs:535
+  51: core::panic::unwind_safe::impl$25::call_once&lt;enum2$&lt;core::task::poll::Poll&lt;tuple$&lt;&gt; &gt; &gt;,tokio::runtime::task::harness::poll_future::closure_env$0&lt;hyper::proto::h2::server::H2Stream&lt;hyper_util::service::glue::TowerToHyperServiceFuture&lt;tower::util::map_reque
+             at /rustc/6b00bc3880198600130e1cf62b8f8a93494488cc\library\core\src\panic\unwind_safe.rs:272
+  52: std::panicking::try::do_call&lt;core::panic::unwind_safe::AssertUnwindSafe&lt;tokio::runtime::task::harness::poll_future::closure_env$0&lt;hyper::proto::h2::server::H2Stream&lt;hyper_util::service::glue::TowerToHyperServiceFuture&lt;tower::util::map_request::MapRequest&lt;t
+             at /rustc/6b00bc3880198600130e1cf62b8f8a93494488cc\library\std\src\panicking.rs:589
+  53: std::panic::catch_unwind&lt;core::panic::unwind_safe::AssertUnwindSafe&lt;tokio::runtime::task::harness::impl$2::complete::closure_env$0&lt;hyper::proto::h2::server::H2Stream&lt;hyper_util::service::glue::TowerToHyperServiceFuture&lt;tower::util::map_request::MapRequest&lt;
+  54: std::panicking::try
+             at /rustc/6b00bc3880198600130e1cf62b8f8a93494488cc\library\std\src\panicking.rs:552
+  55: std::panic::catch_unwind&lt;core::panic::unwind_safe::AssertUnwindSafe&lt;tokio::runtime::task::harness::poll_future::closure_env$0&lt;hyper::proto::h2::server::H2Stream&lt;hyper_util::service::glue::TowerToHyperServiceFuture&lt;tower::util::map_request::MapRequest&lt;tower
+             at /rustc/6b00bc3880198600130e1cf62b8f8a93494488cc\library\std\src\panic.rs:359
+  56: tokio::runtime::task::harness::poll_future&lt;hyper::proto::h2::server::H2Stream&lt;hyper_util::service::glue::TowerToHyperServiceFuture&lt;tower::util::map_request::MapRequest&lt;tower::util::boxed_clone::BoxCloneService&lt;http::request::Request&lt;http_body_util::combina
+             at C:\Users\mtreit\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tokio-1.51.1\src\runtime\task\harness.rs:523
+  57: tokio::runtime::task::harness::Harness&lt;hyper::proto::h2::server::H2Stream&lt;hyper_util::service::glue::TowerToHyperServiceFuture&lt;tower::util::map_request::MapRequest&lt;tower::util::boxed_clone::BoxCloneService&lt;http::request::Request&lt;http_body_util::combinators
+             at C:\Users\mtreit\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tokio-1.51.1\src\runtime\task\harness.rs:210
+  58: tokio::runtime::task::harness::Harness&lt;hyper::proto::h2::server::H2Stream&lt;hyper_util::service::glue::TowerToHyperServiceFuture&lt;tower::util::map_request::MapRequest&lt;tower::util::boxed_clone::BoxCloneService&lt;http::request::Request&lt;http_body_util::combinators
+             at C:\Users\mtreit\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tokio-1.51.1\src\runtime\task\harness.rs:155
+  59: tokio::runtime::task::raw::poll&lt;hyper::proto::h2::server::H2Stream&lt;hyper_util::service::glue::TowerToHyperServiceFuture&lt;tower::util::map_request::MapRequest&lt;tower::util::boxed_clone::BoxCloneService&lt;http::request::Request&lt;http_body_util::combinators::box_b
+             at C:\Users\mtreit\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tokio-1.51.1\src\runtime\task\raw.rs:337
+  60: tokio::runtime::task::raw::RawTask::poll
+             at C:\Users\mtreit\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tokio-1.51.1\src\runtime\task\raw.rs:267
+  61: tokio::runtime::task::LocalNotified&lt;alloc::sync::Arc&lt;tokio::runtime::scheduler::multi_thread::handle::Handle,alloc::alloc::Global&gt; &gt;::run&lt;alloc::sync::Arc&lt;tokio::runtime::scheduler::multi_thread::handle::Handle,alloc::alloc::Global&gt; &gt;
+             at C:\Users\mtreit\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tokio-1.51.1\src\runtime\task\mod.rs:515
+  62: tokio::runtime::scheduler::multi_thread::worker::impl$1::run_task::closure$0
+             at C:\Users\mtreit\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tokio-1.51.1\src\runtime\scheduler\multi_thread\worker.rs:642
+  63: tokio::task::coop::with_budget
+             at C:\Users\mtreit\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tokio-1.51.1\src\task\coop\mod.rs:167
+  64: tokio::task::coop::budget
+             at C:\Users\mtreit\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tokio-1.51.1\src\task\coop\mod.rs:133
+  65: tokio::runtime::scheduler::multi_thread::worker::Context::run_task
+             at C:\Users\mtreit\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tokio-1.51.1\src\runtime\scheduler\multi_thread\worker.rs:633
+  66: tokio::runtime::scheduler::multi_thread::worker::Context::run
+             at C:\Users\mtreit\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tokio-1.51.1\src\runtime\scheduler\multi_thread\worker.rs:578
+  67: tokio::runtime::scheduler::multi_thread::worker::run::closure$0::closure$0
+             at C:\Users\mtreit\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tokio-1.51.1\src\runtime\scheduler\multi_thread\worker.rs:531
+  68: tokio::runtime::context::scoped::Scoped&lt;enum2$&lt;tokio::runtime::scheduler::Context&gt; &gt;::set&lt;enum2$&lt;tokio::runtime::scheduler::Context&gt;,tokio::runtime::scheduler::multi_thread::worker::run::closure$0::closure_env$0,tuple$&lt;&gt; &gt;
+             at C:\Users\mtreit\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tokio-1.51.1\src\runtime\context\scoped.rs:40
+  69: tokio::runtime::context::set_scheduler::closure$0&lt;tuple$&lt;&gt;,tokio::runtime::scheduler::multi_thread::worker::run::closure$0::closure_env$0&gt;
+             at C:\Users\mtreit\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tokio-1.51.1\src\runtime\context.rs:181
+  70: std::thread::local::LocalKey&lt;tokio::runtime::context::Context&gt;::try_with&lt;tokio::runtime::context::Context,tokio::runtime::context::set_scheduler::closure_env$0&lt;tuple$&lt;&gt;,tokio::runtime::scheduler::multi_thread::worker::run::closure$0::closure_env$0&gt;,tuple$&lt;
+             at /rustc/6b00bc3880198600130e1cf62b8f8a93494488cc\library\std\src\thread\local.rs:315
+  71: std::thread::local::LocalKey&lt;tokio::runtime::context::Context&gt;::with&lt;tokio::runtime::context::Context,tokio::runtime::context::set_scheduler::closure_env$0&lt;tuple$&lt;&gt;,tokio::runtime::scheduler::multi_thread::worker::run::closure$0::closure_env$0&gt;,tuple$&lt;&gt; &gt;
+             at /rustc/6b00bc3880198600130e1cf62b8f8a93494488cc\library\std\src\thread\local.rs:279
+  72: tokio::runtime::context::set_scheduler&lt;tuple$&lt;&gt;,tokio::runtime::scheduler::multi_thread::worker::run::closure$0::closure_env$0&gt;
+             at C:\Users\mtreit\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tokio-1.51.1\src\runtime\context.rs:181
+  73: tokio::runtime::scheduler::multi_thread::worker::run::closure$0
+             at C:\Users\mtreit\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tokio-1.51.1\src\runtime\scheduler\multi_thread\worker.rs:526
+  74: tokio::runtime::context::runtime::enter_runtime&lt;tokio::runtime::scheduler::multi_thread::worker::run::closure_env$0,tuple$&lt;&gt; &gt;
+             at C:\Users\mtreit\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tokio-1.51.1\src\runtime\context\runtime.rs:65
+  75: tokio::runtime::scheduler::multi_thread::worker::run
+             at C:\Users\mtreit\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tokio-1.51.1\src\runtime\scheduler\multi_thread\worker.rs:518
+  76: tokio::runtime::scheduler::multi_thread::worker::impl$0::launch::closure$0
+             at C:\Users\mtreit\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tokio-1.51.1\src\runtime\scheduler\multi_thread\worker.rs:484
+  77: tokio::runtime::blocking::task::impl$2::poll&lt;tokio::runtime::scheduler::multi_thread::worker::impl$0::launch::closure_env$0,tuple$&lt;&gt; &gt;
+             at C:\Users\mtreit\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tokio-1.51.1\src\runtime\blocking\task.rs:42
+  78: tokio::runtime::task::core::impl$6::poll::closure$0&lt;tokio::runtime::blocking::task::BlockingTask&lt;tokio::runtime::scheduler::multi_thread::worker::impl$0::launch::closure_env$0&gt;,tokio::runtime::blocking::schedule::BlockingSchedule&gt;
+             at C:\Users\mtreit\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tokio-1.51.1\src\runtime\task\core.rs:375
+  79: tokio::loom::std::unsafe_cell::UnsafeCell&lt;enum2$&lt;tokio::runtime::task::core::Stage&lt;tokio::runtime::blocking::task::BlockingTask&lt;tokio::runtime::scheduler::multi_thread::worker::impl$0::launch::closure_env$0&gt; &gt; &gt; &gt;::with_mut
+             at C:\Users\mtreit\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tokio-1.51.1\src\loom\std\unsafe_cell.rs:16
+  80: tokio::runtime::task::core::Core&lt;tokio::runtime::blocking::task::BlockingTask&lt;tokio::runtime::scheduler::multi_thread::worker::impl$0::launch::closure_env$0&gt;,tokio::runtime::blocking::schedule::BlockingSchedule&gt;::poll&lt;tokio::runtime::blocking::task::Blocki
+             at C:\Users\mtreit\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tokio-1.51.1\src\runtime\task\core.rs:364
+  81: tokio::runtime::task::harness::poll_future::closure$0&lt;tokio::runtime::blocking::task::BlockingTask&lt;tokio::runtime::scheduler::multi_thread::worker::impl$0::launch::closure_env$0&gt;,tokio::runtime::blocking::schedule::BlockingSchedule&gt;
+             at C:\Users\mtreit\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tokio-1.51.1\src\runtime\task\harness.rs:535
+  82: core::panic::unwind_safe::impl$25::call_once&lt;enum2$&lt;core::task::poll::Poll&lt;tuple$&lt;&gt; &gt; &gt;,tokio::runtime::task::harness::poll_future::closure_env$0&lt;tokio::runtime::blocking::task::BlockingTask&lt;tokio::runtime::scheduler::multi_thread::worker::impl$0::launch::
+             at /rustc/6b00bc3880198600130e1cf62b8f8a93494488cc\library\core\src\panic\unwind_safe.rs:272
+  83: std::panicking::try::do_call&lt;core::panic::unwind_safe::AssertUnwindSafe&lt;tokio::runtime::task::harness::poll_future::closure_env$0&lt;tokio::runtime::blocking::task::BlockingTask&lt;tokio::runtime::scheduler::multi_thread::worker::impl$0::launch::closure_env$0&gt;,t
+             at /rustc/6b00bc3880198600130e1cf62b8f8a93494488cc\library\std\src\panicking.rs:589
+  84: tokio::runtime::time::entry::_::impl$2::drop::__drop_inner
+  85: std::panicking::try
+             at /rustc/6b00bc3880198600130e1cf62b8f8a93494488cc\library\std\src\panicking.rs:552
+  86: std::panic::catch_unwind&lt;core::panic::unwind_safe::AssertUnwindSafe&lt;tokio::runtime::task::harness::poll_future::closure_env$0&lt;tokio::runtime::blocking::task::BlockingTask&lt;tokio::runtime::scheduler::multi_thread::worker::impl$0::launch::closure_env$0&gt;,tokio
+             at /rustc/6b00bc3880198600130e1cf62b8f8a93494488cc\library\std\src\panic.rs:359
+  87: tokio::runtime::task::harness::poll_future&lt;tokio::runtime::blocking::task::BlockingTask&lt;tokio::runtime::scheduler::multi_thread::worker::impl$0::launch::closure_env$0&gt;,tokio::runtime::blocking::schedule::BlockingSchedule&gt;
+             at C:\Users\mtreit\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tokio-1.51.1\src\runtime\task\harness.rs:523
+  88: tokio::runtime::task::harness::Harness&lt;tokio::runtime::blocking::task::BlockingTask&lt;tokio::runtime::scheduler::multi_thread::worker::impl$0::launch::closure_env$0&gt;,tokio::runtime::blocking::schedule::BlockingSchedule&gt;::poll_inner&lt;tokio::runtime::blocking::
+             at C:\Users\mtreit\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tokio-1.51.1\src\runtime\task\harness.rs:210
+  89: tokio::runtime::task::harness::Harness&lt;tokio::runtime::blocking::task::BlockingTask&lt;tokio::runtime::scheduler::multi_thread::worker::impl$0::launch::closure_env$0&gt;,tokio::runtime::blocking::schedule::BlockingSchedule&gt;::poll&lt;tokio::runtime::blocking::task::
+             at C:\Users\mtreit\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tokio-1.51.1\src\runtime\task\harness.rs:155
+  90: tokio::runtime::task::raw::poll&lt;tokio::runtime::blocking::task::BlockingTask&lt;tokio::runtime::scheduler::multi_thread::worker::impl$0::launch::closure_env$0&gt;,tokio::runtime::blocking::schedule::BlockingSchedule&gt;
+             at C:\Users\mtreit\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tokio-1.51.1\src\runtime\task\raw.rs:337
+  91: tokio::runtime::task::raw::RawTask::poll
+             at C:\Users\mtreit\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tokio-1.51.1\src\runtime\task\raw.rs:267
+  92: tokio::runtime::task::UnownedTask&lt;tokio::runtime::blocking::schedule::BlockingSchedule&gt;::run&lt;tokio::runtime::blocking::schedule::BlockingSchedule&gt;
+             at C:\Users\mtreit\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tokio-1.51.1\src\runtime\task\mod.rs:552
+  93: tokio::runtime::blocking::pool::Task::run
+             at C:\Users\mtreit\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tokio-1.51.1\src\runtime\blocking\pool.rs:161
+  94: tokio::runtime::blocking::pool::Inner::run
+             at C:\Users\mtreit\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tokio-1.51.1\src\runtime\blocking\pool.rs:518
+  95: tokio::runtime::blocking::pool::impl$6::spawn_thread::closure$0
+             at C:\Users\mtreit\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tokio-1.51.1\src\runtime\blocking\pool.rs:474
+  96: core::hint::black_box
+             at /rustc/6b00bc3880198600130e1cf62b8f8a93494488cc\library\core\src\hint.rs:482
+note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+
+thread &#39;tokio-rt-worker&#39; panicked at logripper-storage-memory\src\lib.rs:240:9:
+attempt to add with overflow
+stack backtrace:
+   0: std::panicking::begin_panic_handler
+             at /rustc/6b00bc3880198600130e1cf62b8f8a93494488cc/library\std\src\panicking.rs:697
+   1: core::panicking::panic_fmt
+             at /rustc/6b00bc3880198600130e1cf62b8f8a93494488cc/library\core\src\panicking.rs:75
+   2: core::panicking::panic_const::panic_const_add_overflow
+             at /rustc/6b00bc3880198600130e1cf62b8f8a93494488cc/library\core\src\panicking.rs:175
+   3: logripper_storage_memory::timestamp_to_millis::closure$0
+             at C:\src\github\rtreit\logripper\src\rust\logripper-storage-memory\src\lib.rs:240
+   4: enum2$&lt;core::option::Option&lt;ref$&lt;prost_types::protobuf::Timestamp&gt; &gt; &gt;::map_or&lt;ref$&lt;prost_types::protobuf::Timestamp&gt;,i64,logripper_storage_memory::timestamp_to_millis::closure_env$0&gt;
+             at /rustc/6b00bc3880198600130e1cf62b8f8a93494488cc\library\core\src\option.rs:1203
+   5: logripper_storage_memory::timestamp_to_millis
+             at C:\src\github\rtreit\logripper\src\rust\logripper-storage-memory\src\lib.rs:239
+   6: logripper_storage_memory::matches_query
+             at C:\src\github\rtreit\logripper\src\rust\logripper-storage-memory\src\lib.rs:190
+   7: logripper_storage_memory::impl$5::list_qsos::async_block$0::closure$0
+             at C:\src\github\rtreit\logripper\src\rust\logripper-storage-memory\src\lib.rs:86
+   8: core::ops::function::impls::impl$3::call_mut&lt;tuple$&lt;ref$&lt;ref$&lt;logripper_core::proto::logripper::domain::QsoRecord&gt; &gt; &gt;,logripper_storage_memory::impl$5::list_qsos::async_block$0::closure_env$0&gt;
+             at /rustc/6b00bc3880198600130e1cf62b8f8a93494488cc\library\core\src\ops\function.rs:294
+   9: core::iter::traits::iterator::Iterator::find::check::closure$0&lt;ref$&lt;logripper_core::proto::logripper::domain::QsoRecord&gt;,ref_mut$&lt;logripper_storage_memory::impl$5::list_qsos::async_block$0::closure_env$0&gt; &gt;
+             at /rustc/6b00bc3880198600130e1cf62b8f8a93494488cc\library\core\src\iter\traits\iterator.rs:2858
+  10: core::iter::traits::iterator::Iterator::try_fold&lt;alloc::collections::btree::map::Values&lt;alloc::string::String,logripper_core::proto::logripper::domain::QsoRecord&gt;,tuple$&lt;&gt;,core::iter::traits::iterator::Iterator::find::check::closure_env$0&lt;ref$&lt;logripper_co
+             at /rustc/6b00bc3880198600130e1cf62b8f8a93494488cc\library\core\src\iter\traits\iterator.rs:2400
+  11: core::iter::traits::iterator::Iterator::find&lt;alloc::collections::btree::map::Values&lt;alloc::string::String,logripper_core::proto::logripper::domain::QsoRecord&gt;,ref_mut$&lt;logripper_storage_memory::impl$5::list_qsos::async_block$0::closure_env$0&gt; &gt;
+             at /rustc/6b00bc3880198600130e1cf62b8f8a93494488cc\library\core\src\iter\traits\iterator.rs:2862
+  12: core::iter::adapters::filter::impl$3::next&lt;alloc::collections::btree::map::Values&lt;alloc::string::String,logripper_core::proto::logripper::domain::QsoRecord&gt;,logripper_storage_memory::impl$5::list_qsos::async_block$0::closure_env$0&gt;
+             at /rustc/6b00bc3880198600130e1cf62b8f8a93494488cc\library\core\src\iter\adapters\filter.rs:98
+  13: core::iter::adapters::cloned::impl$1::next&lt;core::iter::adapters::filter::Filter&lt;alloc::collections::btree::map::Values&lt;alloc::string::String,logripper_core::proto::logripper::domain::QsoRecord&gt;,logripper_storage_memory::impl$5::list_qsos::async_block$0::cl
+             at /rustc/6b00bc3880198600130e1cf62b8f8a93494488cc\library\core\src\iter\adapters\cloned.rs:41
+  14: alloc::vec::spec_from_iter_nested::impl$0::from_iter&lt;logripper_core::proto::logripper::domain::QsoRecord,core::iter::adapters::cloned::Cloned&lt;core::iter::adapters::filter::Filter&lt;alloc::collections::btree::map::Values&lt;alloc::string::String,logripper_core::
+             at /rustc/6b00bc3880198600130e1cf62b8f8a93494488cc\library\alloc\src\vec\spec_from_iter_nested.rs:25
+  15: alloc::vec::spec_from_iter::impl$0::from_iter&lt;logripper_core::proto::logripper::domain::QsoRecord,core::iter::adapters::cloned::Cloned&lt;core::iter::adapters::filter::Filter&lt;alloc::collections::btree::map::Values&lt;alloc::string::String,logripper_core::proto::
+             at /rustc/6b00bc3880198600130e1cf62b8f8a93494488cc\library\alloc\src\vec\spec_from_iter.rs:34
+  16: alloc::vec::impl$15::from_iter&lt;logripper_core::proto::logripper::domain::QsoRecord,core::iter::adapters::cloned::Cloned&lt;core::iter::adapters::filter::Filter&lt;alloc::collections::btree::map::Values&lt;alloc::string::String,logripper_core::proto::logripper::doma
+             at /rustc/6b00bc3880198600130e1cf62b8f8a93494488cc\library\alloc\src\vec\mod.rs:3438
+  17: core::iter::traits::iterator::Iterator::collect&lt;core::iter::adapters::cloned::Cloned&lt;core::iter::adapters::filter::Filter&lt;alloc::collections::btree::map::Values&lt;alloc::string::String,logripper_core::proto::logripper::domain::QsoRecord&gt;,logripper_storage_me
+             at /rustc/6b00bc3880198600130e1cf62b8f8a93494488cc\library\core\src\iter\traits\iterator.rs:2001
+  18: logripper_storage_memory::impl$5::list_qsos::async_block$0
+             at C:\src\github\rtreit\logripper\src\rust\logripper-storage-memory\src\lib.rs:83
+  19: core::future::future::impl$1::poll&lt;alloc::boxed::Box&lt;dyn$&lt;core::future::future::Future&lt;assoc$&lt;Output,enum2$&lt;core::result::Result&lt;alloc::vec::Vec&lt;logripper_core::proto::logripper::domain::QsoRecord,alloc::alloc::Global&gt;,enum2$&lt;logripper_core::storage::error
+             at /rustc/6b00bc3880198600130e1cf62b8f8a93494488cc\library\core\src\future\future.rs:124
+  20: logripper_core::application::logbook::impl$0::list_qsos::async_fn$0
+             at C:\src\github\rtreit\logripper\src\rust\logripper-core\src\application\logbook.rs:171
+  21: logripper_server::impl$5::export_adif::async_block$0
+             at C:\src\github\rtreit\logripper\src\rust\logripper-server\src\main.rs:430
+  22: core::future::future::impl$1::poll&lt;alloc::boxed::Box&lt;dyn$&lt;core::future::future::Future&lt;assoc$&lt;Output,enum2$&lt;core::result::Result&lt;tonic::response::Response&lt;tokio_stream::wrappers::mpsc_bounded::ReceiverStream&lt;enum2$&lt;core::result::Result&lt;logripper_core::prot
+             at /rustc/6b00bc3880198600130e1cf62b8f8a93494488cc\library\core\src\future\future.rs:124
+  23: logripper_core::proto::logripper::services::logbook_service_server::impl$1::call::impl$8::call::async_block$0&lt;logripper_server::DeveloperLogbookService&gt;
+             at C:\src\github\rtreit\logripper\src\rust\target\debug\build\logripper-core-38fccdae57ed09f8\out\logripper.services.rs:1959
+  24: core::future::future::impl$1::poll&lt;alloc::boxed::Box&lt;dyn$&lt;core::future::future::Future&lt;assoc$&lt;Output,enum2$&lt;core::result::Result&lt;tonic::response::Response&lt;tokio_stream::wrappers::mpsc_bounded::ReceiverStream&lt;enum2$&lt;core::result::Result&lt;logripper_core::prot
+             at /rustc/6b00bc3880198600130e1cf62b8f8a93494488cc\library\core\src\future\future.rs:124
+  25: tonic::server::grpc::impl$0::server_streaming::async_fn$0&lt;tonic::codec::prost::ProstCodec&lt;logripper_core::proto::logripper::services::ExportAdifResponse,logripper_core::proto::logripper::services::ExportAdifRequest&gt;,logripper_core::proto::logripper::servic
+             at C:\Users\mtreit\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tonic-0.12.3\src\server\grpc.rs:294
+  26: logripper_core::proto::logripper::services::logbook_service_server::impl$1::call::async_block$8&lt;logripper_server::DeveloperLogbookService,http_body_util::combinators::box_body::UnsyncBoxBody&lt;bytes::bytes::Bytes,tonic::status::Status&gt; &gt;
+             at C:\src\github\rtreit\logripper\src\rust\target\debug\build\logripper-core-38fccdae57ed09f8\out\logripper.services.rs:1981
+  27: core::future::future::impl$1::poll&lt;alloc::boxed::Box&lt;dyn$&lt;core::future::future::Future&lt;assoc$&lt;Output,enum2$&lt;core::result::Result&lt;http::response::Response&lt;http_body_util::combinators::box_body::UnsyncBoxBody&lt;bytes::bytes::Bytes,tonic::status::Status&gt; &gt;,enum
+             at /rustc/6b00bc3880198600130e1cf62b8f8a93494488cc\library\core\src\future\future.rs:124
+  28: futures_core::future::impl$2::try_poll&lt;core::pin::Pin&lt;alloc::boxed::Box&lt;dyn$&lt;core::future::future::Future&lt;assoc$&lt;Output,enum2$&lt;core::result::Result&lt;http::response::Response&lt;http_body_util::combinators::box_body::UnsyncBoxBody&lt;bytes::bytes::Bytes,tonic::sta
+             at C:\Users\mtreit\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\futures-core-0.3.32\src\future.rs:92
+  29: futures_util::future::try_future::into_future::impl$2::poll&lt;core::pin::Pin&lt;alloc::boxed::Box&lt;dyn$&lt;core::future::future::Future&lt;assoc$&lt;Output,enum2$&lt;core::result::Result&lt;http::response::Response&lt;http_body_util::combinators::box_body::UnsyncBoxBody&lt;bytes::by
+             at C:\Users\mtreit\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\futures-util-0.3.32\src\future\try_future\into_future.rs:34
+  30: futures_util::future::future::map::impl$2::poll&lt;futures_util::future::try_future::into_future::IntoFuture&lt;core::pin::Pin&lt;alloc::boxed::Box&lt;dyn$&lt;core::future::future::Future&lt;assoc$&lt;Output,enum2$&lt;core::result::Result&lt;http::response::Response&lt;http_body_util::
+             at C:\Users\mtreit\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\futures-util-0.3.32\src\future\future\map.rs:55
+  31: futures_util::future::future::impl$15::poll&lt;futures_util::future::try_future::into_future::IntoFuture&lt;core::pin::Pin&lt;alloc::boxed::Box&lt;dyn$&lt;core::future::future::Future&lt;assoc$&lt;Output,enum2$&lt;core::result::Result&lt;http::response::Response&lt;http_body_util::comb
+             at C:\Users\mtreit\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\futures-util-0.3.32\src\lib.rs:85
+  32: futures_util::future::try_future::impl$56::poll&lt;core::pin::Pin&lt;alloc::boxed::Box&lt;dyn$&lt;core::future::future::Future&lt;assoc$&lt;Output,enum2$&lt;core::result::Result&lt;http::response::Response&lt;http_body_util::combinators::box_body::UnsyncBoxBody&lt;bytes::bytes::Bytes,t
+             at C:\Users\mtreit\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\futures-util-0.3.32\src\lib.rs:85
+  33: tower::util::map_response::impl$10::poll&lt;core::pin::Pin&lt;alloc::boxed::Box&lt;dyn$&lt;core::future::future::Future&lt;assoc$&lt;Output,enum2$&lt;core::result::Result&lt;http::response::Response&lt;http_body_util::combinators::box_body::UnsyncBoxBody&lt;bytes::bytes::Bytes,tonic::s
+             at C:\Users\mtreit\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tower-0.5.3\src\macros.rs:38
+  34: core::future::future::impl$1::poll&lt;alloc::boxed::Box&lt;dyn$&lt;core::future::future::Future&lt;assoc$&lt;Output,enum2$&lt;core::result::Result&lt;http::response::Response&lt;axum_core::body::Body&gt;,enum2$&lt;core::convert::Infallible&gt; &gt; &gt; &gt; &gt;,core::marker::Send&gt;,alloc::alloc::Glo
+             at /rustc/6b00bc3880198600130e1cf62b8f8a93494488cc\library\core\src\future\future.rs:124
+  35: tower::util::oneshot::impl$3::poll&lt;tower::util::boxed_clone::BoxCloneService&lt;http::request::Request&lt;axum_core::body::Body&gt;,http::response::Response&lt;axum_core::body::Body&gt;,enum2$&lt;core::convert::Infallible&gt; &gt;,http::request::Request&lt;axum_core::body::Body&gt; &gt;
+             at C:\Users\mtreit\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tower-0.5.3\src\util\oneshot.rs:96
+  36: axum::routing::route::impl$5::poll&lt;enum2$&lt;core::convert::Infallible&gt; &gt;
+             at C:\Users\mtreit\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\axum-0.7.9\src\routing\route.rs:182
+  37: tonic::service::router::impl$6::poll
+             at C:\Users\mtreit\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tonic-0.12.3\src\service\router.rs:161
+  38: tonic::transport::service::grpc_timeout::impl$2::poll&lt;tonic::service::router::RoutesFuture,http::response::Response&lt;http_body_util::combinators::box_body::UnsyncBoxBody&lt;bytes::bytes::Bytes,tonic::status::Status&gt; &gt;,alloc::boxed::Box&lt;dyn$&lt;core::error::Error,
+             at C:\Users\mtreit\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tonic-0.12.3\src\transport\service\grpc_timeout.rs:83
+  39: tower::util::either::impl$1::poll&lt;tower::limit::concurrency::future::ResponseFuture&lt;tonic::transport::service::grpc_timeout::ResponseFuture&lt;tonic::service::router::RoutesFuture&gt; &gt;,tonic::transport::service::grpc_timeout::ResponseFuture&lt;tonic::service::rout
+             at C:\Users\mtreit\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tower-0.4.13\src\util\either.rs:71
+  40: tonic::transport::server::service::recover_error::impl$2::poll&lt;enum2$&lt;tower::util::either::Either&lt;tower::limit::concurrency::future::ResponseFuture&lt;tonic::transport::service::grpc_timeout::ResponseFuture&lt;tonic::service::router::RoutesFuture&gt; &gt;,tonic::trans
+             at C:\Users\mtreit\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tonic-0.12.3\src\transport\server\service\recover_error.rs:60
+  41: tonic::transport::server::impl$8::poll&lt;tonic::transport::server::service::recover_error::ResponseFuture&lt;enum2$&lt;tower::util::either::Either&lt;tower::limit::concurrency::future::ResponseFuture&lt;tonic::transport::service::grpc_timeout::ResponseFuture&lt;tonic::serv
+             at C:\Users\mtreit\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tonic-0.12.3\src\transport\server\mod.rs:984
+  42: core::future::future::impl$1::poll&lt;alloc::boxed::Box&lt;dyn$&lt;core::future::future::Future&lt;assoc$&lt;Output,enum2$&lt;core::result::Result&lt;http::response::Response&lt;http_body_util::combinators::box_body::UnsyncBoxBody&lt;bytes::bytes::Bytes,tonic::status::Status&gt; &gt;,allo
+             at /rustc/6b00bc3880198600130e1cf62b8f8a93494488cc\library\core\src\future\future.rs:124
+  43: hyper_util::service::oneshot::impl$1::poll&lt;tower::util::map_request::MapRequest&lt;tower::util::boxed_clone::BoxCloneService&lt;http::request::Request&lt;http_body_util::combinators::box_body::UnsyncBoxBody&lt;bytes::bytes::Bytes,tonic::status::Status&gt; &gt;,http::respons
+             at C:\Users\mtreit\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\hyper-util-0.1.20\src\service\oneshot.rs:54
+  44: hyper_util::service::glue::impl$2::poll&lt;tower::util::map_request::MapRequest&lt;tower::util::boxed_clone::BoxCloneService&lt;http::request::Request&lt;http_body_util::combinators::box_body::UnsyncBoxBody&lt;bytes::bytes::Bytes,tonic::status::Status&gt; &gt;,http::response::
+             at C:\Users\mtreit\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\hyper-util-0.1.20\src\service\glue.rs:70
+  45: hyper::proto::h2::server::H2Stream&lt;hyper_util::service::glue::TowerToHyperServiceFuture&lt;tower::util::map_request::MapRequest&lt;tower::util::boxed_clone::BoxCloneService&lt;http::request::Request&lt;http_body_util::combinators::box_body::UnsyncBoxBody&lt;bytes::bytes:
+             at C:\Users\mtreit\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\hyper-1.9.0\src\proto\h2\server.rs:446
+  46: hyper::proto::h2::server::impl$6::poll&lt;hyper_util::service::glue::TowerToHyperServiceFuture&lt;tower::util::map_request::MapRequest&lt;tower::util::boxed_clone::BoxCloneService&lt;http::request::Request&lt;http_body_util::combinators::box_body::UnsyncBoxBody&lt;bytes::by
+             at C:\Users\mtreit\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\hyper-1.9.0\src\proto\h2\server.rs:544
+  47: tokio::runtime::task::core::impl$6::poll::closure$0&lt;hyper::proto::h2::server::H2Stream&lt;hyper_util::service::glue::TowerToHyperServiceFuture&lt;tower::util::map_request::MapRequest&lt;tower::util::boxed_clone::BoxCloneService&lt;http::request::Request&lt;http_body_util
+             at C:\Users\mtreit\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tokio-1.51.1\src\runtime\task\core.rs:375
+  48: tokio::loom::std::unsafe_cell::UnsafeCell&lt;enum2$&lt;tokio::runtime::task::core::Stage&lt;hyper::proto::h2::server::H2Stream&lt;hyper_util::service::glue::TowerToHyperServiceFuture&lt;tower::util::map_request::MapRequest&lt;tower::util::boxed_clone::BoxCloneService&lt;http::
+             at C:\Users\mtreit\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tokio-1.51.1\src\loom\std\unsafe_cell.rs:16
+  49: tokio::runtime::task::core::Core&lt;hyper::proto::h2::server::H2Stream&lt;hyper_util::service::glue::TowerToHyperServiceFuture&lt;tower::util::map_request::MapRequest&lt;tower::util::boxed_clone::BoxCloneService&lt;http::request::Request&lt;http_body_util::combinators::box_
+             at C:\Users\mtreit\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tokio-1.51.1\src\runtime\task\core.rs:364
+  50: tokio::runtime::task::harness::poll_future::closure$0&lt;hyper::proto::h2::server::H2Stream&lt;hyper_util::service::glue::TowerToHyperServiceFuture&lt;tower::util::map_request::MapRequest&lt;tower::util::boxed_clone::BoxCloneService&lt;http::request::Request&lt;http_body_ut
+             at C:\Users\mtreit\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tokio-1.51.1\src\runtime\task\harness.rs:535
+  51: core::panic::unwind_safe::impl$25::call_once&lt;enum2$&lt;core::task::poll::Poll&lt;tuple$&lt;&gt; &gt; &gt;,tokio::runtime::task::harness::poll_future::closure_env$0&lt;hyper::proto::h2::server::H2Stream&lt;hyper_util::service::glue::TowerToHyperServiceFuture&lt;tower::util::map_reque
+             at /rustc/6b00bc3880198600130e1cf62b8f8a93494488cc\library\core\src\panic\unwind_safe.rs:272
+  52: std::panicking::try::do_call&lt;core::panic::unwind_safe::AssertUnwindSafe&lt;tokio::runtime::task::harness::poll_future::closure_env$0&lt;hyper::proto::h2::server::H2Stream&lt;hyper_util::service::glue::TowerToHyperServiceFuture&lt;tower::util::map_request::MapRequest&lt;t
+             at /rustc/6b00bc3880198600130e1cf62b8f8a93494488cc\library\std\src\panicking.rs:589
+  53: std::panic::catch_unwind&lt;core::panic::unwind_safe::AssertUnwindSafe&lt;tokio::runtime::task::harness::impl$2::complete::closure_env$0&lt;hyper::proto::h2::server::H2Stream&lt;hyper_util::service::glue::TowerToHyperServiceFuture&lt;tower::util::map_request::MapRequest&lt;
+  54: std::panicking::try
+             at /rustc/6b00bc3880198600130e1cf62b8f8a93494488cc\library\std\src\panicking.rs:552
+  55: std::panic::catch_unwind&lt;core::panic::unwind_safe::AssertUnwindSafe&lt;tokio::runtime::task::harness::poll_future::closure_env$0&lt;hyper::proto::h2::server::H2Stream&lt;hyper_util::service::glue::TowerToHyperServiceFuture&lt;tower::util::map_request::MapRequest&lt;tower
+             at /rustc/6b00bc3880198600130e1cf62b8f8a93494488cc\library\std\src\panic.rs:359
+  56: tokio::runtime::task::harness::poll_fu
+... (truncated)</pre>
+</div>
+
+<div class="section">
+    <h2>C# Client Output</h2>
+    <pre>LogRipper gRPC Stress Client
+  Target:      http://localhost:50051
+  Parallelism: 100
+  Duration:    15s
+
+Starting stress vectors...
+
+============================================================
+STRESS TEST RESULTS
+============================================================
+  Duration:        00:00:15.1350316
+  Total calls:     60,082
+  INTERNAL errors: 0 (potential server panics)
+  Other errors:    0
+
+No server panics detected (no INTERNAL/UNKNOWN gRPC status codes).
+============================================================
+</pre>
+</div>
+
+</body>
+</html>
