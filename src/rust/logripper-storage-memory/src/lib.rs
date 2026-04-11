@@ -237,7 +237,10 @@ fn matches_query(record: &QsoRecord, query: &QsoListQuery) -> bool {
 
 fn timestamp_to_millis(timestamp: Option<&prost_types::Timestamp>) -> i64 {
     timestamp.map_or(0, |value| {
-        value.seconds.saturating_mul(1_000) + i64::from(value.nanos) / 1_000_000
+        value
+            .seconds
+            .saturating_mul(1_000)
+            .saturating_add(i64::from(value.nanos) / 1_000_000)
     })
 }
 
@@ -363,5 +366,25 @@ mod tests {
 
         assert_eq!(loaded.callsign, "W1AW");
         assert_eq!(loaded.result.state, LookupState::Found as i32);
+    }
+
+    #[test]
+    fn timestamp_to_millis_saturates_positive_overflow() {
+        let value = super::timestamp_to_millis(Some(&Timestamp {
+            seconds: i64::MAX,
+            nanos: 999_999_999,
+        }));
+
+        assert_eq!(value, i64::MAX);
+    }
+
+    #[test]
+    fn timestamp_to_millis_saturates_negative_overflow() {
+        let value = super::timestamp_to_millis(Some(&Timestamp {
+            seconds: i64::MIN,
+            nanos: -999_999_999,
+        }));
+
+        assert_eq!(value, i64::MIN);
     }
 }

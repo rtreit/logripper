@@ -447,7 +447,12 @@ fn map_sqlite_error(error: sqlite::Error) -> StorageError {
 }
 
 fn timestamp_to_millis(timestamp: Option<&prost_types::Timestamp>) -> Option<i64> {
-    timestamp.map(|value| value.seconds.saturating_mul(1_000) + i64::from(value.nanos) / 1_000_000)
+    timestamp.map(|value| {
+        value
+            .seconds
+            .saturating_mul(1_000)
+            .saturating_add(i64::from(value.nanos) / 1_000_000)
+    })
 }
 
 fn millis_to_timestamp(millis: Option<i64>) -> Option<prost_types::Timestamp> {
@@ -561,5 +566,25 @@ mod tests {
 
         assert_eq!(loaded.callsign, "W1AW");
         assert_eq!(loaded.result.state, LookupState::Found as i32);
+    }
+
+    #[test]
+    fn timestamp_to_millis_saturates_positive_overflow() {
+        let value = super::timestamp_to_millis(Some(&Timestamp {
+            seconds: i64::MAX,
+            nanos: 999_999_999,
+        }));
+
+        assert_eq!(value, Some(i64::MAX));
+    }
+
+    #[test]
+    fn timestamp_to_millis_saturates_negative_overflow() {
+        let value = super::timestamp_to_millis(Some(&Timestamp {
+            seconds: i64::MIN,
+            nanos: -999_999_999,
+        }));
+
+        assert_eq!(value, Some(i64::MIN));
     }
 }
