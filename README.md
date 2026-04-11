@@ -182,7 +182,7 @@ In capture mode, LogRipper builds the outgoing QRZ XML request and returns redac
 
 You can also set `LOGRIPPER_STATION_*` values in `.env` to define the active station profile that the Rust engine snapshots into newly logged QSOs.
 
-For the new first-run bootstrap surface, `SetupService` persists the engine's storage choice, initial station profile, and optional QRZ XML credentials to `config.toml`, then hot-applies those persisted values to the running engine. After setup, `StationProfileService` manages additional station profiles, persisted active-profile selection, and bounded in-memory session overrides for portable or event operation. The Debug Host `/engine` page now exposes setup and station-profile editor forms for these contract surfaces, so local bootstrap/profile lifecycle testing no longer requires `grpcurl`.
+For the new first-run bootstrap surface, `SetupService` persists the engine's log file path, initial station profile, and optional QRZ XML credentials to `config.toml`, then hot-applies those persisted values to the running engine. After setup, `StationProfileService` manages additional station profiles, persisted active-profile selection, and bounded in-memory session overrides for portable or event operation. The Debug Host `/engine` page now exposes setup and station-profile editor forms for these contract surfaces, so local bootstrap/profile lifecycle testing no longer requires `grpcurl`.
 
 ### Local lookup debug workflow
 
