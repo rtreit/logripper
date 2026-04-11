@@ -15,10 +15,10 @@ if (!CliEndpointValidator.TryCreateEndpointUri(arguments.Endpoint, out var endpo
     return ShowHelp($"The endpoint '{arguments.Endpoint}' must be a valid absolute http:// or https:// URI.");
 }
 
-var needsCallsign = arguments.Command is "lookup" or "stream-lookup" or "cache-check";
+var needsCallsign = arguments.Command is "lookup" or "stream-lookup" or "cache-check" or "log" or "get" or "delete";
 if (needsCallsign && string.IsNullOrEmpty(arguments.Callsign))
 {
-    Console.Error.WriteLine($"The '{arguments.Command}' command requires a callsign argument.");
+    Console.Error.WriteLine($"The '{arguments.Command}' command requires an argument.");
     return 1;
 }
 
@@ -32,6 +32,14 @@ try
         "lookup" => await LookupCommand.RunAsync(channel, arguments.Callsign!, arguments.SkipCache),
         "stream-lookup" => await StreamLookupCommand.RunAsync(channel, arguments.Callsign!, arguments.SkipCache),
         "cache-check" => await CacheCheckCommand.RunAsync(channel, arguments.Callsign!),
+        "log" => await LogQsoCommand.RunAsync(channel, arguments.Callsign!, arguments.RemainingArgs),
+        "get" => await GetQsoCommand.RunAsync(channel, arguments.Callsign!),
+        "list" => await ListQsosCommand.RunAsync(channel, arguments.RemainingArgs),
+        "delete" => await DeleteQsoCommand.RunAsync(channel, arguments.Callsign!),
+        "import" => await ImportAdifCommand.RunAsync(channel, arguments.Callsign ?? arguments.RemainingArgs.FirstOrDefault() ?? ""),
+        "export" => await ExportAdifCommand.RunAsync(channel, arguments.RemainingArgs),
+        "config" => await ConfigCommand.RunAsync(channel, arguments.RemainingArgs),
+        "setup" => await SetupCommand.RunAsync(channel),
         _ => ShowHelp($"Unknown command: {arguments.Command}")
     };
 }
@@ -55,21 +63,34 @@ static int ShowHelp(string? error = null)
     }
 
     Console.WriteLine("""
-        LogRipper CLI - validate and interact with the LogRipper engine
+        LogRipper CLI
 
         Usage: logripper-cli [options] <command> [arguments]
 
-        Commands:
-          status                         Show engine sync status and QSO counts
-          lookup <callsign>              Look up a callsign via QRZ
-          stream-lookup <callsign>       Streaming lookup with progressive updates
-          cache-check <callsign>         Check if a callsign is in the cache
+        Logbook:
+          log <call> <band> <mode>         Log a QSO (e.g., log W1AW 20m FT8)
+          get <local-id>                   Get a QSO by ID
+          list [filters]                   List QSOs (--callsign, --band, --mode, --limit)
+          delete <local-id>                Delete a QSO
+
+        ADIF:
+          import <file>                    Import QSOs from an ADIF file
+          export [--file out.adi]           Export QSOs to ADIF (stdout or file)
+
+        Lookup:
+          lookup <callsign>                Look up a callsign via QRZ
+          stream-lookup <callsign>         Streaming lookup with progressive updates
+          cache-check <callsign>           Check if a callsign is cached
+
+        Engine:
+          status                           Show sync status and QSO counts
+          config [--set KEY=VALUE]         View or modify runtime config
+          setup                            Check first-run setup status
 
         Options:
-          --endpoint, -e <url>  Engine gRPC endpoint (default: http://localhost:50051)
-                                Also configurable via LOGRIPPER_ENDPOINT env var
-          --skip-cache          Bypass the cache and force a fresh lookup
-          --help, -h            Show this help
+          --endpoint, -e <url>             Engine endpoint (default: http://127.0.0.1:50051)
+          --skip-cache                     Bypass cache for lookup commands
+          --help, -h                       Show this help
         """);
 
     return error is null ? 0 : 1;

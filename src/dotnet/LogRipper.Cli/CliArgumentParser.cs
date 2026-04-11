@@ -13,6 +13,8 @@ internal static class CliArgumentParser
         string? callsign = null;
         var skipCache = false;
 
+        var remaining = new List<string>();
+
         for (var i = 0; i < args.Length; i++)
         {
             var arg = args[i];
@@ -39,21 +41,27 @@ internal static class CliArgumentParser
                 continue;
             }
 
-            if (arg.StartsWith('-'))
-            {
-                return new CliArguments("help", endpoint, ShowHelp: true, Error: $"Unknown option: {arg}");
-            }
-
-            if (command is null)
+            if (command is null && !arg.StartsWith('-'))
             {
                 command = arg;
+                continue;
             }
-            else
+
+            if (command is not null && callsign is null && !arg.StartsWith('-'))
             {
-                callsign ??= arg.ToUpperInvariant();
+                callsign = arg.ToUpperInvariant();
+                continue;
             }
+
+            remaining.Add(arg);
         }
 
-        return new CliArguments(command ?? "help", endpoint, ShowHelp: command is null, Callsign: callsign, SkipCache: skipCache);
+        return new CliArguments(
+            command ?? "help",
+            endpoint,
+            ShowHelp: command is null,
+            Callsign: callsign,
+            SkipCache: skipCache,
+            RemainingArgs: remaining.ToArray());
     }
 }
