@@ -128,7 +128,7 @@ public class DebugWorkbenchStateTests
     {
         var state = new DebugWorkbenchState(Options.Create(new DebugWorkbenchOptions()));
 
-        state.UpdateSetupStatus(new SetupStatusResponse
+        state.UpdateSetupStatus(new SetupStatus
         {
             ConfigFileExists = true,
             SetupComplete = true,
@@ -169,7 +169,7 @@ public class DebugWorkbenchStateTests
                 }
             }
         };
-        var context = new GetActiveStationContextResponse
+        var context = new ActiveStationContext
         {
             PersistedActiveProfileId = "home",
             PersistedActiveProfile = new StationProfile

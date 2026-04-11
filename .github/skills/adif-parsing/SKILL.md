@@ -19,7 +19,8 @@ description: >-
 ## Reference Documents
 
 - `docs/integrations/adif-specification.md` — Comprehensive ADIF 3.1.7 reference
-- `proto/domain/qso.proto` — QsoRecord definition (ADIF maps to/from this)
+- `proto/domain/qso_record.proto` — QsoRecord definition (ADIF maps to/from this)
+- `proto/domain/station_snapshot.proto` — Historical local-station snapshot captured from ADIF/local context
 - Full spec: https://www.adif.org/317/ADIF_317.htm
 - Machine-readable data files: https://adif.org.uk/317/resources
 

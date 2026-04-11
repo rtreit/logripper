@@ -1,0 +1,9 @@
+syntax = "proto3";
+
+package logripper.services;
+
+option csharp_namespace = "LogRipper.Services";
+
+message GetQsoRequest {
+  string local_id = 1;
+}

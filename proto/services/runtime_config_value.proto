@@ -1,0 +1,14 @@
+syntax = "proto3";
+
+package logripper.services;
+
+option csharp_namespace = "LogRipper.Services";
+
+message RuntimeConfigValue {
+  string key = 1;
+  bool has_value = 2;
+  string display_value = 3;
+  bool overridden = 4;
+  bool secret = 5;
+  bool redacted = 6;
+}

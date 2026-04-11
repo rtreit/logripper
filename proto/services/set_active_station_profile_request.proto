@@ -1,0 +1,9 @@
+syntax = "proto3";
+
+package logripper.services;
+
+option csharp_namespace = "LogRipper.Services";
+
+message SetActiveStationProfileRequest {
+  string profile_id = 1;
+}

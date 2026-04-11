@@ -10,6 +10,15 @@ These instructions govern schema and gRPC contract work in `proto/` and any Rust
 - Never hand-edit generated Rust or C# code to "fix" a schema issue. Change the `.proto` file and regenerate through the existing build flow.
 - ADIF is an external interchange format only. Internal IPC and cross-process contracts stay on protobuf + gRPC.
 
+## 1-1-1 and Envelope Rules
+
+- Follow protobuf 1-1-1 by default: one top-level message, enum, or service per `.proto` file.
+- Service declaration files contain only the `service`; request, response, stream item, enum, and support payload types live in their own files.
+- Every RPC gets a unique `XxxRequest` and `XxxResponse` envelope, including streaming RPCs.
+- Transport-only RPC messages belong in `proto/services/`, not `proto/domain/`.
+- If multiple RPCs need the same business payload, extract a separate reusable message and wrap it from each response; do not reuse one RPC response envelope as another RPC's nested model.
+- Exceptions are rare, must be explicit and documented, and never justify skipping per-RPC envelopes.
+
 ## Compatibility Rules
 
 - Prefer additive changes over breaking changes.
@@ -44,6 +53,7 @@ These instructions govern schema and gRPC contract work in `proto/` and any Rust
 ## Current References
 
 - Protocol Buffers language guide: https://protobuf.dev/programming-guides/proto3/
+- Protocol Buffers best practices (1-1-1): https://protobuf.dev/best-practices/1-1-1/
 - Buf lint/breaking overview: https://buf.build/docs/
 - tonic docs: https://docs.rs/tonic/latest/tonic/
 - prost docs: https://docs.rs/prost/latest/prost/

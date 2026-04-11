@@ -4,6 +4,7 @@ using Google.Protobuf.Reflection;
 using Google.Protobuf.WellKnownTypes;
 using LogRipper.DebugHost.Models;
 using LogRipper.Domain;
+using LogRipper.Services;
 
 namespace LogRipper.DebugHost.Services;
 

@@ -1,0 +1,16 @@
+syntax = "proto3";
+
+package logripper.services;
+
+option csharp_namespace = "LogRipper.Services";
+
+message SyncWithQrzResponse {
+  uint32 total_records = 1;
+  uint32 processed_records = 2;
+  uint32 uploaded_records = 3;
+  uint32 downloaded_records = 4;
+  uint32 conflict_records = 5;
+  optional string current_action = 6;  // Human-readable status
+  bool complete = 7;
+  optional string error = 8;
+}

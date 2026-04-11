@@ -1,0 +1,18 @@
+syntax = "proto3";
+
+package logripper.domain;
+
+option csharp_namespace = "LogRipper.Domain";
+
+// DXCC entity information from QRZ DXCC lookup.
+message DxccEntity {
+  uint32 dxcc_code = 1;
+  string country_name = 2;
+  string continent = 3;  // 2-letter code: NA, SA, EU, AF, AS, OC, AN
+  optional uint32 itu_zone = 4;
+  optional uint32 cq_zone = 5;
+  optional double utc_offset = 6;
+  optional double latitude = 7;
+  optional double longitude = 8;
+  optional string notes = 9;
+}

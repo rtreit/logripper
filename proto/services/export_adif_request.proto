@@ -1,0 +1,14 @@
+syntax = "proto3";
+
+package logripper.services;
+
+option csharp_namespace = "LogRipper.Services";
+
+import "google/protobuf/timestamp.proto";
+
+message ExportAdifRequest {
+  optional google.protobuf.Timestamp after = 1;
+  optional google.protobuf.Timestamp before = 2;
+  optional string contest_id = 3;
+  bool include_header = 4;  // ADIF header with version/program info
+}

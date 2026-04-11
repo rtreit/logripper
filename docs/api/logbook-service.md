@@ -4,7 +4,9 @@ The `LogbookService` is the core QSO lifecycle interface. It covers local QSO CR
 
 Proto definition: [`proto/services/logbook_service.proto`](../../proto/services/logbook_service.proto)
 
-Domain types: [`proto/domain/qso.proto`](../../proto/domain/qso.proto)
+Domain payloads: [`proto/domain/qso_record.proto`](../../proto/domain/qso_record.proto), [`proto/domain/band.proto`](../../proto/domain/band.proto), [`proto/domain/mode.proto`](../../proto/domain/mode.proto), [`proto/domain/sync_status.proto`](../../proto/domain/sync_status.proto), [`proto/domain/station_snapshot.proto`](../../proto/domain/station_snapshot.proto)
+
+Service envelopes and support types live in their own files under `proto/services/`. Every RPC uses a unique request/response envelope, including streamed items such as `ListQsosResponse` and `ExportAdifResponse`.
 
 ## Implementation Status
 
@@ -159,7 +161,7 @@ rpc GetQso(GetQsoRequest) returns (GetQsoResponse)
 List QSOs with optional filters, returning results as a server-streaming response.
 
 ```
-rpc ListQsos(ListQsosRequest) returns (stream QsoRecord)
+rpc ListQsos(ListQsosRequest) returns (stream ListQsosResponse)
 ```
 
 > ✅ **Status:** Implemented for local storage.
@@ -176,16 +178,20 @@ rpc ListQsos(ListQsosRequest) returns (stream QsoRecord)
 | `contest_id` | `string` (optional) | Filter by contest ID |
 | `limit` | `uint32` | Maximum records to return; `0` means no limit |
 | `offset` | `uint32` | Skip this many records (for pagination) |
-| `sort` | `SortOrder` | `SORT_ORDER_NEWEST_FIRST` (default) or `SORT_ORDER_OLDEST_FIRST` |
+| `sort` | `QsoSortOrder` | `QSO_SORT_ORDER_NEWEST_FIRST` (default) or `QSO_SORT_ORDER_OLDEST_FIRST` |
 
-**Response stream:** Zero or more `QsoRecord` messages, then stream close.
+**Response stream:** Zero or more `ListQsosResponse` messages, then stream close.
+
+| Field | Type | Description |
+|---|---|---|
+| `qso` | `QsoRecord` | One matched QSO per streamed envelope |
 
 **Behavior:**
 - Results are streamed as they are produced, rather than buffered and returned in a single message. Clients should consume incrementally.
 - All filter fields are optional; omitting all filters returns all QSOs (subject to `limit`/`offset`).
 
 **Notable status codes:**
-- `OK` — zero or more `QsoRecord` items streamed back.
+- `OK` — zero or more `ListQsosResponse` envelopes streamed back.
 
 ---
 
@@ -194,20 +200,20 @@ rpc ListQsos(ListQsosRequest) returns (stream QsoRecord)
 Trigger a full or incremental sync with the QRZ logbook. Progress is streamed back to the client.
 
 ```
-rpc SyncWithQrz(SyncRequest) returns (stream SyncProgress)
+rpc SyncWithQrz(SyncWithQrzRequest) returns (stream SyncWithQrzResponse)
 ```
 
-> ✅ **Status:** Implemented for local ADIF migration import.
+> ⚠️ **Status:** Planned. Currently returns `UNIMPLEMENTED`.
 
-**Request:** `SyncRequest`
+**Request:** `SyncWithQrzRequest`
 
 | Field | Type | Description |
 |---|---|---|
 | `full_sync` | `bool` | `true` = re-fetch all records from QRZ; `false` = incremental (changes since last sync) |
 
-**Response stream:** One or more `SyncProgress` messages, terminated by a message with `complete == true`.
+**Response stream:** One or more `SyncWithQrzResponse` messages, terminated by a message with `complete == true`.
 
-**`SyncProgress` fields:**
+**`SyncWithQrzResponse` fields:**
 
 | Field | Type | Description |
 |---|---|---|
@@ -236,14 +242,14 @@ rpc SyncWithQrz(SyncRequest) returns (stream SyncProgress)
 Get the current sync state and logbook statistics.
 
 ```
-rpc GetSyncStatus(SyncStatusRequest) returns (SyncStatusResponse)
+rpc GetSyncStatus(GetSyncStatusRequest) returns (GetSyncStatusResponse)
 ```
 
 > ✅ **Status:** Implemented for local storage counts. QRZ metadata remains zero/absent until QRZ sync is implemented.
 
-**Request:** `SyncStatusRequest` — empty message, no fields.
+**Request:** `GetSyncStatusRequest` — empty message, no fields.
 
-**Response:** `SyncStatusResponse`
+**Response:** `GetSyncStatusResponse`
 
 | Field | Type | Description |
 |---|---|---|
@@ -265,16 +271,16 @@ rpc GetSyncStatus(SyncStatusRequest) returns (SyncStatusResponse)
 Import QSOs from ADIF data. The client streams chunks of raw ADIF bytes; the server parses and imports them.
 
 ```
-rpc ImportAdif(stream AdifChunk) returns (ImportResult)
+rpc ImportAdif(stream ImportAdifRequest) returns (ImportAdifResponse)
 ```
 
-> ⚠️ **Status:** Planned. Currently returns `UNIMPLEMENTED`.
+> ✅ **Status:** Implemented for local ADIF migration import.
 
-**Request stream:** One or more `AdifChunk` messages, each containing a slice of raw ADIF bytes.
+**Request stream:** One or more `ImportAdifRequest` messages, each containing one `AdifChunk`.
 
 | Field | Type | Description |
 |---|---|---|
-| `data` | `bytes` | Raw ADIF text bytes for this chunk |
+| `chunk` | `AdifChunk` | Wrapper envelope for one raw ADIF byte slice |
 
 **Behavior:**
 - Clients may split large ADIF files into multiple chunks to avoid large single messages.
@@ -284,7 +290,7 @@ rpc ImportAdif(stream AdifChunk) returns (ImportResult)
 - Duplicate policy: a record is skipped when it matches an existing QSO on `station_callsign`, `worked_callsign`, `utc_timestamp`, `band`, `mode`, and compatible `submode` / `frequency_khz`.
 - Invalid core ADIF values such as unknown `BAND`, unknown `MODE`, or invalid `QSO_DATE` / `TIME_ON` combinations are skipped with warnings. Raw ADIF values are still retained in `extra_fields` so later exports stay predictable.
 
-**Response:** `ImportResult`
+**Response:** `ImportAdifResponse`
 
 | Field | Type | Description |
 |---|---|---|
@@ -304,12 +310,12 @@ rpc ImportAdif(stream AdifChunk) returns (ImportResult)
 Export QSOs to ADIF format. The server streams chunks of raw ADIF bytes back to the client.
 
 ```
-rpc ExportAdif(ExportRequest) returns (stream AdifChunk)
+rpc ExportAdif(ExportAdifRequest) returns (stream ExportAdifResponse)
 ```
 
 > ✅ **Status:** Implemented for local ADIF export.
 
-**Request:** `ExportRequest`
+**Request:** `ExportAdifRequest`
 
 | Field | Type | Description |
 |---|---|---|
@@ -318,7 +324,11 @@ rpc ExportAdif(ExportRequest) returns (stream AdifChunk)
 | `contest_id` | `string` (optional) | Export only QSOs for a specific contest |
 | `include_header` | `bool` | Whether to include the ADIF file header with version/program info |
 
-**Response stream:** One or more `AdifChunk` messages containing raw ADIF bytes, then stream close.
+**Response stream:** One or more `ExportAdifResponse` messages containing one `AdifChunk`, then stream close.
+
+| Field | Type | Description |
+|---|---|---|
+| `chunk` | `AdifChunk` | Wrapper envelope for one exported ADIF byte slice |
 
 **Behavior:**
 - Clients should concatenate received chunks to reconstruct the full ADIF payload.
@@ -349,9 +359,9 @@ rpc ExportAdif(ExportRequest) returns (stream AdifChunk)
 | `station_snapshot` | Optional | Immutable local-station metadata captured when the QSO was logged |
 | `extra_fields` | Optional | ADIF fields with no dedicated proto field — preserved for lossless round-trip |
 
-## SortOrder Values
+## QsoSortOrder Values
 
 | Value | Description |
 |---|---|
-| `SORT_ORDER_NEWEST_FIRST` | Default (zero value) — most recent QSOs first |
-| `SORT_ORDER_OLDEST_FIRST` | Oldest QSOs first |
+| `QSO_SORT_ORDER_NEWEST_FIRST` | Default (zero value) — most recent QSOs first |
+| `QSO_SORT_ORDER_OLDEST_FIRST` | Oldest QSOs first |

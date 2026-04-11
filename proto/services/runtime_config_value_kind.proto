@@ -1,0 +1,13 @@
+syntax = "proto3";
+
+package logripper.services;
+
+option csharp_namespace = "LogRipper.Services";
+
+enum RuntimeConfigValueKind {
+  RUNTIME_CONFIG_VALUE_KIND_UNSPECIFIED = 0;
+  RUNTIME_CONFIG_VALUE_KIND_STRING = 1;
+  RUNTIME_CONFIG_VALUE_KIND_BOOLEAN = 2;
+  RUNTIME_CONFIG_VALUE_KIND_INTEGER = 3;
+  RUNTIME_CONFIG_VALUE_KIND_PATH = 4;
+}

@@ -1,0 +1,12 @@
+syntax = "proto3";
+
+package logripper.services;
+
+option csharp_namespace = "LogRipper.Services";
+
+message LogQsoResponse {
+  string local_id = 1;
+  optional string qrz_logid = 2;  // Set if sync_to_qrz was true and succeeded
+  bool sync_success = 3;
+  optional string sync_error = 4;
+}

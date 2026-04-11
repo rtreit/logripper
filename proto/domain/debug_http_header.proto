@@ -1,0 +1,10 @@
+syntax = "proto3";
+
+package logripper.domain;
+
+option csharp_namespace = "LogRipper.Domain";
+
+message DebugHttpHeader {
+  string name = 1;
+  string value = 2;
+}

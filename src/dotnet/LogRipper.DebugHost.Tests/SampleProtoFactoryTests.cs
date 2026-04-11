@@ -89,8 +89,8 @@ public class SampleProtoFactoryTests
     [Fact]
     public void Sync_request_generation_sets_full_sync()
     {
-        var request = Assert.IsType<SyncRequest>(
-            _factory.CreateSampleMessage(typeof(SyncRequest), "AA7BQ"));
+        var request = Assert.IsType<SyncWithQrzRequest>(
+            _factory.CreateSampleMessage(typeof(SyncWithQrzRequest), "AA7BQ"));
 
         Assert.True(request.FullSync);
         Assert.True(request.CalculateSize() > 0);

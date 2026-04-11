@@ -8,7 +8,11 @@ Client → LookupService → LookupCoordinator → CallsignProvider → QrzProvi
 
 Proto definition: [`proto/services/lookup_service.proto`](../../proto/services/lookup_service.proto)
 
-Domain types: [`proto/domain/lookup.proto`](../../proto/domain/lookup.proto), [`proto/domain/callsign.proto`](../../proto/domain/callsign.proto)
+Service envelopes: `lookup_request.proto`, `lookup_response.proto`, `stream_lookup_request.proto`, `stream_lookup_response.proto`, `get_cached_callsign_request.proto`, `get_cached_callsign_response.proto`, `get_dxcc_entity_request.proto`, `get_dxcc_entity_response.proto`, `batch_lookup_request.proto`, `batch_lookup_response.proto`
+
+Domain payloads: [`proto/domain/lookup_result.proto`](../../proto/domain/lookup_result.proto), [`proto/domain/lookup_state.proto`](../../proto/domain/lookup_state.proto), [`proto/domain/callsign_record.proto`](../../proto/domain/callsign_record.proto), [`proto/domain/dxcc_entity.proto`](../../proto/domain/dxcc_entity.proto), [`proto/domain/debug_http_exchange.proto`](../../proto/domain/debug_http_exchange.proto)
+
+All RPCs use unique request/response envelopes. Shared domain payloads stay nested inside those envelopes so each RPC can evolve independently.
 
 ## Implementation Status
 
@@ -27,7 +31,7 @@ Domain types: [`proto/domain/lookup.proto`](../../proto/domain/lookup.proto), [`
 Single unary callsign lookup. Resolves through the cache then provider.
 
 ```
-rpc Lookup(LookupRequest) returns (LookupResult)
+rpc Lookup(LookupRequest) returns (LookupResponse)
 ```
 
 **Request:** `LookupRequest`
@@ -37,20 +41,14 @@ rpc Lookup(LookupRequest) returns (LookupResult)
 | `callsign` | `string` | Callsign to look up (e.g., `"W1AW"`) |
 | `skip_cache` | `bool` | If `true`, bypasses the L1 in-memory cache and forces a fresh provider fetch |
 
-**Response:** `LookupResult`
+**Response:** `LookupResponse`
 
 | Field | Type | Description |
 |---|---|---|
-| `state` | `LookupState` | Terminal state of the lookup (`FOUND`, `NOT_FOUND`, `ERROR`) |
-| `record` | `CallsignRecord` (optional) | Populated when `state == FOUND` |
-| `error_message` | `string` (optional) | Human-readable error when `state == ERROR` |
-| `cache_hit` | `bool` | Whether the result was served from cache |
-| `lookup_latency_ms` | `uint32` | Round-trip latency in milliseconds |
-| `queried_callsign` | `string` | Echo of the original requested callsign |
-| `debug_http_exchanges` | `DebugHttpExchange[]` | Redacted provider request/response capture for debugging provider-backed lookups |
+| `result` | `LookupResult` | Final lookup outcome payload |
 
 **Behavior:**
-- Always returns a single `LookupResult`. The state field signals the outcome.
+- Always returns a single `LookupResponse` envelope whose `result` field carries the lookup outcome.
 - If the provider is not configured (no QRZ credentials), returns `state == ERROR` with a configuration error message.
 - If the callsign is in the L1 cache and `skip_cache` is false, serves the cached result with `cache_hit == true`.
 - Provider-backed results may include redacted `debug_http_exchanges` entries for login and lookup HTTP calls. Cache-only responses leave this list empty.
@@ -86,12 +84,19 @@ Sensitive values are redacted before the exchange is returned to clients. For QR
 Server-streaming lookup that emits progressive state updates as the lookup progresses.
 
 ```
-rpc StreamLookup(LookupRequest) returns (stream LookupResult)
+rpc StreamLookup(StreamLookupRequest) returns (stream StreamLookupResponse)
 ```
 
-**Request:** `LookupRequest` — same as `Lookup`.
+**Request:** `StreamLookupRequest`
 
-**Response stream:** One or more `LookupResult` messages, terminated by the server.
+| Field | Type | Description |
+|---|---|---|
+| `callsign` | `string` | Callsign to look up (e.g., `"W1AW"`) |
+| `skip_cache` | `bool` | If `true`, bypasses the L1 in-memory cache and forces a fresh provider fetch |
+
+**Response stream:** One or more `StreamLookupResponse` messages, terminated by the server.
+
+Each streamed envelope carries a `result: LookupResult` payload.
 
 **State transition sequence:**
 
@@ -128,19 +133,20 @@ LOADING → (STALE)? → FOUND | NOT_FOUND | ERROR
 Returns the cached `LookupResult` for a callsign without making any network call.
 
 ```
-rpc GetCachedCallsign(CachedCallsignRequest) returns (LookupResult)
+rpc GetCachedCallsign(GetCachedCallsignRequest) returns (GetCachedCallsignResponse)
 ```
 
-**Request:** `CachedCallsignRequest`
+**Request:** `GetCachedCallsignRequest`
 
 | Field | Type | Description |
 |---|---|---|
 | `callsign` | `string` | Callsign to check in the L1 cache |
 
-**Response:** `LookupResult`
+**Response:** `GetCachedCallsignResponse`
 
-- If the callsign is in the L1 cache: returns `state == FOUND` (or the cached state), `cache_hit == true`.
-- If the callsign is not cached: returns `state == NOT_FOUND`, `cache_hit == false`.
+- `result` contains the cached `LookupResult`.
+- If the callsign is in the L1 cache: `result.state == FOUND` (or the cached state), `result.cache_hit == true`.
+- If the callsign is not cached: `result.state == NOT_FOUND`, `result.cache_hit == false`.
 
 **No network calls are made.** This RPC is safe to call speculatively and at high frequency.
 
@@ -156,31 +162,23 @@ rpc GetCachedCallsign(CachedCallsignRequest) returns (LookupResult)
 Look up a DXCC (DX Century Club) entity by numeric code or callsign prefix.
 
 ```
-rpc GetDxccEntity(DxccRequest) returns (DxccEntity)
+rpc GetDxccEntity(GetDxccEntityRequest) returns (GetDxccEntityResponse)
 ```
 
 > ⚠️ **Status:** Planned. Currently returns `UNIMPLEMENTED`.
 
-**Request:** `DxccRequest` (oneof)
+**Request:** `GetDxccEntityRequest` (oneof)
 
 | Field | Type | Description |
 |---|---|---|
 | `dxcc_code` | `uint32` | Numeric DXCC entity code |
 | `prefix` | `string` | Callsign prefix — QRZ performs a 4→3→2 letter reduction to find the entity |
 
-**Response:** `DxccEntity`
+**Response:** `GetDxccEntityResponse`
 
 | Field | Type | Description |
 |---|---|---|
-| `dxcc_code` | `uint32` | DXCC entity code |
-| `country_name` | `string` | Full country name |
-| `continent` | `string` | 2-letter continent code (NA, SA, EU, AF, AS, OC, AN) |
-| `itu_zone` | `uint32` (optional) | ITU zone |
-| `cq_zone` | `uint32` (optional) | CQ zone |
-| `utc_offset` | `double` (optional) | UTC offset in hours |
-| `latitude` | `double` (optional) | Entity reference latitude |
-| `longitude` | `double` (optional) | Entity reference longitude |
-| `notes` | `string` (optional) | Additional notes |
+| `entity` | `DxccEntity` | The matched DXCC payload |
 
 **Notable status codes:**
 - `UNIMPLEMENTED` — current server response (planned feature).

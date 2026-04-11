@@ -3,7 +3,8 @@ name: tonic-proto-contracts
 description: >-
   Change or review protobuf and tonic contracts for LogRipper. Use when editing proto/,
   gRPC services, generated Rust bindings, or .NET clients that depend on shared lookup and
-  logbook contracts.
+  logbook contracts. Enforce protobuf 1-1-1, unique per-RPC envelopes, and clean domain vs
+  service message boundaries.
 ---
 
 # Skill: tonic/proto contracts
@@ -20,8 +21,12 @@ description: >-
 1. `proto/` is the single source of truth for shared contracts.
 2. Preserve field numbers and enum values.
 3. Keep zero-value enums as unspecified/default states.
-4. Prefer additive schema changes over breaking changes.
-5. ADIF is not an internal IPC format; protobuf remains the internal contract.
+4. Follow protobuf 1-1-1 by default: one top-level message, enum, or service per `.proto` file.
+5. Every RPC must use unique `XxxRequest` and `XxxResponse` envelopes; streamed items get unique response envelopes too.
+6. Keep transport-only RPC messages in `proto/services/`; reusable business entities belong in `proto/domain` or dedicated service support messages.
+7. If multiple RPCs need the same payload, extract a separate message and wrap it instead of reusing an RPC response envelope as nested data.
+8. Prefer additive schema changes over breaking changes.
+9. ADIF is not an internal IPC format; protobuf remains the internal contract.
 
 ## Repo-Specific Contract Surfaces
 
@@ -50,6 +55,7 @@ dotnet run --project src\dotnet\LogRipper.Cli -- status
 ## Current References
 
 - Protocol Buffers: https://protobuf.dev/programming-guides/proto3/
+- Protocol Buffers best practices (1-1-1): https://protobuf.dev/best-practices/1-1-1/
 - Buf docs: https://buf.build/docs/
 - tonic docs: https://docs.rs/tonic/latest/tonic/
 - prost docs: https://docs.rs/prost/latest/prost/

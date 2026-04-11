@@ -1,0 +1,9 @@
+syntax = "proto3";
+
+package logripper.services;
+
+option csharp_namespace = "LogRipper.Services";
+
+message SyncWithQrzRequest {
+  bool full_sync = 1;  // true = re-fetch all; false = incremental
+}

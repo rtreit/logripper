@@ -4,8 +4,16 @@ package logripper.services;
 
 option csharp_namespace = "LogRipper.Services";
 
-import "domain/callsign.proto";
-import "domain/lookup.proto";
+import "services/batch_lookup_request.proto";
+import "services/batch_lookup_response.proto";
+import "services/get_cached_callsign_request.proto";
+import "services/get_cached_callsign_response.proto";
+import "services/get_dxcc_entity_request.proto";
+import "services/get_dxcc_entity_response.proto";
+import "services/lookup_request.proto";
+import "services/lookup_response.proto";
+import "services/stream_lookup_request.proto";
+import "services/stream_lookup_response.proto";
 
 // The app-facing callsign lookup interface.
 //
@@ -24,47 +32,19 @@ import "domain/lookup.proto";
 //
 // Client reference: docs/api/lookup-service.md
 service LookupService {
-  // Unary callsign lookup. Returns the final resolved LookupResult.
-  //
-  // The result state field carries the semantic outcome:
-  //   FOUND     — record is populated; call succeeded.
-  //   NOT_FOUND — callsign does not exist in the provider.
-  //   ERROR     — provider error (network, auth, rate limit); see error_message.
-  //
-  // Always returns gRPC OK. The LookupResult.state carries the outcome.
-  rpc Lookup(logripper.domain.LookupRequest) returns (logripper.domain.LookupResult);
+  // Unary callsign lookup. The response envelope carries the final LookupResult.
+  rpc Lookup(LookupRequest) returns (LookupResponse);
 
-  // Server-streaming lookup that emits progressive state updates.
-  //
-  // State transition sequence:
-  //   LOADING → (STALE)? → FOUND | NOT_FOUND | ERROR
-  //
-  // Always emits LOADING immediately so the client can show an in-progress indicator.
-  // If a stale cached entry exists while a fresh fetch is pending, emits STALE before
-  // the terminal result. The stream closes after the terminal result.
-  //
-  // Clients should cancel the stream when a newer lookup request supersedes this one.
-  // CANCELLED is the expected gRPC status for client-cancelled streams.
-  rpc StreamLookup(logripper.domain.LookupRequest) returns (stream logripper.domain.LookupResult);
+  // Server-streaming lookup that emits progressive LookupResult envelopes.
+  rpc StreamLookup(StreamLookupRequest) returns (stream StreamLookupResponse);
 
   // Retrieve a callsign from the L1 in-memory cache only. No network call is made.
-  //
-  // Returns FOUND + cache_hit=true if the callsign is cached.
-  // Returns NOT_FOUND + cache_hit=false if the callsign is not in the cache.
-  //
-  // Safe to call speculatively and at high frequency. Use as the first step of a
-  // type-ahead flow, then fall through to StreamLookup for a fresh result.
-  rpc GetCachedCallsign(logripper.domain.CachedCallsignRequest) returns (logripper.domain.LookupResult);
+  rpc GetCachedCallsign(GetCachedCallsignRequest) returns (GetCachedCallsignResponse);
 
   // Look up a DXCC entity by numeric code or callsign prefix.
-  //
-  // Returns NOT_FOUND if the entity does not exist.
-  // Currently returns UNIMPLEMENTED — planned for a future slice.
-  rpc GetDxccEntity(logripper.domain.DxccRequest) returns (logripper.domain.DxccEntity);
+  rpc GetDxccEntity(GetDxccEntityRequest) returns (GetDxccEntityResponse);
 
   // Batch lookup for prefetch/contest scenarios. Returns one LookupResult per callsign,
   // in request order. Useful for warming the cache before a contest session begins.
-  //
-  // Currently returns UNIMPLEMENTED — planned for a future slice.
-  rpc BatchLookup(logripper.domain.BatchLookupRequest) returns (logripper.domain.BatchLookupResponse);
+  rpc BatchLookup(BatchLookupRequest) returns (BatchLookupResponse);
 }

@@ -1,0 +1,13 @@
+syntax = "proto3";
+
+package logripper.services;
+
+option csharp_namespace = "LogRipper.Services";
+
+import "domain/station_profile.proto";
+
+message SaveStationProfileRequest {
+  optional string profile_id = 1;
+  logripper.domain.StationProfile profile = 2;
+  bool make_active = 3;
+}

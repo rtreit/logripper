@@ -11,7 +11,7 @@ internal sealed class SetupEditorModel : StationProfileEditorModelBase
 
     public string? QrzXmlPassword { get; set; }
 
-    public static SetupEditorModel Create(SetupStatusResponse? status, string fallbackLogFilePath)
+    public static SetupEditorModel Create(SetupStatus? status, string fallbackLogFilePath)
     {
         var model = new SetupEditorModel
         {

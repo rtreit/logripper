@@ -1,0 +1,12 @@
+syntax = "proto3";
+
+package logripper.services;
+
+option csharp_namespace = "LogRipper.Services";
+
+message DeleteQsoResponse {
+  bool success = 1;
+  optional string error = 2;
+  bool qrz_delete_success = 3;
+  optional string qrz_delete_error = 4;
+}

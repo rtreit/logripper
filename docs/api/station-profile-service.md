@@ -29,6 +29,34 @@ Historical QSOs remain stable because saved records already carry their own `sta
 | `SetSessionStationProfileOverride` | ✅ Implemented | Applies a process-session override for new QSO saves |
 | `ClearSessionStationProfileOverride` | ✅ Implemented | Clears the process-session override |
 
+## Contract shape
+
+This service follows the same protobuf 1-1-1 rule as the rest of the engine surface:
+
+- every RPC has a unique request/response envelope
+- shared payloads such as `StationProfileRecord` and `ActiveStationContext` live in their own support files under `proto/services/`
+- response envelopes wrap those payloads instead of being reused as nested models elsewhere
+
+### Reusable payloads
+
+| Payload | Purpose |
+|---|---|
+| `StationProfileRecord` | A persisted profile plus its `profile_id` and `is_active` status |
+| `ActiveStationContext` | Persisted active profile, effective active profile, optional session override, and warnings |
+
+### Response envelopes
+
+| RPC | Response envelope | Key payload fields |
+|---|---|---|
+| `ListStationProfiles` | `ListStationProfilesResponse` | `profiles`, `active_profile_id` |
+| `GetStationProfile` | `GetStationProfileResponse` | `profile` |
+| `SaveStationProfile` | `SaveStationProfileResponse` | `profile`, `active_profile_id` |
+| `DeleteStationProfile` | `DeleteStationProfileResponse` | `active_profile_id` |
+| `SetActiveStationProfile` | `SetActiveStationProfileResponse` | `profile` |
+| `GetActiveStationContext` | `GetActiveStationContextResponse` | `context` |
+| `SetSessionStationProfileOverride` | `SetSessionStationProfileOverrideResponse` | `context` |
+| `ClearSessionStationProfileOverride` | `ClearSessionStationProfileOverrideResponse` | `context` |
+
 ## Notes
 
 - `SaveStationProfile`, `DeleteStationProfile`, and `SetActiveStationProfile` require persisted setup to already exist. Run `SetupService.SaveSetup` first.

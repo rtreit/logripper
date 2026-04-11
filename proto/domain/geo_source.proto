@@ -1,0 +1,18 @@
+syntax = "proto3";
+
+package logripper.domain;
+
+option csharp_namespace = "LogRipper.Domain";
+
+// Indicates the source/confidence of geographic coordinates.
+// Maps directly to QRZ geoloc values.
+enum GeoSource {
+  GEO_SOURCE_UNSPECIFIED = 0;
+  GEO_SOURCE_USER = 1;  // Supplied by licensee
+  GEO_SOURCE_GEOCODE = 2;  // Derived from mailing address
+  GEO_SOURCE_GRID = 3;  // Derived from grid square
+  GEO_SOURCE_ZIP = 4;  // Derived from zip/postal code
+  GEO_SOURCE_STATE = 5;  // Derived from state (centroid)
+  GEO_SOURCE_DXCC = 6;  // Derived from DXCC entity
+  GEO_SOURCE_NONE = 7;  // No geographic data available
+}

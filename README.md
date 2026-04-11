@@ -43,6 +43,7 @@ Proto files under `proto/` are the **single source of truth** for all shared typ
 - **Rust** (engine): `prost` + `tonic-build` generate structs and gRPC server stubs
 - **Any client language**: standard protobuf/gRPC tooling generates client stubs (e.g., `Grpc.Tools` for C#, `protoc-gen-go` for Go, `grpc-web` for browsers)
 - **Schema quality**: `buf lint` and `buf breaking` enforce conventions and backward compatibility
+- **Contract shape**: protobuf 1-1-1 is the default — one top-level entity per file, service files that contain only the `service`, and unique `XxxRequest` / `XxxResponse` envelopes for every RPC
 
 ### gRPC Services
 
@@ -333,8 +334,8 @@ The CLI generates client stubs from the shared proto contracts at build time and
 
 ```
 proto/                    Shared IDL (language-neutral)
-  domain/                 CallsignRecord, QsoRecord, LookupResult, enums
-  services/               LookupService, LogbookService gRPC definitions
+  domain/                 Reusable domain messages/enums (one top-level entity per file)
+  services/               Service declarations plus per-RPC envelopes/support types (one top-level entity per file)
 src/
   rust/                   Rust workspace (Cargo.toml at this level)
     logripper-core/       Engine: storage, lookups, cache, ADIF, gRPC server

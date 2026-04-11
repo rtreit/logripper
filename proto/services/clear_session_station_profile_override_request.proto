@@ -1,0 +1,7 @@
+syntax = "proto3";
+
+package logripper.services;
+
+option csharp_namespace = "LogRipper.Services";
+
+message ClearSessionStationProfileOverrideRequest {}

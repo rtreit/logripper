@@ -1,0 +1,81 @@
+syntax = "proto3";
+
+package logripper.domain;
+
+option csharp_namespace = "LogRipper.Domain";
+
+import "domain/geo_source.proto";
+import "domain/qsl_preference.proto";
+import "google/protobuf/timestamp.proto";
+
+// Normalized callsign record. This is LogRipper's own domain model,
+// not a 1:1 mirror of QRZ XML. Providers adapt into this shape.
+message CallsignRecord {
+  // --- Identity ---
+  string callsign = 1;
+  string cross_ref = 2;  // Query callsign that resolved to this record
+  repeated string aliases = 3;
+  string previous_call = 4;
+  uint32 dxcc_entity_id = 5;
+
+  // --- Name ---
+  string first_name = 10;
+  string last_name = 11;
+  optional string nickname = 12;
+  optional string formatted_name = 13;  // Combined display name
+
+  // --- Address ---
+  optional string attention = 20;
+  optional string addr1 = 21;
+  optional string addr2 = 22;  // City
+  optional string state = 23;
+  optional string zip = 24;
+  optional string country = 25;
+  optional uint32 country_code = 26;  // DXCC code for mailing address country
+
+  // --- Location ---
+  optional double latitude = 30;
+  optional double longitude = 31;
+  optional string grid_square = 32;  // Maidenhead locator
+  optional string county = 33;
+  optional string fips = 34;
+  GeoSource geo_source = 35;
+
+  // --- License ---
+  optional string license_class = 40;
+  optional google.protobuf.Timestamp effective_date = 41;  // Provider-normalized license date
+  optional google.protobuf.Timestamp expiration_date = 42;  // Provider-normalized license date
+  optional string license_codes = 43;
+
+  // --- Contact ---
+  optional string email = 50;
+  optional string web_url = 51;
+  optional string qsl_manager = 52;
+
+  // --- QSL preferences ---
+  QslPreference eqsl = 60;
+  QslPreference lotw = 61;
+  QslPreference paper_qsl = 62;
+
+  // --- Zone ---
+  optional uint32 cq_zone = 70;
+  optional uint32 itu_zone = 71;
+  optional string iota = 72;
+
+  // --- DXCC entity info (denormalized for convenience) ---
+  optional string dxcc_country_name = 80;
+  optional string dxcc_continent = 81;  // 2-letter: NA, SA, EU, AF, AS, OC
+
+  // --- Metadata ---
+  optional uint32 birth_year = 90;  // Operator's year of birth
+  optional uint64 qrz_serial = 91;
+  optional google.protobuf.Timestamp last_modified = 92;
+  optional uint32 bio_length = 93;
+  optional string image_url = 94;
+  optional string msa = 95;  // Metro Service Area
+  optional string area_code = 96;
+  optional string time_zone = 97;
+  optional double gmt_offset = 98;  // Hours offset from GMT, may be fractional
+  optional bool dst_observed = 99;
+  optional uint32 profile_views = 100;
+}

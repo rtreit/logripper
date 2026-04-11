@@ -9,18 +9,19 @@ internal static class CacheCheckCommand
     public static async Task<int> RunAsync(GrpcChannel channel, string callsign)
     {
         var client = new LookupService.LookupServiceClient(channel);
-        var response = await client.GetCachedCallsignAsync(new CachedCallsignRequest
+        var response = await client.GetCachedCallsignAsync(new GetCachedCallsignRequest
         {
             Callsign = callsign,
         });
+        var result = response.Result ?? new LookupResult();
 
-        var state = response.State;
+        var state = result.State;
 
-        if (response.CacheHit && response.Record is not null)
+        if (result.CacheHit && result.Record is not null)
         {
             Console.WriteLine($"{callsign} is cached.");
             Console.WriteLine();
-            LookupCommand.PrintRecord(response.Record);
+            LookupCommand.PrintRecord(result.Record);
             return 0;
         }
 

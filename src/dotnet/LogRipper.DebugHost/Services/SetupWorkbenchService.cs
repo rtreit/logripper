@@ -19,16 +19,20 @@ internal sealed class SetupWorkbenchService
         _workbenchState = workbenchState;
     }
 
-    public Task<SetupStatusResponse?> RefreshAsync(CancellationToken cancellationToken = default)
+    public Task<SetupStatus?> RefreshAsync(CancellationToken cancellationToken = default)
     {
         return ExecuteAsync(
-            client => client.GetSetupStatusAsync(
-                    new GetSetupStatusRequest(),
-                    cancellationToken: cancellationToken)
-                .ResponseAsync);
+            async client =>
+            {
+                var response = await client.GetSetupStatusAsync(
+                        new GetSetupStatusRequest(),
+                        cancellationToken: cancellationToken)
+                    .ResponseAsync;
+                return response.Status ?? throw new InvalidOperationException("GetSetupStatus returned no status payload.");
+            });
     }
 
-    public Task<SetupStatusResponse?> SaveAsync(
+    public Task<SetupStatus?> SaveAsync(
         SaveSetupRequest request,
         CancellationToken cancellationToken = default)
     {
@@ -41,12 +45,12 @@ internal sealed class SetupWorkbenchService
                         request,
                         cancellationToken: cancellationToken)
                     .ResponseAsync;
-                return response.Status;
+                return response.Status ?? throw new InvalidOperationException("SaveSetup returned no status payload.");
             });
     }
 
-    private async Task<SetupStatusResponse?> ExecuteAsync(
-        Func<SetupService.SetupServiceClient, Task<SetupStatusResponse>> action)
+    private async Task<SetupStatus?> ExecuteAsync(
+        Func<SetupService.SetupServiceClient, Task<SetupStatus>> action)
     {
         try
         {

@@ -1,0 +1,12 @@
+syntax = "proto3";
+
+package logripper.services;
+
+option csharp_namespace = "LogRipper.Services";
+
+message GetDxccEntityRequest {
+  oneof query {
+    uint32 dxcc_code = 1;  // By numeric DXCC entity code
+    string prefix = 2;  // By callsign prefix (QRZ does 4->3->2 letter reduction)
+  }
+}

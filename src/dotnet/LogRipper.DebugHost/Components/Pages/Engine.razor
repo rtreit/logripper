@@ -1308,7 +1308,7 @@
             : $"{summary} operator {profile.OperatorCallsign}";
     }
 
-    private static string GetSetupLogFileSummary(SetupStatusResponse status)
+    private static string GetSetupLogFileSummary(SetupStatus status)
     {
         if (!string.IsNullOrWhiteSpace(status.LogFilePath))
         {
@@ -1341,7 +1341,7 @@
 
     private static string GetProfileListBadgeClass(
         StationProfileRecord profile,
-        GetActiveStationContextResponse context)
+        ActiveStationContext context)
     {
         if (profile.IsActive)
         {
@@ -1357,7 +1357,7 @@
 
     private static string GetProfileListLabel(
         StationProfileRecord profile,
-        GetActiveStationContextResponse context)
+        ActiveStationContext context)
     {
         var label = profile.ProfileId;
         if (profile.IsActive)

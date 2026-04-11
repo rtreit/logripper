@@ -4,7 +4,10 @@ package logripper.services;
 
 option csharp_namespace = "LogRipper.Services";
 
-import "domain/station.proto";
+import "services/get_setup_status_request.proto";
+import "services/get_setup_status_response.proto";
+import "services/save_setup_request.proto";
+import "services/save_setup_response.proto";
 
 // Production setup/bootstrap surface for first-run configuration.
 //
@@ -13,53 +16,9 @@ import "domain/station.proto";
 // recommended config/data paths, and save the initial station/logbook settings.
 service SetupService {
   // Read the current persisted setup status and suggested default paths.
-  rpc GetSetupStatus(GetSetupStatusRequest) returns (SetupStatusResponse);
+  rpc GetSetupStatus(GetSetupStatusRequest) returns (GetSetupStatusResponse);
 
   // Validate and persist the initial setup payload, then hot-apply it to the
   // running engine for new requests.
   rpc SaveSetup(SaveSetupRequest) returns (SaveSetupResponse);
-}
-
-message GetSetupStatusRequest {}
-
-message SetupStatusResponse {
-  bool config_file_exists = 1;
-  bool setup_complete = 2;
-  string config_path = 3;
-  // Legacy compatibility field. New clients should use log_file_path.
-  StorageBackend storage_backend = 4;
-  // Legacy compatibility field. New clients should use log_file_path.
-  optional string sqlite_path = 5;
-  bool has_station_profile = 6;
-  logripper.domain.StationProfile station_profile = 7;
-  optional string qrz_xml_username = 8;
-  bool has_qrz_xml_password = 9;
-  // Legacy compatibility field. New clients should use suggested_log_file_path.
-  string suggested_sqlite_path = 10;
-  repeated string warnings = 11;
-  optional string active_station_profile_id = 12;
-  uint32 station_profile_count = 13;
-  optional string log_file_path = 14;
-  string suggested_log_file_path = 15;
-}
-
-message SaveSetupRequest {
-  // Legacy compatibility field. New clients should use log_file_path.
-  StorageBackend storage_backend = 1;
-  // Legacy compatibility field. New clients should use log_file_path.
-  optional string sqlite_path = 2;
-  logripper.domain.StationProfile station_profile = 3;
-  optional string qrz_xml_username = 4;
-  optional string qrz_xml_password = 5;
-  optional string log_file_path = 6;
-}
-
-message SaveSetupResponse {
-  SetupStatusResponse status = 1;
-}
-
-enum StorageBackend {
-  STORAGE_BACKEND_UNSPECIFIED = 0;
-  STORAGE_BACKEND_MEMORY = 1;
-  STORAGE_BACKEND_SQLITE = 2;
 }

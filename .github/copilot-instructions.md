@@ -30,6 +30,11 @@ Primary goals:
 
 - All shared domain types are defined in `proto/` and generated for both Rust and C#.
 - Proto files are the single source of truth. Never hand-write types that should come from proto generation.
+- Follow protobuf 1-1-1 by default: one top-level message, enum, or service per `.proto` file.
+- Every RPC must use unique `XxxRequest` and `XxxResponse` envelopes. Streaming RPCs also get unique streamed response envelopes.
+- Keep transport-only RPC messages in `proto/services/`, not `proto/domain/`.
+- If multiple RPCs need the same payload, extract a separate reusable message and wrap it from each response instead of reusing one RPC response envelope as another RPC's payload.
+- Exceptions to 1-1-1 are rare, must be explicit and documented, and never justify skipping per-RPC envelopes.
 - Use `buf lint` to validate proto files. Use `buf breaking` to guard against incompatible schema changes.
 - ADIF is for external interchange (QRZ API, file I/O) only — internal IPC uses protobuf.
 - Keep shared proto messages discoverable in the Debug Host Protobuf Lab; prefer auto-discovered message catalogs over hand-maintained UI enums or lists.

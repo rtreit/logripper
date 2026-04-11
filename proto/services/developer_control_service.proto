@@ -1,0 +1,24 @@
+syntax = "proto3";
+
+package logripper.services;
+
+option csharp_namespace = "LogRipper.Services";
+
+import "services/apply_runtime_config_request.proto";
+import "services/apply_runtime_config_response.proto";
+import "services/get_runtime_config_request.proto";
+import "services/get_runtime_config_response.proto";
+import "services/reset_runtime_config_request.proto";
+import "services/reset_runtime_config_response.proto";
+
+// Developer-only control surface for live engine diagnostics and runtime overrides.
+service DeveloperControlService {
+  // Read the engine's current runtime configuration snapshot.
+  rpc GetRuntimeConfig(GetRuntimeConfigRequest) returns (GetRuntimeConfigResponse);
+
+  // Apply one or more hot-reloadable runtime config mutations.
+  rpc ApplyRuntimeConfig(ApplyRuntimeConfigRequest) returns (ApplyRuntimeConfigResponse);
+
+  // Clear one or more overrides. When no keys are provided, clears all overrides.
+  rpc ResetRuntimeConfig(ResetRuntimeConfigRequest) returns (ResetRuntimeConfigResponse);
+}

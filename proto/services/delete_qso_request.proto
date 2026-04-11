@@ -1,0 +1,10 @@
+syntax = "proto3";
+
+package logripper.services;
+
+option csharp_namespace = "LogRipper.Services";
+
+message DeleteQsoRequest {
+  string local_id = 1;
+  bool delete_from_qrz = 2;  // Also delete from QRZ logbook (permanent!)
+}

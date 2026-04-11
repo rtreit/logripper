@@ -16,21 +16,22 @@ use tokio_stream::wrappers::{ReceiverStream, TcpListenerStream};
 use tonic::transport::Server;
 use tonic::{Request, Response, Status};
 
-use logripper_core::proto::logripper::domain::{
-    Band, BatchLookupRequest, BatchLookupResponse, CachedCallsignRequest, DxccEntity, DxccRequest,
-    LookupRequest, LookupResult, Mode, QsoRecord,
-};
+use logripper_core::proto::logripper::domain::{Band, Mode};
 use logripper_core::proto::logripper::services::{
     developer_control_service_server::{DeveloperControlService, DeveloperControlServiceServer},
     logbook_service_server::{LogbookService, LogbookServiceServer},
     lookup_service_server::{LookupService, LookupServiceServer},
     setup_service_server::SetupServiceServer,
     station_profile_service_server::StationProfileServiceServer,
-    AdifChunk, ApplyRuntimeConfigRequest, DeleteQsoRequest, DeleteQsoResponse, ExportRequest,
-    GetQsoRequest, GetQsoResponse, GetRuntimeConfigRequest, ImportResult, ListQsosRequest,
-    LogQsoRequest, LogQsoResponse, ResetRuntimeConfigRequest, RuntimeConfigSnapshot, SortOrder,
-    SyncProgress, SyncRequest, SyncStatusRequest, SyncStatusResponse, UpdateQsoRequest,
-    UpdateQsoResponse,
+    AdifChunk, ApplyRuntimeConfigRequest, ApplyRuntimeConfigResponse, BatchLookupRequest,
+    BatchLookupResponse, DeleteQsoRequest, DeleteQsoResponse, ExportAdifRequest,
+    ExportAdifResponse, GetCachedCallsignRequest, GetCachedCallsignResponse, GetDxccEntityRequest,
+    GetDxccEntityResponse, GetQsoRequest, GetQsoResponse, GetRuntimeConfigRequest,
+    GetRuntimeConfigResponse, GetSyncStatusRequest, GetSyncStatusResponse, ImportAdifRequest,
+    ImportAdifResponse, ListQsosRequest, ListQsosResponse, LogQsoRequest, LogQsoResponse,
+    LookupRequest, LookupResponse, QsoSortOrder as ProtoQsoSortOrder, ResetRuntimeConfigRequest,
+    ResetRuntimeConfigResponse, StreamLookupRequest, StreamLookupResponse, SyncWithQrzRequest,
+    SyncWithQrzResponse, UpdateQsoRequest, UpdateQsoResponse,
 };
 use runtime_config::RuntimeConfigManager;
 use setup::{
@@ -256,9 +257,9 @@ impl DeveloperLogbookService {
 
 #[tonic::async_trait]
 impl LogbookService for DeveloperLogbookService {
-    type ListQsosStream = ReceiverStream<Result<QsoRecord, Status>>;
-    type SyncWithQrzStream = ReceiverStream<Result<SyncProgress, Status>>;
-    type ExportAdifStream = ReceiverStream<Result<AdifChunk, Status>>;
+    type ListQsosStream = ReceiverStream<Result<ListQsosResponse, Status>>;
+    type SyncWithQrzStream = ReceiverStream<Result<SyncWithQrzResponse, Status>>;
+    type ExportAdifStream = ReceiverStream<Result<ExportAdifResponse, Status>>;
 
     async fn log_qso(
         &self,
@@ -349,7 +350,11 @@ impl LogbookService for DeveloperLogbookService {
         let (sender, receiver) = tokio::sync::mpsc::channel(records.len().max(1));
 
         for record in records {
-            if sender.send(Ok(record)).await.is_err() {
+            if sender
+                .send(Ok(ListQsosResponse { qso: Some(record) }))
+                .await
+                .is_err()
+            {
                 break;
             }
         }
@@ -359,15 +364,15 @@ impl LogbookService for DeveloperLogbookService {
 
     async fn sync_with_qrz(
         &self,
-        _request: Request<SyncRequest>,
+        _request: Request<SyncWithQrzRequest>,
     ) -> Result<Response<Self::SyncWithQrzStream>, Status> {
         Err(Status::unimplemented("SyncWithQrz is not implemented yet."))
     }
 
     async fn get_sync_status(
         &self,
-        _request: Request<SyncStatusRequest>,
-    ) -> Result<Response<SyncStatusResponse>, Status> {
+        _request: Request<GetSyncStatusRequest>,
+    ) -> Result<Response<GetSyncStatusResponse>, Status> {
         let sync_status = self
             .runtime_config
             .logbook_engine()
@@ -376,7 +381,7 @@ impl LogbookService for DeveloperLogbookService {
             .await
             .map_err(map_logbook_error)?;
 
-        Ok(Response::new(SyncStatusResponse {
+        Ok(Response::new(GetSyncStatusResponse {
             local_qso_count: sync_status.local_qso_count,
             qrz_qso_count: sync_status.qrz_qso_count,
             pending_upload: sync_status.pending_upload,
@@ -387,13 +392,16 @@ impl LogbookService for DeveloperLogbookService {
 
     async fn import_adif(
         &self,
-        request: Request<tonic::Streaming<AdifChunk>>,
-    ) -> Result<Response<ImportResult>, Status> {
+        request: Request<tonic::Streaming<ImportAdifRequest>>,
+    ) -> Result<Response<ImportAdifResponse>, Status> {
         let (engine, active_station_profile) = self.runtime_config.logbook_context().await;
         let mut stream = request.into_inner();
         let mut adif_bytes = Vec::new();
 
         while let Some(chunk) = stream.message().await? {
+            let chunk = chunk
+                .chunk
+                .ok_or_else(|| Status::invalid_argument("ImportAdifRequest requires a chunk."))?;
             adif_bytes.extend_from_slice(&chunk.data);
         }
 
@@ -405,7 +413,7 @@ impl LogbookService for DeveloperLogbookService {
             .await
             .map_err(map_logbook_error)?;
 
-        Ok(Response::new(ImportResult {
+        Ok(Response::new(ImportAdifResponse {
             records_imported: summary.records_imported,
             records_skipped: summary.records_skipped,
             warnings: summary.warnings,
@@ -414,7 +422,7 @@ impl LogbookService for DeveloperLogbookService {
 
     async fn export_adif(
         &self,
-        request: Request<ExportRequest>,
+        request: Request<ExportAdifRequest>,
     ) -> Result<Response<Self::ExportAdifStream>, Status> {
         let engine = self.runtime_config.logbook_engine().await;
         let request = request.into_inner();
@@ -426,8 +434,10 @@ impl LogbookService for DeveloperLogbookService {
 
         for chunk in adif_bytes.chunks(ADIF_CHUNK_SIZE) {
             if sender
-                .send(Ok(AdifChunk {
-                    data: chunk.to_vec(),
+                .send(Ok(ExportAdifResponse {
+                    chunk: Some(AdifChunk {
+                        data: chunk.to_vec(),
+                    }),
                 }))
                 .await
                 .is_err()
@@ -453,24 +463,25 @@ impl DeveloperLookupService {
 
 #[tonic::async_trait]
 impl LookupService for DeveloperLookupService {
-    type StreamLookupStream = ReceiverStream<Result<LookupResult, Status>>;
+    type StreamLookupStream = ReceiverStream<Result<StreamLookupResponse, Status>>;
 
     async fn lookup(
         &self,
         request: Request<LookupRequest>,
-    ) -> Result<Response<LookupResult>, Status> {
+    ) -> Result<Response<LookupResponse>, Status> {
         let coordinator = self.runtime_config.lookup_coordinator().await;
         let request = request.into_inner();
-        Ok(Response::new(
-            coordinator
-                .lookup(&request.callsign, request.skip_cache)
-                .await,
-        ))
+        let result = coordinator
+            .lookup(&request.callsign, request.skip_cache)
+            .await;
+        Ok(Response::new(LookupResponse {
+            result: Some(result),
+        }))
     }
 
     async fn stream_lookup(
         &self,
-        request: Request<LookupRequest>,
+        request: Request<StreamLookupRequest>,
     ) -> Result<Response<Self::StreamLookupStream>, Status> {
         let coordinator = self.runtime_config.lookup_coordinator().await;
         let request = request.into_inner();
@@ -480,7 +491,13 @@ impl LookupService for DeveloperLookupService {
         let (sender, receiver) = tokio::sync::mpsc::channel(8);
 
         for update in updates {
-            if sender.send(Ok(update)).await.is_err() {
+            if sender
+                .send(Ok(StreamLookupResponse {
+                    result: Some(update),
+                }))
+                .await
+                .is_err()
+            {
                 break;
             }
         }
@@ -490,19 +507,20 @@ impl LookupService for DeveloperLookupService {
 
     async fn get_cached_callsign(
         &self,
-        request: Request<CachedCallsignRequest>,
-    ) -> Result<Response<LookupResult>, Status> {
+        request: Request<GetCachedCallsignRequest>,
+    ) -> Result<Response<GetCachedCallsignResponse>, Status> {
         let coordinator = self.runtime_config.lookup_coordinator().await;
         let request = request.into_inner();
-        Ok(Response::new(
-            coordinator.get_cached_callsign(&request.callsign).await,
-        ))
+        let result = coordinator.get_cached_callsign(&request.callsign).await;
+        Ok(Response::new(GetCachedCallsignResponse {
+            result: Some(result),
+        }))
     }
 
     async fn get_dxcc_entity(
         &self,
-        _request: Request<DxccRequest>,
-    ) -> Result<Response<DxccEntity>, Status> {
+        _request: Request<GetDxccEntityRequest>,
+    ) -> Result<Response<GetDxccEntityResponse>, Status> {
         Err(Status::unimplemented(
             "GetDxccEntity is out of scope for the first lookup slice.",
         ))
@@ -534,32 +552,38 @@ impl DeveloperControlService for DeveloperControlSurface {
     async fn get_runtime_config(
         &self,
         _request: Request<GetRuntimeConfigRequest>,
-    ) -> Result<Response<RuntimeConfigSnapshot>, Status> {
-        Ok(Response::new(self.runtime_config.snapshot().await))
+    ) -> Result<Response<GetRuntimeConfigResponse>, Status> {
+        Ok(Response::new(GetRuntimeConfigResponse {
+            snapshot: Some(self.runtime_config.snapshot().await),
+        }))
     }
 
     async fn apply_runtime_config(
         &self,
         request: Request<ApplyRuntimeConfigRequest>,
-    ) -> Result<Response<RuntimeConfigSnapshot>, Status> {
+    ) -> Result<Response<ApplyRuntimeConfigResponse>, Status> {
         let snapshot = self
             .runtime_config
             .apply_request(request.into_inner())
             .await
             .map_err(Status::invalid_argument)?;
-        Ok(Response::new(snapshot))
+        Ok(Response::new(ApplyRuntimeConfigResponse {
+            snapshot: Some(snapshot),
+        }))
     }
 
     async fn reset_runtime_config(
         &self,
         request: Request<ResetRuntimeConfigRequest>,
-    ) -> Result<Response<RuntimeConfigSnapshot>, Status> {
+    ) -> Result<Response<ResetRuntimeConfigResponse>, Status> {
         let snapshot = self
             .runtime_config
             .reset_request(request.into_inner())
             .await
             .map_err(Status::invalid_argument)?;
-        Ok(Response::new(snapshot))
+        Ok(Response::new(ResetRuntimeConfigResponse {
+            snapshot: Some(snapshot),
+        }))
     }
 }
 
@@ -724,9 +748,9 @@ fn qso_list_query_from_request(request: &ListQsosRequest) -> Result<QsoListQuery
                 .map_err(|_| Box::new(Status::invalid_argument("Invalid mode_filter value.")))
         })
         .transpose()?;
-    let sort = match SortOrder::try_from(request.sort) {
-        Ok(SortOrder::NewestFirst) => QsoSortOrder::NewestFirst,
-        Ok(SortOrder::OldestFirst) => QsoSortOrder::OldestFirst,
+    let sort = match ProtoQsoSortOrder::try_from(request.sort) {
+        Ok(ProtoQsoSortOrder::NewestFirst) => QsoSortOrder::NewestFirst,
+        Ok(ProtoQsoSortOrder::OldestFirst) => QsoSortOrder::OldestFirst,
         Err(_) => return Err(Box::new(Status::invalid_argument("Invalid sort order."))),
     };
 
@@ -748,7 +772,7 @@ fn qso_list_query_from_request(request: &ListQsosRequest) -> Result<QsoListQuery
 
 const ADIF_CHUNK_SIZE: usize = 16 * 1024;
 
-fn export_qso_list_query_from_request(request: &ExportRequest) -> QsoListQuery {
+fn export_qso_list_query_from_request(request: &ExportAdifRequest) -> QsoListQuery {
     QsoListQuery {
         after: request.after,
         before: request.before,
@@ -800,15 +824,17 @@ mod tests {
         QRZ_USER_AGENT_ENV_VAR, QRZ_XML_PASSWORD_ENV_VAR, QRZ_XML_USERNAME_ENV_VAR,
     };
     use logripper_core::proto::logripper::domain::{
-        dxcc_request, Band, BatchLookupRequest, CachedCallsignRequest, DxccRequest, LookupRequest,
-        LookupResult, LookupState, Mode, QsoRecord,
+        Band, LookupResult, LookupState, Mode, QsoRecord,
     };
     use logripper_core::proto::logripper::services::{
+        get_dxcc_entity_request,
         logbook_service_client::LogbookServiceClient,
         logbook_service_server::{LogbookService, LogbookServiceServer},
         lookup_service_server::LookupService,
-        AdifChunk, DeleteQsoRequest, ExportRequest, GetQsoRequest, ImportResult, ListQsosRequest,
-        LogQsoRequest, SortOrder, SyncStatusRequest, UpdateQsoRequest,
+        AdifChunk, BatchLookupRequest, DeleteQsoRequest, ExportAdifRequest,
+        GetCachedCallsignRequest, GetDxccEntityRequest, GetQsoRequest, GetSyncStatusRequest,
+        ImportAdifRequest, ImportAdifResponse, ListQsosRequest, LogQsoRequest, LookupRequest,
+        QsoSortOrder, StreamLookupRequest, UpdateQsoRequest,
     };
     use prost_types::Timestamp;
     use tokio_stream::StreamExt;
@@ -980,14 +1006,14 @@ mod tests {
             Request::new(ListQsosRequest {
                 callsign_filter: Some("W1AW".to_string()),
                 limit: 10,
-                sort: SortOrder::NewestFirst as i32,
+                sort: QsoSortOrder::NewestFirst as i32,
                 ..ListQsosRequest::default()
             }),
         )
         .await
         .expect("list response")
         .into_inner()
-        .map(|result| result.expect("list item"))
+        .map(|result| result.expect("list item").qso.expect("listed qso payload"))
         .collect::<Vec<_>>()
         .await;
 
@@ -1039,7 +1065,7 @@ mod tests {
         );
 
         let sync_status =
-            LogbookService::get_sync_status(service, Request::new(SyncStatusRequest {}))
+            LogbookService::get_sync_status(service, Request::new(GetSyncStatusRequest {}))
                 .await
                 .expect("sync status response")
                 .into_inner();
@@ -1110,8 +1136,10 @@ mod tests {
     async fn import_adif_payload(
         client: &mut LogbookServiceClient<Channel>,
         chunks: Vec<Vec<u8>>,
-    ) -> ImportResult {
-        let stream = tokio_stream::iter(chunks.into_iter().map(|chunk| AdifChunk { data: chunk }));
+    ) -> ImportAdifResponse {
+        let stream = tokio_stream::iter(chunks.into_iter().map(|chunk| ImportAdifRequest {
+            chunk: Some(AdifChunk { data: chunk }),
+        }));
 
         client
             .import_adif(Request::new(stream))
@@ -1395,7 +1423,9 @@ mod tests {
         )
         .await
         .expect("lookup response")
-        .into_inner();
+        .into_inner()
+        .result
+        .expect("lookup result payload");
 
         assert_eq!(LookupState::Error as i32, response.state);
         assert_eq!(
@@ -1412,7 +1442,7 @@ mod tests {
 
         let response = LookupService::stream_lookup(
             &service,
-            Request::new(LookupRequest {
+            Request::new(StreamLookupRequest {
                 callsign: "W1AW".to_string(),
                 skip_cache: false,
             }),
@@ -1421,7 +1451,12 @@ mod tests {
         .expect("stream response")
         .into_inner();
         let updates = response
-            .map(|result| result.expect("stream item"))
+            .map(|result| {
+                result
+                    .expect("stream item")
+                    .result
+                    .expect("stream result payload")
+            })
             .collect::<Vec<_>>()
             .await;
 
@@ -1442,13 +1477,15 @@ mod tests {
 
         let response = LookupService::get_cached_callsign(
             &service,
-            Request::new(CachedCallsignRequest {
+            Request::new(GetCachedCallsignRequest {
                 callsign: "W1AW".to_string(),
             }),
         )
         .await
         .expect("cache response")
-        .into_inner();
+        .into_inner()
+        .result
+        .expect("cached lookup result payload");
 
         assert_eq!(LookupState::NotFound as i32, response.state);
         assert!(!response.cache_hit);
@@ -1460,8 +1497,8 @@ mod tests {
 
         let dxcc_error = LookupService::get_dxcc_entity(
             &service,
-            Request::new(DxccRequest {
-                query: Some(dxcc_request::Query::Prefix("W1AW".to_string())),
+            Request::new(GetDxccEntityRequest {
+                query: Some(get_dxcc_entity_request::Query::Prefix("W1AW".to_string())),
             }),
         )
         .await
@@ -1554,7 +1591,7 @@ mod tests {
         .expect("second log response");
 
         let response =
-            LogbookService::get_sync_status(&service, Request::new(SyncStatusRequest {}))
+            LogbookService::get_sync_status(&service, Request::new(GetSyncStatusRequest {}))
                 .await
                 .expect("sync status")
                 .into_inner();
@@ -1608,13 +1645,13 @@ mod tests {
         let imported = client
             .list_qsos(Request::new(ListQsosRequest {
                 limit: 10,
-                sort: SortOrder::OldestFirst as i32,
+                sort: QsoSortOrder::OldestFirst as i32,
                 ..ListQsosRequest::default()
             }))
             .await
             .expect("list response")
             .into_inner()
-            .map(|result| result.expect("list item"))
+            .map(|result| result.expect("list item").qso.expect("listed qso payload"))
             .collect::<Vec<_>>()
             .await;
 
@@ -1660,7 +1697,7 @@ mod tests {
         let imported = client
             .list_qsos(Request::new(ListQsosRequest {
                 limit: 1,
-                sort: SortOrder::OldestFirst as i32,
+                sort: QsoSortOrder::OldestFirst as i32,
                 ..ListQsosRequest::default()
             }))
             .await
@@ -1669,7 +1706,9 @@ mod tests {
             .next()
             .await
             .expect("list item")
-            .expect("qso");
+            .expect("qso")
+            .qso
+            .expect("listed qso payload");
 
         assert_eq!("K7RND", imported.station_callsign);
         assert_eq!(
@@ -1750,10 +1789,10 @@ mod tests {
             .expect("log second qso");
 
         let response = client
-            .export_adif(Request::new(ExportRequest {
+            .export_adif(Request::new(ExportAdifRequest {
                 contest_id: Some("FIELD-DAY".to_string()),
                 include_header: true,
-                ..ExportRequest::default()
+                ..ExportAdifRequest::default()
             }))
             .await
             .expect("export response")
@@ -1763,7 +1802,7 @@ mod tests {
             .collect::<Vec<_>>()
             .await;
         let bytes = chunks.into_iter().fold(Vec::new(), |mut output, chunk| {
-            output.extend_from_slice(&chunk.data);
+            output.extend_from_slice(&chunk.chunk.expect("export chunk payload").data);
             output
         });
         let text = String::from_utf8(bytes).expect("utf8 payload");

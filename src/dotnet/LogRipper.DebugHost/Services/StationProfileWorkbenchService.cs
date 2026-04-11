@@ -27,10 +27,14 @@ internal sealed class StationProfileWorkbenchService
                     new ListStationProfilesRequest(),
                     cancellationToken: cancellationToken)
                 .ResponseAsync,
-            client => client.GetActiveStationContextAsync(
-                    new GetActiveStationContextRequest(),
-                    cancellationToken: cancellationToken)
-                .ResponseAsync);
+            async client =>
+            {
+                var response = await client.GetActiveStationContextAsync(
+                        new GetActiveStationContextRequest(),
+                        cancellationToken: cancellationToken)
+                    .ResponseAsync;
+                return response.Context ?? throw new InvalidOperationException("GetActiveStationContext returned no context payload.");
+            });
     }
 
     public async Task<StationProfileRecord?> GetAsync(
@@ -176,7 +180,7 @@ internal sealed class StationProfileWorkbenchService
 
     private async Task ExecuteAsync(
         Func<StationProfileService.StationProfileServiceClient, Task<ListStationProfilesResponse>> catalogAction,
-        Func<StationProfileService.StationProfileServiceClient, Task<GetActiveStationContextResponse>> contextAction)
+        Func<StationProfileService.StationProfileServiceClient, Task<ActiveStationContext>> contextAction)
     {
         try
         {
@@ -241,6 +245,8 @@ internal sealed class StationProfileWorkbenchService
                 new GetActiveStationContextRequest(),
                 cancellationToken: cancellationToken)
             .ResponseAsync;
-        _workbenchState.UpdateStationProfiles(catalog, context);
+        var activeContext = context.Context
+            ?? throw new InvalidOperationException("GetActiveStationContext returned no context payload.");
+        _workbenchState.UpdateStationProfiles(catalog, activeContext);
     }
 }

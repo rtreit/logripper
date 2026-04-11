@@ -4,11 +4,13 @@ This page provides example request/response shapes and state transitions for com
 
 All examples show field values in a language-neutral pseudo-JSON format. Actual wire encoding is binary protobuf.
 
+All RPCs use unique request/response envelopes. The examples below therefore show the full envelope shape that appears on the wire, even when the interesting payload is nested one level down.
+
 ## LookupService Workflows
 
 ### Unary Callsign Lookup
 
-The simplest lookup: send one `LookupRequest`, receive one `LookupResult`.
+The simplest lookup: send one `LookupRequest`, receive one `LookupResponse`.
 
 **Request:**
 ```json
@@ -21,40 +23,46 @@ The simplest lookup: send one `LookupRequest`, receive one `LookupResult`.
 **Response (found):**
 ```json
 {
-  "state": "LOOKUP_STATE_FOUND",
-  "record": {
-    "callsign": "W1AW",
-    "first_name": "Hiram",
-    "last_name": "Maxim",
-    "country": "United States",
-    "grid_square": "FN31pr",
-    "cq_zone": 5,
-    "itu_zone": 8
-  },
-  "cache_hit": false,
-  "lookup_latency_ms": 230,
-  "queried_callsign": "W1AW"
+  "result": {
+    "state": "LOOKUP_STATE_FOUND",
+    "record": {
+      "callsign": "W1AW",
+      "first_name": "Hiram",
+      "last_name": "Maxim",
+      "country": "United States",
+      "grid_square": "FN31pr",
+      "cq_zone": 5,
+      "itu_zone": 8
+    },
+    "cache_hit": false,
+    "lookup_latency_ms": 230,
+    "queried_callsign": "W1AW"
+  }
 }
 ```
 
 **Response (not found):**
 ```json
 {
-  "state": "LOOKUP_STATE_NOT_FOUND",
-  "cache_hit": false,
-  "lookup_latency_ms": 180,
-  "queried_callsign": "NOTACALL"
+  "result": {
+    "state": "LOOKUP_STATE_NOT_FOUND",
+    "cache_hit": false,
+    "lookup_latency_ms": 180,
+    "queried_callsign": "NOTACALL"
+  }
 }
 ```
 
 **Response (provider error):**
 ```json
 {
-  "state": "LOOKUP_STATE_ERROR",
-  "error_message": "Provider configuration error: QRZ credentials not set",
-  "cache_hit": false,
-  "lookup_latency_ms": 0,
-  "queried_callsign": "W1AW"
+  "result": {
+    "state": "LOOKUP_STATE_ERROR",
+    "error_message": "Provider configuration error: QRZ credentials not set",
+    "cache_hit": false,
+    "lookup_latency_ms": 0,
+    "queried_callsign": "W1AW"
+  }
 }
 ```
 
@@ -77,19 +85,23 @@ The streaming variant is ideal for TUI/GUI clients that want to show a loading i
 Message 1 — emitted immediately:
 ```json
 {
-  "state": "LOOKUP_STATE_LOADING",
-  "queried_callsign": "K7ABC"
+  "result": {
+    "state": "LOOKUP_STATE_LOADING",
+    "queried_callsign": "K7ABC"
+  }
 }
 ```
 
 Message 2 — emitted after provider responds:
 ```json
 {
-  "state": "LOOKUP_STATE_FOUND",
-  "record": { "callsign": "K7ABC", ... },
-  "cache_hit": false,
-  "lookup_latency_ms": 310,
-  "queried_callsign": "K7ABC"
+  "result": {
+    "state": "LOOKUP_STATE_FOUND",
+    "record": { "callsign": "K7ABC", ... },
+    "cache_hit": false,
+    "lookup_latency_ms": 310,
+    "queried_callsign": "K7ABC"
+  }
 }
 ```
 *Stream closes after message 2.*
@@ -98,27 +110,31 @@ Message 2 — emitted after provider responds:
 
 Message 1:
 ```json
-{ "state": "LOOKUP_STATE_LOADING", "queried_callsign": "K7ABC" }
+{ "result": { "state": "LOOKUP_STATE_LOADING", "queried_callsign": "K7ABC" } }
 ```
 
 Message 2 — stale entry returned immediately:
 ```json
 {
-  "state": "LOOKUP_STATE_STALE",
-  "record": { "callsign": "K7ABC", ... },
-  "cache_hit": true,
-  "queried_callsign": "K7ABC"
+  "result": {
+    "state": "LOOKUP_STATE_STALE",
+    "record": { "callsign": "K7ABC", ... },
+    "cache_hit": true,
+    "queried_callsign": "K7ABC"
+  }
 }
 ```
 
 Message 3 — fresh result replaces stale entry:
 ```json
 {
-  "state": "LOOKUP_STATE_FOUND",
-  "record": { "callsign": "K7ABC", ... },
-  "cache_hit": false,
-  "lookup_latency_ms": 290,
-  "queried_callsign": "K7ABC"
+  "result": {
+    "state": "LOOKUP_STATE_FOUND",
+    "record": { "callsign": "K7ABC", ... },
+    "cache_hit": false,
+    "lookup_latency_ms": 290,
+    "queried_callsign": "K7ABC"
+  }
 }
 ```
 *Stream closes after message 3.*
@@ -147,21 +163,25 @@ Use `GetCachedCallsign` when you want a zero-latency check without triggering a 
 **Response (cache hit):**
 ```json
 {
-  "state": "LOOKUP_STATE_FOUND",
-  "record": { "callsign": "W1AW", ... },
-  "cache_hit": true,
-  "lookup_latency_ms": 0,
-  "queried_callsign": "W1AW"
+  "result": {
+    "state": "LOOKUP_STATE_FOUND",
+    "record": { "callsign": "W1AW", ... },
+    "cache_hit": true,
+    "lookup_latency_ms": 0,
+    "queried_callsign": "W1AW"
+  }
 }
 ```
 
 **Response (not cached):**
 ```json
 {
-  "state": "LOOKUP_STATE_NOT_FOUND",
-  "cache_hit": false,
-  "lookup_latency_ms": 0,
-  "queried_callsign": "W1AW"
+  "result": {
+    "state": "LOOKUP_STATE_NOT_FOUND",
+    "cache_hit": false,
+    "lookup_latency_ms": 0,
+    "queried_callsign": "W1AW"
+  }
 }
 ```
 
@@ -267,7 +287,7 @@ Stream all 20m SSB QSOs from the past week, newest first:
 }
 ```
 
-**Response stream:** Zero or more `QsoRecord` messages, one per matched QSO, then stream close.
+**Response stream:** Zero or more `ListQsosResponse` messages, each with a `qso` field, then stream close.
 
 ---
 
@@ -307,12 +327,12 @@ Stream an ADIF file in chunks (client-streaming):
 
 Chunk 1:
 ```json
-{ "data": "<ADIF header bytes>" }
+{ "chunk": { "data": "<ADIF header bytes>" } }
 ```
 
 Chunk 2:
 ```json
-{ "data": "<QSO records bytes>" }
+{ "chunk": { "data": "<QSO records bytes>" } }
 ```
 
 Client closes the send side after all chunks are sent.
@@ -350,12 +370,12 @@ Export all QSOs between two dates:
 }
 ```
 
-**Response stream:** One or more `AdifChunk` messages containing raw ADIF bytes, then stream close.
+**Response stream:** One or more `ExportAdifResponse` messages containing raw ADIF bytes in `chunk.data`, then stream close.
 
 Clients should concatenate chunk data in order to reconstruct the complete ADIF file.
 
 Notes:
-- Filters already present in `ExportRequest` (`after`, `before`, `contest_id`) are applied before serialization.
+- Filters already present in `ExportAdifRequest` (`after`, `before`, `contest_id`) are applied before serialization.
 - Export order is chronological (`oldest first`) for predictable migration output.
 - When `include_header` is `true`, the payload starts with an ADIF header containing the LogRipper program metadata.
 

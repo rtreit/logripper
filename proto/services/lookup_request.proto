@@ -1,0 +1,10 @@
+syntax = "proto3";
+
+package logripper.services;
+
+option csharp_namespace = "LogRipper.Services";
+
+message LookupRequest {
+  string callsign = 1;
+  bool skip_cache = 2;  // Force fresh lookup, bypass L1 cache
+}

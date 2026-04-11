@@ -1,4 +1,5 @@
 using LogRipper.Domain;
+using LogRipper.Services;
 
 namespace LogRipper.DebugHost.Models;
 

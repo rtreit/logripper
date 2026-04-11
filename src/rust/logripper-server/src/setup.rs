@@ -9,14 +9,15 @@ use logripper_core::lookup::{QRZ_XML_PASSWORD_ENV_VAR, QRZ_XML_USERNAME_ENV_VAR}
 use logripper_core::proto::logripper::domain::StationProfile;
 use logripper_core::proto::logripper::services::{
     setup_service_server::SetupService, station_profile_service_server::StationProfileService,
-    ClearSessionStationProfileOverrideRequest, ClearSessionStationProfileOverrideResponse,
-    DeleteStationProfileRequest, DeleteStationProfileResponse, GetActiveStationContextRequest,
-    GetActiveStationContextResponse, GetSetupStatusRequest, GetStationProfileRequest,
+    ActiveStationContext, ClearSessionStationProfileOverrideRequest,
+    ClearSessionStationProfileOverrideResponse, DeleteStationProfileRequest,
+    DeleteStationProfileResponse, GetActiveStationContextRequest, GetActiveStationContextResponse,
+    GetSetupStatusRequest, GetSetupStatusResponse, GetStationProfileRequest,
     GetStationProfileResponse, ListStationProfilesRequest, ListStationProfilesResponse,
     SaveSetupRequest, SaveSetupResponse, SaveStationProfileRequest, SaveStationProfileResponse,
     SetActiveStationProfileRequest, SetActiveStationProfileResponse,
-    SetSessionStationProfileOverrideRequest, SetSessionStationProfileOverrideResponse,
-    SetupStatusResponse, StationProfileRecord, StorageBackend,
+    SetSessionStationProfileOverrideRequest, SetSessionStationProfileOverrideResponse, SetupStatus,
+    StationProfileRecord, StorageBackend,
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
@@ -67,8 +68,10 @@ impl SetupService for SetupControlSurface {
     async fn get_setup_status(
         &self,
         _request: Request<GetSetupStatusRequest>,
-    ) -> Result<Response<SetupStatusResponse>, Status> {
-        Ok(Response::new(self.state.status().await))
+    ) -> Result<Response<GetSetupStatusResponse>, Status> {
+        Ok(Response::new(GetSetupStatusResponse {
+            status: Some(self.state.status().await),
+        }))
     }
 
     async fn save_setup(
@@ -147,11 +150,13 @@ impl StationProfileService for StationProfileControlSurface {
         &self,
         _request: Request<GetActiveStationContextRequest>,
     ) -> Result<Response<GetActiveStationContextResponse>, Status> {
-        Ok(Response::new(
-            self.state
-                .active_station_context(&self.runtime_config)
-                .await,
-        ))
+        let context = self
+            .state
+            .active_station_context(&self.runtime_config)
+            .await;
+        Ok(Response::new(GetActiveStationContextResponse {
+            context: Some(context),
+        }))
     }
 
     async fn set_session_station_profile_override(
@@ -207,7 +212,7 @@ impl SetupState {
             .map_or_else(BTreeMap::new, PersistedSetupConfig::to_runtime_values)
     }
 
-    pub(crate) async fn status(&self) -> SetupStatusResponse {
+    pub(crate) async fn status(&self) -> SetupStatus {
         let persisted_config = self.persisted_config.read().await.clone();
         build_status(
             self.config_path.as_path(),
@@ -220,7 +225,7 @@ impl SetupState {
         &self,
         request: SaveSetupRequest,
         runtime_config: &RuntimeConfigManager,
-    ) -> Result<SetupStatusResponse, String> {
+    ) -> Result<SetupStatus, String> {
         let existing_config = self.persisted_config.read().await.clone();
         let config = PersistedSetupConfig::from_request(
             existing_config.as_ref(),
@@ -348,7 +353,7 @@ impl SetupState {
     async fn active_station_context(
         &self,
         runtime_config: &RuntimeConfigManager,
-    ) -> GetActiveStationContextResponse {
+    ) -> ActiveStationContext {
         let persisted_config = self.persisted_config.read().await.clone();
         let session_override_profile = runtime_config.session_station_profile_override().await;
         let effective_active_profile = runtime_config.effective_station_profile().await;
@@ -362,7 +367,7 @@ impl SetupState {
             );
         }
 
-        GetActiveStationContextResponse {
+        ActiveStationContext {
             persisted_active_profile_id: persisted_config
                 .as_ref()
                 .and_then(PersistedSetupConfig::active_station_profile_id),
@@ -380,7 +385,7 @@ impl SetupState {
         &self,
         request: SetSessionStationProfileOverrideRequest,
         runtime_config: &RuntimeConfigManager,
-    ) -> Result<GetActiveStationContextResponse, String> {
+    ) -> Result<ActiveStationContext, String> {
         let profile = normalize_profile_payload(
             request.profile.ok_or_else(|| {
                 "SetSessionStationProfileOverride requires a profile payload.".to_string()
@@ -397,7 +402,7 @@ impl SetupState {
     async fn clear_session_station_profile_override(
         &self,
         runtime_config: &RuntimeConfigManager,
-    ) -> Result<GetActiveStationContextResponse, String> {
+    ) -> Result<ActiveStationContext, String> {
         runtime_config
             .set_session_station_profile_override(None)
             .await?;
@@ -992,7 +997,7 @@ fn build_status(
     config_path: &Path,
     suggested_log_file_path: &Path,
     persisted_config: Option<&PersistedSetupConfig>,
-) -> SetupStatusResponse {
+) -> SetupStatus {
     let warnings = build_warnings(persisted_config);
     let station_profile = persisted_config.and_then(PersistedSetupConfig::station_profile);
     let log_file_path = persisted_config.and_then(PersistedSetupConfig::log_file_path);
@@ -1001,7 +1006,7 @@ fn build_status(
         PersistedSetupConfig::runtime_storage_backend,
     );
 
-    SetupStatusResponse {
+    SetupStatus {
         config_file_exists: persisted_config.is_some(),
         setup_complete: persisted_config.is_some() && warnings.is_empty(),
         config_path: config_path.display().to_string(),
@@ -1186,7 +1191,9 @@ mod tests {
             SetupService::get_setup_status(&service, Request::new(GetSetupStatusRequest {}))
                 .await
                 .expect("status")
-                .into_inner();
+                .into_inner()
+                .status
+                .expect("status payload");
 
         assert!(!status.config_file_exists);
         assert!(!status.setup_complete);
@@ -1226,7 +1233,9 @@ station_callsign = "K7RND"
             SetupService::get_setup_status(&service, Request::new(GetSetupStatusRequest {}))
                 .await
                 .expect("status")
-                .into_inner();
+                .into_inner()
+                .status
+                .expect("status payload");
 
         assert!(status.config_file_exists);
         assert!(status.setup_complete);
@@ -1262,7 +1271,9 @@ station_callsign = "K7RND"
             SetupService::get_setup_status(&service, Request::new(GetSetupStatusRequest {}))
                 .await
                 .expect("status")
-                .into_inner();
+                .into_inner()
+                .status
+                .expect("status payload");
 
         assert!(status.config_file_exists);
         assert!(!status.setup_complete);
@@ -1579,7 +1590,9 @@ station_callsign = "K7RND"
         )
         .await
         .expect("active context")
-        .into_inner();
+        .into_inner()
+        .context
+        .expect("context payload");
         assert_eq!(Some("pota"), context.persisted_active_profile_id.as_deref());
         assert_eq!(
             Some("K7RND/P"),

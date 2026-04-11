@@ -1,0 +1,12 @@
+syntax = "proto3";
+
+package logripper.services;
+
+option csharp_namespace = "LogRipper.Services";
+
+message UpdateQsoResponse {
+  bool success = 1;
+  optional string error = 2;
+  bool sync_success = 3;
+  optional string sync_error = 4;
+}

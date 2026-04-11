@@ -8,7 +8,7 @@ internal sealed record StorageSmokeTestResult(
     LogQsoResponse? LogResponse,
     GetQsoResponse? LoadedResponse,
     IReadOnlyList<QsoRecord> ListedQsos,
-    SyncStatusResponse? SyncStatus,
+    GetSyncStatusResponse? SyncStatus,
     DeleteQsoResponse? DeleteResponse,
     bool RetainedRecord,
     bool DeleteVerified,

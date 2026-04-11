@@ -1,0 +1,20 @@
+syntax = "proto3";
+
+package logripper.domain;
+
+option csharp_namespace = "LogRipper.Domain";
+
+import "domain/callsign_record.proto";
+import "domain/debug_http_exchange.proto";
+import "domain/lookup_state.proto";
+
+// Result of a callsign lookup.
+message LookupResult {
+  LookupState state = 1;  // Outcome of the lookup
+  optional CallsignRecord record = 2;  // Populated when state == FOUND
+  optional string error_message = 3;  // Human-readable error when state == ERROR
+  bool cache_hit = 4;  // True if result was served from L1 cache
+  uint32 lookup_latency_ms = 5;  // Round-trip latency in milliseconds
+  string queried_callsign = 6;  // Echo of the original requested callsign
+  repeated DebugHttpExchange debug_http_exchanges = 7;  // Redacted HTTP exchanges for debug workbench inspection
+}

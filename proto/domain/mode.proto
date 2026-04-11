@@ -1,0 +1,56 @@
+syntax = "proto3";
+
+package logripper.domain;
+
+option csharp_namespace = "LogRipper.Domain";
+
+// Standard operating modes (full ADIF 3.1.7 Mode enumeration).
+// Submodes are represented as a string field on QsoRecord, not an enum.
+enum Mode {
+  MODE_UNSPECIFIED = 0;
+  MODE_AM = 1;
+  MODE_ARDOP = 2;
+  MODE_ATV = 3;
+  MODE_CHIP = 4;
+  MODE_CLO = 5;
+  MODE_CONTESTI = 6;
+  MODE_CW = 7;
+  MODE_DIGITALVOICE = 8;  // Submodes: C4FM, DMR, DSTAR, FREEDV, M17
+  MODE_DOMINO = 9;
+  MODE_DYNAMIC = 10;  // Submodes: VARA HF/FM, FREEDATA
+  MODE_FAX = 11;
+  MODE_FM = 12;
+  MODE_FSK = 13;
+  MODE_FT8 = 14;
+  MODE_HELL = 15;
+  MODE_ISCAT = 16;
+  MODE_JT4 = 17;
+  MODE_JT9 = 18;
+  MODE_JT44 = 19;
+  MODE_JT65 = 20;
+  MODE_MFSK = 21;  // Submodes: FST4, FST4W, FT2, FT4, JS8, MSK144, Q65
+  MODE_MTONE = 22;
+  MODE_MSK144 = 23;
+  MODE_OFDM = 24;
+  MODE_OLIVIA = 25;
+  MODE_OPERA = 26;
+  MODE_PAC = 27;
+  MODE_PAX = 28;
+  MODE_PKT = 29;
+  MODE_PSK = 30;  // Submodes: PSK31, PSK63, PSK125, QPSK variants
+  MODE_Q15 = 31;
+  MODE_QRA64 = 32;
+  MODE_ROS = 33;
+  MODE_RTTY = 34;
+  MODE_RTTYM = 35;
+  MODE_SSB = 36;  // Submodes: USB, LSB
+  MODE_SSTV = 37;
+  MODE_T10 = 38;
+  MODE_THOR = 39;
+  MODE_THRB = 40;
+  MODE_TOR = 41;
+  MODE_V4 = 42;
+  MODE_VOI = 43;
+  MODE_WINMOR = 44;
+  MODE_WSPR = 45;
+}

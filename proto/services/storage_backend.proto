@@ -1,0 +1,11 @@
+syntax = "proto3";
+
+package logripper.services;
+
+option csharp_namespace = "LogRipper.Services";
+
+enum StorageBackend {
+  STORAGE_BACKEND_UNSPECIFIED = 0;
+  STORAGE_BACKEND_MEMORY = 1;
+  STORAGE_BACKEND_SQLITE = 2;
+}

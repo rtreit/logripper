@@ -1,0 +1,18 @@
+syntax = "proto3";
+
+package logripper.services;
+
+option csharp_namespace = "LogRipper.Services";
+
+import "domain/station_profile.proto";
+import "services/runtime_config_definition.proto";
+import "services/runtime_config_value.proto";
+
+message RuntimeConfigSnapshot {
+  repeated RuntimeConfigDefinition definitions = 1;
+  repeated RuntimeConfigValue values = 2;
+  string active_storage_backend = 3;
+  string lookup_provider_summary = 4;
+  repeated string warnings = 5;
+  logripper.domain.StationProfile active_station_profile = 6;
+}

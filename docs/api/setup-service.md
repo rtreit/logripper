@@ -23,6 +23,8 @@ Use it to:
 | `GetSetupStatus` | ✅ Implemented | Returns persisted setup status, config path, suggested log file path, and validation warnings |
 | `SaveSetup` | ✅ Implemented | Validates and writes `config.toml`, then hot-applies the new persisted config to the running engine |
 
+Both RPCs use unique request/response envelopes and share a reusable `SetupStatus` payload. `GetSetupStatusResponse.status` and `SaveSetupResponse.status` each carry that payload instead of reusing an RPC response as a nested model.
+
 ## RPCs
 
 ### GetSetupStatus
@@ -30,10 +32,16 @@ Use it to:
 Read the current persisted setup status.
 
 ```
-rpc GetSetupStatus(GetSetupStatusRequest) returns (SetupStatusResponse)
+rpc GetSetupStatus(GetSetupStatusRequest) returns (GetSetupStatusResponse)
 ```
 
-**Response highlights**
+**Response envelope:** `GetSetupStatusResponse`
+
+| Field | Type | Meaning |
+|---|---|---|
+| `status` | `SetupStatus` | Reusable setup payload |
+
+**`SetupStatus` highlights**
 
 | Field | Type | Meaning |
 |---|---|---|
@@ -73,6 +81,12 @@ rpc SaveSetup(SaveSetupRequest) returns (SaveSetupResponse)
 - QRZ XML username/password must either both be set or both be omitted
 - `dxcc`, `cq_zone`, and `itu_zone` must be greater than zero when present
 - `latitude` / `longitude` must be finite and within valid bounds
+
+**Response envelope:** `SaveSetupResponse`
+
+| Field | Type | Meaning |
+|---|---|---|
+| `status` | `SetupStatus` | The persisted setup state after validation/save completes |
 
 Legacy compatibility note: the proto still carries `storage_backend`, `sqlite_path`, and `suggested_sqlite_path` for older clients, but new callers should use `log_file_path` and `suggested_log_file_path`.
 

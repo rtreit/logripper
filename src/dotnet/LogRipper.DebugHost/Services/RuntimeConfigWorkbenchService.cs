@@ -22,7 +22,14 @@ internal sealed class RuntimeConfigWorkbenchService
     public Task<RuntimeConfigSnapshot?> RefreshAsync(CancellationToken cancellationToken = default)
     {
         return ExecuteAsync(
-            client => client.GetRuntimeConfigAsync(new GetRuntimeConfigRequest(), cancellationToken: cancellationToken).ResponseAsync,
+            async client =>
+            {
+                var response = await client.GetRuntimeConfigAsync(
+                        new GetRuntimeConfigRequest(),
+                        cancellationToken: cancellationToken)
+                    .ResponseAsync;
+                return response.Snapshot ?? throw new InvalidOperationException("GetRuntimeConfig returned no snapshot payload.");
+            },
             cancellationToken);
     }
 
@@ -33,13 +40,17 @@ internal sealed class RuntimeConfigWorkbenchService
         ArgumentNullException.ThrowIfNull(mutations);
 
         return ExecuteAsync(
-            client => client.ApplyRuntimeConfigAsync(
+            async client =>
+            {
+                var response = await client.ApplyRuntimeConfigAsync(
                     new ApplyRuntimeConfigRequest
                     {
                         Mutations = { mutations }
                     },
                     cancellationToken: cancellationToken)
-                .ResponseAsync,
+                    .ResponseAsync;
+                return response.Snapshot ?? throw new InvalidOperationException("ApplyRuntimeConfig returned no snapshot payload.");
+            },
             cancellationToken);
     }
 
@@ -54,7 +65,14 @@ internal sealed class RuntimeConfigWorkbenchService
         }
 
         return ExecuteAsync(
-            client => client.ResetRuntimeConfigAsync(request, cancellationToken: cancellationToken).ResponseAsync,
+            async client =>
+            {
+                var response = await client.ResetRuntimeConfigAsync(
+                        request,
+                        cancellationToken: cancellationToken)
+                    .ResponseAsync;
+                return response.Snapshot ?? throw new InvalidOperationException("ResetRuntimeConfig returned no snapshot payload.");
+            },
             cancellationToken);
     }
 

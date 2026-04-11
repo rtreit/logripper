@@ -1,0 +1,29 @@
+syntax = "proto3";
+
+package logripper.services;
+
+option csharp_namespace = "LogRipper.Services";
+
+import "domain/station_profile.proto";
+import "services/storage_backend.proto";
+
+message SetupStatus {
+  bool config_file_exists = 1;
+  bool setup_complete = 2;
+  string config_path = 3;
+  // Legacy compatibility field. New clients should use log_file_path.
+  StorageBackend storage_backend = 4;
+  // Legacy compatibility field. New clients should use log_file_path.
+  optional string sqlite_path = 5;
+  bool has_station_profile = 6;
+  logripper.domain.StationProfile station_profile = 7;
+  optional string qrz_xml_username = 8;
+  bool has_qrz_xml_password = 9;
+  // Legacy compatibility field. New clients should use suggested_log_file_path.
+  string suggested_sqlite_path = 10;
+  repeated string warnings = 11;
+  optional string active_station_profile_id = 12;
+  uint32 station_profile_count = 13;
+  optional string log_file_path = 14;
+  string suggested_log_file_path = 15;
+}

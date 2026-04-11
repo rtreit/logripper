@@ -1,0 +1,82 @@
+syntax = "proto3";
+
+package logripper.domain;
+
+option csharp_namespace = "LogRipper.Domain";
+
+import "domain/band.proto";
+import "domain/mode.proto";
+import "domain/qsl_status.proto";
+import "domain/rst_report.proto";
+import "domain/station_snapshot.proto";
+import "domain/sync_status.proto";
+import "google/protobuf/timestamp.proto";
+
+// The core QSO (contact) record. This is LogRipper's primary entity.
+message QsoRecord {
+  // --- Identity ---
+  string local_id = 1;  // LogRipper-assigned UUID
+  optional string qrz_logid = 2;  // QRZ logbook record ID (after sync)
+  optional string qrz_bookid = 3;  // QRZ logbook ID
+
+  // --- Core contact fields ---
+  string station_callsign = 10;  // Local operator's callsign
+  string worked_callsign = 11;  // Remote station callsign
+  google.protobuf.Timestamp utc_timestamp = 12;
+  Band band = 13;
+  Mode mode = 14;
+  optional uint64 frequency_khz = 15;  // Precise frequency in kHz
+  optional string submode = 16;  // ADIF submode string (e.g., "USB", "PSK31")
+  optional StationSnapshot station_snapshot = 17;  // Materialized local-station values used at log time
+
+  // --- Signal reports ---
+  optional RstReport rst_sent = 20;
+  optional RstReport rst_received = 21;
+  optional string tx_power = 22;  // Transmit power
+
+  // --- QSL / confirmation ---
+  QslStatus qsl_sent_status = 30;
+  QslStatus qsl_received_status = 31;
+  optional bool lotw_sent = 32;
+  optional bool lotw_received = 33;
+  optional bool eqsl_sent = 34;
+  optional bool eqsl_received = 35;
+
+  // --- Enrichment from callsign lookup ---
+  optional string worked_operator_name = 40;
+  optional string worked_grid = 41;
+  optional string worked_country = 42;
+  optional uint32 worked_dxcc = 43;
+  optional string worked_state = 44;
+  optional uint32 worked_cq_zone = 45;
+  optional uint32 worked_itu_zone = 46;
+  optional string worked_county = 47;
+  optional string worked_iota = 48;
+  optional string worked_continent = 49;  // 2-letter
+
+  // --- Contest fields ---
+  optional string contest_id = 50;
+  optional string serial_sent = 51;
+  optional string serial_received = 52;
+  optional string exchange_sent = 53;
+  optional string exchange_received = 54;
+
+  // --- Propagation ---
+  optional string prop_mode = 55;  // ADIF Propagation Mode enum value
+  optional string sat_name = 56;  // Satellite name
+  optional string sat_mode = 57;  // Satellite mode
+
+  // --- Operator notes ---
+  optional string notes = 60;
+  optional string comment = 61;
+
+  // --- Metadata ---
+  google.protobuf.Timestamp created_at = 70;
+  google.protobuf.Timestamp updated_at = 71;
+  SyncStatus sync_status = 72;
+
+  // --- ADIF round-trip overflow ---
+  // Stores ADIF fields not mapped to dedicated proto fields,
+  // preserving them for lossless re-export. Key = ADIF field name (uppercase).
+  map<string, string> extra_fields = 80;
+}

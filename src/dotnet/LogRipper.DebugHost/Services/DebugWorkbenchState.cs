@@ -34,13 +34,13 @@ internal sealed class DebugWorkbenchState
 
     public string? RuntimeConfigErrorMessage { get; private set; }
 
-    public SetupStatusResponse? SetupStatus { get; private set; }
+    public SetupStatus? SetupStatus { get; private set; }
 
     public string? SetupErrorMessage { get; private set; }
 
     public ListStationProfilesResponse? StationProfileCatalog { get; private set; }
 
-    public GetActiveStationContextResponse? ActiveStationContext { get; private set; }
+    public ActiveStationContext? ActiveStationContext { get; private set; }
 
     public string? StationProfileErrorMessage { get; private set; }
 
@@ -82,7 +82,7 @@ internal sealed class DebugWorkbenchState
             : message.Trim();
     }
 
-    public void UpdateSetupStatus(SetupStatusResponse status)
+    public void UpdateSetupStatus(SetupStatus status)
     {
         ArgumentNullException.ThrowIfNull(status);
 
@@ -113,7 +113,7 @@ internal sealed class DebugWorkbenchState
 
     public void UpdateStationProfiles(
         ListStationProfilesResponse catalog,
-        GetActiveStationContextResponse context)
+        ActiveStationContext context)
     {
         ArgumentNullException.ThrowIfNull(catalog);
         ArgumentNullException.ThrowIfNull(context);
@@ -248,7 +248,7 @@ internal sealed class DebugWorkbenchState
 
             var client = new LogbookService.LogbookServiceClient(grpcChannel);
             var callOptions = new CallOptions(cancellationToken: grpcTimeoutSource.Token);
-            await client.GetSyncStatusAsync(new SyncStatusRequest(), callOptions);
+            await client.GetSyncStatusAsync(new GetSyncStatusRequest(), callOptions);
 
             LastProbe = new TransportProbeResult(
                 true,

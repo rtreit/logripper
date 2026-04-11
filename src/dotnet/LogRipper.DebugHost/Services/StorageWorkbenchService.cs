@@ -30,7 +30,7 @@ internal sealed class StorageWorkbenchService
         LogQsoResponse? logResponse = null;
         GetQsoResponse? loadedResponse = null;
         DeleteQsoResponse? deleteResponse = null;
-        SyncStatusResponse? syncStatus = null;
+        GetSyncStatusResponse? syncStatus = null;
         var listedQsos = new List<QsoRecord>();
         var deleteVerified = false;
 
@@ -56,17 +56,18 @@ internal sealed class StorageWorkbenchService
                 {
                     CallsignFilter = sampleQso.WorkedCallsign,
                     Limit = 25,
-                    Sort = SortOrder.NewestFirst
+                    Sort = QsoSortOrder.NewestFirst
                 },
                 cancellationToken: cancellationToken);
 
-            await foreach (var qso in listCall.ResponseStream.ReadAllAsync(cancellationToken))
+            await foreach (var response in listCall.ResponseStream.ReadAllAsync(cancellationToken))
             {
+                var qso = response.Qso ?? throw new InvalidOperationException("ListQsos returned a response without a qso payload.");
                 listedQsos.Add(qso);
             }
 
             syncStatus = await client.GetSyncStatusAsync(
-                new SyncStatusRequest(),
+                new GetSyncStatusRequest(),
                 cancellationToken: cancellationToken);
 
             if (!retainRecord)

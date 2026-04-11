@@ -10,7 +10,7 @@ internal static class StreamLookupCommand
     public static async Task<int> RunAsync(GrpcChannel channel, string callsign, bool skipCache)
     {
         var client = new LookupService.LookupServiceClient(channel);
-        using var call = client.StreamLookup(new LookupRequest
+        using var call = client.StreamLookup(new StreamLookupRequest
         {
             Callsign = callsign,
             SkipCache = skipCache,
@@ -24,7 +24,7 @@ internal static class StreamLookupCommand
 
         while (await call.ResponseStream.MoveNext(CancellationToken.None))
         {
-            var update = call.ResponseStream.Current;
+            var update = call.ResponseStream.Current.Result ?? new LookupResult();
             var state = update.State;
             var elapsed = stopwatch.ElapsedMilliseconds;
 
@@ -44,7 +44,7 @@ internal static class StreamLookupCommand
             LookupCommand.PrintRecord(record);
         }
 
-        var finalState = (lastResult?.State) ?? LookupState.Unspecified;
+        var finalState = lastResult?.State ?? LookupState.Unspecified;
         return finalState == LookupState.Found ? 0 : 1;
     }
 }

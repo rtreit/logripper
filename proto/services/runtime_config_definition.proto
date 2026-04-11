@@ -1,0 +1,16 @@
+syntax = "proto3";
+
+package logripper.services;
+
+option csharp_namespace = "LogRipper.Services";
+
+import "services/runtime_config_value_kind.proto";
+
+message RuntimeConfigDefinition {
+  string key = 1;
+  string label = 2;
+  string description = 3;
+  RuntimeConfigValueKind kind = 4;
+  bool secret = 5;
+  repeated string allowed_values = 6;
+}

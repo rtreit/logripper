@@ -1,0 +1,11 @@
+syntax = "proto3";
+
+package logripper.services;
+
+option csharp_namespace = "LogRipper.Services";
+
+message ImportAdifResponse {
+  uint32 records_imported = 1;
+  uint32 records_skipped = 2;  // Duplicates or parse errors
+  repeated string warnings = 3;
+}

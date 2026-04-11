@@ -12,25 +12,37 @@ LogRipper is an **engine-first** project. The engine exposes everything through 
 | **StationProfileService** | Persisted station profile CRUD, active selection, bounded session override state | [station-profile-service.md](station-profile-service.md) |
 | **LookupService** | Callsign lookups — single, streaming, batch, cached, DXCC | [lookup-service.md](lookup-service.md) |
 | **LogbookService** | QSO CRUD, QRZ logbook sync, ADIF import/export | [logbook-service.md](logbook-service.md) |
+| **DeveloperControlService** | Developer-only runtime config overrides and diagnostics | [`proto/services/developer_control_service.proto`](../../proto/services/developer_control_service.proto) |
 
 ## Contract Source of Truth
 
-All service and domain types are defined in `proto/`:
+All service and domain types are defined in `proto/`. LogRipper treats protobuf 1-1-1 and per-RPC envelopes as an architectural rule:
 
 ```
 proto/
 ├── domain/
-│   ├── callsign.proto   # CallsignRecord, DxccEntity, GeoSource, QslPreference
-│   ├── qso.proto        # QsoRecord, Band, Mode, RstReport, SyncStatus, QslStatus
-│   ├── lookup.proto     # LookupResult, LookupState, LookupRequest, BatchLookup
-│   └── station.proto    # StationProfile, StationSnapshot
+│   ├── callsign_record.proto
+│   ├── dxcc_entity.proto
+│   ├── lookup_result.proto
+│   ├── qso_record.proto
+│   ├── station_profile.proto
+│   └── ... one reusable domain type per file
 └── services/
-    ├── setup_service.proto    # SetupService gRPC definitions
-    ├── station_profile_service.proto # StationProfileService gRPC definitions
-    ├── lookup_service.proto   # LookupService gRPC definitions
-    ├── logbook_service.proto  # LogbookService gRPC definitions
-    └── debug_control_service.proto # DeveloperControlService gRPC definitions
+    ├── setup_service.proto                # service declaration only
+    ├── station_profile_service.proto      # service declaration only
+    ├── lookup_service.proto               # service declaration only
+    ├── logbook_service.proto              # service declaration only
+    ├── developer_control_service.proto    # service declaration only
+    ├── lookup_request.proto               # per-RPC envelope
+    ├── lookup_response.proto              # per-RPC envelope
+    └── ... one envelope/support type per file
 ```
+
+Rules of thumb:
+
+- Every RPC uses a unique `XxxRequest` and `XxxResponse` envelope, including streaming RPCs.
+- Shared business payloads live in dedicated domain or service support messages and are nested inside envelopes.
+- Service files contain only the `service`; request/response/support messages live beside them as their own files.
 
 The `.proto` files are the durable reference source. Comments inside them document individual field and RPC semantics. The reference docs in this directory provide higher-level integration guidance and implementation-status tables on top of those definitions.
 

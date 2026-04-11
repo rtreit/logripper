@@ -6,16 +6,13 @@ lint:
   use:
     - STANDARD
   # LogRipper intentionally keeps repo-scoped packages under proto/domain and
-  # proto/services, allows shared domain messages to serve directly as some RPC
-  # request/response shapes, and preserves operational zero-values for enums
-  # where zero is the true default behavior.
+  # proto/services and preserves operational zero-values for enums where zero is
+  # the true default behavior. RPC envelopes follow Buf's standard request and
+  # response naming/uniqueness rules.
   except:
     - ENUM_ZERO_VALUE_SUFFIX
     - PACKAGE_DIRECTORY_MATCH
     - PACKAGE_VERSION_SUFFIX
-    - RPC_REQUEST_RESPONSE_UNIQUE
-    - RPC_REQUEST_STANDARD_NAME
-    - RPC_RESPONSE_STANDARD_NAME
   rpc_allow_google_protobuf_empty_requests: true
   rpc_allow_google_protobuf_empty_responses: true
 breaking:

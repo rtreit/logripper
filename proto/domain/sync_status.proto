@@ -1,0 +1,13 @@
+syntax = "proto3";
+
+package logripper.domain;
+
+option csharp_namespace = "LogRipper.Domain";
+
+// Tracks whether a QSO has been synced with the QRZ logbook.
+enum SyncStatus {
+  SYNC_STATUS_LOCAL_ONLY = 0;  // Not yet uploaded
+  SYNC_STATUS_SYNCED = 1;  // Matches QRZ logbook
+  SYNC_STATUS_MODIFIED = 2;  // Local edits since last sync
+  SYNC_STATUS_CONFLICT = 3;  // Local and remote diverged
+}

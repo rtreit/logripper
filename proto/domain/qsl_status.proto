@@ -1,0 +1,15 @@
+syntax = "proto3";
+
+package logripper.domain;
+
+option csharp_namespace = "LogRipper.Domain";
+
+// QSL card / confirmation status (aligned with ADIF QSL Sent/Rcvd enumerations).
+enum QslStatus {
+  QSL_STATUS_UNSPECIFIED = 0;
+  QSL_STATUS_NO = 1;  // N — not sent/received
+  QSL_STATUS_YES = 2;  // Y — sent/received
+  QSL_STATUS_REQUESTED = 3;  // R — requested
+  QSL_STATUS_QUEUED = 4;  // Q — queued (sent only)
+  QSL_STATUS_IGNORE = 5;  // I — ignore/invalid
+}

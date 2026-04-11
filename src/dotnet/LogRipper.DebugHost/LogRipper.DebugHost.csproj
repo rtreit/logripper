@@ -17,20 +17,10 @@
     <Protobuf Include="..\..\..\proto\domain\*.proto"
               ProtoRoot="..\..\..\proto"
               GrpcServices="None" />
-    <Protobuf Include="..\..\..\proto\services\lookup_service.proto"
+    <Protobuf Include="..\..\..\proto\services\*.proto"
               ProtoRoot="..\..\..\proto"
-              GrpcServices="Client" />
-    <Protobuf Include="..\..\..\proto\services\logbook_service.proto"
-              ProtoRoot="..\..\..\proto"
-              GrpcServices="Client" />
-    <Protobuf Include="..\..\..\proto\services\debug_control_service.proto"
-              ProtoRoot="..\..\..\proto"
-              GrpcServices="Client" />
-    <Protobuf Include="..\..\..\proto\services\setup_service.proto"
-              ProtoRoot="..\..\..\proto"
-              GrpcServices="Client" />
-    <Protobuf Include="..\..\..\proto\services\station_profile_service.proto"
-              ProtoRoot="..\..\..\proto"
+              GrpcServices="None" />
+    <Protobuf Update="..\..\..\proto\services\*service.proto"
               GrpcServices="Client" />
   </ItemGroup>
 

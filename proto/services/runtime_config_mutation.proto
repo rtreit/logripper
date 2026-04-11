@@ -1,0 +1,13 @@
+syntax = "proto3";
+
+package logripper.services;
+
+option csharp_namespace = "LogRipper.Services";
+
+import "services/runtime_config_mutation_kind.proto";
+
+message RuntimeConfigMutation {
+  string key = 1;
+  RuntimeConfigMutationKind kind = 2;
+  optional string value = 3;
+}

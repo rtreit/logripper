@@ -1,0 +1,19 @@
+syntax = "proto3";
+
+package logripper.domain;
+
+option csharp_namespace = "LogRipper.Domain";
+
+// The state of an in-flight or completed lookup operation.
+//
+// State machine for streaming lookups:
+//   LOADING -> (STALE)? -> FOUND | NOT_FOUND | ERROR
+enum LookupState {
+  LOOKUP_STATE_UNSPECIFIED = 0;  // Default/zero value — should not appear in normal responses
+  LOOKUP_STATE_LOADING = 1;  // Request in flight; emitted first by StreamLookup
+  LOOKUP_STATE_FOUND = 2;  // Callsign resolved successfully; record field is populated
+  LOOKUP_STATE_NOT_FOUND = 3;  // Callsign does not exist in the provider
+  LOOKUP_STATE_ERROR = 4;  // Provider error (network, auth, rate limit); see error_message
+  LOOKUP_STATE_STALE = 5;  // Returning cached data while a background refresh is pending
+  LOOKUP_STATE_CANCELLED = 6;  // Lookup was superseded by a newer request
+}

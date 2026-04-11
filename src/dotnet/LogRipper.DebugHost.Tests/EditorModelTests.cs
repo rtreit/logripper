@@ -12,7 +12,7 @@ public class EditorModelTests
     public void SetupEditorModel_create_uses_persisted_status_and_defaults()
     {
         var model = SetupEditorModel.Create(
-            new SetupStatusResponse
+            new SetupStatus
             {
                 LogFilePath = @".\data\portable.db",
                 QrzXmlUsername = "k7rnd",

@@ -1,0 +1,12 @@
+syntax = "proto3";
+
+package logripper.services;
+
+option csharp_namespace = "LogRipper.Services";
+
+import "domain/qso_record.proto";
+
+message LogQsoRequest {
+  logripper.domain.QsoRecord qso = 1;
+  bool sync_to_qrz = 2;  // Also upload to QRZ immediately
+}

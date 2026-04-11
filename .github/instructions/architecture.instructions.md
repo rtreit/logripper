@@ -193,13 +193,23 @@ QRZ, XML, HTTP, auth, and future providers are edge concerns.
 
 All shared domain types are defined in `.proto` files under `proto/`. These are the single source of truth:
 
-- `proto/domain/callsign.proto` — CallsignRecord, DxccEntity, GeoSource
-- `proto/domain/qso.proto` — QsoRecord, Band, Mode, RstReport, SyncStatus
-- `proto/domain/lookup.proto` — LookupResult, LookupState, LookupRequest
-- `proto/services/lookup_service.proto` — gRPC LookupService
-- `proto/services/logbook_service.proto` — gRPC LogbookService
+- `proto/domain/callsign_record.proto` — CallsignRecord
+- `proto/domain/dxcc_entity.proto` — DxccEntity
+- `proto/domain/qso_record.proto` — QsoRecord
+- `proto/domain/lookup_result.proto` — LookupResult
+- `proto/domain/lookup_state.proto` — LookupState
+- `proto/services/lookup_service.proto` — gRPC LookupService declaration
+- `proto/services/logbook_service.proto` — gRPC LogbookService declaration
 
 Code is generated for both Rust (`prost`/`tonic`) and C# (`Grpc.Tools`). Never hand-write types that should come from proto generation.
+
+Treat protobuf 1-1-1 as an architectural rule:
+
+- one top-level message, enum, or service per `.proto` file by default
+- service declaration files contain only the `service`
+- every RPC gets unique `XxxRequest` and `XxxResponse` envelopes
+- reusable payloads are extracted into dedicated domain or service support messages and nested inside envelopes
+- exceptions are rare, must be explicit and documented, and never apply to per-RPC envelopes
 
 ### Language Split
 

@@ -27,6 +27,8 @@ LOGRIPPER_SERVER_ADDR=0.0.0.0:50051 cargo run -p logripper-server
 
 The proto files under `proto/` are the authoritative contract. Use standard protobuf/gRPC tooling for your language to generate client stubs.
 
+LogRipper follows protobuf 1-1-1 by default: one top-level entity per file, service files that contain only the `service`, and method-specific `XxxRequest` / `XxxResponse` envelopes for every RPC. Your code generation step therefore needs to include the split service support files, not just the `*service.proto` declarations.
+
 ### Prerequisites
 
 Install the Protocol Buffers compiler:
@@ -58,11 +60,14 @@ The repository uses `Grpc.Tools` for automatic C# code generation at MSBuild tim
 
 ```xml
 <ItemGroup>
-  <Protobuf Include="..\..\proto\services\lookup_service.proto" GrpcServices="Client" />
-  <Protobuf Include="..\..\proto\services\logbook_service.proto" GrpcServices="Client" />
-  <Protobuf Include="..\..\proto\domain\callsign.proto" GrpcServices="None" />
-  <Protobuf Include="..\..\proto\domain\lookup.proto" GrpcServices="None" />
-  <Protobuf Include="..\..\proto\domain\qso.proto" GrpcServices="None" />
+  <Protobuf Include="..\..\proto\domain\*.proto"
+            ProtoRoot="..\..\proto"
+            GrpcServices="None" />
+  <Protobuf Include="..\..\proto\services\*.proto"
+            ProtoRoot="..\..\proto"
+            GrpcServices="None" />
+  <Protobuf Update="..\..\proto\services\*service.proto"
+            GrpcServices="Client" />
 </ItemGroup>
 ```
 
@@ -80,18 +85,34 @@ The debug workbench under `src/dotnet/LogRipper.DebugHost/` is a working example
 
 The repository engine uses `prost` + `tonic-build` with a `build.rs` script. See `src/rust/logripper-core/build.rs` for the generation setup.
 
-For a standalone client (not using the engine crate), add to `build.rs`:
+For a standalone Rust client, prefer recursive discovery so new split contract files are picked up automatically:
 
 ```rust
+use std::path::{Path, PathBuf};
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    tonic_build::configure()
-        .compile_protos(
-            &[
-                "../../proto/services/lookup_service.proto",
-                "../../proto/services/logbook_service.proto",
-            ],
-            &["../../proto"],
-        )?;
+    let proto_root = PathBuf::from("../../proto");
+    let mut protos = Vec::new();
+    collect_proto_files(&proto_root.join("domain"), &mut protos)?;
+    collect_proto_files(&proto_root.join("services"), &mut protos)?;
+    protos.sort();
+
+    tonic_build::configure().compile_protos(&protos, &[&proto_root])?;
+    Ok(())
+}
+
+fn collect_proto_files(
+    directory: &Path,
+    protos: &mut Vec<PathBuf>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    for entry in std::fs::read_dir(directory)? {
+        let path = entry?.path();
+        if path.is_dir() {
+            collect_proto_files(path.as_path(), protos)?;
+        } else if path.extension().and_then(|value| value.to_str()) == Some("proto") {
+            protos.push(path);
+        }
+    }
     Ok(())
 }
 ```
@@ -115,9 +136,8 @@ protoc \
   --proto_path=proto \
   --go_out=gen \
   --go-grpc_out=gen \
-  proto/services/lookup_service.proto \
-  proto/services/logbook_service.proto \
-  proto/domain/*.proto
+  proto/domain/*.proto \
+  proto/services/*.proto
 ```
 
 ### JavaScript / TypeScript (Node.js, not browser)
@@ -129,9 +149,8 @@ npx grpc_tools_node_protoc \
   --proto_path=proto \
   --js_out=import_style=commonjs,binary:gen \
   --grpc_out=grpc_js:gen \
-  proto/services/lookup_service.proto \
-  proto/services/logbook_service.proto \
-  proto/domain/*.proto
+  proto/domain/*.proto \
+  proto/services/*.proto
 ```
 
 Or use `ts-proto` for TypeScript with full type generation:
@@ -141,9 +160,8 @@ npx protoc \
   --plugin=protoc-gen-ts_proto=./node_modules/.bin/protoc-gen-ts_proto \
   --ts_proto_out=./gen \
   --proto_path=proto \
-  proto/services/lookup_service.proto \
-  proto/services/logbook_service.proto \
-  proto/domain/*.proto
+  proto/domain/*.proto \
+  proto/services/*.proto
 ```
 
 ### Other Languages
@@ -164,27 +182,28 @@ using LogRipper.Domain;
 var channel = GrpcChannel.ForAddress("http://localhost:50051");
 var client = new LookupService.LookupServiceClient(channel);
 
-var result = await client.LookupAsync(new LookupRequest
+var response = await client.LookupAsync(new LookupRequest
 {
     Callsign = "W1AW",
     SkipCache = false,
 });
 
-Console.WriteLine($"State: {result.State}, Callsign: {result.QueriedCallsign}");
+Console.WriteLine($"State: {response.Result.State}, Callsign: {response.Result.QueriedCallsign}");
 ```
 
 **Rust example (tonic client):**
 
 ```rust
-use logripper::services::lookup_service_client::LookupServiceClient;
-use logripper::domain::LookupRequest;
+use my_client::logripper::services::lookup_service_client::LookupServiceClient;
+use my_client::logripper::services::LookupRequest;
 
 let mut client = LookupServiceClient::connect("http://127.0.0.1:50051").await?;
 let response = client.lookup(LookupRequest {
     callsign: "W1AW".into(),
     skip_cache: false,
 }).await?;
-println!("State: {:?}", response.into_inner().state);
+let result = response.into_inner().result.expect("lookup payload");
+println!("State: {:?}", result.state);
 ```
 
 ## Browser and Web Clients
@@ -232,9 +251,8 @@ protoc \
   --proto_path=proto \
   --js_out=import_style=commonjs:gen \
   --grpc-web_out=import_style=commonjs+dts,mode=grpcwebtext:gen \
-  proto/services/lookup_service.proto \
-  proto/services/logbook_service.proto \
-  proto/domain/*.proto
+  proto/domain/*.proto \
+  proto/services/*.proto
 ```
 
 Or use `@connectrpc/protoc-gen-connect-es` with `@bufbuild/protoc-gen-es` if you choose the Connect protocol.

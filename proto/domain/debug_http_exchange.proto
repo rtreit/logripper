@@ -1,0 +1,24 @@
+syntax = "proto3";
+
+package logripper.domain;
+
+option csharp_namespace = "LogRipper.Domain";
+
+import "domain/debug_http_header.proto";
+import "google/protobuf/timestamp.proto";
+
+message DebugHttpExchange {
+  string provider_name = 1;
+  string operation = 2;
+  google.protobuf.Timestamp started_at_utc = 3;
+  uint32 duration_ms = 4;
+  uint32 attempt = 5;
+  string method = 6;
+  string url = 7;
+  repeated DebugHttpHeader request_headers = 8;
+  optional string request_body = 9;
+  optional uint32 response_status_code = 10;
+  repeated DebugHttpHeader response_headers = 11;
+  optional string response_body = 12;
+  optional string error_message = 13;
+}

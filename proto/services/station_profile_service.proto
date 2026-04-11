@@ -4,7 +4,22 @@ package logripper.services;
 
 option csharp_namespace = "LogRipper.Services";
 
-import "domain/station.proto";
+import "services/clear_session_station_profile_override_request.proto";
+import "services/clear_session_station_profile_override_response.proto";
+import "services/delete_station_profile_request.proto";
+import "services/delete_station_profile_response.proto";
+import "services/get_active_station_context_request.proto";
+import "services/get_active_station_context_response.proto";
+import "services/get_station_profile_request.proto";
+import "services/get_station_profile_response.proto";
+import "services/list_station_profiles_request.proto";
+import "services/list_station_profiles_response.proto";
+import "services/save_station_profile_request.proto";
+import "services/save_station_profile_response.proto";
+import "services/set_active_station_profile_request.proto";
+import "services/set_active_station_profile_response.proto";
+import "services/set_session_station_profile_override_request.proto";
+import "services/set_session_station_profile_override_response.proto";
 
 // Persisted station-profile lifecycle plus bounded process-session override support.
 service StationProfileService {
@@ -32,77 +47,4 @@ service StationProfileService {
 
   // Clear the process-session station override and fall back to the persisted active profile.
   rpc ClearSessionStationProfileOverride(ClearSessionStationProfileOverrideRequest) returns (ClearSessionStationProfileOverrideResponse);
-}
-
-message ListStationProfilesRequest {}
-
-message ListStationProfilesResponse {
-  repeated StationProfileRecord profiles = 1;
-  optional string active_profile_id = 2;
-}
-
-message GetStationProfileRequest {
-  string profile_id = 1;
-}
-
-message GetStationProfileResponse {
-  StationProfileRecord profile = 1;
-}
-
-message SaveStationProfileRequest {
-  optional string profile_id = 1;
-  logripper.domain.StationProfile profile = 2;
-  bool make_active = 3;
-}
-
-message SaveStationProfileResponse {
-  StationProfileRecord profile = 1;
-  optional string active_profile_id = 2;
-}
-
-message DeleteStationProfileRequest {
-  string profile_id = 1;
-}
-
-message DeleteStationProfileResponse {
-  optional string active_profile_id = 1;
-}
-
-message SetActiveStationProfileRequest {
-  string profile_id = 1;
-}
-
-message SetActiveStationProfileResponse {
-  StationProfileRecord profile = 1;
-}
-
-message GetActiveStationContextRequest {}
-
-message GetActiveStationContextResponse {
-  optional string persisted_active_profile_id = 1;
-  logripper.domain.StationProfile persisted_active_profile = 2;
-  logripper.domain.StationProfile effective_active_profile = 3;
-  bool has_session_override = 4;
-  logripper.domain.StationProfile session_override_profile = 5;
-  repeated string warnings = 6;
-}
-
-message SetSessionStationProfileOverrideRequest {
-  logripper.domain.StationProfile profile = 1;
-}
-
-message SetSessionStationProfileOverrideResponse {
-  GetActiveStationContextResponse context = 1;
-}
-
-message ClearSessionStationProfileOverrideRequest {}
-
-message ClearSessionStationProfileOverrideResponse {
-  GetActiveStationContextResponse context = 1;
-}
-
-message StationProfileRecord {
-  string profile_id = 1;
-  logripper.domain.StationProfile profile = 2;
-  bool is_active = 3;
 }

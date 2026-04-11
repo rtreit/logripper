@@ -8,7 +8,7 @@ internal static class StatusCommand
     public static async Task<int> RunAsync(GrpcChannel channel)
     {
         var client = new LogbookService.LogbookServiceClient(channel);
-        var response = await client.GetSyncStatusAsync(new SyncStatusRequest());
+        var response = await client.GetSyncStatusAsync(new GetSyncStatusRequest());
 
         Console.WriteLine($"Local QSOs:       {response.LocalQsoCount}");
         Console.WriteLine($"QRZ QSOs:         {response.QrzQsoCount}");

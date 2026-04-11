@@ -1,0 +1,15 @@
+syntax = "proto3";
+
+package logripper.services;
+
+option csharp_namespace = "LogRipper.Services";
+
+import "google/protobuf/timestamp.proto";
+
+message GetSyncStatusResponse {
+  uint32 local_qso_count = 1;
+  uint32 qrz_qso_count = 2;  // From QRZ STATUS command
+  uint32 pending_upload = 3;
+  optional google.protobuf.Timestamp last_sync = 4;
+  optional string qrz_logbook_owner = 5;
+}

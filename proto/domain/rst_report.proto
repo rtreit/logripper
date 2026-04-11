@@ -1,0 +1,13 @@
+syntax = "proto3";
+
+package logripper.domain;
+
+option csharp_namespace = "LogRipper.Domain";
+
+// Signal report (RST system).
+message RstReport {
+  optional uint32 readability = 1;  // 1-5
+  optional uint32 strength = 2;  // 1-9
+  optional uint32 tone = 3;  // 1-9 (CW/digital only)
+  string raw = 4;  // Original string, e.g. "599" or "59"
+}

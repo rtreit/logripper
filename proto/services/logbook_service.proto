@@ -4,8 +4,24 @@ package logripper.services;
 
 option csharp_namespace = "LogRipper.Services";
 
-import "google/protobuf/timestamp.proto";
-import "domain/qso.proto";
+import "services/delete_qso_request.proto";
+import "services/delete_qso_response.proto";
+import "services/export_adif_request.proto";
+import "services/export_adif_response.proto";
+import "services/get_qso_request.proto";
+import "services/get_qso_response.proto";
+import "services/get_sync_status_request.proto";
+import "services/get_sync_status_response.proto";
+import "services/import_adif_request.proto";
+import "services/import_adif_response.proto";
+import "services/list_qsos_request.proto";
+import "services/list_qsos_response.proto";
+import "services/log_qso_request.proto";
+import "services/log_qso_response.proto";
+import "services/sync_with_qrz_request.proto";
+import "services/sync_with_qrz_response.proto";
+import "services/update_qso_request.proto";
+import "services/update_qso_response.proto";
 
 // Core logbook operations. Covers local QSO CRUD, QRZ logbook sync, and ADIF import/export.
 //
@@ -27,12 +43,7 @@ import "domain/qso.proto";
 service LogbookService {
   // --- QSO CRUD ---
 
-// Log a new QSO. Returns the engine-assigned local_id and optional QRZ sync result.
-//
-// Do not set QsoRecord.local_id in the request — the engine assigns a UUID.
-// Required fields: worked_callsign, utc_timestamp, band, mode, plus station_callsign unless the
-// effective active station context already provides it.
-// A QRZ sync failure does not fail the local log — check sync_success/sync_error in the response.
+  // Log a new QSO. Returns the engine-assigned local_id and optional QRZ sync result.
   rpc LogQso(LogQsoRequest) returns (LogQsoResponse);
 
   // Update an existing QSO identified by QsoRecord.local_id.
@@ -53,22 +64,15 @@ service LogbookService {
   //
   // All filter fields are optional; omitting all filters returns all QSOs (subject to limit/offset).
   // Clients should consume incrementally rather than buffering the full stream.
-  rpc ListQsos(ListQsosRequest) returns (stream logripper.domain.QsoRecord);
+  rpc ListQsos(ListQsosRequest) returns (stream ListQsosResponse);
 
   // --- QRZ Sync ---
 
   // Trigger a full or incremental sync with the QRZ logbook.
-  //
-  // Progress is streamed back as SyncProgress messages. The stream closes after
-  // a message with complete=true. An auth failure produces an early terminal message
-  // with complete=true and error set.
-  rpc SyncWithQrz(SyncRequest) returns (stream SyncProgress);
+  rpc SyncWithQrz(SyncWithQrzRequest) returns (stream SyncWithQrzResponse);
 
-// Get current sync/logbook statistics (counts, last sync time, logbook owner).
-//
-// Local counts are derived from current storage. QRZ-specific fields stay zero/absent until QRZ
-// sync is implemented.
-rpc GetSyncStatus(SyncStatusRequest) returns (SyncStatusResponse);
+  // Get current sync/logbook statistics (counts, last sync time, logbook owner).
+  rpc GetSyncStatus(GetSyncStatusRequest) returns (GetSyncStatusResponse);
 
   // --- ADIF Import/Export ---
 
@@ -77,119 +81,10 @@ rpc GetSyncStatus(SyncStatusRequest) returns (SyncStatusResponse);
   // Returns a summary with counts and any per-record warnings.
   // Duplicate policy: an incoming record is skipped when it matches an existing QSO on
   // station_callsign, worked_callsign, utc_timestamp, band, mode, and compatible submode/frequency.
-  rpc ImportAdif(stream AdifChunk) returns (ImportResult);
+  rpc ImportAdif(stream ImportAdifRequest) returns (ImportAdifResponse);
 
   // Export QSOs to ADIF format. The server streams raw ADIF bytes back.
   // Clients should concatenate received chunks to reconstruct the full ADIF payload.
   // Export order is chronological (oldest first) after applying the request filters.
-  rpc ExportAdif(ExportRequest) returns (stream AdifChunk);
-}
-
-// --- Request/Response messages ---
-
-message LogQsoRequest {
-  logripper.domain.QsoRecord qso = 1;
-  bool sync_to_qrz               = 2;  // Also upload to QRZ immediately
-}
-
-message LogQsoResponse {
-  string local_id          = 1;
-  optional string qrz_logid = 2;   // Set if sync_to_qrz was true and succeeded
-  bool sync_success        = 3;
-  optional string sync_error = 4;
-}
-
-message UpdateQsoRequest {
-  logripper.domain.QsoRecord qso = 1;
-  bool sync_to_qrz               = 2;
-}
-
-message UpdateQsoResponse {
-  bool success              = 1;
-  optional string error     = 2;
-  bool sync_success         = 3;
-  optional string sync_error = 4;
-}
-
-message DeleteQsoRequest {
-  string local_id           = 1;
-  bool delete_from_qrz      = 2;   // Also delete from QRZ logbook (permanent!)
-}
-
-message DeleteQsoResponse {
-  bool success              = 1;
-  optional string error     = 2;
-  bool qrz_delete_success   = 3;
-  optional string qrz_delete_error = 4;
-}
-
-message GetQsoRequest {
-  string local_id           = 1;
-}
-
-message GetQsoResponse {
-  logripper.domain.QsoRecord qso = 1;
-}
-
-message ListQsosRequest {
-  optional google.protobuf.Timestamp after   = 1;
-  optional google.protobuf.Timestamp before  = 2;
-  optional string callsign_filter            = 3;
-  optional logripper.domain.Band band_filter = 4;
-  optional logripper.domain.Mode mode_filter = 5;
-  optional string contest_id                 = 6;
-  uint32 limit                               = 7;  // 0 = no limit
-  uint32 offset                              = 8;
-  SortOrder sort                             = 9;
-}
-
-enum SortOrder {
-  SORT_ORDER_NEWEST_FIRST = 0;
-  SORT_ORDER_OLDEST_FIRST = 1;
-}
-
-// --- Sync messages ---
-
-message SyncRequest {
-  bool full_sync            = 1;   // true = re-fetch all; false = incremental
-}
-
-message SyncProgress {
-  uint32 total_records      = 1;
-  uint32 processed_records  = 2;
-  uint32 uploaded_records   = 3;
-  uint32 downloaded_records = 4;
-  uint32 conflict_records   = 5;
-  optional string current_action = 6;  // Human-readable status
-  bool complete             = 7;
-  optional string error     = 8;
-}
-
-message SyncStatusRequest {}
-
-message SyncStatusResponse {
-  uint32 local_qso_count    = 1;
-  uint32 qrz_qso_count     = 2;   // From QRZ STATUS command
-  uint32 pending_upload     = 3;
-  optional google.protobuf.Timestamp last_sync = 4;
-  optional string qrz_logbook_owner = 5;
-}
-
-// --- ADIF messages ---
-
-message AdifChunk {
-  bytes data                = 1;   // Raw ADIF text bytes
-}
-
-message ImportResult {
-  uint32 records_imported   = 1;
-  uint32 records_skipped    = 2;   // Duplicates or parse errors
-  repeated string warnings  = 3;
-}
-
-message ExportRequest {
-  optional google.protobuf.Timestamp after   = 1;
-  optional google.protobuf.Timestamp before  = 2;
-  optional string contest_id                 = 3;
-  bool include_header                        = 4;  // ADIF header with version/program info
+  rpc ExportAdif(ExportAdifRequest) returns (stream ExportAdifResponse);
 }

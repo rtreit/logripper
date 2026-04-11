@@ -20,6 +20,8 @@
               GrpcServices="None" />
     <Protobuf Include="..\..\..\proto\services\*.proto"
               ProtoRoot="..\..\..\proto"
+              GrpcServices="None" />
+    <Protobuf Update="..\..\..\proto\services\*service.proto"
               GrpcServices="Client" />
   </ItemGroup>
 

@@ -1,0 +1,16 @@
+syntax = "proto3";
+
+package logripper.services;
+
+option csharp_namespace = "LogRipper.Services";
+
+import "domain/station_profile.proto";
+
+message ActiveStationContext {
+  optional string persisted_active_profile_id = 1;
+  logripper.domain.StationProfile persisted_active_profile = 2;
+  logripper.domain.StationProfile effective_active_profile = 3;
+  bool has_session_override = 4;
+  logripper.domain.StationProfile session_override_profile = 5;
+  repeated string warnings = 6;
+}

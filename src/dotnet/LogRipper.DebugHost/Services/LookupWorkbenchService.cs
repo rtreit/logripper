@@ -1,6 +1,7 @@
 using Grpc.Core;
 using LogRipper.DebugHost.Models;
 using LogRipper.Domain;
+using LogRipper.Services;
 
 namespace LogRipper.DebugHost.Services;
 
@@ -27,7 +28,12 @@ internal sealed class LookupWorkbenchService
             using var channel = _clientFactory.CreateChannel();
             var client = new LogRipper.Services.LookupService.LookupServiceClient(channel);
             var response = await client.LookupAsync(request, cancellationToken: cancellationToken);
-            return new LookupInvocationResult(request, [response], null, UnaryMode, DateTimeOffset.UtcNow);
+            return new LookupInvocationResult(
+                request,
+                [response.Result ?? new LookupResult()],
+                null,
+                UnaryMode,
+                DateTimeOffset.UtcNow);
         }
         catch (RpcException ex)
         {
@@ -49,11 +55,17 @@ internal sealed class LookupWorkbenchService
         {
             using var channel = _clientFactory.CreateChannel();
             var client = new LogRipper.Services.LookupService.LookupServiceClient(channel);
-            using var call = client.StreamLookup(request, cancellationToken: cancellationToken);
+            using var call = client.StreamLookup(
+                new StreamLookupRequest
+                {
+                    Callsign = request.Callsign,
+                    SkipCache = request.SkipCache
+                },
+                cancellationToken: cancellationToken);
 
             await foreach (var response in call.ResponseStream.ReadAllAsync(cancellationToken))
             {
-                responses.Add(response);
+                responses.Add(response.Result ?? new LookupResult());
             }
 
             return new LookupInvocationResult(request, responses, null, StreamingMode, DateTimeOffset.UtcNow);
@@ -84,9 +96,14 @@ internal sealed class LookupWorkbenchService
             using var channel = _clientFactory.CreateChannel();
             var client = new LogRipper.Services.LookupService.LookupServiceClient(channel);
             var response = await client.GetCachedCallsignAsync(
-                new CachedCallsignRequest { Callsign = normalizedCallsign },
+                new GetCachedCallsignRequest { Callsign = normalizedCallsign },
                 cancellationToken: cancellationToken);
-            return new LookupInvocationResult(syntheticRequest, [response], null, CacheMode, DateTimeOffset.UtcNow);
+            return new LookupInvocationResult(
+                syntheticRequest,
+                [response.Result ?? new LookupResult()],
+                null,
+                CacheMode,
+                DateTimeOffset.UtcNow);
         }
         catch (RpcException ex)
         {

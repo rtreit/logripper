@@ -1,0 +1,11 @@
+syntax = "proto3";
+
+package logripper.services;
+
+option csharp_namespace = "LogRipper.Services";
+
+import "services/adif_chunk.proto";
+
+message ImportAdifRequest {
+  AdifChunk chunk = 1;
+}

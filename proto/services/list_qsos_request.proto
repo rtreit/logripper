@@ -1,0 +1,22 @@
+syntax = "proto3";
+
+package logripper.services;
+
+option csharp_namespace = "LogRipper.Services";
+
+import "domain/band.proto";
+import "domain/mode.proto";
+import "google/protobuf/timestamp.proto";
+import "services/qso_sort_order.proto";
+
+message ListQsosRequest {
+  optional google.protobuf.Timestamp after = 1;
+  optional google.protobuf.Timestamp before = 2;
+  optional string callsign_filter = 3;
+  optional logripper.domain.Band band_filter = 4;
+  optional logripper.domain.Mode mode_filter = 5;
+  optional string contest_id = 6;
+  uint32 limit = 7;  // 0 = no limit
+  uint32 offset = 8;
+  QsoSortOrder sort = 9;
+}

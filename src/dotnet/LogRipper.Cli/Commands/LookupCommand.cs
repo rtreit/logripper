@@ -14,19 +14,20 @@ internal static class LookupCommand
             Callsign = callsign,
             SkipCache = skipCache,
         });
+        var result = response.Result ?? new LookupResult();
 
-        var state = (LookupState)response.State;
+        var state = (LookupState)result.State;
         Console.WriteLine($"State:            {state}");
-        Console.WriteLine($"Queried:          {response.QueriedCallsign}");
-        Console.WriteLine($"Cache hit:        {response.CacheHit}");
-        Console.WriteLine($"Latency:          {response.LookupLatencyMs} ms");
+        Console.WriteLine($"Queried:          {result.QueriedCallsign}");
+        Console.WriteLine($"Cache hit:        {result.CacheHit}");
+        Console.WriteLine($"Latency:          {result.LookupLatencyMs} ms");
 
-        if (response.HasErrorMessage)
+        if (result.HasErrorMessage)
         {
-            Console.WriteLine($"Error:            {response.ErrorMessage}");
+            Console.WriteLine($"Error:            {result.ErrorMessage}");
         }
 
-        if (response.Record is { } record)
+        if (result.Record is { } record)
         {
             PrintRecord(record);
         }

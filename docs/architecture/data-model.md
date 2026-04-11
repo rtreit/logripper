@@ -19,20 +19,41 @@ LogRipper uses **Protocol Buffers (proto3)** as the canonical schema definition 
 The proto-first approach directly supports these architecture principles:
 
 - **Principle #6 (Normalize Data Immediately)**: QRZ XML/ADIF responses are parsed and mapped into proto domain types at the provider edge. Internal communication always uses normalized types.
-- **Principle #8 (Consumer-Driven Interfaces)**: Proto messages are designed around what the UI needs (e.g., `LookupResult` wraps state + data + latency), not QRZ's XML structure.
+- **Principle #8 (Consumer-Driven Interfaces)**: Proto messages are designed around what the UI needs (for example, `LookupResult` wraps state + data + latency), not QRZ's XML structure.
 - **Stable core, volatile edges**: Proto domain types are the stable core. QRZ XML parsing, ADIF parsing, and HTTP concerns are edge adapters that produce proto types.
+
+## Proto Layout Rules
+
+LogRipper treats the protobuf 1-1-1 guidance as an architectural rule, not a style preference:
+
+- **One top-level entity per file by default**: messages, enums, and services each get their own `.proto` file.
+- **Service declaration files contain only the service**: request, response, stream item, enum, and support payload messages live in separate files under `proto/services/`.
+- **Every RPC gets unique request/response envelopes**: unary and streaming methods both use method-specific `XxxRequest` / `XxxResponse` messages.
+- **Reusable business payloads stay separate from envelopes**: shared models such as `LookupResult`, `QsoRecord`, `SetupStatus`, and `ActiveStationContext` are nested inside envelopes rather than returned directly as RPC shapes.
+- **Exceptions are rare and explicit**: if LogRipper ever deviates from 1-1-1, that decision must be documented and justified in the schema review. RPC envelopes are not the place for exceptions.
 
 ## Directory Structure
 
 ```
 proto/
 ├── domain/
-│   ├── callsign.proto       # CallsignRecord, DxccEntity, GeoSource, QslPreference
-│   ├── qso.proto            # QsoRecord, Band, Mode, RstReport, SyncStatus, QslStatus
-│   └── lookup.proto         # LookupResult, LookupState, LookupRequest, BatchLookup
+│   ├── callsign_record.proto
+│   ├── dxcc_entity.proto
+│   ├── lookup_result.proto
+│   ├── lookup_state.proto
+│   ├── qso_record.proto
+│   ├── station_profile.proto
+│   ├── station_snapshot.proto
+│   └── ... one top-level reusable domain type per file
 └── services/
-    ├── lookup_service.proto  # LookupService gRPC (Lookup, StreamLookup, BatchLookup, DXCC)
-    └── logbook_service.proto # LogbookService gRPC (CRUD, sync, ADIF import/export)
+    ├── lookup_service.proto
+    ├── lookup_request.proto
+    ├── lookup_response.proto
+    ├── stream_lookup_request.proto
+    ├── stream_lookup_response.proto
+    ├── log_qso_request.proto
+    ├── log_qso_response.proto
+    └── ... one top-level service envelope/support type per file
 ```
 
 ## Language Split
@@ -51,7 +72,7 @@ proto/
 
 ## Core Domain Types
 
-### CallsignRecord (`callsign.proto`)
+### CallsignRecord (`callsign_record.proto`)
 
 Normalized representation of a ham radio operator/station. Derived from QRZ XML lookup data (40+ fields) but owned by LogRipper. Field groups:
 
@@ -65,7 +86,7 @@ Normalized representation of a ham radio operator/station. Derived from QRZ XML 
 - **Zone**: cq_zone, itu_zone, iota
 - **Metadata**: qrz_serial, last_modified, bio_length, image_url, etc.
 
-### QsoRecord (`qso.proto`)
+### QsoRecord (`qso_record.proto`)
 
 The core QSO (contact) entity. Every logged contact is a QsoRecord.
 
@@ -79,7 +100,7 @@ The core QSO (contact) entity. Every logged contact is a QsoRecord.
 - **Sync**: sync_status (local_only → synced → modified → conflict)
 - **ADIF overflow**: extra_fields map preserves unrecognized ADIF fields for lossless round-trip
 
-### LookupResult (`lookup.proto`)
+### LookupResult (`lookup_result.proto`)
 
 Wraps the async state machine for callsign lookups:
 
@@ -115,6 +136,8 @@ Key RPCs:
 - `GetDxccEntity` — DXCC entity lookup
 - `BatchLookup` — contest prefetch
 
+Each RPC returns a unique service envelope such as `LookupResponse`, `StreamLookupResponse`, or `GetCachedCallsignResponse`. Shared payloads like `LookupResult` stay nested inside those envelopes so each RPC can evolve independently.
+
 ### LogbookService
 
 QSO lifecycle management:
@@ -123,6 +146,8 @@ QSO lifecycle management:
 - `ListQsos` — filtered/paginated query with server-streaming response
 - `SyncWithQrz` — full or incremental sync, streams progress updates
 - `ImportAdif` / `ExportAdif` — client-streaming import, server-streaming export
+
+Logbook RPCs follow the same rule: `ListQsos` streams `ListQsosResponse` envelopes that carry `QsoRecord`, `ExportAdif` streams `ExportAdifResponse` envelopes that carry `AdifChunk`, and unary RPCs use method-specific envelopes even when the payload is a single shared domain type.
 
 ## ADIF as External Format
 
@@ -197,4 +222,5 @@ dotnet build src/dotnet/LogRipper.slnx
 - **Timestamps**: Use `google.protobuf.Timestamp` for all date/time fields
 - **C# namespace**: Set via `option csharp_namespace = "LogRipper.Domain"` or `"LogRipper.Services"`
 - **Packages**: Keep the current `proto/domain` and `proto/services` layout with `logripper.domain` / `logripper.services` packages until the project deliberately introduces versioned external contracts
-- **RPC message shapes**: Reuse shared domain messages like `LookupResult` and `QsoRecord` directly when they are already the app-facing contract; add method-specific wrapper messages only when they carry distinct semantics
+- **1-1-1 layout**: Default to one top-level message, enum, or service per `.proto` file
+- **RPC message shapes**: Every RPC gets unique `XxxRequest` and `XxxResponse` envelopes; shared payloads are nested inside those envelopes rather than used as the top-level RPC contract

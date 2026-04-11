@@ -1,0 +1,43 @@
+syntax = "proto3";
+
+package logripper.domain;
+
+option csharp_namespace = "LogRipper.Domain";
+
+// Standard amateur radio frequency bands (full ADIF 3.1.7 enumeration).
+enum Band {
+  BAND_UNSPECIFIED = 0;
+  BAND_2190M = 1;  // 0.1357–0.1378 MHz
+  BAND_630M = 2;  // 0.472–0.479 MHz
+  BAND_560M = 3;  // 0.501–0.504 MHz
+  BAND_160M = 4;  // 1.8–2.0 MHz
+  BAND_80M = 5;  // 3.5–4.0 MHz
+  BAND_60M = 6;  // 5.06–5.45 MHz
+  BAND_40M = 7;  // 7.0–7.3 MHz
+  BAND_30M = 8;  // 10.1–10.15 MHz
+  BAND_20M = 9;  // 14.0–14.35 MHz
+  BAND_17M = 10;  // 18.068–18.168 MHz
+  BAND_15M = 11;  // 21.0–21.45 MHz
+  BAND_12M = 12;  // 24.89–24.99 MHz
+  BAND_10M = 13;  // 28.0–29.7 MHz
+  BAND_8M = 14;  // 40–45 MHz
+  BAND_6M = 15;  // 50–54 MHz
+  BAND_5M = 16;  // 54.000001–69.9 MHz
+  BAND_4M = 17;  // 70–71 MHz
+  BAND_2M = 18;  // 144–148 MHz
+  BAND_1_25M = 19;  // 222–225 MHz
+  BAND_70CM = 20;  // 420–450 MHz
+  BAND_33CM = 21;  // 902–928 MHz
+  BAND_23CM = 22;  // 1240–1300 MHz
+  BAND_13CM = 23;  // 2300–2450 MHz
+  BAND_9CM = 24;  // 3300–3500 MHz
+  BAND_6CM = 25;  // 5650–5925 MHz
+  BAND_3CM = 26;  // 10000–10500 MHz
+  BAND_1_25CM = 27;  // 24000–24250 MHz
+  BAND_6MM = 28;  // 47000–47200 MHz
+  BAND_4MM = 29;  // 75500–81000 MHz
+  BAND_2_5MM = 30;  // 119980–123000 MHz
+  BAND_2MM = 31;  // 134000–149000 MHz
+  BAND_1MM = 32;  // 241000–250000 MHz
+  BAND_SUBMM = 33;  // 300000–7500000 MHz
+}
