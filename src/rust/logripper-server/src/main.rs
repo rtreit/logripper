@@ -4,10 +4,11 @@ mod runtime_config;
 mod setup;
 mod station_profile_support;
 
-use std::{future::Future, net::SocketAddr, path::PathBuf, sync::Arc};
+use std::{fs, future::Future, io, net::SocketAddr, path::PathBuf, sync::Arc};
 
 use logripper_core::adif::{parse_adi_qsos, serialize_adi_qsos};
 use logripper_core::application::logbook::LogbookError;
+use logripper_core::lookup::QRZ_USER_AGENT_ENV_VAR;
 use logripper_core::storage::{EngineStorage, QsoListQuery, QsoSortOrder, StorageError};
 use logripper_storage_memory::MemoryStorage;
 use logripper_storage_sqlite::SqliteStorageBuilder;
@@ -157,9 +158,89 @@ fn server_ready_message(
 fn load_dotenv_if_present() {
     match dotenvy::dotenv() {
         Ok(path) => println!("Loaded config from {}", path.display()),
-        Err(dotenvy::Error::Io(_)) => {}
-        Err(error) => eprintln!("Warning: failed to parse .env file: {error}"),
+        Err(dotenvy::Error::Io(error)) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => {
+            if let Some(path) = load_dotenv_with_legacy_qrz_user_agent_compatibility(&error) {
+                eprintln!(
+                    "Warning: loaded {} after auto-correcting a legacy unquoted {} value; quote that value in .env to remove this warning.",
+                    path.display(),
+                    QRZ_USER_AGENT_ENV_VAR
+                );
+                println!("Loaded config from {}", path.display());
+            } else {
+                eprintln!("Warning: failed to parse .env file: {error}");
+            }
+        }
     }
+}
+
+fn load_dotenv_with_legacy_qrz_user_agent_compatibility(error: &dotenvy::Error) -> Option<PathBuf> {
+    let dotenvy::Error::LineParse(_, _) = error else {
+        return None;
+    };
+    let path = find_dotenv_path().ok()??;
+    let contents = fs::read_to_string(&path).ok()?;
+    let compatible_contents = sanitize_legacy_qrz_user_agent_contents(&contents)?;
+    dotenvy::from_read(std::io::Cursor::new(compatible_contents)).ok()?;
+    Some(path)
+}
+
+fn legacy_qrz_user_agent_line_compatibility(line: &str) -> Option<String> {
+    let trimmed = line.trim_start();
+    let (key, raw_value) = trimmed.split_once('=')?;
+
+    if key.trim() != QRZ_USER_AGENT_ENV_VAR {
+        return None;
+    }
+
+    let value = raw_value.trim();
+    if value.is_empty()
+        || value.contains('#')
+        || matches!(value.chars().next(), Some('"' | '\''))
+        || !(value.chars().any(char::is_whitespace) || value.contains('(') || value.contains(')'))
+    {
+        return None;
+    }
+
+    let leading_whitespace = &line[..line.len() - trimmed.len()];
+    Some(format!(
+        r#"{leading_whitespace}{QRZ_USER_AGENT_ENV_VAR}="{}""#,
+        value.replace('\\', "\\\\").replace('"', "\\\"")
+    ))
+}
+
+fn sanitize_legacy_qrz_user_agent_contents(contents: &str) -> Option<String> {
+    let mut changed = false;
+    let mut compatible_contents = String::with_capacity(contents.len());
+
+    for segment in contents.split_inclusive('\n') {
+        let (line, newline) = if let Some(line) = segment.strip_suffix("\r\n") {
+            (line, "\r\n")
+        } else if let Some(line) = segment.strip_suffix('\n') {
+            (line, "\n")
+        } else {
+            (segment, "")
+        };
+
+        if let Some(compatible_line) = legacy_qrz_user_agent_line_compatibility(line) {
+            compatible_contents.push_str(&compatible_line);
+            changed = true;
+        } else {
+            compatible_contents.push_str(line);
+        }
+
+        compatible_contents.push_str(newline);
+    }
+
+    changed.then_some(compatible_contents)
+}
+
+fn find_dotenv_path() -> io::Result<Option<PathBuf>> {
+    let current_dir = std::env::current_dir()?;
+    Ok(current_dir
+        .ancestors()
+        .map(|directory| directory.join(".env"))
+        .find(|candidate| candidate.is_file()))
 }
 
 #[derive(Clone)]
@@ -706,13 +787,17 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::{
-        build_storage, load_dotenv_if_present, parse_storage_backend, run_server,
+        build_storage, legacy_qrz_user_agent_line_compatibility, load_dotenv_if_present,
+        parse_storage_backend, run_server, sanitize_legacy_qrz_user_agent_contents,
         server_ready_message, server_starting_message, DeveloperLogbookService,
         DeveloperLookupService, Server, ServerOptions, StorageBackendKind, StorageOptions,
     };
     use crate::runtime_config::{
         RuntimeConfigManager, SQLITE_PATH_ENV_VAR, STATION_CALLSIGN_ENV_VAR, STATION_GRID_ENV_VAR,
         STATION_OPERATOR_CALLSIGN_ENV_VAR, STATION_PROFILE_NAME_ENV_VAR, STORAGE_BACKEND_ENV_VAR,
+    };
+    use logripper_core::lookup::{
+        QRZ_USER_AGENT_ENV_VAR, QRZ_XML_PASSWORD_ENV_VAR, QRZ_XML_USERNAME_ENV_VAR,
     };
     use logripper_core::proto::logripper::domain::{
         dxcc_request, Band, BatchLookupRequest, CachedCallsignRequest, DxccRequest, LookupRequest,
@@ -732,7 +817,7 @@ mod tests {
 
     static PROCESS_STATE_LOCK: Mutex<()> = Mutex::new(());
 
-    const SERVER_ENV_KEYS: [&str; 4] = [
+    const PROCESS_ENV_KEYS: [&str; 4] = [
         "LOGRIPPER_SERVER_ADDR",
         "LOGRIPPER_CONFIG_PATH",
         "LOGRIPPER_STORAGE_BACKEND",
@@ -748,7 +833,7 @@ mod tests {
         fn capture() -> Self {
             Self {
                 original_dir: std::env::current_dir().expect("current working directory"),
-                original_env: SERVER_ENV_KEYS
+                original_env: PROCESS_ENV_KEYS
                     .into_iter()
                     .map(|key| (key, std::env::var(key).ok()))
                     .collect(),
@@ -776,7 +861,7 @@ mod tests {
         let process_state_lock = PROCESS_STATE_LOCK.lock().expect("lock process state");
         let process_state = ProcessStateGuard::capture();
 
-        for key in SERVER_ENV_KEYS {
+        for key in PROCESS_ENV_KEYS {
             std::env::remove_var(key);
         }
 
@@ -1077,33 +1162,39 @@ mod tests {
     }
 
     #[test]
-    fn load_dotenv_if_present_does_not_panic_on_malformed_env() {
-        let (_process_state_lock, process_state) = capture_clean_process_state();
+    fn legacy_qrz_user_agent_compatibility_rewrites_and_preserves_later_values() {
+        let legacy_line = "LOGRIPPER_QRZ_USER_AGENT=LogRipper/0.1.0 (AE7XI)";
+        assert_eq!(
+            Some("LOGRIPPER_QRZ_USER_AGENT=\"LogRipper/0.1.0 (AE7XI)\"".to_string()),
+            legacy_qrz_user_agent_line_compatibility(legacy_line)
+        );
 
-        let temp_dir = std::env::temp_dir().join(format!(
-            "logripper-dotenv-bad-{}-{}",
-            std::process::id(),
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .expect("system clock")
-                .as_nanos()
-        ));
-        fs::create_dir_all(&temp_dir).expect("create temp dir");
-        let env_path = temp_dir.join(".env");
-        // Unquoted parentheses are invalid dotenvy syntax
-        fs::write(
-            &env_path,
+        let sanitized = sanitize_legacy_qrz_user_agent_contents(concat!(
             "LOGRIPPER_QRZ_USER_AGENT=LogRipper/0.1.0 (AE7XI)\n",
-        )
-        .expect("write temp .env");
+            "LOGRIPPER_QRZ_XML_USERNAME=KC7AVA\n",
+            "LOGRIPPER_QRZ_XML_PASSWORD=test-password\n"
+        ))
+        .expect("compatibility rewrite");
 
-        std::env::set_current_dir(&temp_dir).expect("switch to temp dir");
-        // Should not panic; parse errors are reported to stderr but not fatal
-        load_dotenv_if_present();
+        let entries: Vec<(String, String)> =
+            dotenvy::from_read_iter(std::io::Cursor::new(sanitized))
+                .collect::<Result<_, _>>()
+                .expect("sanitized dotenv entries");
 
-        process_state.restore_current_dir();
-        fs::remove_file(env_path).expect("remove temp .env");
-        fs::remove_dir_all(temp_dir).expect("remove temp dir");
+        assert_eq!(
+            vec![
+                (
+                    QRZ_USER_AGENT_ENV_VAR.to_string(),
+                    "LogRipper/0.1.0 (AE7XI)".to_string()
+                ),
+                (QRZ_XML_USERNAME_ENV_VAR.to_string(), "KC7AVA".to_string()),
+                (
+                    QRZ_XML_PASSWORD_ENV_VAR.to_string(),
+                    "test-password".to_string()
+                ),
+            ],
+            entries
+        );
     }
 
     #[test]
