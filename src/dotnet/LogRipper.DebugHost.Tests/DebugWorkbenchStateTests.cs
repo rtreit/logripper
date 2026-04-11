@@ -124,7 +124,7 @@ public class DebugWorkbenchStateTests
     }
 
     [Fact]
-    public void Update_setup_status_syncs_persisted_sqlite_defaults()
+    public void Update_setup_status_syncs_persisted_log_file_path()
     {
         var state = new DebugWorkbenchState(Options.Create(new DebugWorkbenchOptions()));
 
@@ -134,7 +134,7 @@ public class DebugWorkbenchStateTests
             SetupComplete = true,
             ConfigPath = @".\config\config.toml",
             StorageBackend = StorageBackend.Sqlite,
-            SqlitePath = @".\data\portable-logripper.db",
+            LogFilePath = @".\data\portable-logripper.db",
             StationProfile = new StationProfile
             {
                 StationCallsign = "K7RND",

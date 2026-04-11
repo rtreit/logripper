@@ -14,8 +14,7 @@ public class EditorModelTests
         var model = SetupEditorModel.Create(
             new SetupStatusResponse
             {
-                StorageBackend = StorageBackend.Sqlite,
-                SqlitePath = @".\data\portable.db",
+                LogFilePath = @".\data\portable.db",
                 QrzXmlUsername = "k7rnd",
                 StationProfile = new StationProfile
                 {
@@ -24,11 +23,9 @@ public class EditorModelTests
                     Grid = "CN87"
                 }
             },
-            EngineStorageBackend.Memory,
             @".\data\fallback.db");
 
-        Assert.Equal(StorageBackend.Sqlite, model.StorageBackend);
-        Assert.Equal(@".\data\portable.db", model.SqlitePath);
+        Assert.Equal(@".\data\portable.db", model.LogFilePath);
         Assert.Equal("k7rnd", model.QrzXmlUsername);
         Assert.Equal("Home", model.ProfileName);
         Assert.Equal("K7RND", model.StationCallsign);
@@ -40,8 +37,7 @@ public class EditorModelTests
     {
         var model = new SetupEditorModel
         {
-            StorageBackend = StorageBackend.Sqlite,
-            SqlitePath = @"  .\data\logripper.db  ",
+            LogFilePath = @"  .\data\logripper.db  ",
             QrzXmlUsername = "  k7rnd  ",
             QrzXmlPassword = "  secret  ",
             ProfileName = "  Home  ",
@@ -53,9 +49,8 @@ public class EditorModelTests
 
         var request = model.ToRequest();
 
-        Assert.Equal(StorageBackend.Sqlite, request.StorageBackend);
-        Assert.True(request.HasSqlitePath);
-        Assert.Equal(@".\data\logripper.db", request.SqlitePath);
+        Assert.True(request.HasLogFilePath);
+        Assert.Equal(@".\data\logripper.db", request.LogFilePath);
         Assert.True(request.HasQrzXmlUsername);
         Assert.True(request.HasQrzXmlPassword);
         Assert.Equal("k7rnd", request.QrzXmlUsername);
@@ -69,19 +64,18 @@ public class EditorModelTests
     }
 
     [Fact]
-    public void SetupEditorModel_validate_requires_sqlite_path_and_complete_qrz_pair()
+    public void SetupEditorModel_validate_requires_log_file_path_and_complete_qrz_pair()
     {
         var model = new SetupEditorModel
         {
-            StorageBackend = StorageBackend.Sqlite,
-            SqlitePath = "   ",
+            LogFilePath = "   ",
             QrzXmlUsername = "k7rnd",
             StationCallsign = "K7RND"
         };
 
         var results = Validate(model);
 
-        Assert.Contains(results, result => result.MemberNames.Contains(nameof(SetupEditorModel.SqlitePath), StringComparer.Ordinal));
+        Assert.Contains(results, result => result.MemberNames.Contains(nameof(SetupEditorModel.LogFilePath), StringComparer.Ordinal));
         Assert.Contains(results, result => result.MemberNames.Contains(nameof(SetupEditorModel.QrzXmlPassword), StringComparer.Ordinal));
     }
 

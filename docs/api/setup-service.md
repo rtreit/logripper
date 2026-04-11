@@ -12,15 +12,15 @@ Use it to:
 
 - detect whether a real config file already exists
 - discover the config path the engine will use
-- discover the suggested default SQLite path
-- inspect the currently persisted storage/station bootstrap
-- save the initial storage choice, station profile, and optional QRZ XML credentials
+- discover the suggested default log file path
+- inspect the currently persisted logbook/station bootstrap
+- save the initial log file path, station profile, and optional QRZ XML credentials
 
 ## Current behavior
 
 | RPC | Status | Notes |
 |---|---|---|
-| `GetSetupStatus` | ✅ Implemented | Returns persisted setup status, config path, suggested SQLite path, and validation warnings |
+| `GetSetupStatus` | ✅ Implemented | Returns persisted setup status, config path, suggested log file path, and validation warnings |
 | `SaveSetup` | ✅ Implemented | Validates and writes `config.toml`, then hot-applies the new persisted config to the running engine |
 
 ## RPCs
@@ -40,14 +40,13 @@ rpc GetSetupStatus(GetSetupStatusRequest) returns (SetupStatusResponse)
 | `config_file_exists` | `bool` | Whether the persisted setup file exists |
 | `setup_complete` | `bool` | Whether the saved setup is sufficient for the current first-run slice |
 | `config_path` | `string` | Path to the config file the engine is using |
-| `storage_backend` | `StorageBackend` | Persisted storage choice |
-| `sqlite_path` | `string` (optional) | Persisted SQLite path when SQLite is selected |
+| `log_file_path` | `string` (optional) | Persisted log file path for the durable logbook |
 | `station_profile` | `StationProfile` (optional) | Persisted bootstrap station profile |
 | `active_station_profile_id` | `string` (optional) | Persisted active station-profile id when profile lifecycle is configured |
 | `station_profile_count` | `uint32` | Count of persisted station profiles currently stored |
 | `qrz_xml_username` | `string` (optional) | Persisted QRZ XML username |
 | `has_qrz_xml_password` | `bool` | Whether a QRZ XML password is stored |
-| `suggested_sqlite_path` | `string` | Recommended SQLite path when the user has not picked one yet |
+| `suggested_log_file_path` | `string` | Recommended log file path when the user has not picked one yet |
 | `warnings` | `repeated string` | Human-readable setup gaps or validation warnings |
 
 ### SaveSetup
@@ -62,8 +61,7 @@ rpc SaveSetup(SaveSetupRequest) returns (SaveSetupResponse)
 
 | Field | Type | Meaning |
 |---|---|---|
-| `storage_backend` | `StorageBackend` | Required. `MEMORY` or `SQLITE` |
-| `sqlite_path` | `string` (optional) | Optional explicit SQLite path. When omitted for SQLite, the engine uses `suggested_sqlite_path` |
+| `log_file_path` | `string` (optional) | Preferred durable log file path for the operator-facing setup flow |
 | `station_profile` | `StationProfile` | Required bootstrap station profile |
 | `qrz_xml_username` | `string` (optional) | Optional QRZ XML username |
 | `qrz_xml_password` | `string` (optional) | Optional QRZ XML password |
@@ -71,9 +69,12 @@ rpc SaveSetup(SaveSetupRequest) returns (SaveSetupResponse)
 **Validation rules**
 
 - `station_profile.station_callsign` is required
+- `log_file_path` is required for the current operator-facing setup flow
 - QRZ XML username/password must either both be set or both be omitted
 - `dxcc`, `cq_zone`, and `itu_zone` must be greater than zero when present
 - `latitude` / `longitude` must be finite and within valid bounds
+
+Legacy compatibility note: the proto still carries `storage_backend`, `sqlite_path`, and `suggested_sqlite_path` for older clients, but new callers should use `log_file_path` and `suggested_log_file_path`.
 
 ## Persistence model
 

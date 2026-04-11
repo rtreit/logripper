@@ -30,7 +30,7 @@ use crate::station_profile_support::{
 
 pub(crate) const CONFIG_PATH_ENV_VAR: &str = "LOGRIPPER_CONFIG_PATH";
 const DEFAULT_CONFIG_FILE_NAME: &str = "config.toml";
-const DEFAULT_SQLITE_FILE_NAME: &str = "logripper.db";
+const DEFAULT_LOG_FILE_NAME: &str = "logripper.db";
 
 #[derive(Clone)]
 pub(crate) struct SetupControlSurface {
@@ -185,7 +185,7 @@ impl StationProfileService for StationProfileControlSurface {
 
 pub(crate) struct SetupState {
     config_path: PathBuf,
-    suggested_sqlite_path: PathBuf,
+    suggested_log_file_path: PathBuf,
     persisted_config: RwLock<Option<PersistedSetupConfig>>,
 }
 
@@ -193,7 +193,7 @@ impl SetupState {
     pub(crate) fn load(config_path: PathBuf) -> Result<Self, String> {
         let persisted_config = load_persisted_config(&config_path)?;
         Ok(Self {
-            suggested_sqlite_path: suggested_sqlite_path(&config_path),
+            suggested_log_file_path: suggested_log_file_path(&config_path),
             config_path,
             persisted_config: RwLock::new(persisted_config),
         })
@@ -211,7 +211,7 @@ impl SetupState {
         let persisted_config = self.persisted_config.read().await.clone();
         build_status(
             self.config_path.as_path(),
-            self.suggested_sqlite_path.as_path(),
+            self.suggested_log_file_path.as_path(),
             persisted_config.as_ref(),
         )
     }
@@ -225,7 +225,7 @@ impl SetupState {
         let config = PersistedSetupConfig::from_request(
             existing_config.as_ref(),
             &request,
-            self.suggested_sqlite_path.as_path(),
+            self.suggested_log_file_path.as_path(),
         )?;
         let runtime_values = config.to_runtime_values();
         runtime_config
@@ -432,7 +432,9 @@ impl SetupState {
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 struct PersistedSetupConfig {
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "PersistedLogbookConfig::is_empty")]
+    logbook: PersistedLogbookConfig,
+    #[serde(default, skip_serializing_if = "PersistedStorageConfig::is_empty")]
     storage: PersistedStorageConfig,
     #[serde(default)]
     station_profile: PersistedStationProfile,
@@ -446,10 +448,8 @@ impl PersistedSetupConfig {
     fn from_request(
         existing: Option<&Self>,
         request: &SaveSetupRequest,
-        suggested_sqlite_path: &Path,
+        suggested_log_file_path: &Path,
     ) -> Result<Self, String> {
-        let storage_backend = StorageBackend::try_from(request.storage_backend)
-            .map_err(|_| "A supported storage_backend is required.".to_string())?;
         let station_profile = normalize_profile_payload(
             request
                 .station_profile
@@ -468,21 +468,39 @@ impl PersistedSetupConfig {
             );
         }
 
-        let sqlite_path = normalize_optional_string(request.sqlite_path.as_deref());
-        let storage = match storage_backend {
-            StorageBackend::Memory => PersistedStorageConfig {
-                backend: Some("memory".to_string()),
-                sqlite_path: None,
-            },
-            StorageBackend::Sqlite => PersistedStorageConfig {
-                backend: Some("sqlite".to_string()),
-                sqlite_path: Some(
-                    sqlite_path.unwrap_or_else(|| suggested_sqlite_path.display().to_string()),
-                ),
-            },
-            StorageBackend::Unspecified => {
-                return Err("A supported storage_backend is required.".to_string());
-            }
+        let requested_log_file_path = normalize_optional_string(request.log_file_path.as_deref());
+        let legacy_sqlite_path = normalize_optional_string(request.sqlite_path.as_deref());
+        let legacy_storage_backend = StorageBackend::try_from(request.storage_backend)
+            .unwrap_or(StorageBackend::Unspecified);
+        let (logbook, storage) = if let Some(log_file_path) = requested_log_file_path {
+            (
+                PersistedLogbookConfig {
+                    file_path: Some(log_file_path),
+                },
+                PersistedStorageConfig::default(),
+            )
+        } else if matches!(legacy_storage_backend, StorageBackend::Memory) {
+            (
+                PersistedLogbookConfig::default(),
+                PersistedStorageConfig {
+                    backend: Some("memory".to_string()),
+                    sqlite_path: None,
+                },
+            )
+        } else if matches!(legacy_storage_backend, StorageBackend::Sqlite)
+            || legacy_sqlite_path.is_some()
+        {
+            (
+                PersistedLogbookConfig {
+                    file_path: Some(
+                        legacy_sqlite_path
+                            .unwrap_or_else(|| suggested_log_file_path.display().to_string()),
+                    ),
+                },
+                PersistedStorageConfig::default(),
+            )
+        } else {
+            return Err("A log_file_path is required.".to_string());
         };
 
         let mut station_profiles = existing
@@ -500,6 +518,7 @@ impl PersistedSetupConfig {
         );
 
         let mut config = existing.cloned().unwrap_or_default();
+        config.logbook = logbook;
         config.storage = storage;
         config.station_profile = PersistedStationProfile::from_proto(&station_profile);
         config.station_profiles = station_profiles;
@@ -514,12 +533,19 @@ impl PersistedSetupConfig {
 
     fn to_runtime_values(&self) -> BTreeMap<String, String> {
         let mut values = BTreeMap::new();
+        let log_file_path = self.log_file_path();
 
-        if let Some(backend) = self.storage.backend.as_deref() {
-            values.insert(STORAGE_BACKEND_ENV_VAR.to_string(), backend.to_string());
-        }
-        if let Some(sqlite_path) = self.storage.sqlite_path.as_deref() {
-            values.insert(SQLITE_PATH_ENV_VAR.to_string(), sqlite_path.to_string());
+        match self.runtime_storage_backend() {
+            StorageBackend::Memory => {
+                values.insert(STORAGE_BACKEND_ENV_VAR.to_string(), "memory".to_string());
+            }
+            StorageBackend::Sqlite => {
+                values.insert(STORAGE_BACKEND_ENV_VAR.to_string(), "sqlite".to_string());
+                if let Some(log_file_path) = log_file_path {
+                    values.insert(SQLITE_PATH_ENV_VAR.to_string(), log_file_path);
+                }
+            }
+            StorageBackend::Unspecified => {}
         }
 
         if let Some(profile) = self.station_profile() {
@@ -536,7 +562,20 @@ impl PersistedSetupConfig {
         values
     }
 
-    fn storage_backend(&self) -> StorageBackend {
+    fn log_file_path(&self) -> Option<String> {
+        normalize_optional_string(self.logbook.file_path.as_deref())
+            .or_else(|| normalize_optional_string(self.storage.sqlite_path.as_deref()))
+    }
+
+    fn runtime_storage_backend(&self) -> StorageBackend {
+        if self.log_file_path().is_some() {
+            StorageBackend::Sqlite
+        } else {
+            self.legacy_storage_backend()
+        }
+    }
+
+    fn legacy_storage_backend(&self) -> StorageBackend {
         match self.storage.backend.as_deref() {
             Some("memory") => StorageBackend::Memory,
             Some("sqlite") => StorageBackend::Sqlite,
@@ -616,9 +655,27 @@ impl PersistedSetupConfig {
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
+struct PersistedLogbookConfig {
+    file_path: Option<String>,
+}
+
+impl PersistedLogbookConfig {
+    fn is_empty(config: &Self) -> bool {
+        normalize_optional_string(config.file_path.as_deref()).is_none()
+    }
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 struct PersistedStorageConfig {
     backend: Option<String>,
     sqlite_path: Option<String>,
+}
+
+impl PersistedStorageConfig {
+    fn is_empty(config: &Self) -> bool {
+        config.backend.is_none()
+            && normalize_optional_string(config.sqlite_path.as_deref()).is_none()
+    }
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -879,11 +936,11 @@ pub(crate) fn default_config_path() -> Result<PathBuf, String> {
     }
 }
 
-fn suggested_sqlite_path(config_path: &Path) -> PathBuf {
+fn suggested_log_file_path(config_path: &Path) -> PathBuf {
     config_path
         .parent()
         .unwrap_or_else(|| Path::new("."))
-        .join(DEFAULT_SQLITE_FILE_NAME)
+        .join(DEFAULT_LOG_FILE_NAME)
 }
 
 fn load_persisted_config(config_path: &Path) -> Result<Option<PersistedSetupConfig>, String> {
@@ -933,14 +990,15 @@ fn write_persisted_config(config_path: &Path, config: &PersistedSetupConfig) -> 
 
 fn build_status(
     config_path: &Path,
-    suggested_sqlite_path: &Path,
+    suggested_log_file_path: &Path,
     persisted_config: Option<&PersistedSetupConfig>,
 ) -> SetupStatusResponse {
     let warnings = build_warnings(persisted_config);
     let station_profile = persisted_config.and_then(PersistedSetupConfig::station_profile);
+    let log_file_path = persisted_config.and_then(PersistedSetupConfig::log_file_path);
     let storage_backend = persisted_config.map_or(
         StorageBackend::Unspecified,
-        PersistedSetupConfig::storage_backend,
+        PersistedSetupConfig::runtime_storage_backend,
     );
 
     SetupStatusResponse {
@@ -948,20 +1006,22 @@ fn build_status(
         setup_complete: persisted_config.is_some() && warnings.is_empty(),
         config_path: config_path.display().to_string(),
         storage_backend: storage_backend as i32,
-        sqlite_path: persisted_config.and_then(|config| config.storage.sqlite_path.clone()),
+        sqlite_path: log_file_path.clone(),
         has_station_profile: station_profile.is_some(),
         station_profile,
         qrz_xml_username: persisted_config.and_then(|config| config.qrz_xml.username.clone()),
         has_qrz_xml_password: persisted_config
             .and_then(|config| config.qrz_xml.password.as_ref())
             .is_some(),
-        suggested_sqlite_path: suggested_sqlite_path.display().to_string(),
+        suggested_sqlite_path: suggested_log_file_path.display().to_string(),
         warnings,
         active_station_profile_id: persisted_config
             .and_then(PersistedSetupConfig::active_station_profile_id),
         station_profile_count: persisted_config.map_or(0, |config| {
             u32::try_from(config.station_profile_count()).unwrap_or(u32::MAX)
         }),
+        log_file_path,
+        suggested_log_file_path: suggested_log_file_path.display().to_string(),
     }
 }
 
@@ -971,18 +1031,17 @@ fn build_warnings(persisted_config: Option<&PersistedSetupConfig>) -> Vec<String
     };
 
     let mut warnings = Vec::new();
+    let log_file_path = config.log_file_path();
 
-    match config.storage_backend() {
-        StorageBackend::Memory | StorageBackend::Sqlite => {}
-        StorageBackend::Unspecified => {
-            warnings.push("Persisted setup is missing a supported storage backend.".to_string());
+    if log_file_path.is_none() {
+        if matches!(config.legacy_storage_backend(), StorageBackend::Memory) {
+            warnings.push(
+                "Persisted setup still uses legacy in-memory storage; save a log file path to migrate to the backend-agnostic setup model."
+                    .to_string(),
+            );
+        } else {
+            warnings.push("Persisted setup is missing a log_file_path.".to_string());
         }
-    }
-
-    if matches!(config.storage_backend(), StorageBackend::Sqlite)
-        && normalize_optional_string(config.storage.sqlite_path.as_deref()).is_none()
-    {
-        warnings.push("SQLite storage requires a sqlite_path.".to_string());
     }
 
     if config.station_profile().is_none() {
@@ -1082,8 +1141,8 @@ mod tests {
     use tonic::Request;
 
     use super::{
-        default_config_path, suggested_sqlite_path, SetupControlSurface, SetupState,
-        StationProfileControlSurface, DEFAULT_CONFIG_FILE_NAME,
+        default_config_path, suggested_log_file_path, PersistedSetupConfig, SetupControlSurface,
+        SetupState, StationProfileControlSurface, DEFAULT_CONFIG_FILE_NAME,
     };
     use crate::runtime_config::RuntimeConfigManager;
     use logripper_core::proto::logripper::domain::StationProfile;
@@ -1124,12 +1183,88 @@ mod tests {
         assert!(!status.setup_complete);
         assert_eq!(config_path.display().to_string(), status.config_path);
         assert_eq!(
-            suggested_sqlite_path(&config_path).display().to_string(),
-            status.suggested_sqlite_path
+            suggested_log_file_path(&config_path).display().to_string(),
+            status.suggested_log_file_path
         );
+        assert_eq!(status.suggested_log_file_path, status.suggested_sqlite_path);
         assert!(status
             .warnings
             .contains(&"No persisted LogRipper setup exists yet.".to_string()));
+    }
+
+    #[tokio::test]
+    async fn get_setup_status_reads_legacy_sqlite_storage_as_log_file_path() {
+        let config_path = unique_config_path();
+        let config_directory = config_path.parent().expect("config directory");
+        fs::create_dir_all(config_directory).expect("create config directory");
+        fs::write(
+            &config_path,
+            r#"[storage]
+backend = "sqlite"
+sqlite_path = 'legacy\portable.db'
+
+[station_profile]
+station_callsign = "K7RND"
+"#,
+        )
+        .expect("write legacy config");
+
+        let setup_state = Arc::new(SetupState::load(config_path.clone()).expect("setup state"));
+        let runtime_config = Arc::new(RuntimeConfigManager::new(BTreeMap::new()).expect("runtime"));
+        let service = SetupControlSurface::new(setup_state, runtime_config);
+
+        let status =
+            SetupService::get_setup_status(&service, Request::new(GetSetupStatusRequest {}))
+                .await
+                .expect("status")
+                .into_inner();
+
+        assert!(status.config_file_exists);
+        assert!(status.setup_complete);
+        assert_eq!(StorageBackend::Sqlite as i32, status.storage_backend);
+        assert_eq!(Some("legacy\\portable.db"), status.log_file_path.as_deref());
+        assert_eq!(status.log_file_path, status.sqlite_path);
+        assert!(status.warnings.is_empty());
+
+        fs::remove_dir_all(config_directory).expect("remove temp config directory");
+    }
+
+    #[tokio::test]
+    async fn get_setup_status_flags_legacy_memory_setup_for_migration() {
+        let config_path = unique_config_path();
+        let config_directory = config_path.parent().expect("config directory");
+        fs::create_dir_all(config_directory).expect("create config directory");
+        fs::write(
+            &config_path,
+            r#"[storage]
+backend = "memory"
+
+[station_profile]
+station_callsign = "K7RND"
+"#,
+        )
+        .expect("write legacy config");
+
+        let setup_state = Arc::new(SetupState::load(config_path.clone()).expect("setup state"));
+        let runtime_config = Arc::new(RuntimeConfigManager::new(BTreeMap::new()).expect("runtime"));
+        let service = SetupControlSurface::new(setup_state, runtime_config);
+
+        let status =
+            SetupService::get_setup_status(&service, Request::new(GetSetupStatusRequest {}))
+                .await
+                .expect("status")
+                .into_inner();
+
+        assert!(status.config_file_exists);
+        assert!(!status.setup_complete);
+        assert_eq!(StorageBackend::Memory as i32, status.storage_backend);
+        assert!(status.log_file_path.is_none());
+        assert!(status
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("legacy in-memory storage")));
+
+        fs::remove_dir_all(config_directory).expect("remove temp config directory");
     }
 
     #[tokio::test]
@@ -1142,8 +1277,9 @@ mod tests {
         let response = SetupService::save_setup(
             &service,
             Request::new(SaveSetupRequest {
-                storage_backend: StorageBackend::Sqlite as i32,
+                storage_backend: StorageBackend::Unspecified as i32,
                 sqlite_path: None,
+                log_file_path: Some("data\\portable.db".to_string()),
                 station_profile: Some(StationProfile {
                     station_callsign: "k7rnd".to_string(),
                     operator_name: Some("Randy".to_string()),
@@ -1162,9 +1298,20 @@ mod tests {
         assert!(status.config_file_exists);
         assert!(status.setup_complete);
         assert_eq!(StorageBackend::Sqlite as i32, status.storage_backend);
+        assert_eq!(Some("data\\portable.db"), status.log_file_path.as_deref());
+        assert_eq!(status.log_file_path, status.sqlite_path);
         assert_eq!(Some("Home"), station_profile.profile_name.as_deref());
         assert_eq!("K7RND", station_profile.station_callsign);
         assert!(config_path.exists());
+        let saved_config = fs::read_to_string(&config_path).expect("saved config");
+        let parsed_config =
+            toml::from_str::<PersistedSetupConfig>(&saved_config).expect("parse saved config");
+        assert_eq!(
+            Some("data\\portable.db"),
+            parsed_config.logbook.file_path.as_deref()
+        );
+        assert!(parsed_config.storage.backend.is_none());
+        assert!(parsed_config.storage.sqlite_path.is_none());
 
         let runtime_snapshot = runtime_config.snapshot().await;
         assert_eq!("sqlite", runtime_snapshot.active_storage_backend);
@@ -1184,6 +1331,7 @@ mod tests {
         fs::remove_dir_all(config_directory).expect("remove temp config directory");
     }
 
+    #[allow(clippy::too_many_lines)]
     #[tokio::test]
     async fn save_setup_preserves_existing_station_profiles() {
         let config_path = unique_config_path();
@@ -1196,8 +1344,9 @@ mod tests {
         SetupService::save_setup(
             &setup_service,
             Request::new(SaveSetupRequest {
-                storage_backend: StorageBackend::Memory as i32,
+                storage_backend: StorageBackend::Unspecified as i32,
                 sqlite_path: None,
+                log_file_path: Some("data\\home.db".to_string()),
                 station_profile: Some(StationProfile {
                     profile_name: Some("Home".to_string()),
                     station_callsign: "k7rnd".to_string(),
@@ -1230,8 +1379,9 @@ mod tests {
         let updated = SetupService::save_setup(
             &setup_service,
             Request::new(SaveSetupRequest {
-                storage_backend: StorageBackend::Sqlite as i32,
-                sqlite_path: Some("data\\updated.db".to_string()),
+                storage_backend: StorageBackend::Unspecified as i32,
+                sqlite_path: None,
+                log_file_path: Some("data\\updated.db".to_string()),
                 station_profile: Some(StationProfile {
                     profile_name: Some("Home Debug".to_string()),
                     station_callsign: "k7rnd".to_string(),
@@ -1249,6 +1399,7 @@ mod tests {
         .expect("status");
 
         assert_eq!(StorageBackend::Sqlite as i32, updated.storage_backend);
+        assert_eq!(Some("data\\updated.db"), updated.log_file_path.as_deref());
         assert_eq!(Some("home"), updated.active_station_profile_id.as_deref());
         assert_eq!(2, updated.station_profile_count);
         assert_eq!(
@@ -1304,8 +1455,9 @@ mod tests {
         let error = SetupService::save_setup(
             &service,
             Request::new(SaveSetupRequest {
-                storage_backend: StorageBackend::Memory as i32,
+                storage_backend: StorageBackend::Unspecified as i32,
                 sqlite_path: None,
+                log_file_path: Some("data\\partial.db".to_string()),
                 station_profile: Some(StationProfile {
                     station_callsign: "k7rnd".to_string(),
                     ..StationProfile::default()
@@ -1334,8 +1486,9 @@ mod tests {
         SetupService::save_setup(
             &setup_service,
             Request::new(SaveSetupRequest {
-                storage_backend: StorageBackend::Memory as i32,
+                storage_backend: StorageBackend::Unspecified as i32,
                 sqlite_path: None,
+                log_file_path: Some("data\\station-profiles.db".to_string()),
                 station_profile: Some(StationProfile {
                     profile_name: Some("Home".to_string()),
                     station_callsign: "k7rnd".to_string(),
