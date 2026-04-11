@@ -1,16 +1,21 @@
 //! QRZ XML lookup provider adapter.
 
-use std::{env, fmt, time::Duration};
+use std::{
+    env, fmt,
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+};
 
 use chrono::NaiveDate;
 use prost_types::Timestamp;
-use reqwest::Client;
+use reqwest::{header::HeaderMap, Client, Request};
 use serde::Deserialize;
 use tokio::sync::Mutex;
 
 use crate::{
     domain::lookup::normalize_callsign,
-    proto::logripper::domain::{CallsignRecord, GeoSource, QslPreference},
+    proto::logripper::domain::{
+        CallsignRecord, DebugHttpExchange, DebugHttpHeader, GeoSource, QslPreference,
+    },
 };
 
 use super::provider::{CallsignProvider, ProviderLookup, ProviderLookupError};
@@ -182,7 +187,7 @@ impl QrzXmlProvider {
     ///
     /// # Errors
     ///
-    /// Returns `ProviderLookupError::Configuration` when the HTTP client cannot
+    /// Returns `ProviderLookupError::configuration` when the HTTP client cannot
     /// be created.
     pub fn new(config: QrzXmlConfig) -> Result<Self, ProviderLookupError> {
         let client = Client::builder()
@@ -190,7 +195,7 @@ impl QrzXmlProvider {
             .timeout(config.http_timeout)
             .build()
             .map_err(|error| {
-                ProviderLookupError::Configuration(format!(
+                ProviderLookupError::configuration(format!(
                     "Failed to create QRZ HTTP client: {error}"
                 ))
             })?;
@@ -202,43 +207,51 @@ impl QrzXmlProvider {
         })
     }
 
-    async fn ensure_session_key(&self) -> Result<String, ProviderLookupError> {
+    async fn ensure_session_key(
+        &self,
+    ) -> Result<(String, Vec<DebugHttpExchange>), ProviderLookupError> {
         if let Some(existing) = self.session_key.lock().await.clone() {
-            return Ok(existing);
+            return Ok((existing, Vec::new()));
         }
 
         self.login().await
     }
 
-    async fn login(&self) -> Result<String, ProviderLookupError> {
-        let response = self
-            .request_database(&[
-                ("username", self.config.username.clone()),
-                ("password", self.config.password.clone()),
-                ("agent", self.config.user_agent.clone()),
-            ])
+    async fn login(&self) -> Result<(String, Vec<DebugHttpExchange>), ProviderLookupError> {
+        let (response, debug_http_exchanges) = self
+            .request_database(
+                &[
+                    ("username", self.config.username.clone()),
+                    ("password", self.config.password.clone()),
+                    ("agent", self.config.user_agent.clone()),
+                ],
+                "login",
+            )
             .await?;
 
         let session = response.session.ok_or_else(|| {
-            ProviderLookupError::Parse(
+            ProviderLookupError::parse(
                 "QRZ login response did not include a <Session> element.".to_string(),
+                debug_http_exchanges.clone(),
             )
         })?;
 
         if let Some(error) = session.error {
-            return Err(ProviderLookupError::Authentication(format!(
-                "QRZ login failed: {error}"
-            )));
+            return Err(ProviderLookupError::authentication(
+                format!("QRZ login failed: {error}"),
+                debug_http_exchanges,
+            ));
         }
 
         let key = session.key.ok_or_else(|| {
-            ProviderLookupError::Authentication(
+            ProviderLookupError::authentication(
                 "QRZ login response did not include a session key.".to_string(),
+                debug_http_exchanges.clone(),
             )
         })?;
 
         self.store_session_key(&key).await;
-        Ok(key)
+        Ok((key, debug_http_exchanges))
     }
 
     async fn store_session_key(&self, key: &str) {
@@ -252,77 +265,137 @@ impl QrzXmlProvider {
     async fn request_database(
         &self,
         query: &[(&str, String)],
-    ) -> Result<QrzDatabase, ProviderLookupError> {
-        let xml = self.send_request(query).await?;
-        quick_xml::de::from_str::<QrzDatabase>(&xml).map_err(|error| {
-            ProviderLookupError::Parse(format!("Failed to parse QRZ XML response: {error}"))
-        })
+        operation: &'static str,
+    ) -> Result<(QrzDatabase, Vec<DebugHttpExchange>), ProviderLookupError> {
+        let CapturedQrzResponse {
+            body,
+            debug_http_exchanges,
+        } = self.send_request(query, operation).await?;
+        let database = quick_xml::de::from_str::<QrzDatabase>(&body).map_err(|error| {
+            ProviderLookupError::parse(
+                format!("Failed to parse QRZ XML response: {error}"),
+                debug_http_exchanges.clone(),
+            )
+        })?;
+        Ok((database, debug_http_exchanges))
     }
 
-    fn capture_request_message(
-        &self,
-        query: &[(&str, String)],
-    ) -> Result<String, ProviderLookupError> {
-        let request = self
-            .client
-            .get(&self.config.base_url)
-            .query(query)
-            .build()
-            .map_err(|error| {
-                ProviderLookupError::Configuration(format!(
-                    "Failed to build QRZ HTTP request for diagnostics: {error}"
-                ))
-            })?;
+    fn capture_request_message(request: &Request, query: &[(&str, String)]) -> String {
         let query_details = query
             .iter()
             .map(|(name, value)| render_capture_query(name, value))
             .collect::<Vec<_>>()
             .join("; ");
-        let masked_query = query
-            .iter()
-            .map(|(name, value)| format!("{name}={}", mask_capture_value(name, value)))
-            .collect::<Vec<_>>()
-            .join("&");
-        let mut base_url = request.url().clone();
-        base_url.set_query(None);
-        let url = if masked_query.is_empty() {
-            base_url.to_string()
-        } else {
-            format!("{base_url}?{masked_query}")
-        };
-
-        Ok(format!(
+        format!(
             "QRZ XML request capture mode enabled ({QRZ_XML_CAPTURE_ONLY_ENV_VAR}=true): request not sent. QRZ XML uses HTTP GET query parameters (no JSON body). method={}, url={}, query_details=[{}]",
             request.method(),
-            url,
+            redact_request_url(request),
             query_details
-        ))
+        )
     }
 
-    async fn send_request(&self, query: &[(&str, String)]) -> Result<String, ProviderLookupError> {
-        if self.config.capture_only {
-            return Err(ProviderLookupError::Transport(
-                self.capture_request_message(query)?,
-            ));
-        }
-
+    #[expect(
+        clippy::too_many_lines,
+        reason = "QRZ request execution owns retry, redaction, and capture as one provider-edge flow."
+    )]
+    async fn send_request(
+        &self,
+        query: &[(&str, String)],
+        operation: &'static str,
+    ) -> Result<CapturedQrzResponse, ProviderLookupError> {
+        let mut debug_http_exchanges = Vec::new();
         let mut attempt = 0_u32;
+
         loop {
-            let response = self
+            let request = self
                 .client
                 .get(&self.config.base_url)
                 .query(query)
-                .send()
-                .await;
+                .build()
+                .map_err(|error| {
+                    ProviderLookupError::configuration(format!(
+                        "Failed to build QRZ HTTP request for diagnostics: {error}"
+                    ))
+                })?;
+            let started_at = SystemTime::now();
+            let started_at_utc = system_time_to_timestamp(started_at);
+            let duration_start = Instant::now();
+            let method = request.method().to_string();
+            let url = redact_request_url(&request);
+            let request_headers = capture_headers(request.headers());
 
-            match response {
+            if self.config.capture_only {
+                let exchange = DebugHttpExchange {
+                    provider_name: "QRZ XML".to_string(),
+                    operation: operation.to_string(),
+                    started_at_utc: Some(started_at_utc),
+                    duration_ms: duration_to_millis_u32(duration_start.elapsed()),
+                    attempt: attempt + 1,
+                    method,
+                    url,
+                    request_headers,
+                    request_body: None,
+                    response_status_code: None,
+                    response_headers: Vec::new(),
+                    response_body: None,
+                    error_message: Some("request not sent (capture_only=true)".to_string()),
+                };
+                debug_http_exchanges.push(exchange);
+                return Err(ProviderLookupError::transport(
+                    Self::capture_request_message(&request, query),
+                    debug_http_exchanges,
+                ));
+            }
+
+            match self.client.execute(request).await {
                 Ok(response) => {
                     let status = response.status();
-                    if status.is_success() {
-                        return response.text().await.map_err(|error| {
-                            ProviderLookupError::Transport(format!(
+                    let response_headers = capture_headers(response.headers());
+                    let duration_ms = duration_to_millis_u32(duration_start.elapsed());
+                    let response_body = response.text().await.map_err(|error| {
+                        debug_http_exchanges.push(DebugHttpExchange {
+                            provider_name: "QRZ XML".to_string(),
+                            operation: operation.to_string(),
+                            started_at_utc: Some(started_at_utc),
+                            duration_ms,
+                            attempt: attempt + 1,
+                            method: method.clone(),
+                            url: url.clone(),
+                            request_headers: request_headers.clone(),
+                            request_body: None,
+                            response_status_code: Some(status.as_u16().into()),
+                            response_headers: response_headers.clone(),
+                            response_body: None,
+                            error_message: Some(format!(
                                 "Failed to read QRZ response body: {error}"
-                            ))
+                            )),
+                        });
+                        ProviderLookupError::transport(
+                            format!("Failed to read QRZ response body: {error}"),
+                            debug_http_exchanges.clone(),
+                        )
+                    })?;
+                    let exchange = DebugHttpExchange {
+                        provider_name: "QRZ XML".to_string(),
+                        operation: operation.to_string(),
+                        started_at_utc: Some(started_at_utc),
+                        duration_ms,
+                        attempt: attempt + 1,
+                        method: method.clone(),
+                        url: url.clone(),
+                        request_headers: request_headers.clone(),
+                        request_body: None,
+                        response_status_code: Some(status.as_u16().into()),
+                        response_headers,
+                        response_body: Some(redact_qrz_xml_response(&response_body)),
+                        error_message: (!status.is_success()).then(|| format!("HTTP {status}")),
+                    };
+                    debug_http_exchanges.push(exchange);
+
+                    if status.is_success() {
+                        return Ok(CapturedQrzResponse {
+                            body: response_body,
+                            debug_http_exchanges,
                         });
                     }
 
@@ -333,9 +406,10 @@ impl QrzXmlProvider {
                             continue;
                         }
 
-                        return Err(ProviderLookupError::RateLimited(format!(
-                            "QRZ XML request exceeded rate limits (HTTP {status})."
-                        )));
+                        return Err(ProviderLookupError::rate_limited(
+                            format!("QRZ XML request exceeded rate limits (HTTP {status})."),
+                            debug_http_exchanges,
+                        ));
                     }
 
                     if status.is_server_error() && attempt < self.config.max_retries {
@@ -344,20 +418,39 @@ impl QrzXmlProvider {
                         continue;
                     }
 
-                    return Err(ProviderLookupError::Transport(format!(
-                        "QRZ XML request failed with HTTP status {status}."
-                    )));
+                    return Err(ProviderLookupError::transport(
+                        format!("QRZ XML request failed with HTTP status {status}."),
+                        debug_http_exchanges,
+                    ));
                 }
                 Err(error) => {
+                    let exchange = DebugHttpExchange {
+                        provider_name: "QRZ XML".to_string(),
+                        operation: operation.to_string(),
+                        started_at_utc: Some(started_at_utc),
+                        duration_ms: duration_to_millis_u32(duration_start.elapsed()),
+                        attempt: attempt + 1,
+                        method,
+                        url,
+                        request_headers,
+                        request_body: None,
+                        response_status_code: None,
+                        response_headers: Vec::new(),
+                        response_body: None,
+                        error_message: Some(format!("QRZ XML request failed: {error}")),
+                    };
+                    debug_http_exchanges.push(exchange);
+
                     if is_retryable_transport_error(&error) && attempt < self.config.max_retries {
                         attempt += 1;
                         tokio::time::sleep(retry_delay(attempt)).await;
                         continue;
                     }
 
-                    return Err(ProviderLookupError::Transport(format!(
-                        "QRZ XML request failed: {error}"
-                    )));
+                    return Err(ProviderLookupError::transport(
+                        format!("QRZ XML request failed: {error}"),
+                        debug_http_exchanges,
+                    ));
                 }
             }
         }
@@ -369,19 +462,32 @@ impl CallsignProvider for QrzXmlProvider {
     async fn lookup_callsign(&self, callsign: &str) -> Result<ProviderLookup, ProviderLookupError> {
         let normalized_callsign = normalize_callsign(callsign);
         let mut session_retry_attempted = false;
+        let mut debug_http_exchanges = Vec::new();
 
         loop {
-            let session_key = self.ensure_session_key().await?;
-            let response = self
-                .request_database(&[
-                    ("s", session_key),
-                    ("callsign", normalized_callsign.clone()),
-                ])
-                .await?;
+            let (session_key, session_exchanges) =
+                self.ensure_session_key().await.map_err(|error| {
+                    error.with_prior_debug_http_exchanges(debug_http_exchanges.clone())
+                })?;
+            debug_http_exchanges.extend(session_exchanges);
+            let (response, lookup_exchanges) = self
+                .request_database(
+                    &[
+                        ("s", session_key),
+                        ("callsign", normalized_callsign.clone()),
+                    ],
+                    "callsign_lookup",
+                )
+                .await
+                .map_err(|error| {
+                    error.with_prior_debug_http_exchanges(debug_http_exchanges.clone())
+                })?;
+            debug_http_exchanges.extend(lookup_exchanges);
 
             let session = response.session.ok_or_else(|| {
-                ProviderLookupError::Parse(
+                ProviderLookupError::parse(
                     "QRZ lookup response did not include a <Session> element.".to_string(),
+                    debug_http_exchanges.clone(),
                 )
             })?;
 
@@ -393,7 +499,7 @@ impl CallsignProvider for QrzXmlProvider {
 
             if let Some(error) = session.error.as_deref() {
                 if is_not_found_error(error) && session.key.is_some() {
-                    return Ok(ProviderLookup::NotFound);
+                    return Ok(ProviderLookup::not_found(debug_http_exchanges));
                 }
 
                 if session.key.is_none() && !session_retry_attempted {
@@ -403,24 +509,37 @@ impl CallsignProvider for QrzXmlProvider {
                 }
 
                 if is_auth_error(error) || is_connection_refused_error(error) {
-                    return Err(ProviderLookupError::Authentication(error.to_string()));
+                    return Err(ProviderLookupError::authentication(
+                        error.to_string(),
+                        debug_http_exchanges,
+                    ));
                 }
 
-                return Err(ProviderLookupError::Session(error.to_string()));
+                return Err(ProviderLookupError::session(
+                    error.to_string(),
+                    debug_http_exchanges,
+                ));
             }
 
             let callsign_record = response.callsign.ok_or_else(|| {
-                ProviderLookupError::Parse(
+                ProviderLookupError::parse(
                     "QRZ lookup response omitted <Callsign> without a session error.".to_string(),
+                    debug_http_exchanges.clone(),
                 )
             })?;
 
-            return Ok(ProviderLookup::Found(Box::new(map_callsign_record(
-                &normalized_callsign,
-                &callsign_record,
-            ))));
+            return Ok(ProviderLookup::found(
+                map_callsign_record(&normalized_callsign, &callsign_record),
+                debug_http_exchanges,
+            ));
         }
     }
+}
+
+#[derive(Debug)]
+struct CapturedQrzResponse {
+    body: String,
+    debug_http_exchanges: Vec<DebugHttpExchange>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -692,6 +811,13 @@ fn retry_delay(attempt: u32) -> Duration {
     Duration::from_millis(RETRY_BASE_DELAY_MILLIS.saturating_mul(1_u64 << shift))
 }
 
+fn duration_to_millis_u32(duration: Duration) -> u32 {
+    match u32::try_from(duration.as_millis()) {
+        Ok(value) => value,
+        Err(_) => u32::MAX,
+    }
+}
+
 fn is_retryable_transport_error(error: &reqwest::Error) -> bool {
     error.is_timeout() || error.is_connect() || error.is_request() || error.is_body()
 }
@@ -710,6 +836,90 @@ fn is_auth_error(error: &str) -> bool {
         || lowered.contains("username")
         || lowered.contains("login")
         || lowered.contains("authorization")
+}
+
+fn redact_request_url(request: &Request) -> String {
+    let mut base_url = request.url().clone();
+    let masked_query = request
+        .url()
+        .query_pairs()
+        .map(|(name, value)| format!("{name}={}", mask_capture_value(&name, &value)))
+        .collect::<Vec<_>>()
+        .join("&");
+    base_url.set_query(None);
+    if masked_query.is_empty() {
+        base_url.to_string()
+    } else {
+        format!("{base_url}?{masked_query}")
+    }
+}
+
+fn capture_headers(headers: &HeaderMap) -> Vec<DebugHttpHeader> {
+    let mut captured = headers
+        .iter()
+        .map(|(name, value)| DebugHttpHeader {
+            name: name.as_str().to_string(),
+            value: mask_header_value(name.as_str(), value.to_str().unwrap_or("<non-utf8>")),
+        })
+        .collect::<Vec<_>>();
+    captured.sort_by(|left, right| left.name.cmp(&right.name));
+    captured
+}
+
+fn mask_header_value(name: &str, value: &str) -> String {
+    if is_sensitive_header_name(name) {
+        "<redacted>".to_string()
+    } else {
+        value.to_string()
+    }
+}
+
+fn is_sensitive_header_name(name: &str) -> bool {
+    matches!(
+        name.trim().to_ascii_lowercase().as_str(),
+        "authorization" | "cookie" | "set-cookie" | "proxy-authorization" | "x-api-key"
+    )
+}
+
+fn redact_qrz_xml_response(response_body: &str) -> String {
+    redact_xml_tag_contents(response_body, "Key")
+}
+
+fn redact_xml_tag_contents(xml: &str, tag_name: &str) -> String {
+    let open_tag = format!("<{tag_name}>");
+    let close_tag = format!("</{tag_name}>");
+    let mut remaining = xml;
+    let mut redacted = String::with_capacity(xml.len());
+
+    while let Some(open_index) = remaining.find(&open_tag) {
+        let (before_open, after_before_open) = remaining.split_at(open_index);
+        redacted.push_str(before_open);
+        redacted.push_str(&open_tag);
+
+        let after_open = &after_before_open[open_tag.len()..];
+        let Some(close_index) = after_open.find(&close_tag) else {
+            redacted.push_str("<redacted>");
+            return redacted;
+        };
+
+        redacted.push_str("<redacted>");
+        redacted.push_str(&after_open[close_index..close_index + close_tag.len()]);
+        remaining = &after_open[close_index + close_tag.len()..];
+    }
+
+    redacted.push_str(remaining);
+    redacted
+}
+
+fn system_time_to_timestamp(time: SystemTime) -> Timestamp {
+    let Ok(duration) = time.duration_since(UNIX_EPOCH) else {
+        return Timestamp::default();
+    };
+
+    Timestamp {
+        seconds: i64::try_from(duration.as_secs()).unwrap_or(i64::MAX),
+        nanos: i32::try_from(duration.subsec_nanos()).unwrap_or_default(),
+    }
 }
 
 fn mask_capture_value(name: &str, value: &str) -> String {
@@ -903,6 +1113,7 @@ mod tests {
     };
 
     use super::*;
+    use crate::lookup::provider::ProviderLookupOutcome;
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
         net::{TcpListener, TcpStream},
@@ -943,6 +1154,13 @@ mod tests {
     <Error>Session Timeout</Error>
   </Session>
 </QRZDatabase>
+"#;
+
+    const MALFORMED_LOOKUP_XML: &str = r#"
+<?xml version="1.0"?>
+<QRZDatabase version="1.34">
+  <Session>
+    <Key>session-key
 "#;
 
     const FOUND_XML: &str = r#"
@@ -1095,10 +1313,33 @@ mod tests {
 
         let result = provider.lookup_callsign("w1aw").await.expect("lookup");
 
-        assert!(matches!(
-            result,
-            ProviderLookup::Found(record) if record.callsign == "W1AW"
-        ));
+        let ProviderLookup {
+            outcome,
+            debug_http_exchanges,
+        } = result;
+        let record = match outcome {
+            ProviderLookupOutcome::Found(record) => Some(record),
+            ProviderLookupOutcome::NotFound => None,
+        }
+        .expect("expected found result");
+        assert_eq!(record.callsign, "W1AW");
+        assert_eq!(debug_http_exchanges.len(), 2);
+        let first_exchange = debug_http_exchanges.first().expect("login exchange");
+        let second_exchange = debug_http_exchanges.get(1).expect("lookup exchange");
+        assert_eq!(first_exchange.operation, "login");
+        assert_eq!(second_exchange.operation, "callsign_lookup");
+        assert_eq!(
+            first_exchange.response_body.as_deref(),
+            Some(
+                "\n<?xml version=\"1.0\"?>\n<QRZDatabase version=\"1.34\">\n  <Session>\n    <Key><redacted></Key>\n  </Session>\n</QRZDatabase>\n"
+            )
+        );
+        assert!(second_exchange.url.contains("s=<redacted>"));
+        assert!(!second_exchange
+            .response_body
+            .as_deref()
+            .unwrap_or_default()
+            .contains("session-key"));
 
         let requests = recorded_requests.lock().expect("requests");
         assert_eq!(2, requests.len());
@@ -1124,7 +1365,8 @@ mod tests {
 
         let result = provider.lookup_callsign("w1aw").await.expect("lookup");
 
-        assert!(matches!(result, ProviderLookup::Found(_)));
+        assert!(matches!(result.outcome, ProviderLookupOutcome::Found(_)));
+        assert_eq!(result.debug_http_exchanges.len(), 4);
         assert_eq!(4, recorded_requests.lock().expect("requests").len());
     }
 
@@ -1135,7 +1377,8 @@ mod tests {
 
         let result = provider.lookup_callsign("w1aw").await.expect("lookup");
 
-        assert!(matches!(result, ProviderLookup::NotFound));
+        assert!(matches!(result.outcome, ProviderLookupOutcome::NotFound));
+        assert_eq!(result.debug_http_exchanges.len(), 2);
     }
 
     #[tokio::test]
@@ -1155,6 +1398,34 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn lookup_failure_after_login_preserves_login_and_lookup_captures() {
+        let (base_url, _) = spawn_qrz_server(&[LOGIN_SUCCESS_XML, MALFORMED_LOOKUP_XML]).await;
+        let provider = QrzXmlProvider::new(test_config(base_url)).expect("provider");
+
+        let error = provider
+            .lookup_callsign("w1aw")
+            .await
+            .expect_err("parse error");
+
+        assert_eq!(error.debug_http_exchanges().len(), 2);
+        let first_exchange = error
+            .debug_http_exchanges()
+            .first()
+            .expect("login exchange");
+        let second_exchange = error
+            .debug_http_exchanges()
+            .get(1)
+            .expect("lookup exchange");
+        assert_eq!(first_exchange.operation, "login");
+        assert_eq!(second_exchange.operation, "callsign_lookup");
+        assert!(!second_exchange
+            .response_body
+            .as_deref()
+            .unwrap_or_default()
+            .contains("session-key"));
+    }
+
+    #[tokio::test]
     async fn capture_only_mode_returns_redacted_request_diagnostics() {
         let mut config = test_config("https://xmldata.qrz.com/xml/current/".to_string());
         config.capture_only = true;
@@ -1171,6 +1442,13 @@ mod tests {
         assert!(message.contains("password=<redacted>"));
         assert!(!message.contains("super-secret-password"));
         assert!(message.contains("starts_with_quote=false"));
+        assert_eq!(error.debug_http_exchanges().len(), 1);
+        let login_exchange = error
+            .debug_http_exchanges()
+            .first()
+            .expect("login exchange");
+        assert_eq!(login_exchange.operation, "login");
+        assert!(login_exchange.url.contains("password=<redacted>"));
     }
 
     #[test]
@@ -1180,6 +1458,13 @@ mod tests {
         assert!(!rendered.contains("secret"));
         assert!(rendered.contains("starts_with_quote=true"));
         assert!(rendered.contains("ends_with_quote=true"));
+    }
+
+    #[test]
+    fn response_redaction_masks_unterminated_session_key() {
+        let redacted = redact_qrz_xml_response(MALFORMED_LOOKUP_XML);
+        assert!(!redacted.contains("session-key"));
+        assert!(redacted.contains("<Key><redacted>"));
     }
 
     #[test]

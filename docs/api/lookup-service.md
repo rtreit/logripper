@@ -47,11 +47,33 @@ rpc Lookup(LookupRequest) returns (LookupResult)
 | `cache_hit` | `bool` | Whether the result was served from cache |
 | `lookup_latency_ms` | `uint32` | Round-trip latency in milliseconds |
 | `queried_callsign` | `string` | Echo of the original requested callsign |
+| `debug_http_exchanges` | `DebugHttpExchange[]` | Redacted provider request/response capture for debugging provider-backed lookups |
 
 **Behavior:**
 - Always returns a single `LookupResult`. The state field signals the outcome.
 - If the provider is not configured (no QRZ credentials), returns `state == ERROR` with a configuration error message.
 - If the callsign is in the L1 cache and `skip_cache` is false, serves the cached result with `cache_hit == true`.
+- Provider-backed results may include redacted `debug_http_exchanges` entries for login and lookup HTTP calls. Cache-only responses leave this list empty.
+
+**Debug capture payload:**
+
+Each `DebugHttpExchange` is an additive, provider-agnostic transport capture with:
+
+- `provider_name`
+- `operation`
+- `started_at_utc`
+- `duration_ms`
+- `attempt`
+- `method`
+- `url`
+- `request_headers`
+- `request_body` (optional)
+- `response_status_code` (optional)
+- `response_headers`
+- `response_body` (optional)
+- `error_message` (optional)
+
+Sensitive values are redacted before the exchange is returned to clients. For QRZ XML this includes session keys, passwords, tokens, and auth/cookie-style headers.
 
 **Notable status codes:**
 - `OK` — returned in all cases (including not-found); the `state` field carries the semantic outcome.

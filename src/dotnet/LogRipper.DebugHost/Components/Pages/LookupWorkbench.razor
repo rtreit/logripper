@@ -1,4 +1,7 @@
 @page "/lookup-workbench"
+@using System.Globalization
+@using System.Text
+@using LogRipper.Domain
 @inject DebugWorkbenchState WorkbenchState
 @inject RuntimeConfigWorkbenchService RuntimeConfigWorkbenchService
 @inject LookupWorkbenchService LookupWorkbenchService
@@ -98,6 +101,29 @@
                     </div>
                 }
             }
+
+            <div class="mt-4">
+                <h3 class="h6">Provider exchanges</h3>
+                <p class="text-muted small">
+                    Redacted raw provider request and response capture for this invocation.
+                </p>
+
+                @if (debugExchangePayloads.Count == 0)
+                {
+                    <p class="text-muted mb-0">No provider HTTP exchanges were captured for this invocation.</p>
+                }
+                else
+                {
+                    @for (var i = 0; i < debugExchangePayloads.Count; i++)
+                    {
+                        <div class="mb-3">
+                            <PayloadCard Title="@debugExchangePayloads[i].Title"
+                                         BadgeText="@debugExchangePayloads[i].BadgeText"
+                                         Payload="@debugExchangePayloads[i].Payload" />
+                        </div>
+                    }
+                }
+            </div>
         }
     </div>
 </div>
@@ -109,6 +135,7 @@
     private ProtoPayloadView samplePayload = new("{}", string.Empty, 0);
     private LookupInvocationResult? liveResult;
     private List<ProtoPayloadView> livePayloads = [];
+    private List<DebugExchangePayload> debugExchangePayloads = [];
 
     protected override async Task OnInitializedAsync()
     {
@@ -129,6 +156,7 @@
         var request = SampleProtoFactory.CreateLookupRequest(callsign, skipCache);
         liveResult = await LookupWorkbenchService.RunLookupAsync(request);
         livePayloads = liveResult.Responses.Select(ProtoJsonService.Describe).ToList();
+        debugExchangePayloads = BuildDebugExchangePayloads(liveResult);
     }
 
     private async Task RunStreamingAsync()
@@ -137,6 +165,7 @@
         var request = SampleProtoFactory.CreateLookupRequest(callsign, skipCache);
         liveResult = await LookupWorkbenchService.RunStreamingLookupAsync(request);
         livePayloads = liveResult.Responses.Select(ProtoJsonService.Describe).ToList();
+        debugExchangePayloads = BuildDebugExchangePayloads(liveResult);
     }
 
     private async Task RunCacheAsync()
@@ -144,5 +173,90 @@
         Preview();
         liveResult = await LookupWorkbenchService.RunCachedLookupAsync(callsign);
         livePayloads = liveResult.Responses.Select(ProtoJsonService.Describe).ToList();
+        debugExchangePayloads = BuildDebugExchangePayloads(liveResult);
     }
+
+    private static List<DebugExchangePayload> BuildDebugExchangePayloads(LookupInvocationResult? result)
+    {
+        if (result is null)
+        {
+            return [];
+        }
+
+        return result.DebugHttpExchanges
+            .Select(static (exchange, index) => new DebugExchangePayload(
+                $"Provider exchange {index + 1}",
+                $"{exchange.ProviderName} / {exchange.Operation} / attempt {exchange.Attempt}",
+                FormatDebugHttpExchange(exchange)))
+            .ToList();
+    }
+
+    private static string FormatDebugHttpExchange(DebugHttpExchange exchange)
+    {
+        var builder = new StringBuilder();
+        builder.AppendLine($"Provider: {exchange.ProviderName}");
+        builder.AppendLine($"Operation: {exchange.Operation}");
+
+        if (exchange.StartedAtUtc is not null)
+        {
+            builder.AppendLine(
+                $"Started (UTC): {exchange.StartedAtUtc.ToDateTime().ToUniversalTime().ToString("u", CultureInfo.InvariantCulture)}");
+        }
+
+        builder.AppendLine($"Attempt: {exchange.Attempt}");
+        builder.AppendLine($"Duration: {exchange.DurationMs} ms");
+        builder.AppendLine($"Method: {exchange.Method}");
+        builder.AppendLine($"URL: {exchange.Url}");
+        builder.AppendLine();
+        builder.AppendLine("Request headers:");
+        AppendHeaders(builder, exchange.RequestHeaders);
+
+        if (exchange.HasRequestBody)
+        {
+            builder.AppendLine();
+            builder.AppendLine("Request body:");
+            builder.AppendLine(exchange.RequestBody);
+        }
+
+        builder.AppendLine();
+        builder.AppendLine(
+            exchange.HasResponseStatusCode
+                ? $"Response status: {exchange.ResponseStatusCode}"
+                : "Response status: <not available>");
+        builder.AppendLine("Response headers:");
+        AppendHeaders(builder, exchange.ResponseHeaders);
+
+        if (exchange.HasErrorMessage)
+        {
+            builder.AppendLine();
+            builder.AppendLine("Error:");
+            builder.AppendLine(exchange.ErrorMessage);
+        }
+
+        if (exchange.HasResponseBody)
+        {
+            builder.AppendLine();
+            builder.AppendLine("Response body:");
+            builder.AppendLine(exchange.ResponseBody);
+        }
+
+        return builder.ToString().TrimEnd();
+    }
+
+    private static void AppendHeaders(StringBuilder builder, IEnumerable<DebugHttpHeader> headers)
+    {
+        var wroteHeader = false;
+        foreach (var header in headers)
+        {
+            wroteHeader = true;
+            builder.AppendLine($"{header.Name}: {header.Value}");
+        }
+
+        if (!wroteHeader)
+        {
+            builder.AppendLine("<none>");
+        }
+    }
+
+    private sealed record DebugExchangePayload(string Title, string BadgeText, string Payload);
 }

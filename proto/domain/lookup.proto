@@ -5,6 +5,7 @@ package logripper.domain;
 option csharp_namespace = "LogRipper.Domain";
 
 import "domain/callsign.proto";
+import "google/protobuf/timestamp.proto";
 
 // The state of an in-flight or completed lookup operation.
 //
@@ -37,6 +38,28 @@ message LookupResult {
   bool cache_hit               = 4;  // True if result was served from L1 cache
   uint32 lookup_latency_ms     = 5;  // Round-trip latency in milliseconds
   string queried_callsign      = 6;  // Echo of the original requested callsign
+  repeated DebugHttpExchange debug_http_exchanges = 7;  // Redacted HTTP exchanges for debug workbench inspection
+}
+
+message DebugHttpExchange {
+  string provider_name = 1;
+  string operation = 2;
+  google.protobuf.Timestamp started_at_utc = 3;
+  uint32 duration_ms = 4;
+  uint32 attempt = 5;
+  string method = 6;
+  string url = 7;
+  repeated DebugHttpHeader request_headers = 8;
+  optional string request_body = 9;
+  optional uint32 response_status_code = 10;
+  repeated DebugHttpHeader response_headers = 11;
+  optional string response_body = 12;
+  optional string error_message = 13;
+}
+
+message DebugHttpHeader {
+  string name = 1;
+  string value = 2;
 }
 
 // Request to look up a callsign.

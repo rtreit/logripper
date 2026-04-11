@@ -14,7 +14,9 @@ use crate::{
     proto::logripper::domain::{CallsignRecord, LookupResult, LookupState},
 };
 
-use super::provider::{CallsignProvider, ProviderLookup, ProviderLookupError};
+use super::provider::{
+    CallsignProvider, ProviderLookup, ProviderLookupError, ProviderLookupOutcome,
+};
 
 type ProviderLookupResult = Result<ProviderLookup, ProviderLookupError>;
 type SharedProviderLookup = Shared<BoxFuture<'static, ProviderLookupResult>>;
@@ -123,6 +125,7 @@ impl LookupCoordinator {
             cache_hit: false,
             lookup_latency_ms: 0,
             queried_callsign: normalized_callsign.clone(),
+            debug_http_exchanges: Vec::new(),
         }];
 
         if !skip_cache {
@@ -175,6 +178,7 @@ impl LookupCoordinator {
             cache_hit: false,
             lookup_latency_ms: 0,
             queried_callsign: normalized_callsign,
+            debug_http_exchanges: Vec::new(),
         }
     }
 
@@ -207,6 +211,7 @@ impl LookupCoordinator {
                 cache_hit,
                 lookup_latency_ms: 0,
                 queried_callsign: normalized_callsign.to_string(),
+                debug_http_exchanges: Vec::new(),
             },
             CachedLookup::NotFound => LookupResult {
                 state: LookupState::NotFound as i32,
@@ -215,6 +220,7 @@ impl LookupCoordinator {
                 cache_hit,
                 lookup_latency_ms: 0,
                 queried_callsign: normalized_callsign.to_string(),
+                debug_http_exchanges: Vec::new(),
             },
         }
     }
@@ -226,7 +232,10 @@ impl LookupCoordinator {
         lookup_latency_ms: u32,
     ) -> LookupResult {
         match provider_result {
-            Ok(ProviderLookup::Found(record)) => {
+            Ok(ProviderLookup {
+                outcome: ProviderLookupOutcome::Found(record),
+                debug_http_exchanges,
+            }) => {
                 self.store_cache_entry(
                     normalized_callsign,
                     CacheEntry {
@@ -243,9 +252,13 @@ impl LookupCoordinator {
                     cache_hit: false,
                     lookup_latency_ms,
                     queried_callsign: normalized_callsign.to_string(),
+                    debug_http_exchanges,
                 }
             }
-            Ok(ProviderLookup::NotFound) => {
+            Ok(ProviderLookup {
+                outcome: ProviderLookupOutcome::NotFound,
+                debug_http_exchanges,
+            }) => {
                 self.store_cache_entry(
                     normalized_callsign,
                     CacheEntry {
@@ -262,6 +275,7 @@ impl LookupCoordinator {
                     cache_hit: false,
                     lookup_latency_ms,
                     queried_callsign: normalized_callsign.to_string(),
+                    debug_http_exchanges,
                 }
             }
             Err(error) => LookupResult {
@@ -271,6 +285,7 @@ impl LookupCoordinator {
                 cache_hit: false,
                 lookup_latency_ms,
                 queried_callsign: normalized_callsign.to_string(),
+                debug_http_exchanges: error.debug_http_exchanges().to_vec(),
             },
         }
     }
@@ -366,7 +381,7 @@ mod tests {
 
             match self.responses.lock().await.pop_front() {
                 Some(result) => result,
-                None => Ok(ProviderLookup::NotFound),
+                None => Ok(ProviderLookup::not_found(Vec::new())),
             }
         }
     }
@@ -384,9 +399,10 @@ mod tests {
     #[tokio::test]
     async fn lookup_returns_cache_hit_on_second_call() {
         let provider = QueueProvider::new(
-            vec![Ok(ProviderLookup::Found(Box::new(found_record(
-                "W1AW", "Initial",
-            ))))],
+            vec![Ok(ProviderLookup::found(
+                found_record("W1AW", "Initial"),
+                Vec::new(),
+            ))],
             Duration::ZERO,
         );
         let coordinator = LookupCoordinator::new(
@@ -408,12 +424,14 @@ mod tests {
     async fn skip_cache_forces_provider_lookup() {
         let provider = QueueProvider::new(
             vec![
-                Ok(ProviderLookup::Found(Box::new(found_record(
-                    "W1AW", "First",
-                )))),
-                Ok(ProviderLookup::Found(Box::new(found_record(
-                    "W1AW", "Second",
-                )))),
+                Ok(ProviderLookup::found(
+                    found_record("W1AW", "First"),
+                    Vec::new(),
+                )),
+                Ok(ProviderLookup::found(
+                    found_record("W1AW", "Second"),
+                    Vec::new(),
+                )),
             ],
             Duration::ZERO,
         );
@@ -434,12 +452,14 @@ mod tests {
     async fn stream_lookup_emits_loading_stale_and_refreshed_found() {
         let provider = QueueProvider::new(
             vec![
-                Ok(ProviderLookup::Found(Box::new(found_record(
-                    "W1AW", "Cached",
-                )))),
-                Ok(ProviderLookup::Found(Box::new(found_record(
-                    "W1AW", "Fresh",
-                )))),
+                Ok(ProviderLookup::found(
+                    found_record("W1AW", "Cached"),
+                    Vec::new(),
+                )),
+                Ok(ProviderLookup::found(
+                    found_record("W1AW", "Fresh"),
+                    Vec::new(),
+                )),
             ],
             Duration::ZERO,
         );
@@ -470,9 +490,10 @@ mod tests {
     #[tokio::test]
     async fn concurrent_identical_lookups_share_inflight_request() {
         let provider = QueueProvider::new(
-            vec![Ok(ProviderLookup::Found(Box::new(found_record(
-                "W1AW", "Shared",
-            ))))],
+            vec![Ok(ProviderLookup::found(
+                found_record("W1AW", "Shared"),
+                Vec::new(),
+            ))],
             Duration::from_millis(30),
         );
         let coordinator = Arc::new(LookupCoordinator::new(

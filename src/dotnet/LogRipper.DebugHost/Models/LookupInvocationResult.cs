@@ -10,4 +10,7 @@ internal sealed record LookupInvocationResult(
     DateTimeOffset CompletedAtUtc)
 {
     public bool Succeeded => string.IsNullOrWhiteSpace(ErrorMessage);
+
+    public IReadOnlyList<DebugHttpExchange> DebugHttpExchanges =>
+        Responses.SelectMany(static response => response.DebugHttpExchanges).ToArray();
 }
