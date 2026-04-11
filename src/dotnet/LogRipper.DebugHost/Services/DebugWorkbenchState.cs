@@ -89,10 +89,13 @@ internal sealed class DebugWorkbenchState
         SetupStatus = status;
         SetupErrorMessage = null;
 
-        if (status.StorageBackend == StorageBackend.Sqlite && !string.IsNullOrWhiteSpace(status.SqlitePath))
+        var persistedLogFilePath = string.IsNullOrWhiteSpace(status.LogFilePath)
+            ? status.SqlitePath
+            : status.LogFilePath;
+        if (!string.IsNullOrWhiteSpace(persistedLogFilePath))
         {
             EngineStorageBackend = EngineStorageBackend.Sqlite;
-            EngineSqlitePath = NormalizeSqlitePath(status.SqlitePath);
+            EngineSqlitePath = NormalizeSqlitePath(persistedLogFilePath);
         }
     }
 

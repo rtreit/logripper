@@ -511,7 +511,7 @@
             </div>
             <div class="row g-3 mb-3">
                 <div class="col-lg-6">
-                    <strong>Persisted storage:</strong> @GetSetupStorageSummary(setupStatus)
+                    <strong>Persisted log file:</strong> @GetSetupLogFileSummary(setupStatus)
                 </div>
                 <div class="col-lg-6">
                     <strong>QRZ XML:</strong>
@@ -530,7 +530,7 @@
         @if (WorkbenchState.SetupStatus?.SetupComplete == true && !isSetupExpanded)
         {
             <div class="small text-muted">
-                Bootstrap setup is complete. Expand this section if you want to inspect or edit storage, QRZ credentials, or the currently active persisted station profile.
+                Bootstrap setup is complete. Expand this section if you want to inspect or edit the log file path, QRZ credentials, or the currently active persisted station profile.
             </div>
         }
         else
@@ -570,7 +570,7 @@
                     <div>
                         <h3 class="h6 mb-1">Setup editor</h3>
                         <div class="small text-muted">
-                            This form calls <code>SetupService.SaveSetup</code> to edit bootstrap setup, storage, QRZ credentials, and the currently active persisted station profile. Use the station profile editor above to add additional profiles. If QRZ XML is enabled, the service requires both username and password on save.
+                            This form calls <code>SetupService.SaveSetup</code> to edit the persisted log file path, QRZ credentials, and the currently active bootstrap station profile. Use the station profile editor above to add additional profiles. If QRZ XML is enabled, the service requires both username and password on save.
                         </div>
                     </div>
                     @if (WorkbenchState.SetupStatus?.HasQrzXmlPassword == true)
@@ -584,23 +584,13 @@
                     <ValidationSummary />
 
                     <div class="row g-3">
-                        <div class="col-md-4">
-                            <label class="form-label" for="setup-storage-backend">Storage backend</label>
-                            <InputSelect id="setup-storage-backend"
-                                         class="form-select"
-                                         @bind-Value="setupEditor.StorageBackend"
-                                         disabled="@isSetupBusy">
-                                <option value="@StorageBackend.Memory">memory</option>
-                                <option value="@StorageBackend.Sqlite">sqlite</option>
-                            </InputSelect>
-                        </div>
-                        <div class="col-md-8">
-                            <label class="form-label" for="setup-sqlite-path">SQLite path</label>
-                            <InputText id="setup-sqlite-path"
+                        <div class="col-md-12">
+                            <label class="form-label" for="setup-log-file-path">Log file path</label>
+                            <InputText id="setup-log-file-path"
                                        class="form-control"
-                                       @bind-Value="setupEditor.SqlitePath"
+                                       @bind-Value="setupEditor.LogFilePath"
                                        disabled="@isSetupBusy" />
-                            <ValidationMessage For="@(() => setupEditor.SqlitePath)" />
+                            <ValidationMessage For="@(() => setupEditor.LogFilePath)" />
                         </div>
 
                         <div class="col-md-6">
@@ -901,7 +891,7 @@
     private ProtoPayloadView? activeStationProfilePayload;
     private ProtoPayloadView? persistedStationProfilePayload;
     private ProtoPayloadView? activeStationContextPayload;
-    private SetupEditorModel setupEditor = SetupEditorModel.Create(null, EngineStorageBackend.Memory, @".\data\logripper.db");
+    private SetupEditorModel setupEditor = SetupEditorModel.Create(null, @".\data\logripper.db");
     private StationProfileEditorModel stationProfileEditor = StationProfileEditorModel.CreateEmpty();
     private EditContext setupEditContext = default!;
     private EditContext stationProfileEditContext = default!;
@@ -914,7 +904,7 @@
     {
         endpoint = WorkbenchState.EngineEndpoint;
         tools = ToolchainLocator.GetToolAvailability();
-        ReplaceSetupEditor(SetupEditorModel.Create(null, WorkbenchState.EngineStorageBackend, WorkbenchState.EngineSqlitePath));
+        ReplaceSetupEditor(SetupEditorModel.Create(null, WorkbenchState.EngineSqlitePath));
         ReplaceStationProfileEditor(StationProfileEditorModel.CreateEmpty());
         await RefreshSetupStatusAsync();
         await RefreshStationProfilesAsync();
@@ -959,7 +949,6 @@
             RefreshSetupPayload();
             ReplaceSetupEditor(SetupEditorModel.Create(
                 WorkbenchState.SetupStatus,
-                WorkbenchState.EngineStorageBackend,
                 WorkbenchState.EngineSqlitePath));
             InitializeSetupExpansionDefault();
         }
@@ -985,7 +974,6 @@
             RefreshSetupPayload();
             ReplaceSetupEditor(SetupEditorModel.Create(
                 status,
-                WorkbenchState.EngineStorageBackend,
                 WorkbenchState.EngineSqlitePath));
             isSetupExpanded = status.SetupComplete != true;
             await RefreshStationProfilesAsync();
@@ -1320,16 +1308,19 @@
             : $"{summary} operator {profile.OperatorCallsign}";
     }
 
-    private static string GetSetupStorageSummary(SetupStatusResponse status)
+    private static string GetSetupLogFileSummary(SetupStatusResponse status)
     {
-        return status.StorageBackend switch
+        if (!string.IsNullOrWhiteSpace(status.LogFilePath))
         {
-            StorageBackend.Sqlite when !string.IsNullOrWhiteSpace(status.SqlitePath)
-                => $"SQLite ({status.SqlitePath})",
-            StorageBackend.Sqlite => $"SQLite (suggested: {status.SuggestedSqlitePath})",
-            StorageBackend.Memory => "Memory",
-            _ => $"Not configured (suggested SQLite path: {status.SuggestedSqlitePath})"
-        };
+            return status.LogFilePath;
+        }
+
+        if (status.StorageBackend == StorageBackend.Memory)
+        {
+            return "Not configured (legacy in-memory setup)";
+        }
+
+        return $"Not configured (suggested: {status.SuggestedLogFilePath})";
     }
 
     private static bool AreSameProfile(StationProfile left, StationProfile right)

@@ -5,29 +5,19 @@ namespace LogRipper.DebugHost.Models;
 
 internal sealed class SetupEditorModel : StationProfileEditorModelBase
 {
-    public StorageBackend StorageBackend { get; set; } = StorageBackend.Memory;
-
-    public string SqlitePath { get; set; } = @".\data\logripper.db";
+    public string LogFilePath { get; set; } = @".\data\logripper.db";
 
     public string? QrzXmlUsername { get; set; }
 
     public string? QrzXmlPassword { get; set; }
 
-    public static SetupEditorModel Create(SetupStatusResponse? status, EngineStorageBackend fallbackStorageBackend, string fallbackSqlitePath)
+    public static SetupEditorModel Create(SetupStatusResponse? status, string fallbackLogFilePath)
     {
         var model = new SetupEditorModel
         {
-            StorageBackend = status?.StorageBackend switch
-            {
-                StorageBackend.Sqlite => StorageBackend.Sqlite,
-                StorageBackend.Memory => StorageBackend.Memory,
-                _ => fallbackStorageBackend == EngineStorageBackend.Sqlite
-                    ? StorageBackend.Sqlite
-                    : StorageBackend.Memory
-            },
-            SqlitePath = status?.SqlitePath
-                ?? status?.SuggestedSqlitePath
-                ?? fallbackSqlitePath,
+            LogFilePath = NormalizeOptional(status?.LogFilePath)
+                ?? NormalizeOptional(status?.SuggestedLogFilePath)
+                ?? fallbackLogFilePath,
             QrzXmlUsername = NormalizeOptional(status?.QrzXmlUsername)
         };
 
@@ -39,13 +29,12 @@ internal sealed class SetupEditorModel : StationProfileEditorModelBase
     {
         var request = new SaveSetupRequest
         {
-            StorageBackend = StorageBackend,
             StationProfile = ToStationProfile()
         };
 
-        if (!string.IsNullOrWhiteSpace(SqlitePath))
+        if (!string.IsNullOrWhiteSpace(LogFilePath))
         {
-            request.SqlitePath = SqlitePath.Trim();
+            request.LogFilePath = LogFilePath.Trim();
         }
 
         if (!string.IsNullOrWhiteSpace(QrzXmlUsername))
@@ -68,11 +57,11 @@ internal sealed class SetupEditorModel : StationProfileEditorModelBase
             yield return result;
         }
 
-        if (StorageBackend == StorageBackend.Sqlite && string.IsNullOrWhiteSpace(SqlitePath))
+        if (string.IsNullOrWhiteSpace(LogFilePath))
         {
             yield return new ValidationResult(
-                "SQLite path is required when SQLite storage is selected.",
-                [nameof(SqlitePath)]);
+                "Log file path is required.",
+                [nameof(LogFilePath)]);
         }
 
         if (string.IsNullOrWhiteSpace(QrzXmlUsername) != string.IsNullOrWhiteSpace(QrzXmlPassword))
