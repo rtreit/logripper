@@ -4,6 +4,8 @@ namespace LogRipper.DebugHost.Services;
 
 internal sealed class ToolchainLocator
 {
+    private IReadOnlyList<ToolAvailability>? _cachedAvailability;
+
 #pragma warning disable CA1822 // Mark members as static
     public string? FindCargo() => FindOnPath("cargo");
 
@@ -40,18 +42,30 @@ internal sealed class ToolchainLocator
         var candidate = Path.Combine(packageDirectory, "build", "native", "include");
         return Directory.Exists(candidate) ? candidate : null;
     }
+#pragma warning restore CA1822 // Mark members as static
 
     public IReadOnlyList<ToolAvailability> GetToolAvailability()
     {
-        return
+        if (_cachedAvailability is not null)
+        {
+            return _cachedAvailability;
+        }
+
+        var dotnet = FindDotnet();
+        var cargo = FindCargo();
+        var buf = FindBuf();
+        var protoc = FindProtoc();
+
+        _cachedAvailability =
         [
-            new("dotnet", FindDotnet() is not null, FindDotnet()),
-            new("cargo", FindCargo() is not null, FindCargo()),
-            new("buf", FindBuf() is not null, FindBuf()),
-            new("protoc", FindProtoc() is not null, FindProtoc())
+            new("dotnet", dotnet is not null, dotnet),
+            new("cargo", cargo is not null, cargo),
+            new("buf", buf is not null, buf),
+            new("protoc", protoc is not null, protoc)
         ];
+
+        return _cachedAvailability;
     }
-#pragma warning restore CA1822 // Mark members as static
 
     private static IEnumerable<string> EnumerateNuGetPackageRoots()
     {

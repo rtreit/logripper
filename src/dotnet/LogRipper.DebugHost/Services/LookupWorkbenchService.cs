@@ -25,8 +25,7 @@ internal sealed class LookupWorkbenchService
 
         try
         {
-            using var channel = _clientFactory.CreateChannel();
-            var client = new LogRipper.Services.LookupService.LookupServiceClient(channel);
+            var client = _clientFactory.CreateLookupClient();
             var response = await client.LookupAsync(request, cancellationToken: cancellationToken);
             return new LookupInvocationResult(
                 request,
@@ -53,8 +52,7 @@ internal sealed class LookupWorkbenchService
 
         try
         {
-            using var channel = _clientFactory.CreateChannel();
-            var client = new LogRipper.Services.LookupService.LookupServiceClient(channel);
+            var client = _clientFactory.CreateLookupClient();
             using var call = client.StreamLookup(
                 new StreamLookupRequest
                 {
@@ -93,8 +91,7 @@ internal sealed class LookupWorkbenchService
 
         try
         {
-            using var channel = _clientFactory.CreateChannel();
-            var client = new LogRipper.Services.LookupService.LookupServiceClient(channel);
+            var client = _clientFactory.CreateLookupClient();
             var response = await client.GetCachedCallsignAsync(
                 new GetCachedCallsignRequest { Callsign = normalizedCallsign },
                 cancellationToken: cancellationToken);

@@ -4,7 +4,7 @@ internal sealed class DebugWorkbenchOptions
 {
     public const string SectionName = "DebugWorkbench";
 
-    public string DefaultEngineEndpoint { get; set; } = "http://localhost:50051";
+    public string DefaultEngineEndpoint { get; set; } = "http://127.0.0.1:50051";
 
     public string DefaultEngineStorageBackend { get; set; } = "memory";
 

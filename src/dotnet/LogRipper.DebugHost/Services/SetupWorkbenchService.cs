@@ -54,8 +54,7 @@ internal sealed class SetupWorkbenchService
     {
         try
         {
-            using var channel = _clientFactory.CreateChannel();
-            var client = new SetupService.SetupServiceClient(channel);
+            var client = _clientFactory.CreateSetupClient();
             var status = await action(client);
             _workbenchState.UpdateSetupStatus(status);
             return status;

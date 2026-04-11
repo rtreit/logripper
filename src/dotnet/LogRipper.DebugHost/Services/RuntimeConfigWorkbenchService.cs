@@ -82,8 +82,7 @@ internal sealed class RuntimeConfigWorkbenchService
     {
         try
         {
-            using var channel = _clientFactory.CreateChannel();
-            var client = new DeveloperControlService.DeveloperControlServiceClient(channel);
+            var client = _clientFactory.CreateDeveloperControlClient();
             var snapshot = await action(client);
             _workbenchState.UpdateRuntimeConfig(snapshot);
             return snapshot;
