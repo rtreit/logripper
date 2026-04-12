@@ -1,3 +1,4 @@
+using Grpc.Core;
 using Grpc.Net.Client;
 using LogRipper.Cli;
 using LogRipper.Domain;
@@ -10,7 +11,7 @@ internal static class ListQsosCommand
 {
     public static async Task<int> RunAsync(GrpcChannel channel, string[] args, bool jsonOutput = false)
     {
-        if (!TryCreateRequest(args, out var request, out var error))
+        if (!TryParseArgs(args, out var request, out var displayOptions, out var error))
         {
             Console.Error.WriteLine(error);
             return 1;
@@ -36,8 +37,7 @@ internal static class ListQsosCommand
             return 0;
         }
 
-        Console.WriteLine($"{"UTC",-20} {"ID",-38} {"Callsign",-12} {"Band",-8} {"Mode",-8} {"RST S",-6} {"RST R",-6}");
-        Console.WriteLine(new string('-', 102));
+        PrintHeader(displayOptions);
 
         var count = 0u;
 
@@ -49,13 +49,7 @@ internal static class ListQsosCommand
                 continue;
             }
 
-            var utc = qso.UtcTimestamp?.ToDateTime().ToString("u") ?? "";
-            var band = FormatBand(qso.Band);
-            var mode = FormatMode(qso.Mode);
-            var rstS = FormatRst(qso.RstSent);
-            var rstR = FormatRst(qso.RstReceived);
-
-            Console.WriteLine($"{utc,-20} {qso.LocalId,-38} {qso.WorkedCallsign,-12} {band,-8} {mode,-8} {rstS,-6} {rstR,-6}");
+            PrintRow(qso, displayOptions);
             count++;
         }
 
@@ -65,15 +59,80 @@ internal static class ListQsosCommand
         return 0;
     }
 
-    internal static bool TryCreateRequest(string[] args, out ListQsosRequest request, out string? error)
+    private static void PrintHeader(ListDisplayOptions options)
+    {
+        var header = $"{"UTC",-20} {"Callsign",-12} {"Band",-8} {"Mode",-8}";
+
+        if (options.ShowId)
+        {
+            header = $"{"UTC",-20} {"ID",-38} {"Callsign",-12} {"Band",-8} {"Mode",-8}";
+        }
+
+        if (options.ShowRst)
+        {
+            header += $" {"RST S",-6} {"RST R",-6}";
+        }
+
+        header += $" {"Country",-20} {"Grid",-8}";
+
+        if (options.ShowComment)
+        {
+            header += $" {"Comment"}";
+        }
+
+        Console.WriteLine(header);
+        Console.WriteLine(new string('-', header.Length));
+    }
+
+    private static void PrintRow(QsoRecord qso, ListDisplayOptions options)
+    {
+        var utc = qso.UtcTimestamp?.ToDateTime().ToString("u") ?? "";
+        var band = FormatBand(qso.Band);
+        var mode = FormatMode(qso.Mode);
+        var row = $"{utc,-20} {qso.WorkedCallsign,-12} {band,-8} {mode,-8}";
+
+        if (options.ShowId)
+        {
+            row = $"{utc,-20} {qso.LocalId,-38} {qso.WorkedCallsign,-12} {band,-8} {mode,-8}";
+        }
+
+        if (options.ShowRst)
+        {
+            row += $" {FormatRst(qso.RstSent),-6} {FormatRst(qso.RstReceived),-6}";
+        }
+
+        var country = qso.HasWorkedCountry ? qso.WorkedCountry : "";
+        var grid = qso.HasWorkedGrid ? qso.WorkedGrid : "";
+        row += $" {country,-20} {grid,-8}";
+
+        if (options.ShowComment)
+        {
+            var comment = qso.HasComment ? qso.Comment : (qso.HasNotes ? qso.Notes : "");
+            row += $" {comment}";
+        }
+
+        Console.WriteLine(row);
+    }
+
+    internal static bool TryParseArgs(string[] args, out ListQsosRequest request, out ListDisplayOptions displayOptions, out string? error)
     {
         request = new ListQsosRequest { Limit = 20 };
+        displayOptions = new ListDisplayOptions();
         error = null;
 
         for (var i = 0; i < args.Length; i++)
         {
             switch (args[i])
             {
+                case "--show-id":
+                    displayOptions.ShowId = true;
+                    break;
+                case "--show-rst":
+                    displayOptions.ShowRst = true;
+                    break;
+                case "--show-comment":
+                    displayOptions.ShowComment = true;
+                    break;
                 case "--callsign" when i < args.Length - 1:
                     request.CallsignFilter = args[++i].ToUpperInvariant();
                     break;
@@ -160,13 +219,22 @@ internal static class ListQsosCommand
 
     internal static string FormatRst(RstReport? rst)
     {
-        if (rst is null)
+        if (rst is null || (rst.Readability == 0 && rst.Strength == 0))
         {
-            return "";
+            return rst?.Raw ?? "";
         }
 
         return rst.HasTone
             ? $"{rst.Readability}{rst.Strength}{rst.Tone}"
             : $"{rst.Readability}{rst.Strength}";
     }
+}
+
+internal sealed class ListDisplayOptions
+{
+    public bool ShowId { get; set; }
+
+    public bool ShowRst { get; set; }
+
+    public bool ShowComment { get; set; }
 }

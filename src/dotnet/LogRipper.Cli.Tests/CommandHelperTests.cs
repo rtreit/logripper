@@ -79,11 +79,11 @@ public sealed class CommandHelperTests
     }
 
     [Fact]
-    public void TryCreateRequest_populates_filters()
+    public void TryParseArgs_populates_filters()
     {
-        var success = ListQsosCommand.TryCreateRequest(
-            ["--callsign", "w1aw", "--band", "20m", "--mode", "ft8", "--after", "2026-04-10T00:00:00Z", "--before", "2026-04-11T00:00:00Z", "--limit", "5"],
+        var success = ListQsosCommand.TryParseArgs(["--callsign", "w1aw", "--band", "20m", "--mode", "ft8", "--after", "2026-04-10T00:00:00Z", "--before", "2026-04-11T00:00:00Z", "--limit", "5"],
             out var request,
+            out _,
             out var error);
 
         Assert.True(success);
@@ -107,9 +107,9 @@ public sealed class CommandHelperTests
 
     [Theory]
     [MemberData(nameof(InvalidListArgs))]
-    public void TryCreateRequest_rejects_invalid_args(string[] args, string expectedError)
+    public void TryParseArgs_rejects_invalid_args(string[] args, string expectedError)
     {
-        var success = ListQsosCommand.TryCreateRequest(args, out _, out var error);
+        var success = ListQsosCommand.TryParseArgs(args, out _, out _, out var error);
 
         Assert.False(success);
         Assert.Equal(expectedError, error);

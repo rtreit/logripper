@@ -71,6 +71,9 @@ internal static class CliHelpText
                   --after <time>       QSOs after this time (e.g., 2.days, 3.hours, 2026-04-10)
                   --before <time>      QSOs before this time
                   --limit <n>          Max results (default: 20)
+                  --show-id            Include the QSO local ID column
+                  --show-rst           Include RST sent/received columns
+                  --show-comment       Include comment/notes column
                 """,
             "delete" => """
                 Usage: delete <local-id>
