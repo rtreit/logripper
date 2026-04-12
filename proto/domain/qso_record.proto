@@ -28,6 +28,7 @@ message QsoRecord {
   optional uint64 frequency_khz = 15;  // Precise frequency in kHz
   optional string submode = 16;  // ADIF submode string (e.g., "USB", "PSK31")
   optional StationSnapshot station_snapshot = 17;  // Materialized local-station values used at log time
+  optional google.protobuf.Timestamp utc_end_timestamp = 18;  // QSO end timestamp when known
 
   // --- Signal reports ---
   optional RstReport rst_sent = 20;

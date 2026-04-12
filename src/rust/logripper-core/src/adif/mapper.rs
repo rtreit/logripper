@@ -826,8 +826,28 @@ mod tests {
 
         let rst_sent = qso.rst_sent.unwrap();
         assert_eq!(rst_sent.raw, "59");
+        assert_eq!(rst_sent.readability, Some(5));
+        assert_eq!(rst_sent.strength, Some(9));
+        assert_eq!(rst_sent.tone, None);
         let rst_rcvd = qso.rst_received.unwrap();
         assert_eq!(rst_rcvd.raw, "57");
+        assert_eq!(rst_rcvd.readability, Some(5));
+        assert_eq!(rst_rcvd.strength, Some(7));
+        assert_eq!(rst_rcvd.tone, None);
+    }
+
+    #[test]
+    fn record_to_qso_parses_three_digit_rst_tone() {
+        let mut rec = Record::new();
+        rec.insert("CALL", "W1AW").unwrap();
+        rec.insert("RST_SENT", "599").unwrap();
+
+        let qso = AdifMapper::record_to_qso(&rec);
+        let rst = qso.rst_sent.expect("rst");
+        assert_eq!(rst.raw, "599");
+        assert_eq!(rst.readability, Some(5));
+        assert_eq!(rst.strength, Some(9));
+        assert_eq!(rst.tone, Some(9));
     }
 
     #[test]
@@ -988,6 +1008,20 @@ mod tests {
     }
 
     #[test]
+    fn dxcc_enrichment_populates_missing_country_continent_and_zones() {
+        let mut rec = Record::new();
+        rec.insert("CALL", "JA1ABC").unwrap();
+        rec.insert("DXCC", "339").unwrap();
+
+        let qso = AdifMapper::record_to_qso(&rec);
+        assert_eq!(qso.worked_dxcc, Some(339));
+        assert_eq!(qso.worked_country.as_deref(), Some("JAPAN"));
+        assert_eq!(qso.worked_continent.as_deref(), Some("AS"));
+        assert_eq!(qso.worked_cq_zone, Some(25));
+        assert_eq!(qso.worked_itu_zone, Some(45));
+    }
+
+    #[test]
     fn record_to_qso_maps_station_snapshot_fields() {
         let mut rec = Record::new();
         rec.insert("CALL", "W1AW").unwrap();
@@ -1068,6 +1102,28 @@ mod tests {
     }
 
     #[test]
+    fn submode_aliases_in_mode_field_map_to_parent_mode() {
+        for (raw_mode, expected_mode, expected_submode) in [
+            ("PSK31", Mode::Psk, "PSK31"),
+            ("USB", Mode::Ssb, "USB"),
+            ("DMR", Mode::Digitalvoice, "DMR"),
+            ("Q65", Mode::Mfsk, "Q65"),
+        ] {
+            let mut rec = Record::new();
+            rec.insert("CALL", "W1AW").unwrap();
+            rec.insert("MODE", raw_mode).unwrap();
+
+            let qso = AdifMapper::record_to_qso(&rec);
+            assert_eq!(qso.mode, expected_mode as i32, "mode mismatch for {raw_mode}");
+            assert_eq!(
+                qso.submode.as_deref(),
+                Some(expected_submode),
+                "submode mismatch for {raw_mode}"
+            );
+        }
+    }
+
+    #[test]
     fn qso_to_adif_fields_round_trip() {
         let rec = make_test_record();
         let qso = AdifMapper::record_to_qso(&rec);
@@ -1085,6 +1141,49 @@ mod tests {
         assert_eq!(field_map.get("MODE"), Some(&"RTTY"));
         assert!(field_map.contains_key("QSO_DATE"));
         assert!(field_map.contains_key("TIME_ON"));
+    }
+
+    #[test]
+    fn record_to_qso_maps_end_timestamp() {
+        let mut rec = Record::new();
+        rec.insert("CALL", "W1AW").unwrap();
+        rec.insert("QSO_DATE", "20260115").unwrap();
+        rec.insert("TIME_ON", "235500").unwrap();
+        rec.insert("QSO_DATE_OFF", "20260116").unwrap();
+        rec.insert("TIME_OFF", "000200").unwrap();
+
+        let qso = AdifMapper::record_to_qso(&rec);
+        let ts = qso.utc_end_timestamp.expect("end timestamp");
+        let dt = chrono::DateTime::from_timestamp(ts.seconds, 0)
+            .unwrap()
+            .naive_utc();
+        assert_eq!(dt.format("%Y%m%d").to_string(), "20260116");
+        assert_eq!(dt.format("%H%M%S").to_string(), "000200");
+    }
+
+    #[test]
+    fn qso_to_adif_fields_emits_end_timestamp() {
+        let qso = crate::proto::logripper::domain::QsoRecord {
+            worked_callsign: "W1AW".into(),
+            utc_timestamp: Some(prost_types::Timestamp {
+                seconds: 1_768_578_000,
+                nanos: 0,
+            }),
+            utc_end_timestamp: Some(prost_types::Timestamp {
+                seconds: 1_768_578_120,
+                nanos: 0,
+            }),
+            ..Default::default()
+        };
+
+        let fields = AdifMapper::qso_to_adif_fields(&qso);
+        let field_map: std::collections::HashMap<&str, &str> = fields
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect();
+
+        assert_eq!(field_map.get("QSO_DATE_OFF"), Some(&"20260115"));
+        assert_eq!(field_map.get("TIME_OFF"), Some(&"051840"));
     }
 
     #[test]
