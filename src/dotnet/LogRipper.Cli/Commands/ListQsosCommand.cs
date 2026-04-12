@@ -73,7 +73,7 @@ internal static class ListQsosCommand
             header += $" {"RST S",-6} {"RST R",-6}";
         }
 
-        header += $" {"Country",-20} {"Grid",-8}";
+        header += $" {"Freq",-10} {"Grid",-8}";
 
         if (options.ShowComment)
         {
@@ -101,9 +101,9 @@ internal static class ListQsosCommand
             row += $" {FormatRst(qso.RstSent),-6} {FormatRst(qso.RstReceived),-6}";
         }
 
-        var country = qso.HasWorkedCountry ? qso.WorkedCountry : "";
+        var freq = qso.HasFrequencyKhz ? $"{qso.FrequencyKhz / 1000.0:F3}" : "";
         var grid = qso.HasWorkedGrid ? qso.WorkedGrid : "";
-        row += $" {country,-20} {grid,-8}";
+        row += $" {freq,-10} {grid,-8}";
 
         if (options.ShowComment)
         {
