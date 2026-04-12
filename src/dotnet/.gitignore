@@ -2,6 +2,7 @@
 [Bb]in/
 [Oo]bj/
 artifacts/
+publish/
 
 ## User-specific files
 *.user
