@@ -1,4 +1,5 @@
 using Grpc.Net.Client;
+using LogRipper.Cli;
 using LogRipper.Domain;
 using LogRipper.Services;
 
@@ -6,7 +7,7 @@ namespace LogRipper.Cli.Commands;
 
 internal static class CacheCheckCommand
 {
-    public static async Task<int> RunAsync(GrpcChannel channel, string callsign)
+    public static async Task<int> RunAsync(GrpcChannel channel, string callsign, bool jsonOutput = false)
     {
         var client = new LookupService.LookupServiceClient(channel);
         var response = await client.GetCachedCallsignAsync(new GetCachedCallsignRequest
@@ -14,6 +15,12 @@ internal static class CacheCheckCommand
             Callsign = callsign,
         });
         var result = response.Result ?? new LookupResult();
+
+        if (jsonOutput)
+        {
+            JsonOutput.Print(response);
+            return (result.CacheHit && result.Record is not null) ? 0 : 1;
+        }
 
         var state = result.State;
 

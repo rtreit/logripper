@@ -15,11 +15,16 @@ if (!CliEndpointValidator.TryCreateEndpointUri(arguments.Endpoint, out var endpo
     return ShowHelp($"The endpoint '{arguments.Endpoint}' must be a valid absolute http:// or https:// URI.");
 }
 
-var needsCallsign = arguments.Command is "lookup" or "stream-lookup" or "cache-check";
+var needsCallsign = CliCommandMetadata.RequiresPrimaryArgument(arguments.Command);
+
+if (CliCommandMetadata.IsCommandHelp(arguments))
+{
+    return ShowCommandHelp(arguments.Command);
+}
+
 if (needsCallsign && string.IsNullOrEmpty(arguments.Callsign))
 {
-    Console.Error.WriteLine($"The '{arguments.Command}' command requires a callsign argument.");
-    return 1;
+    return ShowCommandHelp(arguments.Command);
 }
 
 try
@@ -28,10 +33,18 @@ try
 
     return arguments.Command switch
     {
-        "status" => await StatusCommand.RunAsync(channel),
-        "lookup" => await LookupCommand.RunAsync(channel, arguments.Callsign!, arguments.SkipCache),
+        "status" => await StatusCommand.RunAsync(channel, arguments.JsonOutput),
+        "lookup" => await LookupCommand.RunAsync(channel, arguments.Callsign!, arguments.SkipCache, arguments.JsonOutput),
         "stream-lookup" => await StreamLookupCommand.RunAsync(channel, arguments.Callsign!, arguments.SkipCache),
-        "cache-check" => await CacheCheckCommand.RunAsync(channel, arguments.Callsign!),
+        "cache-check" => await CacheCheckCommand.RunAsync(channel, arguments.Callsign!, arguments.JsonOutput),
+        "log" => await LogQsoCommand.RunAsync(channel, arguments.Callsign!, arguments.RemainingArgs),
+        "get" => await GetQsoCommand.RunAsync(channel, arguments.Callsign!, arguments.JsonOutput),
+        "list" => await ListQsosCommand.RunAsync(channel, arguments.RemainingArgs, arguments.JsonOutput),
+        "delete" => await DeleteQsoCommand.RunAsync(channel, arguments.Callsign!),
+        "import" => await ImportAdifCommand.RunAsync(channel, arguments.Callsign ?? arguments.RemainingArgs.FirstOrDefault() ?? ""),
+        "export" => await ExportAdifCommand.RunAsync(channel, arguments.RemainingArgs),
+        "config" => await ConfigCommand.RunAsync(channel, arguments.RemainingArgs, arguments.JsonOutput),
+        "setup" => await SetupCommand.RunAsync(channel, arguments.JsonOutput),
         _ => ShowHelp($"Unknown command: {arguments.Command}")
     };
 }
@@ -54,23 +67,13 @@ static int ShowHelp(string? error = null)
         Console.Error.WriteLine(error);
     }
 
-    Console.WriteLine("""
-        LogRipper CLI - validate and interact with the LogRipper engine
-
-        Usage: logripper-cli [options] <command> [arguments]
-
-        Commands:
-          status                         Show engine sync status and QSO counts
-          lookup <callsign>              Look up a callsign via QRZ
-          stream-lookup <callsign>       Streaming lookup with progressive updates
-          cache-check <callsign>         Check if a callsign is in the cache
-
-        Options:
-          --endpoint, -e <url>  Engine gRPC endpoint (default: http://localhost:50051)
-                                Also configurable via LOGRIPPER_ENDPOINT env var
-          --skip-cache          Bypass the cache and force a fresh lookup
-          --help, -h            Show this help
-        """);
+    Console.WriteLine(CliHelpText.GetGeneralHelp());
 
     return error is null ? 0 : 1;
+}
+
+static int ShowCommandHelp(string command)
+{
+    Console.WriteLine(CliHelpText.GetCommandHelp(command));
+    return 0;
 }

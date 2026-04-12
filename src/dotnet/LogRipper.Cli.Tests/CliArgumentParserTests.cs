@@ -45,11 +45,11 @@ public class CliArgumentParserTests
     }
 
     [Fact]
-    public void Parse_normalizes_callsign_to_uppercase()
+    public void Parse_preserves_argument_case()
     {
-        var arguments = CliArgumentParser.Parse(["lookup", "w1aw"]);
+        var arguments = CliArgumentParser.Parse(["get", "a1b2c3d4-e5f6"]);
 
-        Assert.Equal("W1AW", arguments.Callsign);
+        Assert.Equal("a1b2c3d4-e5f6", arguments.Callsign);
     }
 
     [Fact]

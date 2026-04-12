@@ -12,6 +12,9 @@ internal static class CliArgumentParser
         string? command = null;
         string? callsign = null;
         var skipCache = false;
+        var jsonOutput = false;
+
+        var remaining = new List<string>();
 
         for (var i = 0; i < args.Length; i++)
         {
@@ -19,7 +22,13 @@ internal static class CliArgumentParser
 
             if (arg is "--help" or "-h" or "help")
             {
-                return new CliArguments("help", endpoint, ShowHelp: true);
+                if (command is null)
+                {
+                    return new CliArguments("help", endpoint, ShowHelp: true);
+                }
+
+                remaining.Add(arg);
+                continue;
             }
 
             if (arg is "--endpoint" or "-e")
@@ -39,21 +48,36 @@ internal static class CliArgumentParser
                 continue;
             }
 
-            if (arg.StartsWith('-'))
+            if (arg is "--json")
             {
-                return new CliArguments("help", endpoint, ShowHelp: true, Error: $"Unknown option: {arg}");
+                jsonOutput = true;
+                continue;
             }
 
-            if (command is null)
+            if (command is null && !arg.StartsWith('-'))
             {
                 command = arg;
+                continue;
             }
-            else
+
+            var commandNeedsCallsign = CliCommandMetadata.UsesPrimaryArgument(command);
+
+            if (command is not null && callsign is null && !arg.StartsWith('-') && commandNeedsCallsign)
             {
-                callsign ??= arg.ToUpperInvariant();
+                callsign = arg;
+                continue;
             }
+
+            remaining.Add(arg);
         }
 
-        return new CliArguments(command ?? "help", endpoint, ShowHelp: command is null, Callsign: callsign, SkipCache: skipCache);
+        return new CliArguments(
+            command ?? "help",
+            endpoint,
+            ShowHelp: command is null,
+            Callsign: callsign,
+            SkipCache: skipCache,
+            JsonOutput: jsonOutput,
+            RemainingArgs: remaining.ToArray());
     }
 }

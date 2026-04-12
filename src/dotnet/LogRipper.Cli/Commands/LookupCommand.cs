@@ -1,4 +1,5 @@
 using Grpc.Net.Client;
+using LogRipper.Cli;
 using LogRipper.Domain;
 using LogRipper.Services;
 
@@ -6,7 +7,7 @@ namespace LogRipper.Cli.Commands;
 
 internal static class LookupCommand
 {
-    public static async Task<int> RunAsync(GrpcChannel channel, string callsign, bool skipCache)
+    public static async Task<int> RunAsync(GrpcChannel channel, string callsign, bool skipCache, bool jsonOutput = false)
     {
         var client = new LookupService.LookupServiceClient(channel);
         var response = await client.LookupAsync(new LookupRequest
@@ -15,6 +16,12 @@ internal static class LookupCommand
             SkipCache = skipCache,
         });
         var result = response.Result ?? new LookupResult();
+
+        if (jsonOutput)
+        {
+            JsonOutput.Print(response);
+            return (LookupState)result.State == LookupState.Found ? 0 : 1;
+        }
 
         var state = (LookupState)result.State;
         Console.WriteLine($"State:            {state}");

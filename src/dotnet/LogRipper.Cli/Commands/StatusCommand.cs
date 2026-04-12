@@ -1,14 +1,21 @@
 using Grpc.Net.Client;
+using LogRipper.Cli;
 using LogRipper.Services;
 
 namespace LogRipper.Cli.Commands;
 
 internal static class StatusCommand
 {
-    public static async Task<int> RunAsync(GrpcChannel channel)
+    public static async Task<int> RunAsync(GrpcChannel channel, bool jsonOutput = false)
     {
         var client = new LogbookService.LogbookServiceClient(channel);
         var response = await client.GetSyncStatusAsync(new GetSyncStatusRequest());
+
+        if (jsonOutput)
+        {
+            JsonOutput.Print(response);
+            return 0;
+        }
 
         Console.WriteLine($"Local QSOs:       {response.LocalQsoCount}");
         Console.WriteLine($"QRZ QSOs:         {response.QrzQsoCount}");
