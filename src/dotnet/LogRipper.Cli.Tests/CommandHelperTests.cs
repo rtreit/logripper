@@ -186,6 +186,113 @@ public sealed class CommandHelperTests
     }
 
     [Fact]
+    public void TryApplyUpdates_sets_grid_and_freq()
+    {
+        var qso = new QsoRecord { WorkedCallsign = "W1AW", Band = Band._20M, Mode = Mode.Cw };
+        var enrich = false;
+
+        var success = UpdateQsoCommand.TryApplyUpdates(
+            ["--grid", "FN31", "--freq", "14035", "--comment", "Nice signal"],
+            qso,
+            ref enrich,
+            out var error);
+
+        Assert.True(success);
+        Assert.Null(error);
+        Assert.Equal("FN31", qso.WorkedGrid);
+        Assert.Equal((ulong)14035, qso.FrequencyKhz);
+        Assert.Equal("Nice signal", qso.Comment);
+        Assert.False(enrich);
+    }
+
+    [Fact]
+    public void TryApplyUpdates_sets_enrich_flag()
+    {
+        var qso = new QsoRecord { WorkedCallsign = "W1AW" };
+        var enrich = false;
+
+        var success = UpdateQsoCommand.TryApplyUpdates(["--enrich"], qso, ref enrich, out _);
+
+        Assert.True(success);
+        Assert.True(enrich);
+    }
+
+    [Fact]
+    public void TryApplyUpdates_sets_country_state_band_mode()
+    {
+        var qso = new QsoRecord { WorkedCallsign = "W1AW", Band = Band._20M, Mode = Mode.Cw };
+        var enrich = false;
+
+        var success = UpdateQsoCommand.TryApplyUpdates(
+            ["--country", "United States", "--state", "ct", "--band", "40m", "--mode", "SSB"],
+            qso,
+            ref enrich,
+            out var error);
+
+        Assert.True(success);
+        Assert.Null(error);
+        Assert.Equal("United States", qso.WorkedCountry);
+        Assert.Equal("CT", qso.WorkedState);
+        Assert.Equal(Band._40M, qso.Band);
+        Assert.Equal(Mode.Ssb, qso.Mode);
+    }
+
+    [Fact]
+    public void TryApplyUpdates_sets_rst_sent_and_received()
+    {
+        var qso = new QsoRecord { WorkedCallsign = "W1AW", Band = Band._20M, Mode = Mode.Cw };
+        var enrich = false;
+
+        var success = UpdateQsoCommand.TryApplyUpdates(
+            ["--rst-sent", "579", "--rst-rcvd", "589"],
+            qso,
+            ref enrich,
+            out var error);
+
+        Assert.True(success);
+        Assert.Null(error);
+        Assert.Equal(5u, qso.RstSent!.Readability);
+        Assert.Equal(7u, qso.RstSent.Strength);
+        Assert.Equal(9u, qso.RstSent.Tone);
+        Assert.Equal(5u, qso.RstReceived!.Readability);
+        Assert.Equal(8u, qso.RstReceived.Strength);
+        Assert.Equal(9u, qso.RstReceived.Tone);
+    }
+
+    [Theory]
+    [InlineData("--grid", "Missing value for --grid.")]
+    [InlineData("--country", "Missing value for --country.")]
+    [InlineData("--state", "Missing value for --state.")]
+    [InlineData("--freq", "Missing value for --freq.")]
+    [InlineData("--band", "Missing value for --band.")]
+    [InlineData("--mode", "Missing value for --mode.")]
+    [InlineData("--comment", "Missing value for --comment.")]
+    [InlineData("--rst-sent", "Missing value for --rst-sent.")]
+    [InlineData("--rst-rcvd", "Missing value for --rst-rcvd.")]
+    public void TryApplyUpdates_rejects_missing_values(string option, string expectedError)
+    {
+        var qso = new QsoRecord { WorkedCallsign = "W1AW" };
+        var enrich = false;
+
+        var success = UpdateQsoCommand.TryApplyUpdates([option], qso, ref enrich, out var error);
+
+        Assert.False(success);
+        Assert.Equal(expectedError, error);
+    }
+
+    [Fact]
+    public void TryApplyUpdates_rejects_unknown_option()
+    {
+        var qso = new QsoRecord { WorkedCallsign = "W1AW" };
+        var enrich = false;
+
+        var success = UpdateQsoCommand.TryApplyUpdates(["--bogus"], qso, ref enrich, out var error);
+
+        Assert.False(success);
+        Assert.Equal("Unknown option: --bogus", error);
+    }
+
+    [Fact]
     public async Task ReadRequestsAsync_splits_stream_into_chunks()
     {
         var bytes = Enumerable.Range(0, 131077).Select(static i => (byte)(i % 251)).ToArray();
