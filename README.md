@@ -113,6 +113,16 @@ winget install Bufbuild.Buf
 
 ### Build and Test
 
+**Repository build script:**
+
+```powershell
+.\build.ps1
+.\build.ps1 -Configuration Debug
+.\build.ps1 check
+```
+
+By default, `.\build.ps1` builds the Rust workspace in **Release** and publishes the Native AOT CLI to `artifacts\publish\QsoRipper.Cli\Release\`. Use `-Configuration Debug` to switch the Rust build and AOT publish output to `Debug`.
+
 **Rust engine:**
 
 ```
@@ -155,12 +165,29 @@ When no explicit config override is provided, the server uses a persisted setup 
 - **Windows:** `%APPDATA%\qsoripper\config.toml`
 - **Linux:** `~/.config/qsoripper/config.toml` (or `XDG_CONFIG_HOME`)
 
+If you want the engine to stay running in the background while you log QSOs from another terminal, use the repo-root helper scripts:
+
+```powershell
+.\start-qsoripper.ps1
+.\artifacts\publish\QsoRipper.Cli\Release\QsoRipper.Cli.exe log W1AW 20m FT8
+.\stop-qsoripper.ps1
+```
+
+`start-qsoripper.ps1` builds `qsoripper-server`, imports `.env`, starts the engine in the background from the repository root, respects `QSORIPPER_CONFIG_PATH` and `QSORIPPER_SQLITE_PATH` unless you override them with parameters, and writes process state plus stdout/stderr logs under `artifacts\run\`.
+
 ### Local engine configuration
 
 Use `.env.example` as the local template for QRZ settings and optional local-station defaults:
 
 ```
 Copy-Item .env.example .env
+```
+
+Common local overrides include:
+
+```powershell
+QSORIPPER_CONFIG_PATH=C:\Users\yourname\OneDrive\qsoripper\config.toml
+QSORIPPER_SQLITE_PATH=C:\Users\yourname\OneDrive\qsoripper\qsoripper.db
 ```
 
 The QRZ credentials are easy to mix up, so keep this split in mind:
@@ -256,7 +283,7 @@ dotnet build QsoRipper.slnx
 dotnet test QsoRipper.slnx
 ```
 
-This builds the shared .NET workspace, including the developer debug host and the CLI tool that validates engine connectivity over gRPC.
+This builds the shared .NET workspace, including the developer debug host and the CLI project used for engine validation over gRPC. To publish the Native AOT CLI from the repository root, use `.\build.ps1` or `.\build.ps1 dotnet`.
 
 ### Code Coverage
 
@@ -320,7 +347,7 @@ dotnet run --project QsoRipper.DebugHost
 
 The repository also includes a minimal **.NET 10 CLI tool** under `src/dotnet/QsoRipper.Cli` for validating connectivity to the Rust engine over gRPC.
 
-Run it with:
+Run it directly from source with:
 
 ```
 cd src/dotnet
@@ -328,7 +355,14 @@ dotnet run --project QsoRipper.Cli -- status
 dotnet run --project QsoRipper.Cli -- --endpoint http://localhost:50051 status
 ```
 
-The CLI generates client stubs from the shared proto contracts at build time and currently includes a `status` command for `LogbookService.GetSyncStatus`.
+Or publish the Native AOT build and run the produced executable:
+
+```powershell
+.\build.ps1 dotnet
+.\artifacts\publish\QsoRipper.Cli\Release\QsoRipper.Cli.exe status
+```
+
+The CLI generates client stubs from the shared proto contracts at build time and currently includes commands for status, lookup, and local logbook operations over gRPC.
 
 ## Project Structure
 
