@@ -1,0 +1,37 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:QsoRipper.Gui.ViewModels"
+             x:Class="QsoRipper.Gui.Views.StationProfileStepView"
+             x:DataType="vm:StationProfileStepViewModel">
+
+  <StackPanel Spacing="12">
+    <TextBlock Text="Station Callsign (required):" FontWeight="SemiBold" />
+    <TextBox Text="{Binding Callsign, Mode=TwoWay}"
+             PlaceholderText="e.g. W1AW" />
+
+    <TextBlock Text="Grid Square:" FontWeight="SemiBold" />
+    <TextBox Text="{Binding GridSquare, Mode=TwoWay}"
+             PlaceholderText="e.g. FN31pr" />
+
+    <TextBlock Text="Operator Name:" FontWeight="SemiBold" />
+    <TextBox Text="{Binding OperatorName, Mode=TwoWay}"
+             PlaceholderText="e.g. John Smith" />
+
+    <!-- Advanced fields -->
+    <Expander Header="Advanced" Padding="0,8">
+      <StackPanel Spacing="8">
+        <TextBlock Text="County:" />
+        <TextBox Text="{Binding County, Mode=TwoWay}" PlaceholderText="e.g. Hartford" />
+
+        <TextBlock Text="State:" />
+        <TextBox Text="{Binding State, Mode=TwoWay}" PlaceholderText="e.g. CT" />
+
+        <TextBlock Text="Country:" />
+        <TextBox Text="{Binding Country, Mode=TwoWay}" PlaceholderText="e.g. United States" />
+
+        <TextBlock Text="ARRL Section:" />
+        <TextBox Text="{Binding ArrlSection, Mode=TwoWay}" PlaceholderText="e.g. CT" />
+      </StackPanel>
+    </Expander>
+  </StackPanel>
+</UserControl>

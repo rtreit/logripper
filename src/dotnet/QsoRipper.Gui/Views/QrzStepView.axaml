@@ -1,0 +1,35 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:QsoRipper.Gui.ViewModels"
+             xmlns:v="using:QsoRipper.Gui.Views"
+             x:Class="QsoRipper.Gui.Views.QrzStepView"
+             x:DataType="vm:QrzStepViewModel">
+
+  <StackPanel Spacing="12">
+    <TextBlock TextWrapping="Wrap" Opacity="0.7"
+               Text="QRZ provides callsign lookups and logbook sync. If you don't have a QRZ account, skip this step — local logging works without it." />
+
+    <TextBlock Text="QRZ Username:" FontWeight="SemiBold" />
+    <TextBox Text="{Binding Username, Mode=TwoWay}"
+             PlaceholderText="Your QRZ username" />
+
+    <TextBlock Text="QRZ Password:" FontWeight="SemiBold" />
+    <TextBox Text="{Binding Password, Mode=TwoWay}"
+             PasswordChar="•"
+             PlaceholderText="Your QRZ password" />
+
+    <StackPanel Orientation="Horizontal" Spacing="12">
+      <Button Content="Test Connection"
+              Command="{Binding TestConnectionCommand}"
+              IsEnabled="{Binding !IsTesting}" />
+      <ProgressBar IsIndeterminate="True"
+                   IsVisible="{Binding IsTesting}"
+                   Width="100" VerticalAlignment="Center" />
+    </StackPanel>
+
+    <TextBlock Text="{Binding TestResult}"
+               TextWrapping="Wrap"
+               IsVisible="{Binding TestResult, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
+               Foreground="{Binding TestSucceeded, Converter={x:Static v:QrzStepView.TestColor}}" />
+  </StackPanel>
+</UserControl>

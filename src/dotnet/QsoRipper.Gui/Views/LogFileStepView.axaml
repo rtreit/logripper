@@ -1,0 +1,14 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:QsoRipper.Gui.ViewModels"
+             x:Class="QsoRipper.Gui.Views.LogFileStepView"
+             x:DataType="vm:LogFileStepViewModel">
+
+  <StackPanel Spacing="12">
+    <TextBlock Text="Log file path:" FontWeight="SemiBold" />
+    <TextBox Text="{Binding LogFilePath, Mode=TwoWay}"
+             PlaceholderText="e.g. C:\Users\you\qsoripper.db" />
+    <TextBlock Text="Choose where QsoRipper stores your QSO log database. The directory must exist and be writable."
+               Opacity="0.6" TextWrapping="Wrap" FontSize="12" />
+  </StackPanel>
+</UserControl>

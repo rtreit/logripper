@@ -1,0 +1,115 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:QsoRipper.Gui.ViewModels"
+             xmlns:v="using:QsoRipper.Gui.Views"
+             x:Class="QsoRipper.Gui.Views.SetupWizardView"
+             x:DataType="vm:SetupWizardViewModel">
+
+  <DockPanel>
+    <!-- Footer: step label + buttons -->
+    <Border DockPanel.Dock="Bottom"
+            Padding="16,8"
+            BorderThickness="0,1,0,0"
+            BorderBrush="{DynamicResource SystemControlForegroundBaseMediumLowBrush}">
+      <DockPanel>
+        <TextBlock DockPanel.Dock="Left"
+                   Text="{Binding StepLabel}"
+                   VerticalAlignment="Center"
+                   Opacity="0.6" />
+
+        <StackPanel DockPanel.Dock="Right"
+                    Orientation="Horizontal"
+                    Spacing="8"
+                    HorizontalAlignment="Right">
+          <Button Content="Cancel"
+                  Command="{Binding CancelCommand}" />
+          <Button Content="Back"
+                  Command="{Binding BackCommand}"
+                  IsVisible="{Binding CanGoBack}" />
+          <Button Content="Skip"
+                  Command="{Binding SkipCommand}"
+                  IsVisible="{Binding CurrentStep.IsSkippable}" />
+          <Button Content="{Binding IsLastStep, Converter={x:Static v:SetupWizardView.NextOrSave}}"
+                  Command="{Binding NextCommand}"
+                  Classes="accent"
+                  IsEnabled="{Binding !IsBusy}" />
+        </StackPanel>
+      </DockPanel>
+    </Border>
+
+    <!-- Body: sidebar + step content -->
+    <Grid ColumnDefinitions="180,*">
+
+      <!-- Sidebar -->
+      <Border Grid.Column="0"
+              BorderThickness="0,0,1,0"
+              BorderBrush="{DynamicResource SystemControlForegroundBaseMediumLowBrush}"
+              Padding="8,16">
+        <ItemsControl ItemsSource="{Binding Steps}">
+          <ItemsControl.ItemTemplate>
+            <DataTemplate x:DataType="vm:WizardStepViewModel">
+              <Button HorizontalAlignment="Stretch"
+                      HorizontalContentAlignment="Left"
+                      Padding="8,6"
+                      Background="Transparent"
+                      Command="{Binding $parent[ItemsControl].((vm:SetupWizardViewModel)DataContext).NavigateToStepCommand}"
+                      CommandParameter="{Binding $self, Converter={x:Static v:SetupWizardView.ItemIndex}}">
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                  <TextBlock Text="{Binding IsComplete, Converter={x:Static v:SetupWizardView.StepIndicator}}"
+                             FontSize="14" VerticalAlignment="Center" />
+                  <TextBlock Text="{Binding Title}" VerticalAlignment="Center" />
+                </StackPanel>
+              </Button>
+            </DataTemplate>
+          </ItemsControl.ItemTemplate>
+        </ItemsControl>
+      </Border>
+
+      <!-- Step content -->
+      <ScrollViewer Grid.Column="1" Padding="24,16">
+        <StackPanel Spacing="16">
+          <TextBlock Text="{Binding CurrentStep.Title}"
+                     FontSize="20" FontWeight="SemiBold" />
+          <TextBlock Text="{Binding CurrentStep.Description}"
+                     Opacity="0.7" TextWrapping="Wrap" />
+
+          <!-- Dynamic step content -->
+          <ContentControl Content="{Binding CurrentStep}">
+            <ContentControl.DataTemplates>
+              <DataTemplate DataType="vm:LogFileStepViewModel">
+                <v:LogFileStepView />
+              </DataTemplate>
+              <DataTemplate DataType="vm:StationProfileStepViewModel">
+                <v:StationProfileStepView />
+              </DataTemplate>
+              <DataTemplate DataType="vm:QrzStepViewModel">
+                <v:QrzStepView />
+              </DataTemplate>
+              <DataTemplate DataType="vm:ReviewStepViewModel">
+                <v:ReviewStepView />
+              </DataTemplate>
+            </ContentControl.DataTemplates>
+          </ContentControl>
+
+          <!-- Validation errors -->
+          <TextBlock Text="{Binding CurrentStep.ValidationSummary}"
+                     Foreground="IndianRed"
+                     TextWrapping="Wrap"
+                     IsVisible="{Binding CurrentStep.ValidationSummary, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+
+          <!-- Global error -->
+          <TextBlock Text="{Binding ErrorMessage}"
+                     Foreground="IndianRed"
+                     FontWeight="SemiBold"
+                     TextWrapping="Wrap"
+                     IsVisible="{Binding ErrorMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+
+          <!-- Busy indicator -->
+          <ProgressBar IsIndeterminate="True"
+                       IsVisible="{Binding IsBusy}"
+                       Margin="0,8,0,0" />
+        </StackPanel>
+      </ScrollViewer>
+    </Grid>
+  </DockPanel>
+</UserControl>
