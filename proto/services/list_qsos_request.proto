@@ -1,8 +1,8 @@
 syntax = "proto3";
 
-package logripper.services;
+package qsoripper.services;
 
-option csharp_namespace = "LogRipper.Services";
+option csharp_namespace = "QsoRipper.Services";
 
 import "domain/band.proto";
 import "domain/mode.proto";
@@ -13,8 +13,8 @@ message ListQsosRequest {
   optional google.protobuf.Timestamp after = 1;
   optional google.protobuf.Timestamp before = 2;
   optional string callsign_filter = 3;
-  optional logripper.domain.Band band_filter = 4;
-  optional logripper.domain.Mode mode_filter = 5;
+  optional qsoripper.domain.Band band_filter = 4;
+  optional qsoripper.domain.Mode mode_filter = 5;
   optional string contest_id = 6;
   uint32 limit = 7;  // 0 = no limit
   uint32 offset = 8;

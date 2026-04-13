@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Runs the LogRipper adversarial stress test suite and generates an HTML report.
+    Runs the QsoRipper adversarial stress test suite and generates an HTML report.
 
 .DESCRIPTION
     Builds the Rust server and C# stress client, starts the server with in-memory
@@ -42,9 +42,9 @@ if (-not $OutputPath) {
 
 $rustDir = Join-Path $repoRoot 'src' 'rust'
 $dotnetDir = Join-Path $repoRoot 'src' 'dotnet' 'stress-client'
-$serverStderr = Join-Path ([System.IO.Path]::GetTempPath()) "logripper-stress-server-$PID.log"
-$rustTestOutput = Join-Path ([System.IO.Path]::GetTempPath()) "logripper-stress-rust-$PID.log"
-$dotnetOutput = Join-Path ([System.IO.Path]::GetTempPath()) "logripper-stress-dotnet-$PID.log"
+$serverStderr = Join-Path ([System.IO.Path]::GetTempPath()) "qsoripper-stress-server-$PID.log"
+$rustTestOutput = Join-Path ([System.IO.Path]::GetTempPath()) "qsoripper-stress-rust-$PID.log"
+$dotnetOutput = Join-Path ([System.IO.Path]::GetTempPath()) "qsoripper-stress-dotnet-$PID.log"
 
 function Write-Step([string]$message) {
     Write-Host "`n>> $message" -ForegroundColor Cyan
@@ -54,7 +54,7 @@ try {
     # ---- Build ----
     Write-Step 'Building Rust server and stress test'
     Push-Location $rustDir
-    cargo build -p logripper-server 2>&1 | Out-Null
+    cargo build -p qsoripper-server 2>&1 | Out-Null
     cargo test --test stress_test --no-run 2>&1 | Out-Null
     Pop-Location
 
@@ -75,11 +75,11 @@ try {
     $rustPassed = $rustExitCode -eq 0
 
     # ---- Start server ----
-    Write-Step "Starting logripper-server on port $ServerPort (in-memory storage)"
+    Write-Step "Starting qsoripper-server on port $ServerPort (in-memory storage)"
     $env:RUST_BACKTRACE = '1'
-    $serverExe = Join-Path $rustDir 'target' 'debug' 'logripper-server.exe'
+    $serverExe = Join-Path $rustDir 'target' 'debug' 'qsoripper-server.exe'
     if (-not (Test-Path $serverExe)) {
-        $serverExe = Join-Path $rustDir 'target' 'debug' 'logripper-server'
+        $serverExe = Join-Path $rustDir 'target' 'debug' 'qsoripper-server'
     }
 
     $serverProcess = Start-Process -FilePath $serverExe `
@@ -169,7 +169,7 @@ try {
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>LogRipper Stress Test Report</title>
+<title>QsoRipper Stress Test Report</title>
 <style>
     body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; margin: 2rem; background: #f8f9fa; color: #212529; }
     h1 { margin-bottom: 0.25rem; }
@@ -188,7 +188,7 @@ try {
 </style>
 </head>
 <body>
-<h1>LogRipper Stress Test Report</h1>
+<h1>QsoRipper Stress Test Report</h1>
 <div class="timestamp">$timestamp</div>
 
 <div class="section">

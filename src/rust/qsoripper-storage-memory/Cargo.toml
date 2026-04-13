@@ -1,0 +1,17 @@
+[package]
+name = "qsoripper-storage-memory"
+description = "In-memory storage adapter for QsoRipper engine tests and local composition"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+qsoripper-core = { path = "../qsoripper-core", version = "0.1.0" }
+tokio = { workspace = true }
+tonic = { workspace = true }
+prost-types = { workspace = true }
+
+[lints]
+workspace = true

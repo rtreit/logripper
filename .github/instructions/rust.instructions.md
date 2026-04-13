@@ -2,12 +2,12 @@
 
 ## Purpose
 
-These instructions govern Rust work in LogRipper, especially under `src/rust/`, `proto/`, and the C FFI boundary under `src/c/`.
+These instructions govern Rust work in QsoRipper, especially under `src/rust/`, `proto/`, and the C FFI boundary under `src/c/`.
 
 ## Architecture Rules
 
-- `src/rust/logripper-core` owns reusable engine logic, domain mapping, generated proto bindings, and adapter seams.
-- `src/rust/logripper-server` owns runtime hosting and tonic server startup; keep process/bootstrap logic there rather than pushing it into `logripper-core`.
+- `src/rust/qsoripper-core` owns reusable engine logic, domain mapping, generated proto bindings, and adapter seams.
+- `src/rust/qsoripper-server` owns runtime hosting and tonic server startup; keep process/bootstrap logic there rather than pushing it into `qsoripper-core`.
 - Keep ADIF, QRZ, and other external formats/services at the Rust edge. Normalize into project-owned proto/domain types immediately.
 - Do not move engine behavior into .NET debug surfaces; .NET remains a client/inspection layer.
 
@@ -41,8 +41,8 @@ These instructions govern Rust work in LogRipper, especially under `src/rust/`, 
 - Workspace lint policy lives in `src/rust/Cargo.toml`; keep shared Clippy and rustc lint defaults centralized there.
 - When proto or service contracts change, also run:
   - `buf lint`
-  - `cargo run --manifest-path src/rust/Cargo.toml -p logripper-server`
-  - `dotnet run --project src/dotnet/LogRipper.Cli -- status`
+  - `cargo run --manifest-path src/rust/Cargo.toml -p qsoripper-server`
+  - `dotnet run --project src/dotnet/QsoRipper.Cli -- status`
 - When changing Rust dependencies or supply-chain-sensitive infrastructure, also run:
   - `Push-Location src\rust; cargo deny check --config deny.toml; Pop-Location`
 - Treat `cargo audit` as a manual/occasional vulnerability review rather than a per-PR CI requirement unless the team explicitly changes that policy.

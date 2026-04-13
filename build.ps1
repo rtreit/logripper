@@ -1,7 +1,7 @@
 #!/usr/bin/env pwsh
 <#
 .SYNOPSIS
-    Cross-platform build and quality script for LogRipper.
+    Cross-platform build and quality script for QsoRipper.
 
 .DESCRIPTION
     Orchestrates Rust, .NET, and proto builds and quality checks.
@@ -26,7 +26,7 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $RustManifest = Join-Path $PSScriptRoot 'src' 'rust' 'Cargo.toml'
-$DotnetSolution = Join-Path $PSScriptRoot 'src' 'dotnet' 'LogRipper.slnx'
+$DotnetSolution = Join-Path $PSScriptRoot 'src' 'dotnet' 'QsoRipper.slnx'
 $RustDir = Join-Path $PSScriptRoot 'src' 'rust'
 
 function Write-Step([string]$Message) {
@@ -107,7 +107,7 @@ function Check-All {
 function Show-Help {
     Write-Host @"
 
-LogRipper Build Script
+QsoRipper Build Script
 
 Usage: ./build.ps1 [command]
 

@@ -1,11 +1,11 @@
 syntax = "proto3";
 
-package logripper.services;
+package qsoripper.services;
 
-option csharp_namespace = "LogRipper.Services";
+option csharp_namespace = "QsoRipper.Services";
 
 import "domain/station_profile.proto";
 
 message SetSessionStationProfileOverrideRequest {
-  logripper.domain.StationProfile profile = 1;
+  qsoripper.domain.StationProfile profile = 1;
 }

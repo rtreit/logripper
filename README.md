@@ -1,16 +1,16 @@
-# LogRipper
+# QsoRipper
 
 High-performance ham radio logging engine built for speed, clean workflows, and keyboard-first operation.
 
 ## Architecture
 
-LogRipper is an **engine-first** project. The core engine handles logging, lookups, caching, and sync. It exposes all functionality through a gRPC API and has zero knowledge of any particular UI. Any number of UX implementations can be built on top of the engine: a terminal UI in Rust, a desktop GUI in .NET or Electron, a web frontend, a mobile app, or a voice-driven interface for accessibility. The engine doesn't know or care what's calling it.
+QsoRipper is an **engine-first** project. The core engine handles logging, lookups, caching, and sync. It exposes all functionality through a gRPC API and has zero knowledge of any particular UI. Any number of UX implementations can be built on top of the engine: a terminal UI in Rust, a desktop GUI in .NET or Electron, a web frontend, a mobile app, or a voice-driven interface for accessibility. The engine doesn't know or care what's calling it.
 
 ```
 ┌─────────────────────────────────────────────┐
 │  Engine (Rust)                              │
 │                                             │
-│  logripper-core:                            │
+│  qsoripper-core:                            │
 │    Log storage, QSO CRUD, QRZ lookups,      │
 │    cache, ADIF parser, gRPC server (tonic)  │
 └──────────────────┬──────────────────────────┘
@@ -127,7 +127,7 @@ This compiles the C libraries via FFI, generates Rust types from the proto files
 
 ```
 cd src/rust
-cargo run -p logripper-server
+cargo run -p qsoripper-server
 ```
 
 This starts the developer gRPC server on `127.0.0.1:50051` by default so the .NET CLI and debug workbench can validate transport and service wiring against a live Rust host.
@@ -136,24 +136,24 @@ The server can now swap storage implementations at startup:
 
 ```powershell
 cd src\rust
-cargo run -p logripper-server -- --storage memory
-cargo run -p logripper-server -- --storage sqlite --sqlite-path .\data\logripper.db
-cargo run -p logripper-server -- --config .\config\logripper.toml
+cargo run -p qsoripper-server -- --storage memory
+cargo run -p qsoripper-server -- --storage sqlite --sqlite-path .\data\qsoripper.db
+cargo run -p qsoripper-server -- --config .\config\qsoripper.toml
 ```
 
 Equivalent environment variables are also supported:
 
 ```powershell
-$env:LOGRIPPER_STORAGE_BACKEND = "sqlite"
-$env:LOGRIPPER_SQLITE_PATH = ".\data\logripper.db"
-$env:LOGRIPPER_CONFIG_PATH = ".\config\logripper.toml"
-cargo run -p logripper-server
+$env:QSORIPPER_STORAGE_BACKEND = "sqlite"
+$env:QSORIPPER_SQLITE_PATH = ".\data\qsoripper.db"
+$env:QSORIPPER_CONFIG_PATH = ".\config\qsoripper.toml"
+cargo run -p qsoripper-server
 ```
 
 When no explicit config override is provided, the server uses a persisted setup file at:
 
-- **Windows:** `%APPDATA%\logripper\config.toml`
-- **Linux:** `~/.config/logripper/config.toml` (or `XDG_CONFIG_HOME`)
+- **Windows:** `%APPDATA%\qsoripper\config.toml`
+- **Linux:** `~/.config/qsoripper/config.toml` (or `XDG_CONFIG_HOME`)
 
 ### Local engine configuration
 
@@ -167,21 +167,21 @@ The QRZ credentials are easy to mix up, so keep this split in mind:
 
 | Setting | What it must contain |
 |---|---|
-| `LOGRIPPER_QRZ_XML_USERNAME` | Your QRZ account username |
-| `LOGRIPPER_QRZ_XML_PASSWORD` | Your **actual QRZ account password** for the XML lookup service |
-| `LOGRIPPER_QRZ_LOGBOOK_API_KEY` | Your separate **QRZ Logbook API access key** from the QRZ website |
+| `QSORIPPER_QRZ_XML_USERNAME` | Your QRZ account username |
+| `QSORIPPER_QRZ_XML_PASSWORD` | Your **actual QRZ account password** for the XML lookup service |
+| `QSORIPPER_QRZ_LOGBOOK_API_KEY` | Your separate **QRZ Logbook API access key** from the QRZ website |
 
-**Important:** `LOGRIPPER_QRZ_XML_PASSWORD` and `LOGRIPPER_QRZ_LOGBOOK_API_KEY` are **not** the same value and are **not** interchangeable. Using the logbook API key as the XML password will cause QRZ XML login failures and may trigger a temporary lockout.
+**Important:** `QSORIPPER_QRZ_XML_PASSWORD` and `QSORIPPER_QRZ_LOGBOOK_API_KEY` are **not** the same value and are **not** interchangeable. Using the logbook API key as the XML password will cause QRZ XML login failures and may trigger a temporary lockout.
 
 For lockout-safe debugging, you can temporarily set:
 
 ```
-LOGRIPPER_QRZ_XML_CAPTURE_ONLY=true
+QSORIPPER_QRZ_XML_CAPTURE_ONLY=true
 ```
 
-In capture mode, LogRipper builds the outgoing QRZ XML request and returns redacted request diagnostics without sending any HTTP traffic to QRZ.
+In capture mode, QsoRipper builds the outgoing QRZ XML request and returns redacted request diagnostics without sending any HTTP traffic to QRZ.
 
-You can also set `LOGRIPPER_STATION_*` values in `.env` to define the active station profile that the Rust engine snapshots into newly logged QSOs.
+You can also set `QSORIPPER_STATION_*` values in `.env` to define the active station profile that the Rust engine snapshots into newly logged QSOs.
 
 For the new first-run bootstrap surface, `SetupService` persists the engine's log file path, initial station profile, and optional QRZ XML credentials to `config.toml`, then hot-applies those persisted values to the running engine. After setup, `StationProfileService` manages additional station profiles, persisted active-profile selection, and bounded in-memory session overrides for portable or event operation. The Debug Host `/engine` page now exposes setup and station-profile editor forms for these contract surfaces, so local bootstrap/profile lifecycle testing no longer requires `grpcurl`.
 
@@ -217,10 +217,10 @@ For local QRZ lookup debugging, use two terminals: one for the Rust engine and o
 3. Start the Rust engine in the first terminal:
 
    ```powershell
-   Set-Location C:\path\to\logripper
+   Set-Location C:\path\to\qsoripper
    env
    Set-Location src\rust
-   cargo run -p logripper-server
+   cargo run -p qsoripper-server
    ```
 
    The developer engine listens on `http://localhost:50051` by default.
@@ -228,10 +228,10 @@ For local QRZ lookup debugging, use two terminals: one for the Rust engine and o
 4. Start the developer debug workbench in a second terminal:
 
    ```powershell
-   Set-Location C:\path\to\logripper
+   Set-Location C:\path\to\qsoripper
    env
    Set-Location src\dotnet
-   dotnet run --project LogRipper.DebugHost
+   dotnet run --project QsoRipper.DebugHost
    ```
 
 5. Open the workbench in a browser:
@@ -246,14 +246,14 @@ For local QRZ lookup debugging, use two terminals: one for the Rust engine and o
    - **Stream lookup** shows the state transition flow.
    - **Cache lookup** checks only the engine cache.
 
-If you want to inspect request shape without touching QRZ, set `LOGRIPPER_QRZ_XML_CAPTURE_ONLY=true` in `.env`, run `env` again in the engine shell, and restart `logripper-server`.
+If you want to inspect request shape without touching QRZ, set `QSORIPPER_QRZ_XML_CAPTURE_ONLY=true` in `.env`, run `env` again in the engine shell, and restart `qsoripper-server`.
 
 **.NET workspace:**
 
 ```
 cd src/dotnet
-dotnet build LogRipper.slnx
-dotnet test LogRipper.slnx
+dotnet build QsoRipper.slnx
+dotnet test QsoRipper.slnx
 ```
 
 This builds the shared .NET workspace, including the developer debug host and the CLI tool that validates engine connectivity over gRPC.
@@ -292,7 +292,7 @@ cargo llvm-cov --all --fail-under-lines 80
 ```
 dotnet tool install -g dotnet-reportgenerator-globaltool
 cd src/dotnet
-dotnet test LogRipper.slnx --collect:"XPlat Code Coverage" --results-directory coverage
+dotnet test QsoRipper.slnx --collect:"XPlat Code Coverage" --results-directory coverage
 reportgenerator -reports:"coverage/**/coverage.cobertura.xml" -targetdir:"coverage/report" -reporttypes:"Html"
 ```
 
@@ -300,7 +300,7 @@ Then open `src/dotnet/coverage/report/index.html` in a browser.
 
 ### Developer Debug Workbench
 
-The repository now includes a **developer-only Blazor Server debug host** under `src/dotnet/LogRipper.DebugHost`. This is not the product logger UX. It is an internal workbench for:
+The repository now includes a **developer-only Blazor Server debug host** under `src/dotnet/QsoRipper.DebugHost`. This is not the product logger UX. It is an internal workbench for:
 
 - configuring and probing a local Rust engine endpoint
 - inspecting generated protobuf payloads and sample data
@@ -311,21 +311,21 @@ Build, test, and run it with:
 
 ```
 cd src/dotnet
-dotnet build LogRipper.Debug.sln
-dotnet test LogRipper.Debug.sln
-dotnet run --project LogRipper.DebugHost
+dotnet build QsoRipper.Debug.sln
+dotnet test QsoRipper.Debug.sln
+dotnet run --project QsoRipper.DebugHost
 ```
 
 ### Engine Validation CLI
 
-The repository also includes a minimal **.NET 10 CLI tool** under `src/dotnet/LogRipper.Cli` for validating connectivity to the Rust engine over gRPC.
+The repository also includes a minimal **.NET 10 CLI tool** under `src/dotnet/QsoRipper.Cli` for validating connectivity to the Rust engine over gRPC.
 
 Run it with:
 
 ```
 cd src/dotnet
-dotnet run --project LogRipper.Cli -- status
-dotnet run --project LogRipper.Cli -- --endpoint http://localhost:50051 status
+dotnet run --project QsoRipper.Cli -- status
+dotnet run --project QsoRipper.Cli -- --endpoint http://localhost:50051 status
 ```
 
 The CLI generates client stubs from the shared proto contracts at build time and currently includes a `status` command for `LogbookService.GetSyncStatus`.
@@ -338,14 +338,14 @@ proto/                    Shared IDL (language-neutral)
   services/               Service declarations plus per-RPC envelopes/support types (one top-level entity per file)
 src/
   rust/                   Rust workspace (Cargo.toml at this level)
-    logripper-core/       Engine: storage, lookups, cache, ADIF, gRPC server
+    qsoripper-core/       Engine: storage, lookups, cache, ADIF, gRPC server
   dotnet/
-    LogRipper.slnx        Root .NET workspace solution
-    LogRipper.Cli/        Minimal CLI for engine validation over gRPC
-    LogRipper.DebugHost/  Developer-only Blazor Server debug workbench
-    LogRipper.DebugHost.Tests/  Tests for debug-host services and payload builders
+    QsoRipper.slnx        Root .NET workspace solution
+    QsoRipper.Cli/        Minimal CLI for engine validation over gRPC
+    QsoRipper.DebugHost/  Developer-only Blazor Server debug workbench
+    QsoRipper.DebugHost.Tests/  Tests for debug-host services and payload builders
   c/                      Native C libraries called by the engine via FFI
-    logripper-dsp/        Signal processing helpers (DSP, filtering, audio)
+    qsoripper-dsp/        Signal processing helpers (DSP, filtering, audio)
 tests/
   fixtures/               Shared test data (ADIF files, etc.)
 docs/

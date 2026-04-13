@@ -1,8 +1,8 @@
 syntax = "proto3";
 
-package logripper.domain;
+package qsoripper.domain;
 
-option csharp_namespace = "LogRipper.Domain";
+option csharp_namespace = "QsoRipper.Domain";
 
 // Tracks whether a QSO has been synced with the QRZ logbook.
 enum SyncStatus {

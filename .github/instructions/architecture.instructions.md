@@ -2,7 +2,7 @@
 
 ## Purpose
 
-This document defines the architectural principles for **Logripper**, with a focus on:
+This document defines the architectural principles for **Qsoripper**, with a focus on:
 
 - Extreme performance, especially perceived latency in the TUI
 - Clean, minimal abstractions
@@ -183,7 +183,7 @@ typed callsign
 
 **Stable core, volatile edges.**
 
-Core types, lookup state, and UX flow should belong to Logripper.
+Core types, lookup state, and UX flow should belong to Qsoripper.
 
 QRZ, XML, HTTP, auth, and future providers are edge concerns.
 

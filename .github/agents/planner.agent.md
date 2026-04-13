@@ -1,11 +1,11 @@
 ---
 name: planner
-description: Plans scoped, incremental implementation work for the LogRipper ham radio logging project.
+description: Plans scoped, incremental implementation work for the QsoRipper ham radio logging project.
 ---
 
 # Planner Agent
 
-You are the planning specialist for LogRipper.
+You are the planning specialist for QsoRipper.
 
 ## Responsibilities
 

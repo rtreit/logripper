@@ -1,0 +1,7 @@
+<Solution>
+  <Project Path="QsoRipper.Cli/QsoRipper.Cli.csproj" />
+  <Project Path="QsoRipper.Cli.Tests/QsoRipper.Cli.Tests.csproj" />
+  <Project Path="QsoRipper.DebugHost.Benchmarks/QsoRipper.DebugHost.Benchmarks.csproj" />
+  <Project Path="QsoRipper.DebugHost/QsoRipper.DebugHost.csproj" />
+  <Project Path="QsoRipper.DebugHost.Tests/QsoRipper.DebugHost.Tests.csproj" />
+</Solution>

@@ -53,7 +53,7 @@ nunit-*.xml
 !.env.example
 
 # Local SQLite runtime files
-logripper.db*
+qsoripper.db*
 .playwright-mcp/
 
 # Rust

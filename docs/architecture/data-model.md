@@ -2,7 +2,7 @@
 
 ## Overview
 
-LogRipper uses **Protocol Buffers (proto3)** as the canonical schema definition for all shared domain types. Proto files are the single source of truth — Rust structs and C# classes are generated from them, ensuring zero drift between the two language runtimes.
+QsoRipper uses **Protocol Buffers (proto3)** as the canonical schema definition for all shared domain types. Proto files are the single source of truth — Rust structs and C# classes are generated from them, ensuring zero drift between the two language runtimes.
 
 ## Why Protocol Buffers?
 
@@ -24,13 +24,13 @@ The proto-first approach directly supports these architecture principles:
 
 ## Proto Layout Rules
 
-LogRipper treats the protobuf 1-1-1 guidance as an architectural rule, not a style preference:
+QsoRipper treats the protobuf 1-1-1 guidance as an architectural rule, not a style preference:
 
 - **One top-level entity per file by default**: messages, enums, and services each get their own `.proto` file.
 - **Service declaration files contain only the service**: request, response, stream item, enum, and support payload messages live in separate files under `proto/services/`.
 - **Every RPC gets unique request/response envelopes**: unary and streaming methods both use method-specific `XxxRequest` / `XxxResponse` messages.
 - **Reusable business payloads stay separate from envelopes**: shared models such as `LookupResult`, `QsoRecord`, `SetupStatus`, and `ActiveStationContext` are nested inside envelopes rather than returned directly as RPC shapes.
-- **Exceptions are rare and explicit**: if LogRipper ever deviates from 1-1-1, that decision must be documented and justified in the schema review. RPC envelopes are not the place for exceptions.
+- **Exceptions are rare and explicit**: if QsoRipper ever deviates from 1-1-1, that decision must be documented and justified in the schema review. RPC envelopes are not the place for exceptions.
 
 ## Directory Structure
 
@@ -74,7 +74,7 @@ proto/
 
 ### CallsignRecord (`callsign_record.proto`)
 
-Normalized representation of a ham radio operator/station. Derived from QRZ XML lookup data (40+ fields) but owned by LogRipper. Field groups:
+Normalized representation of a ham radio operator/station. Derived from QRZ XML lookup data (40+ fields) but owned by QsoRipper. Field groups:
 
 - **Identity**: callsign, aliases, previous_call, dxcc_entity_id
 - **Name**: first_name, last_name, nickname, formatted_name
@@ -90,7 +90,7 @@ Normalized representation of a ham radio operator/station. Derived from QRZ XML 
 
 The core QSO (contact) entity. Every logged contact is a QsoRecord.
 
-- **Identity**: local_id (UUID assigned by LogRipper), qrz_logid (from QRZ sync)
+- **Identity**: local_id (UUID assigned by QsoRipper), qrz_logid (from QRZ sync)
 - **Core**: station_callsign, worked_callsign, utc_timestamp, utc_end_timestamp, band, mode, submode, frequency_khz
 - **Signal**: rst_sent, rst_received (structured RstReport), tx_power
 - **QSL**: sent/received status for card, LoTW, eQSL
@@ -167,7 +167,7 @@ QsoRecord includes an `extra_fields` map (`map<string, string>`) to preserve ADI
 2. Unrecognized fields → stored in `extra_fields` (keyed by uppercase ADIF field name)
 3. During export → dedicated fields are emitted first, then `extra_fields` are appended
 
-This ensures no data loss when round-tripping ADIF files through LogRipper.
+This ensures no data loss when round-tripping ADIF files through QsoRipper.
 
 See `docs/integrations/adif-specification.md` for the complete ADIF 3.1.7 reference including all 150+ QSO fields, data types, enumerations, and field-to-proto mapping table.
 
@@ -192,14 +192,14 @@ buf breaking --against '.git#branch=main'
 cargo build --manifest-path src/rust/Cargo.toml
 
 # Regenerate C# bindings
-dotnet build src/dotnet/LogRipper.slnx
+dotnet build src/dotnet/QsoRipper.slnx
 ```
 
 ### Generated output locations
 
 | Language | Output path | Notes |
 |---|---|---|
-| Rust | Cargo `OUT_DIR` under `src/rust/target/` | Generated at build time by `src/rust/logripper-core/build.rs`; not checked in |
+| Rust | Cargo `OUT_DIR` under `src/rust/target/` | Generated at build time by `src/rust/qsoripper-core/build.rs`; not checked in |
 | C# | MSBuild intermediate output under `src/dotnet/**/obj/` | Generated at build time by `Grpc.Tools`; not checked in |
 
 ## Adding a New Field
@@ -220,7 +220,7 @@ dotnet build src/dotnet/LogRipper.slnx
 - **Optional fields**: Use `optional` keyword for fields that may not be present from the provider
 - **Enums**: Prefer `_UNSPECIFIED = 0` when the schema has a neutral default; operational defaults may intentionally keep a domain-specific zero value
 - **Timestamps**: Use `google.protobuf.Timestamp` for all date/time fields
-- **C# namespace**: Set via `option csharp_namespace = "LogRipper.Domain"` or `"LogRipper.Services"`
-- **Packages**: Keep the current `proto/domain` and `proto/services` layout with `logripper.domain` / `logripper.services` packages until the project deliberately introduces versioned external contracts
+- **C# namespace**: Set via `option csharp_namespace = "QsoRipper.Domain"` or `"QsoRipper.Services"`
+- **Packages**: Keep the current `proto/domain` and `proto/services` layout with `qsoripper.domain` / `qsoripper.services` packages until the project deliberately introduces versioned external contracts
 - **1-1-1 layout**: Default to one top-level message, enum, or service per `.proto` file
 - **RPC message shapes**: Every RPC gets unique `XxxRequest` and `XxxResponse` envelopes; shared payloads are nested inside those envelopes rather than used as the top-level RPC contract

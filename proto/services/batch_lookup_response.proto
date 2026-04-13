@@ -1,11 +1,11 @@
 syntax = "proto3";
 
-package logripper.services;
+package qsoripper.services;
 
-option csharp_namespace = "LogRipper.Services";
+option csharp_namespace = "QsoRipper.Services";
 
 import "domain/lookup_result.proto";
 
 message BatchLookupResponse {
-  repeated logripper.domain.LookupResult results = 1;
+  repeated qsoripper.domain.LookupResult results = 1;
 }

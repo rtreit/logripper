@@ -103,7 +103,7 @@ description: What this agent specializes in and its review focus.
 
 # My Agent
 
-You are the [role] specialist for LogRipper.
+You are the [role] specialist for QsoRipper.
 
 ## Responsibilities
 
@@ -174,7 +174,7 @@ What these instructions govern.
 GitHub issues, PR descriptions, comments, and review text need an extra Windows-specific rule:
 
 - Do **not** use `bash` code fences for Windows commands.
-- Backslash path separators such as `src\dotnet\LogRipper.slnx` or `src\rust\Cargo.toml` can be rendered as garbled escape sequences when treated like shell escape text.
+- Backslash path separators such as `src\dotnet\QsoRipper.slnx` or `src\rust\Cargo.toml` can be rendered as garbled escape sequences when treated like shell escape text.
 - Use one of these instead:
   - plain fenced block with no language tag
   - `powershell`
@@ -183,7 +183,7 @@ GitHub issues, PR descriptions, comments, and review text need an extra Windows-
 Example:
 
 ```powershell
-dotnet build src\dotnet\LogRipper.slnx
+dotnet build src\dotnet\QsoRipper.slnx
 cargo test --manifest-path src\rust\Cargo.toml
 ```
 

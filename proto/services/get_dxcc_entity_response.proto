@@ -1,11 +1,11 @@
 syntax = "proto3";
 
-package logripper.services;
+package qsoripper.services;
 
-option csharp_namespace = "LogRipper.Services";
+option csharp_namespace = "QsoRipper.Services";
 
 import "domain/dxcc_entity.proto";
 
 message GetDxccEntityResponse {
-  logripper.domain.DxccEntity entity = 1;
+  qsoripper.domain.DxccEntity entity = 1;
 }

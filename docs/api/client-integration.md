@@ -1,6 +1,6 @@
 # Client Integration Guide
 
-This guide covers everything you need to connect a client application to the LogRipper engine over gRPC.
+This guide covers everything you need to connect a client application to the QsoRipper engine over gRPC.
 
 ## Endpoint Defaults
 
@@ -8,26 +8,26 @@ The engine listens on `http://127.0.0.1:50051` by default when started with:
 
 ```
 cd src/rust
-cargo run -p logripper-server
+cargo run -p qsoripper-server
 ```
 
 The listen address can be overridden at startup:
 
 ```
-cargo run -p logripper-server -- --listen 0.0.0.0:50051
+cargo run -p qsoripper-server -- --listen 0.0.0.0:50051
 ```
 
 Or via environment variable:
 
 ```
-LOGRIPPER_SERVER_ADDR=0.0.0.0:50051 cargo run -p logripper-server
+QSORIPPER_SERVER_ADDR=0.0.0.0:50051 cargo run -p qsoripper-server
 ```
 
 ## Generating Client Stubs
 
 The proto files under `proto/` are the authoritative contract. Use standard protobuf/gRPC tooling for your language to generate client stubs.
 
-LogRipper follows protobuf 1-1-1 by default: one top-level entity per file, service files that contain only the `service`, and method-specific `XxxRequest` / `XxxResponse` envelopes for every RPC. Your code generation step therefore needs to include the split service support files, not just the `*service.proto` declarations.
+QsoRipper follows protobuf 1-1-1 by default: one top-level entity per file, service files that contain only the `service`, and method-specific `XxxRequest` / `XxxResponse` envelopes for every RPC. Your code generation step therefore needs to include the split service support files, not just the `*service.proto` declarations.
 
 ### Prerequisites
 
@@ -79,11 +79,11 @@ Required packages:
 <PackageReference Include="Grpc.Tools" Version="..." PrivateAssets="All" />
 ```
 
-The debug workbench under `src/dotnet/LogRipper.DebugHost/` is a working example of this pattern.
+The debug workbench under `src/dotnet/QsoRipper.DebugHost/` is a working example of this pattern.
 
 ### Rust
 
-The repository engine uses `prost` + `tonic-build` with a `build.rs` script. See `src/rust/logripper-core/build.rs` for the generation setup.
+The repository engine uses `prost` + `tonic-build` with a `build.rs` script. See `src/rust/qsoripper-core/build.rs` for the generation setup.
 
 For a standalone Rust client, prefer recursive discovery so new split contract files are picked up automatically:
 
@@ -176,8 +176,8 @@ Native clients connect directly to the engine with a standard gRPC channel over 
 
 ```csharp
 using Grpc.Net.Client;
-using LogRipper.Services;
-using LogRipper.Domain;
+using QsoRipper.Services;
+using QsoRipper.Domain;
 
 var channel = GrpcChannel.ForAddress("http://localhost:50051");
 var client = new LookupService.LookupServiceClient(channel);
@@ -194,8 +194,8 @@ Console.WriteLine($"State: {response.Result.State}, Callsign: {response.Result.Q
 **Rust example (tonic client):**
 
 ```rust
-use my_client::logripper::services::lookup_service_client::LookupServiceClient;
-use my_client::logripper::services::LookupRequest;
+use my_client::qsoripper::services::lookup_service_client::LookupServiceClient;
+use my_client::qsoripper::services::LookupRequest;
 
 let mut client = LookupServiceClient::connect("http://127.0.0.1:50051").await?;
 let response = client.lookup(LookupRequest {
@@ -210,7 +210,7 @@ println!("State: {:?}", result.state);
 
 Browsers cannot issue native gRPC (HTTP/2 + binary framing) requests due to browser networking constraints. Web clients must use **gRPC-Web**, which is a modified protocol that works over standard HTTP/1.1 or HTTP/2 in a way browsers can handle.
 
-The LogRipper engine exposes native gRPC only. To connect a browser or web client, you need an intermediate proxy or gateway.
+The QsoRipper engine exposes native gRPC only. To connect a browser or web client, you need an intermediate proxy or gateway.
 
 ### gRPC-Web Options
 
@@ -263,9 +263,9 @@ Do not attempt to connect a browser-side JavaScript client directly to `http://l
 
 ## Schema Evolution and Compatibility
 
-The current LogRipper proto contract follows standard proto3 additive evolution rules **from the current 1-1-1 envelope baseline forward**.
+The current QsoRipper proto contract follows standard proto3 additive evolution rules **from the current 1-1-1 envelope baseline forward**.
 
-> PR [#74](https://github.com/rtreit/logripper/pull/74) was a deliberate breaking-contract cleanup performed while the project is still early. Clients pinned to older pre-1-1-1 revisions must regenerate against the current `proto/` surface rather than assuming wire compatibility across that cutover.
+> PR [#74](https://github.com/rtreit/qsoripper/pull/74) was a deliberate breaking-contract cleanup performed while the project is still early. Clients pinned to older pre-1-1-1 revisions must regenerate against the current `proto/` surface rather than assuming wire compatibility across that cutover.
 
 - **New optional fields** may be added to any message in future releases without breaking existing clients.
 - **New RPCs** may be added to existing services. Old clients will not call them.

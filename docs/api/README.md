@@ -1,8 +1,8 @@
-# LogRipper Engine API
+# QsoRipper Engine API
 
-This is the canonical entry point for client authors integrating with the LogRipper engine over gRPC.
+This is the canonical entry point for client authors integrating with the QsoRipper engine over gRPC.
 
-LogRipper is an **engine-first** project. The engine exposes everything through a gRPC API backed by Protocol Buffer contracts. Any UX implementation — a TUI, desktop GUI, web frontend, CLI tool, or mobile app — is an independent gRPC consumer. Nothing about the engine privileges any particular client technology.
+QsoRipper is an **engine-first** project. The engine exposes everything through a gRPC API backed by Protocol Buffer contracts. Any UX implementation — a TUI, desktop GUI, web frontend, CLI tool, or mobile app — is an independent gRPC consumer. Nothing about the engine privileges any particular client technology.
 
 ## Services
 
@@ -16,7 +16,7 @@ LogRipper is an **engine-first** project. The engine exposes everything through 
 
 ## Contract Source of Truth
 
-All service and domain types are defined in `proto/`. LogRipper treats protobuf 1-1-1 and per-RPC envelopes as an architectural rule:
+All service and domain types are defined in `proto/`. QsoRipper treats protobuf 1-1-1 and per-RPC envelopes as an architectural rule:
 
 ```
 proto/
@@ -67,7 +67,7 @@ In general:
 - `SetupService` can report persisted setup status and save the initial storage/station bootstrap config.
 - `LogbookService` local QSO CRUD, ADIF import/export, and local sync-status reporting are implemented against the active storage backend. QRZ sync remains planned, and `GetSyncStatus` still reports QRZ fields as zero/absent until remote sync lands.
 
-The current proto contract should now be treated as the stable **post-1-1-1 baseline**. PR [#74](https://github.com/rtreit/logripper/pull/74) was a deliberate breaking-contract cutover while the project is still early. From this baseline forward, additive changes are preferred and client code generated from the current proto files should continue to compile as new fields and RPCs are added. See [client-integration.md](client-integration.md#schema-evolution-and-compatibility) for field tolerance guidance.
+The current proto contract should now be treated as the stable **post-1-1-1 baseline**. PR [#74](https://github.com/rtreit/qsoripper/pull/74) was a deliberate breaking-contract cutover while the project is still early. From this baseline forward, additive changes are preferred and client code generated from the current proto files should continue to compile as new fields and RPCs are added. See [client-integration.md](client-integration.md#schema-evolution-and-compatibility) for field tolerance guidance.
 
 ## Quick Links
 

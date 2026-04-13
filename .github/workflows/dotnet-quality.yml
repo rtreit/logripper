@@ -29,13 +29,13 @@ jobs:
           global-json-file: global.json
 
       - name: Verify formatting
-        run: dotnet format src/dotnet/LogRipper.slnx --verify-no-changes
+        run: dotnet format src/dotnet/QsoRipper.slnx --verify-no-changes
 
       - name: Build
-        run: dotnet build src/dotnet/LogRipper.slnx
+        run: dotnet build src/dotnet/QsoRipper.slnx
 
       - name: Run tests with coverage
-        run: dotnet test src/dotnet/LogRipper.slnx --no-build --collect:"XPlat Code Coverage" --settings src/dotnet/CodeCoverage.runsettings --results-directory coverage
+        run: dotnet test src/dotnet/QsoRipper.slnx --no-build --collect:"XPlat Code Coverage" --settings src/dotnet/CodeCoverage.runsettings --results-directory coverage
 
       - name: Install ReportGenerator
         run: dotnet tool install -g dotnet-reportgenerator-globaltool
@@ -74,4 +74,4 @@ jobs:
           path: coverage/report/
 
       - name: Check for vulnerable packages
-        run: dotnet list src/dotnet/LogRipper.slnx package --vulnerable --include-transitive
+        run: dotnet list src/dotnet/QsoRipper.slnx package --vulnerable --include-transitive

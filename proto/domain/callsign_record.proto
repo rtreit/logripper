@@ -1,14 +1,14 @@
 syntax = "proto3";
 
-package logripper.domain;
+package qsoripper.domain;
 
-option csharp_namespace = "LogRipper.Domain";
+option csharp_namespace = "QsoRipper.Domain";
 
 import "domain/geo_source.proto";
 import "domain/qsl_preference.proto";
 import "google/protobuf/timestamp.proto";
 
-// Normalized callsign record. This is LogRipper's own domain model,
+// Normalized callsign record. This is QsoRipper's own domain model,
 // not a 1:1 mirror of QRZ XML. Providers adapt into this shape.
 message CallsignRecord {
   // --- Identity ---

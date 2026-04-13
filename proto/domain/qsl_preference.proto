@@ -1,8 +1,8 @@
 syntax = "proto3";
 
-package logripper.domain;
+package qsoripper.domain;
 
-option csharp_namespace = "LogRipper.Domain";
+option csharp_namespace = "QsoRipper.Domain";
 
 // Tri-state for QSL preference fields (QRZ returns 0, 1, or blank).
 enum QslPreference {

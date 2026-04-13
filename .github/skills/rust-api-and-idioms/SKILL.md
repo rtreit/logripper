@@ -1,7 +1,7 @@
 ---
 name: rust-api-and-idioms
 description: >-
-  Apply current Rust API design and idioms in LogRipper. Use when shaping Rust public APIs,
+  Apply current Rust API design and idioms in QsoRipper. Use when shaping Rust public APIs,
   choosing signatures, modeling errors, or checking whether older Rust-era advice still
   applies to current stable Rust.
 ---

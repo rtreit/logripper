@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>LogRipper Stress Test Report</title>
+<title>QsoRipper Stress Test Report</title>
 <style>
     body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; margin: 2rem; background: #f8f9fa; color: #212529; }
     h1 { margin-bottom: 0.25rem; }
@@ -21,7 +21,7 @@
 </style>
 </head>
 <body>
-<h1>LogRipper Stress Test Report</h1>
+<h1>QsoRipper Stress Test Report</h1>
 <div class="timestamp">2026-04-11 15:57:54</div>
 
 <div class="section">
@@ -61,7 +61,7 @@
         <tbody>
             <tr>
                 <td>1</td>
-                <td><code>logripper-storage-memory\src\lib.rs:240:9:</code></td>
+                <td><code>qsoripper-storage-memory\src\lib.rs:240:9:</code></td>
                 <td>attempt to add with overflow</td>
                 <td>tokio-rt-worker</td>
             </tr>
@@ -72,7 +72,7 @@
 <div class="section">
     <h2>Server Panic Backtraces</h2>
     <pre>
-thread &#39;tokio-rt-worker&#39; panicked at logripper-storage-memory\src\lib.rs:240:9:
+thread &#39;tokio-rt-worker&#39; panicked at qsoripper-storage-memory\src\lib.rs:240:9:
 attempt to add with overflow
 stack backtrace:
    0: std::panicking::begin_panic_handler
@@ -81,54 +81,54 @@ stack backtrace:
              at /rustc/6b00bc3880198600130e1cf62b8f8a93494488cc/library\core\src\panicking.rs:75
    2: core::panicking::panic_const::panic_const_add_overflow
              at /rustc/6b00bc3880198600130e1cf62b8f8a93494488cc/library\core\src\panicking.rs:175
-   3: logripper_storage_memory::timestamp_to_millis::closure$0
-             at C:\src\github\rtreit\logripper\src\rust\logripper-storage-memory\src\lib.rs:240
-   4: enum2$&lt;core::option::Option&lt;ref$&lt;prost_types::protobuf::Timestamp&gt; &gt; &gt;::map_or&lt;ref$&lt;prost_types::protobuf::Timestamp&gt;,i64,logripper_storage_memory::timestamp_to_millis::closure_env$0&gt;
+   3: qsoripper_storage_memory::timestamp_to_millis::closure$0
+             at C:\src\github\rtreit\qsoripper\src\rust\qsoripper-storage-memory\src\lib.rs:240
+   4: enum2$&lt;core::option::Option&lt;ref$&lt;prost_types::protobuf::Timestamp&gt; &gt; &gt;::map_or&lt;ref$&lt;prost_types::protobuf::Timestamp&gt;,i64,qsoripper_storage_memory::timestamp_to_millis::closure_env$0&gt;
              at /rustc/6b00bc3880198600130e1cf62b8f8a93494488cc\library\core\src\option.rs:1203
-   5: logripper_storage_memory::timestamp_to_millis
-             at C:\src\github\rtreit\logripper\src\rust\logripper-storage-memory\src\lib.rs:239
-   6: logripper_storage_memory::matches_query
-             at C:\src\github\rtreit\logripper\src\rust\logripper-storage-memory\src\lib.rs:190
-   7: logripper_storage_memory::impl$5::list_qsos::async_block$0::closure$0
-             at C:\src\github\rtreit\logripper\src\rust\logripper-storage-memory\src\lib.rs:86
-   8: core::ops::function::impls::impl$3::call_mut&lt;tuple$&lt;ref$&lt;ref$&lt;logripper_core::proto::logripper::domain::QsoRecord&gt; &gt; &gt;,logripper_storage_memory::impl$5::list_qsos::async_block$0::closure_env$0&gt;
+   5: qsoripper_storage_memory::timestamp_to_millis
+             at C:\src\github\rtreit\qsoripper\src\rust\qsoripper-storage-memory\src\lib.rs:239
+   6: qsoripper_storage_memory::matches_query
+             at C:\src\github\rtreit\qsoripper\src\rust\qsoripper-storage-memory\src\lib.rs:190
+   7: qsoripper_storage_memory::impl$5::list_qsos::async_block$0::closure$0
+             at C:\src\github\rtreit\qsoripper\src\rust\qsoripper-storage-memory\src\lib.rs:86
+   8: core::ops::function::impls::impl$3::call_mut&lt;tuple$&lt;ref$&lt;ref$&lt;qsoripper_core::proto::qsoripper::domain::QsoRecord&gt; &gt; &gt;,qsoripper_storage_memory::impl$5::list_qsos::async_block$0::closure_env$0&gt;
              at /rustc/6b00bc3880198600130e1cf62b8f8a93494488cc\library\core\src\ops\function.rs:294
-   9: core::iter::traits::iterator::Iterator::find::check::closure$0&lt;ref$&lt;logripper_core::proto::logripper::domain::QsoRecord&gt;,ref_mut$&lt;logripper_storage_memory::impl$5::list_qsos::async_block$0::closure_env$0&gt; &gt;
+   9: core::iter::traits::iterator::Iterator::find::check::closure$0&lt;ref$&lt;qsoripper_core::proto::qsoripper::domain::QsoRecord&gt;,ref_mut$&lt;qsoripper_storage_memory::impl$5::list_qsos::async_block$0::closure_env$0&gt; &gt;
              at /rustc/6b00bc3880198600130e1cf62b8f8a93494488cc\library\core\src\iter\traits\iterator.rs:2858
-  10: core::iter::traits::iterator::Iterator::try_fold&lt;alloc::collections::btree::map::Values&lt;alloc::string::String,logripper_core::proto::logripper::domain::QsoRecord&gt;,tuple$&lt;&gt;,core::iter::traits::iterator::Iterator::find::check::closure_env$0&lt;ref$&lt;logripper_co
+  10: core::iter::traits::iterator::Iterator::try_fold&lt;alloc::collections::btree::map::Values&lt;alloc::string::String,qsoripper_core::proto::qsoripper::domain::QsoRecord&gt;,tuple$&lt;&gt;,core::iter::traits::iterator::Iterator::find::check::closure_env$0&lt;ref$&lt;qsoripper_co
              at /rustc/6b00bc3880198600130e1cf62b8f8a93494488cc\library\core\src\iter\traits\iterator.rs:2400
-  11: core::iter::traits::iterator::Iterator::find&lt;alloc::collections::btree::map::Values&lt;alloc::string::String,logripper_core::proto::logripper::domain::QsoRecord&gt;,ref_mut$&lt;logripper_storage_memory::impl$5::list_qsos::async_block$0::closure_env$0&gt; &gt;
+  11: core::iter::traits::iterator::Iterator::find&lt;alloc::collections::btree::map::Values&lt;alloc::string::String,qsoripper_core::proto::qsoripper::domain::QsoRecord&gt;,ref_mut$&lt;qsoripper_storage_memory::impl$5::list_qsos::async_block$0::closure_env$0&gt; &gt;
              at /rustc/6b00bc3880198600130e1cf62b8f8a93494488cc\library\core\src\iter\traits\iterator.rs:2862
-  12: core::iter::adapters::filter::impl$3::next&lt;alloc::collections::btree::map::Values&lt;alloc::string::String,logripper_core::proto::logripper::domain::QsoRecord&gt;,logripper_storage_memory::impl$5::list_qsos::async_block$0::closure_env$0&gt;
+  12: core::iter::adapters::filter::impl$3::next&lt;alloc::collections::btree::map::Values&lt;alloc::string::String,qsoripper_core::proto::qsoripper::domain::QsoRecord&gt;,qsoripper_storage_memory::impl$5::list_qsos::async_block$0::closure_env$0&gt;
              at /rustc/6b00bc3880198600130e1cf62b8f8a93494488cc\library\core\src\iter\adapters\filter.rs:98
-  13: core::iter::adapters::cloned::impl$1::next&lt;core::iter::adapters::filter::Filter&lt;alloc::collections::btree::map::Values&lt;alloc::string::String,logripper_core::proto::logripper::domain::QsoRecord&gt;,logripper_storage_memory::impl$5::list_qsos::async_block$0::cl
+  13: core::iter::adapters::cloned::impl$1::next&lt;core::iter::adapters::filter::Filter&lt;alloc::collections::btree::map::Values&lt;alloc::string::String,qsoripper_core::proto::qsoripper::domain::QsoRecord&gt;,qsoripper_storage_memory::impl$5::list_qsos::async_block$0::cl
              at /rustc/6b00bc3880198600130e1cf62b8f8a93494488cc\library\core\src\iter\adapters\cloned.rs:41
-  14: alloc::vec::spec_from_iter_nested::impl$0::from_iter&lt;logripper_core::proto::logripper::domain::QsoRecord,core::iter::adapters::cloned::Cloned&lt;core::iter::adapters::filter::Filter&lt;alloc::collections::btree::map::Values&lt;alloc::string::String,logripper_core::
+  14: alloc::vec::spec_from_iter_nested::impl$0::from_iter&lt;qsoripper_core::proto::qsoripper::domain::QsoRecord,core::iter::adapters::cloned::Cloned&lt;core::iter::adapters::filter::Filter&lt;alloc::collections::btree::map::Values&lt;alloc::string::String,qsoripper_core::
              at /rustc/6b00bc3880198600130e1cf62b8f8a93494488cc\library\alloc\src\vec\spec_from_iter_nested.rs:25
-  15: alloc::vec::spec_from_iter::impl$0::from_iter&lt;logripper_core::proto::logripper::domain::QsoRecord,core::iter::adapters::cloned::Cloned&lt;core::iter::adapters::filter::Filter&lt;alloc::collections::btree::map::Values&lt;alloc::string::String,logripper_core::proto::
+  15: alloc::vec::spec_from_iter::impl$0::from_iter&lt;qsoripper_core::proto::qsoripper::domain::QsoRecord,core::iter::adapters::cloned::Cloned&lt;core::iter::adapters::filter::Filter&lt;alloc::collections::btree::map::Values&lt;alloc::string::String,qsoripper_core::proto::
              at /rustc/6b00bc3880198600130e1cf62b8f8a93494488cc\library\alloc\src\vec\spec_from_iter.rs:34
-  16: alloc::vec::impl$15::from_iter&lt;logripper_core::proto::logripper::domain::QsoRecord,core::iter::adapters::cloned::Cloned&lt;core::iter::adapters::filter::Filter&lt;alloc::collections::btree::map::Values&lt;alloc::string::String,logripper_core::proto::logripper::doma
+  16: alloc::vec::impl$15::from_iter&lt;qsoripper_core::proto::qsoripper::domain::QsoRecord,core::iter::adapters::cloned::Cloned&lt;core::iter::adapters::filter::Filter&lt;alloc::collections::btree::map::Values&lt;alloc::string::String,qsoripper_core::proto::qsoripper::doma
              at /rustc/6b00bc3880198600130e1cf62b8f8a93494488cc\library\alloc\src\vec\mod.rs:3438
-  17: core::iter::traits::iterator::Iterator::collect&lt;core::iter::adapters::cloned::Cloned&lt;core::iter::adapters::filter::Filter&lt;alloc::collections::btree::map::Values&lt;alloc::string::String,logripper_core::proto::logripper::domain::QsoRecord&gt;,logripper_storage_me
+  17: core::iter::traits::iterator::Iterator::collect&lt;core::iter::adapters::cloned::Cloned&lt;core::iter::adapters::filter::Filter&lt;alloc::collections::btree::map::Values&lt;alloc::string::String,qsoripper_core::proto::qsoripper::domain::QsoRecord&gt;,qsoripper_storage_me
              at /rustc/6b00bc3880198600130e1cf62b8f8a93494488cc\library\core\src\iter\traits\iterator.rs:2001
-  18: logripper_storage_memory::impl$5::list_qsos::async_block$0
-             at C:\src\github\rtreit\logripper\src\rust\logripper-storage-memory\src\lib.rs:83
-  19: core::future::future::impl$1::poll&lt;alloc::boxed::Box&lt;dyn$&lt;core::future::future::Future&lt;assoc$&lt;Output,enum2$&lt;core::result::Result&lt;alloc::vec::Vec&lt;logripper_core::proto::logripper::domain::QsoRecord,alloc::alloc::Global&gt;,enum2$&lt;logripper_core::storage::error
+  18: qsoripper_storage_memory::impl$5::list_qsos::async_block$0
+             at C:\src\github\rtreit\qsoripper\src\rust\qsoripper-storage-memory\src\lib.rs:83
+  19: core::future::future::impl$1::poll&lt;alloc::boxed::Box&lt;dyn$&lt;core::future::future::Future&lt;assoc$&lt;Output,enum2$&lt;core::result::Result&lt;alloc::vec::Vec&lt;qsoripper_core::proto::qsoripper::domain::QsoRecord,alloc::alloc::Global&gt;,enum2$&lt;qsoripper_core::storage::error
              at /rustc/6b00bc3880198600130e1cf62b8f8a93494488cc\library\core\src\future\future.rs:124
-  20: logripper_core::application::logbook::impl$0::list_qsos::async_fn$0
-             at C:\src\github\rtreit\logripper\src\rust\logripper-core\src\application\logbook.rs:171
-  21: logripper_server::impl$5::export_adif::async_block$0
-             at C:\src\github\rtreit\logripper\src\rust\logripper-server\src\main.rs:430
-  22: core::future::future::impl$1::poll&lt;alloc::boxed::Box&lt;dyn$&lt;core::future::future::Future&lt;assoc$&lt;Output,enum2$&lt;core::result::Result&lt;tonic::response::Response&lt;tokio_stream::wrappers::mpsc_bounded::ReceiverStream&lt;enum2$&lt;core::result::Result&lt;logripper_core::prot
+  20: qsoripper_core::application::logbook::impl$0::list_qsos::async_fn$0
+             at C:\src\github\rtreit\qsoripper\src\rust\qsoripper-core\src\application\logbook.rs:171
+  21: qsoripper_server::impl$5::export_adif::async_block$0
+             at C:\src\github\rtreit\qsoripper\src\rust\qsoripper-server\src\main.rs:430
+  22: core::future::future::impl$1::poll&lt;alloc::boxed::Box&lt;dyn$&lt;core::future::future::Future&lt;assoc$&lt;Output,enum2$&lt;core::result::Result&lt;tonic::response::Response&lt;tokio_stream::wrappers::mpsc_bounded::ReceiverStream&lt;enum2$&lt;core::result::Result&lt;qsoripper_core::prot
              at /rustc/6b00bc3880198600130e1cf62b8f8a93494488cc\library\core\src\future\future.rs:124
-  23: logripper_core::proto::logripper::services::logbook_service_server::impl$1::call::impl$8::call::async_block$0&lt;logripper_server::DeveloperLogbookService&gt;
-             at C:\src\github\rtreit\logripper\src\rust\target\debug\build\logripper-core-38fccdae57ed09f8\out\logripper.services.rs:1959
-  24: core::future::future::impl$1::poll&lt;alloc::boxed::Box&lt;dyn$&lt;core::future::future::Future&lt;assoc$&lt;Output,enum2$&lt;core::result::Result&lt;tonic::response::Response&lt;tokio_stream::wrappers::mpsc_bounded::ReceiverStream&lt;enum2$&lt;core::result::Result&lt;logripper_core::prot
+  23: qsoripper_core::proto::qsoripper::services::logbook_service_server::impl$1::call::impl$8::call::async_block$0&lt;qsoripper_server::DeveloperLogbookService&gt;
+             at C:\src\github\rtreit\qsoripper\src\rust\target\debug\build\qsoripper-core-38fccdae57ed09f8\out\qsoripper.services.rs:1959
+  24: core::future::future::impl$1::poll&lt;alloc::boxed::Box&lt;dyn$&lt;core::future::future::Future&lt;assoc$&lt;Output,enum2$&lt;core::result::Result&lt;tonic::response::Response&lt;tokio_stream::wrappers::mpsc_bounded::ReceiverStream&lt;enum2$&lt;core::result::Result&lt;qsoripper_core::prot
              at /rustc/6b00bc3880198600130e1cf62b8f8a93494488cc\library\core\src\future\future.rs:124
-  25: tonic::server::grpc::impl$0::server_streaming::async_fn$0&lt;tonic::codec::prost::ProstCodec&lt;logripper_core::proto::logripper::services::ExportAdifResponse,logripper_core::proto::logripper::services::ExportAdifRequest&gt;,logripper_core::proto::logripper::servic
+  25: tonic::server::grpc::impl$0::server_streaming::async_fn$0&lt;tonic::codec::prost::ProstCodec&lt;qsoripper_core::proto::qsoripper::services::ExportAdifResponse,qsoripper_core::proto::qsoripper::services::ExportAdifRequest&gt;,qsoripper_core::proto::qsoripper::servic
              at C:\Users\mtreit\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tonic-0.12.3\src\server\grpc.rs:294
-  26: logripper_core::proto::logripper::services::logbook_service_server::impl$1::call::async_block$8&lt;logripper_server::DeveloperLogbookService,http_body_util::combinators::box_body::UnsyncBoxBody&lt;bytes::bytes::Bytes,tonic::status::Status&gt; &gt;
-             at C:\src\github\rtreit\logripper\src\rust\target\debug\build\logripper-core-38fccdae57ed09f8\out\logripper.services.rs:1981
+  26: qsoripper_core::proto::qsoripper::services::logbook_service_server::impl$1::call::async_block$8&lt;qsoripper_server::DeveloperLogbookService,http_body_util::combinators::box_body::UnsyncBoxBody&lt;bytes::bytes::Bytes,tonic::status::Status&gt; &gt;
+             at C:\src\github\rtreit\qsoripper\src\rust\target\debug\build\qsoripper-core-38fccdae57ed09f8\out\qsoripper.services.rs:1981
   27: core::future::future::impl$1::poll&lt;alloc::boxed::Box&lt;dyn$&lt;core::future::future::Future&lt;assoc$&lt;Output,enum2$&lt;core::result::Result&lt;http::response::Response&lt;http_body_util::combinators::box_body::UnsyncBoxBody&lt;bytes::bytes::Bytes,tonic::status::Status&gt; &gt;,enum
              at /rustc/6b00bc3880198600130e1cf62b8f8a93494488cc\library\core\src\future\future.rs:124
   28: futures_core::future::impl$2::try_poll&lt;core::pin::Pin&lt;alloc::boxed::Box&lt;dyn$&lt;core::future::future::Future&lt;assoc$&lt;Output,enum2$&lt;core::result::Result&lt;http::response::Response&lt;http_body_util::combinators::box_body::UnsyncBoxBody&lt;bytes::bytes::Bytes,tonic::sta
@@ -269,7 +269,7 @@ stack backtrace:
              at /rustc/6b00bc3880198600130e1cf62b8f8a93494488cc\library\core\src\hint.rs:482
 note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
 
-thread &#39;tokio-rt-worker&#39; panicked at logripper-storage-memory\src\lib.rs:240:9:
+thread &#39;tokio-rt-worker&#39; panicked at qsoripper-storage-memory\src\lib.rs:240:9:
 attempt to add with overflow
 stack backtrace:
    0: std::panicking::begin_panic_handler
@@ -278,54 +278,54 @@ stack backtrace:
              at /rustc/6b00bc3880198600130e1cf62b8f8a93494488cc/library\core\src\panicking.rs:75
    2: core::panicking::panic_const::panic_const_add_overflow
              at /rustc/6b00bc3880198600130e1cf62b8f8a93494488cc/library\core\src\panicking.rs:175
-   3: logripper_storage_memory::timestamp_to_millis::closure$0
-             at C:\src\github\rtreit\logripper\src\rust\logripper-storage-memory\src\lib.rs:240
-   4: enum2$&lt;core::option::Option&lt;ref$&lt;prost_types::protobuf::Timestamp&gt; &gt; &gt;::map_or&lt;ref$&lt;prost_types::protobuf::Timestamp&gt;,i64,logripper_storage_memory::timestamp_to_millis::closure_env$0&gt;
+   3: qsoripper_storage_memory::timestamp_to_millis::closure$0
+             at C:\src\github\rtreit\qsoripper\src\rust\qsoripper-storage-memory\src\lib.rs:240
+   4: enum2$&lt;core::option::Option&lt;ref$&lt;prost_types::protobuf::Timestamp&gt; &gt; &gt;::map_or&lt;ref$&lt;prost_types::protobuf::Timestamp&gt;,i64,qsoripper_storage_memory::timestamp_to_millis::closure_env$0&gt;
              at /rustc/6b00bc3880198600130e1cf62b8f8a93494488cc\library\core\src\option.rs:1203
-   5: logripper_storage_memory::timestamp_to_millis
-             at C:\src\github\rtreit\logripper\src\rust\logripper-storage-memory\src\lib.rs:239
-   6: logripper_storage_memory::matches_query
-             at C:\src\github\rtreit\logripper\src\rust\logripper-storage-memory\src\lib.rs:190
-   7: logripper_storage_memory::impl$5::list_qsos::async_block$0::closure$0
-             at C:\src\github\rtreit\logripper\src\rust\logripper-storage-memory\src\lib.rs:86
-   8: core::ops::function::impls::impl$3::call_mut&lt;tuple$&lt;ref$&lt;ref$&lt;logripper_core::proto::logripper::domain::QsoRecord&gt; &gt; &gt;,logripper_storage_memory::impl$5::list_qsos::async_block$0::closure_env$0&gt;
+   5: qsoripper_storage_memory::timestamp_to_millis
+             at C:\src\github\rtreit\qsoripper\src\rust\qsoripper-storage-memory\src\lib.rs:239
+   6: qsoripper_storage_memory::matches_query
+             at C:\src\github\rtreit\qsoripper\src\rust\qsoripper-storage-memory\src\lib.rs:190
+   7: qsoripper_storage_memory::impl$5::list_qsos::async_block$0::closure$0
+             at C:\src\github\rtreit\qsoripper\src\rust\qsoripper-storage-memory\src\lib.rs:86
+   8: core::ops::function::impls::impl$3::call_mut&lt;tuple$&lt;ref$&lt;ref$&lt;qsoripper_core::proto::qsoripper::domain::QsoRecord&gt; &gt; &gt;,qsoripper_storage_memory::impl$5::list_qsos::async_block$0::closure_env$0&gt;
              at /rustc/6b00bc3880198600130e1cf62b8f8a93494488cc\library\core\src\ops\function.rs:294
-   9: core::iter::traits::iterator::Iterator::find::check::closure$0&lt;ref$&lt;logripper_core::proto::logripper::domain::QsoRecord&gt;,ref_mut$&lt;logripper_storage_memory::impl$5::list_qsos::async_block$0::closure_env$0&gt; &gt;
+   9: core::iter::traits::iterator::Iterator::find::check::closure$0&lt;ref$&lt;qsoripper_core::proto::qsoripper::domain::QsoRecord&gt;,ref_mut$&lt;qsoripper_storage_memory::impl$5::list_qsos::async_block$0::closure_env$0&gt; &gt;
              at /rustc/6b00bc3880198600130e1cf62b8f8a93494488cc\library\core\src\iter\traits\iterator.rs:2858
-  10: core::iter::traits::iterator::Iterator::try_fold&lt;alloc::collections::btree::map::Values&lt;alloc::string::String,logripper_core::proto::logripper::domain::QsoRecord&gt;,tuple$&lt;&gt;,core::iter::traits::iterator::Iterator::find::check::closure_env$0&lt;ref$&lt;logripper_co
+  10: core::iter::traits::iterator::Iterator::try_fold&lt;alloc::collections::btree::map::Values&lt;alloc::string::String,qsoripper_core::proto::qsoripper::domain::QsoRecord&gt;,tuple$&lt;&gt;,core::iter::traits::iterator::Iterator::find::check::closure_env$0&lt;ref$&lt;qsoripper_co
              at /rustc/6b00bc3880198600130e1cf62b8f8a93494488cc\library\core\src\iter\traits\iterator.rs:2400
-  11: core::iter::traits::iterator::Iterator::find&lt;alloc::collections::btree::map::Values&lt;alloc::string::String,logripper_core::proto::logripper::domain::QsoRecord&gt;,ref_mut$&lt;logripper_storage_memory::impl$5::list_qsos::async_block$0::closure_env$0&gt; &gt;
+  11: core::iter::traits::iterator::Iterator::find&lt;alloc::collections::btree::map::Values&lt;alloc::string::String,qsoripper_core::proto::qsoripper::domain::QsoRecord&gt;,ref_mut$&lt;qsoripper_storage_memory::impl$5::list_qsos::async_block$0::closure_env$0&gt; &gt;
              at /rustc/6b00bc3880198600130e1cf62b8f8a93494488cc\library\core\src\iter\traits\iterator.rs:2862
-  12: core::iter::adapters::filter::impl$3::next&lt;alloc::collections::btree::map::Values&lt;alloc::string::String,logripper_core::proto::logripper::domain::QsoRecord&gt;,logripper_storage_memory::impl$5::list_qsos::async_block$0::closure_env$0&gt;
+  12: core::iter::adapters::filter::impl$3::next&lt;alloc::collections::btree::map::Values&lt;alloc::string::String,qsoripper_core::proto::qsoripper::domain::QsoRecord&gt;,qsoripper_storage_memory::impl$5::list_qsos::async_block$0::closure_env$0&gt;
              at /rustc/6b00bc3880198600130e1cf62b8f8a93494488cc\library\core\src\iter\adapters\filter.rs:98
-  13: core::iter::adapters::cloned::impl$1::next&lt;core::iter::adapters::filter::Filter&lt;alloc::collections::btree::map::Values&lt;alloc::string::String,logripper_core::proto::logripper::domain::QsoRecord&gt;,logripper_storage_memory::impl$5::list_qsos::async_block$0::cl
+  13: core::iter::adapters::cloned::impl$1::next&lt;core::iter::adapters::filter::Filter&lt;alloc::collections::btree::map::Values&lt;alloc::string::String,qsoripper_core::proto::qsoripper::domain::QsoRecord&gt;,qsoripper_storage_memory::impl$5::list_qsos::async_block$0::cl
              at /rustc/6b00bc3880198600130e1cf62b8f8a93494488cc\library\core\src\iter\adapters\cloned.rs:41
-  14: alloc::vec::spec_from_iter_nested::impl$0::from_iter&lt;logripper_core::proto::logripper::domain::QsoRecord,core::iter::adapters::cloned::Cloned&lt;core::iter::adapters::filter::Filter&lt;alloc::collections::btree::map::Values&lt;alloc::string::String,logripper_core::
+  14: alloc::vec::spec_from_iter_nested::impl$0::from_iter&lt;qsoripper_core::proto::qsoripper::domain::QsoRecord,core::iter::adapters::cloned::Cloned&lt;core::iter::adapters::filter::Filter&lt;alloc::collections::btree::map::Values&lt;alloc::string::String,qsoripper_core::
              at /rustc/6b00bc3880198600130e1cf62b8f8a93494488cc\library\alloc\src\vec\spec_from_iter_nested.rs:25
-  15: alloc::vec::spec_from_iter::impl$0::from_iter&lt;logripper_core::proto::logripper::domain::QsoRecord,core::iter::adapters::cloned::Cloned&lt;core::iter::adapters::filter::Filter&lt;alloc::collections::btree::map::Values&lt;alloc::string::String,logripper_core::proto::
+  15: alloc::vec::spec_from_iter::impl$0::from_iter&lt;qsoripper_core::proto::qsoripper::domain::QsoRecord,core::iter::adapters::cloned::Cloned&lt;core::iter::adapters::filter::Filter&lt;alloc::collections::btree::map::Values&lt;alloc::string::String,qsoripper_core::proto::
              at /rustc/6b00bc3880198600130e1cf62b8f8a93494488cc\library\alloc\src\vec\spec_from_iter.rs:34
-  16: alloc::vec::impl$15::from_iter&lt;logripper_core::proto::logripper::domain::QsoRecord,core::iter::adapters::cloned::Cloned&lt;core::iter::adapters::filter::Filter&lt;alloc::collections::btree::map::Values&lt;alloc::string::String,logripper_core::proto::logripper::doma
+  16: alloc::vec::impl$15::from_iter&lt;qsoripper_core::proto::qsoripper::domain::QsoRecord,core::iter::adapters::cloned::Cloned&lt;core::iter::adapters::filter::Filter&lt;alloc::collections::btree::map::Values&lt;alloc::string::String,qsoripper_core::proto::qsoripper::doma
              at /rustc/6b00bc3880198600130e1cf62b8f8a93494488cc\library\alloc\src\vec\mod.rs:3438
-  17: core::iter::traits::iterator::Iterator::collect&lt;core::iter::adapters::cloned::Cloned&lt;core::iter::adapters::filter::Filter&lt;alloc::collections::btree::map::Values&lt;alloc::string::String,logripper_core::proto::logripper::domain::QsoRecord&gt;,logripper_storage_me
+  17: core::iter::traits::iterator::Iterator::collect&lt;core::iter::adapters::cloned::Cloned&lt;core::iter::adapters::filter::Filter&lt;alloc::collections::btree::map::Values&lt;alloc::string::String,qsoripper_core::proto::qsoripper::domain::QsoRecord&gt;,qsoripper_storage_me
              at /rustc/6b00bc3880198600130e1cf62b8f8a93494488cc\library\core\src\iter\traits\iterator.rs:2001
-  18: logripper_storage_memory::impl$5::list_qsos::async_block$0
-             at C:\src\github\rtreit\logripper\src\rust\logripper-storage-memory\src\lib.rs:83
-  19: core::future::future::impl$1::poll&lt;alloc::boxed::Box&lt;dyn$&lt;core::future::future::Future&lt;assoc$&lt;Output,enum2$&lt;core::result::Result&lt;alloc::vec::Vec&lt;logripper_core::proto::logripper::domain::QsoRecord,alloc::alloc::Global&gt;,enum2$&lt;logripper_core::storage::error
+  18: qsoripper_storage_memory::impl$5::list_qsos::async_block$0
+             at C:\src\github\rtreit\qsoripper\src\rust\qsoripper-storage-memory\src\lib.rs:83
+  19: core::future::future::impl$1::poll&lt;alloc::boxed::Box&lt;dyn$&lt;core::future::future::Future&lt;assoc$&lt;Output,enum2$&lt;core::result::Result&lt;alloc::vec::Vec&lt;qsoripper_core::proto::qsoripper::domain::QsoRecord,alloc::alloc::Global&gt;,enum2$&lt;qsoripper_core::storage::error
              at /rustc/6b00bc3880198600130e1cf62b8f8a93494488cc\library\core\src\future\future.rs:124
-  20: logripper_core::application::logbook::impl$0::list_qsos::async_fn$0
-             at C:\src\github\rtreit\logripper\src\rust\logripper-core\src\application\logbook.rs:171
-  21: logripper_server::impl$5::export_adif::async_block$0
-             at C:\src\github\rtreit\logripper\src\rust\logripper-server\src\main.rs:430
-  22: core::future::future::impl$1::poll&lt;alloc::boxed::Box&lt;dyn$&lt;core::future::future::Future&lt;assoc$&lt;Output,enum2$&lt;core::result::Result&lt;tonic::response::Response&lt;tokio_stream::wrappers::mpsc_bounded::ReceiverStream&lt;enum2$&lt;core::result::Result&lt;logripper_core::prot
+  20: qsoripper_core::application::logbook::impl$0::list_qsos::async_fn$0
+             at C:\src\github\rtreit\qsoripper\src\rust\qsoripper-core\src\application\logbook.rs:171
+  21: qsoripper_server::impl$5::export_adif::async_block$0
+             at C:\src\github\rtreit\qsoripper\src\rust\qsoripper-server\src\main.rs:430
+  22: core::future::future::impl$1::poll&lt;alloc::boxed::Box&lt;dyn$&lt;core::future::future::Future&lt;assoc$&lt;Output,enum2$&lt;core::result::Result&lt;tonic::response::Response&lt;tokio_stream::wrappers::mpsc_bounded::ReceiverStream&lt;enum2$&lt;core::result::Result&lt;qsoripper_core::prot
              at /rustc/6b00bc3880198600130e1cf62b8f8a93494488cc\library\core\src\future\future.rs:124
-  23: logripper_core::proto::logripper::services::logbook_service_server::impl$1::call::impl$8::call::async_block$0&lt;logripper_server::DeveloperLogbookService&gt;
-             at C:\src\github\rtreit\logripper\src\rust\target\debug\build\logripper-core-38fccdae57ed09f8\out\logripper.services.rs:1959
-  24: core::future::future::impl$1::poll&lt;alloc::boxed::Box&lt;dyn$&lt;core::future::future::Future&lt;assoc$&lt;Output,enum2$&lt;core::result::Result&lt;tonic::response::Response&lt;tokio_stream::wrappers::mpsc_bounded::ReceiverStream&lt;enum2$&lt;core::result::Result&lt;logripper_core::prot
+  23: qsoripper_core::proto::qsoripper::services::logbook_service_server::impl$1::call::impl$8::call::async_block$0&lt;qsoripper_server::DeveloperLogbookService&gt;
+             at C:\src\github\rtreit\qsoripper\src\rust\target\debug\build\qsoripper-core-38fccdae57ed09f8\out\qsoripper.services.rs:1959
+  24: core::future::future::impl$1::poll&lt;alloc::boxed::Box&lt;dyn$&lt;core::future::future::Future&lt;assoc$&lt;Output,enum2$&lt;core::result::Result&lt;tonic::response::Response&lt;tokio_stream::wrappers::mpsc_bounded::ReceiverStream&lt;enum2$&lt;core::result::Result&lt;qsoripper_core::prot
              at /rustc/6b00bc3880198600130e1cf62b8f8a93494488cc\library\core\src\future\future.rs:124
-  25: tonic::server::grpc::impl$0::server_streaming::async_fn$0&lt;tonic::codec::prost::ProstCodec&lt;logripper_core::proto::logripper::services::ExportAdifResponse,logripper_core::proto::logripper::services::ExportAdifRequest&gt;,logripper_core::proto::logripper::servic
+  25: tonic::server::grpc::impl$0::server_streaming::async_fn$0&lt;tonic::codec::prost::ProstCodec&lt;qsoripper_core::proto::qsoripper::services::ExportAdifResponse,qsoripper_core::proto::qsoripper::services::ExportAdifRequest&gt;,qsoripper_core::proto::qsoripper::servic
              at C:\Users\mtreit\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tonic-0.12.3\src\server\grpc.rs:294
-  26: logripper_core::proto::logripper::services::logbook_service_server::impl$1::call::async_block$8&lt;logripper_server::DeveloperLogbookService,http_body_util::combinators::box_body::UnsyncBoxBody&lt;bytes::bytes::Bytes,tonic::status::Status&gt; &gt;
-             at C:\src\github\rtreit\logripper\src\rust\target\debug\build\logripper-core-38fccdae57ed09f8\out\logripper.services.rs:1981
+  26: qsoripper_core::proto::qsoripper::services::logbook_service_server::impl$1::call::async_block$8&lt;qsoripper_server::DeveloperLogbookService,http_body_util::combinators::box_body::UnsyncBoxBody&lt;bytes::bytes::Bytes,tonic::status::Status&gt; &gt;
+             at C:\src\github\rtreit\qsoripper\src\rust\target\debug\build\qsoripper-core-38fccdae57ed09f8\out\qsoripper.services.rs:1981
   27: core::future::future::impl$1::poll&lt;alloc::boxed::Box&lt;dyn$&lt;core::future::future::Future&lt;assoc$&lt;Output,enum2$&lt;core::result::Result&lt;http::response::Response&lt;http_body_util::combinators::box_body::UnsyncBoxBody&lt;bytes::bytes::Bytes,tonic::status::Status&gt; &gt;,enum
              at /rustc/6b00bc3880198600130e1cf62b8f8a93494488cc\library\core\src\future\future.rs:124
   28: futures_core::future::impl$2::try_poll&lt;core::pin::Pin&lt;alloc::boxed::Box&lt;dyn$&lt;core::future::future::Future&lt;assoc$&lt;Output,enum2$&lt;core::result::Result&lt;http::response::Response&lt;http_body_util::combinators::box_body::UnsyncBoxBody&lt;bytes::bytes::Bytes,tonic::sta
@@ -389,7 +389,7 @@ stack backtrace:
 
 <div class="section">
     <h2>C# Client Output</h2>
-    <pre>LogRipper gRPC Stress Client
+    <pre>QsoRipper gRPC Stress Client
   Target:      http://localhost:50051
   Parallelism: 100
   Duration:    15s

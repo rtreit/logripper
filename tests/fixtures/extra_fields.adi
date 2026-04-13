@@ -1,7 +1,7 @@
 Test file with app-defined and extra fields
 
 <adif_ver:5>3.1.7
-<programid:9>LogRipper
+<programid:9>QsoRipper
 <EOH>
 
 <qso_date:8>20260201
@@ -22,5 +22,5 @@ Test file with app-defined and extra fields
 <ant_el:2>15
 <sat_name:3>ISS
 <sat_mode:1>V
-<app_logripper_sync_status:6>synced
+<app_qsoripper_sync_status:6>synced
 <eor>

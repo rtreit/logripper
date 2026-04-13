@@ -1,10 +1,10 @@
 [workspace]
 resolver = "2"
 members = [
-    "logripper-core",
-    "logripper-server",
-    "logripper-storage-memory",
-    "logripper-storage-sqlite",
+    "qsoripper-core",
+    "qsoripper-server",
+    "qsoripper-storage-memory",
+    "qsoripper-storage-sqlite",
 ]
 
 [workspace.package]
@@ -12,7 +12,7 @@ version = "0.1.0"
 edition = "2021"
 rust-version = "1.88"
 license = "MIT"
-repository = "https://github.com/rtreit/logripper"
+repository = "https://github.com/rtreit/qsoripper"
 
 [workspace.dependencies]
 prost = "0.13"

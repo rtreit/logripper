@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-LogRipper is a high-performance ham radio logging system focused on speed, clean workflows, and keyboard-first operation.
+QsoRipper is a high-performance ham radio logging system focused on speed, clean workflows, and keyboard-first operation.
 
 Primary goals:
 - Fast TUI experience for operators during active radio operation
@@ -79,7 +79,7 @@ Primary goals:
 When writing markdown that will be rendered on GitHub, such as PR descriptions, issue bodies, review comments, or other repository comments:
 
 - Never use `bash` as the code fence language for Windows commands.
-- Backslash path separators like `src\dotnet\LogRipper.slnx` can render incorrectly in GitHub-flavored markdown when labeled as `bash`.
+- Backslash path separators like `src\dotnet\QsoRipper.slnx` can render incorrectly in GitHub-flavored markdown when labeled as `bash`.
 - Use a plain fenced code block with no language tag, or use `powershell` / `cmd` instead.
 - Prefer Windows-style paths in those examples when the command is intended to run on Windows.
 

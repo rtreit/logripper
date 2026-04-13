@@ -1,7 +1,7 @@
 ---
 name: tonic-proto-contracts
 description: >-
-  Change or review protobuf and tonic contracts for LogRipper. Use when editing proto/,
+  Change or review protobuf and tonic contracts for QsoRipper. Use when editing proto/,
   gRPC services, generated Rust bindings, or .NET clients that depend on shared lookup and
   logbook contracts. Enforce protobuf 1-1-1, unique per-RPC envelopes, and clean domain vs
   service message boundaries.
@@ -32,24 +32,24 @@ description: >-
 
 - `proto/domain/*.proto`
 - `proto/services/*.proto`
-- `src/rust/logripper-core/build.rs`
-- `src/rust/logripper-server/`
-- `src/dotnet/LogRipper.Cli/`
-- `src/dotnet/LogRipper.DebugHost/`
+- `src/rust/qsoripper-core/build.rs`
+- `src/rust/qsoripper-server/`
+- `src/dotnet/QsoRipper.Cli/`
+- `src/dotnet/QsoRipper.DebugHost/`
 
 ## Validation
 
 ```powershell
 buf lint
 cargo test --manifest-path src\rust\Cargo.toml
-dotnet build src\dotnet\LogRipper.slnx
+dotnet build src\dotnet\QsoRipper.slnx
 ```
 
 Runtime smoke path:
 
 ```powershell
-cargo run --manifest-path src\rust\Cargo.toml -p logripper-server
-dotnet run --project src\dotnet\LogRipper.Cli -- status
+cargo run --manifest-path src\rust\Cargo.toml -p qsoripper-server
+dotnet run --project src\dotnet\QsoRipper.Cli -- status
 ```
 
 ## Current References

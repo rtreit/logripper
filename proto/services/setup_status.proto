@@ -1,8 +1,8 @@
 syntax = "proto3";
 
-package logripper.services;
+package qsoripper.services;
 
-option csharp_namespace = "LogRipper.Services";
+option csharp_namespace = "QsoRipper.Services";
 
 import "domain/station_profile.proto";
 import "services/storage_backend.proto";
@@ -16,7 +16,7 @@ message SetupStatus {
   // Legacy compatibility field. New clients should use log_file_path.
   optional string sqlite_path = 5;
   bool has_station_profile = 6;
-  logripper.domain.StationProfile station_profile = 7;
+  qsoripper.domain.StationProfile station_profile = 7;
   optional string qrz_xml_username = 8;
   bool has_qrz_xml_password = 9;
   // Legacy compatibility field. New clients should use suggested_log_file_path.

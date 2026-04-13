@@ -1,8 +1,8 @@
 syntax = "proto3";
 
-package logripper.domain;
+package qsoripper.domain;
 
-option csharp_namespace = "LogRipper.Domain";
+option csharp_namespace = "QsoRipper.Domain";
 
 // Standard operating modes (full ADIF 3.1.7 Mode enumeration).
 // Submodes are represented as a string field on QsoRecord, not an enum.

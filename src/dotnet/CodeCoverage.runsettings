@@ -5,7 +5,7 @@
       <DataCollector friendlyName="XPlat Code Coverage">
         <Configuration>
           <Format>cobertura</Format>
-          <Exclude>[*]LogRipper.Domain.*,[*]LogRipper.Services.*,[LogRipper.DebugHost]*,[*]LogRipper.Cli.Commands.*,[*]Program</Exclude>
+          <Exclude>[*]QsoRipper.Domain.*,[*]QsoRipper.Services.*,[QsoRipper.DebugHost]*,[*]QsoRipper.Cli.Commands.*,[*]Program</Exclude>
           <ExcludeByAttribute>GeneratedCodeAttribute,CompilerGeneratedAttribute</ExcludeByAttribute>
         </Configuration>
       </DataCollector>

@@ -1,11 +1,11 @@
 version: v2
 modules:
   - path: proto
-    name: buf.build/logripper/logripper
+    name: buf.build/qsoripper/qsoripper
 lint:
   use:
     - STANDARD
-  # LogRipper intentionally keeps repo-scoped packages under proto/domain and
+  # QsoRipper intentionally keeps repo-scoped packages under proto/domain and
   # proto/services and preserves operational zero-values for enums where zero is
   # the true default behavior. RPC envelopes follow Buf's standard request and
   # response naming/uniqueness rules.

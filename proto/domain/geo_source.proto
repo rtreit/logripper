@@ -1,8 +1,8 @@
 syntax = "proto3";
 
-package logripper.domain;
+package qsoripper.domain;
 
-option csharp_namespace = "LogRipper.Domain";
+option csharp_namespace = "QsoRipper.Domain";
 
 // Indicates the source/confidence of geographic coordinates.
 // Maps directly to QRZ geoloc values.

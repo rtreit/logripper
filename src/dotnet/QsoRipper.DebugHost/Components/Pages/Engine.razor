@@ -1,0 +1,1377 @@
+@page "/engine"
+@using QsoRipper.DebugHost.Models
+@using QsoRipper.Domain
+@using QsoRipper.Services
+@using Microsoft.AspNetCore.Components.Forms
+@inject DebugWorkbenchState WorkbenchState
+@inject ProtoJsonService ProtoJsonService
+@inject RuntimeConfigWorkbenchService RuntimeConfigWorkbenchService
+@inject SetupWorkbenchService SetupWorkbenchService
+@inject StationProfileWorkbenchService StationProfileWorkbenchService
+@inject ToolchainLocator ToolchainLocator
+
+<PageTitle>Engine Session</PageTitle>
+
+<h1 class="mb-3">Engine Session</h1>
+<p class="text-muted">
+    Configure the Rust engine endpoint the debug workbench should target. The probe checks TCP reachability then performs a live gRPC call to <code>GetSyncStatus</code> to verify that the engine is actually serving the expected QsoRipper services. When the host is reachable, this page also lets you exercise setup and station-profile gRPC contracts directly without dropping to <code>grpcurl</code>.
+</p>
+
+<EditForm Model="this" OnSubmit="SaveEndpointAsync">
+    <div class="row g-3 align-items-end">
+        <div class="col-lg-8">
+            <label class="form-label" for="engine-endpoint">Engine endpoint</label>
+            <InputText id="engine-endpoint" class="form-control" @bind-Value="endpoint" />
+        </div>
+        <div class="col-lg-4 d-flex gap-2">
+            <button type="submit" class="btn btn-primary">Save endpoint</button>
+            <button type="button" class="btn btn-outline-primary" @onclick="ProbeAsync">Probe engine</button>
+        </div>
+    </div>
+</EditForm>
+
+@if (!string.IsNullOrWhiteSpace(statusMessage))
+{
+    <div class="alert alert-info mt-3">@statusMessage</div>
+}
+
+@if (!string.IsNullOrWhiteSpace(WorkbenchState.RuntimeConfigErrorMessage))
+{
+    <div class="alert alert-warning mt-3">@WorkbenchState.RuntimeConfigErrorMessage</div>
+}
+
+@if (!string.IsNullOrWhiteSpace(WorkbenchState.SetupErrorMessage))
+{
+    <div class="alert alert-warning mt-3">@WorkbenchState.SetupErrorMessage</div>
+}
+
+@if (!string.IsNullOrWhiteSpace(WorkbenchState.StationProfileErrorMessage))
+{
+    <div class="alert alert-warning mt-3">@WorkbenchState.StationProfileErrorMessage</div>
+}
+
+@if (WorkbenchState.LastProbe is not null)
+{
+    var probe = WorkbenchState.LastProbe;
+    var alertClass = probe.Stage switch
+    {
+        EngineProbeStage.MethodSucceeded => "alert-success",
+        EngineProbeStage.MethodUnimplemented => "alert-warning",
+        _ => "alert-danger",
+    };
+    var stageBadgeClass = probe.Stage switch
+    {
+        EngineProbeStage.MethodSucceeded => "text-bg-success",
+        EngineProbeStage.MethodUnimplemented => "text-bg-warning",
+        EngineProbeStage.GrpcUnavailable or EngineProbeStage.TcpUnreachable => "text-bg-danger",
+        _ => "text-bg-secondary",
+    };
+    var stageLabel = probe.Stage switch
+    {
+        EngineProbeStage.InvalidEndpoint => "Invalid endpoint",
+        EngineProbeStage.TcpUnreachable => "TCP unreachable",
+        EngineProbeStage.GrpcUnavailable => "gRPC unavailable",
+        EngineProbeStage.MethodUnimplemented => "Method unimplemented",
+        EngineProbeStage.MethodSucceeded => "Method succeeded",
+        _ => probe.Stage.ToString(),
+    };
+
+    <div class="alert mt-3 @alertClass">
+        <div class="d-flex align-items-center gap-2 mb-1">
+            <span class="badge @stageBadgeClass">@stageLabel</span>
+            <strong>@probe.Summary</strong>
+        </div>
+        <div class="small mt-1"><em>Next action:</em> @probe.NextAction</div>
+        <div class="small text-muted mt-1">Attempted @probe.AttemptedAtUtc.LocalDateTime.ToString("g") against @probe.Endpoint</div>
+    </div>
+}
+
+<div class="row g-4 mt-1">
+    <div class="col-xl-7">
+        <div class="card shadow-sm h-100">
+            <div class="card-body">
+                <h2 class="h5">Current session notes</h2>
+                <ul class="mb-0">
+                    <li>The workbench stores endpoint selection per Blazor server circuit.</li>
+                    <li>Use <code>http://127.0.0.1:50051</code> by default for local Rust gRPC development.</li>
+                    <li>The setup and station-profile forms call the same gRPC contracts that <code>grpcurl</code> would use.</li>
+                    <li>The lookup and storage workbench pages use this endpoint automatically.</li>
+                </ul>
+            </div>
+        </div>
+    </div>
+    <div class="col-xl-5">
+        <div class="card shadow-sm h-100">
+            <div class="card-body">
+                <h2 class="h5">Tool detection</h2>
+                <table class="table table-sm align-middle mb-0">
+                    <thead>
+                        <tr>
+                            <th>Tool</th>
+                            <th>Status</th>
+                            <th>Path</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var tool in tools)
+                        {
+                            <tr>
+                                <td><code>@tool.Name</code></td>
+                                <td>
+                                    <span class="badge @(tool.IsAvailable ? "text-bg-success" : "text-bg-secondary")">
+                                        @(tool.IsAvailable ? "Detected" : "Missing")
+                                    </span>
+                                </td>
+                                <td class="small">@tool.Details</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="card shadow-sm mt-4">
+    <div class="card-body">
+        <div class="d-flex justify-content-between align-items-center mb-3 gap-3 flex-wrap">
+            <div>
+                <h2 class="h5 mb-1">Station profile lifecycle</h2>
+                <div class="small text-muted">
+                    Save, edit, delete, activate, and override station profiles through the standard gRPC lifecycle surface.
+                </div>
+            </div>
+            <div class="d-flex gap-2 flex-wrap">
+                <button class="btn btn-sm btn-outline-primary"
+                        @onclick="RefreshStationProfilesAsync"
+                        disabled="@isStationProfilesBusy">
+                    Refresh profiles
+                </button>
+                <button class="btn btn-sm btn-outline-secondary"
+                        @onclick="ClearSessionOverrideAsync"
+                        disabled="@(isStationProfilesBusy || WorkbenchState.ActiveStationContext?.HasSessionOverride != true)">
+                    Clear session override
+                </button>
+            </div>
+        </div>
+
+        @if (isStationProfilesBusy && WorkbenchState.StationProfileCatalog is null)
+        {
+            <div class="alert alert-info mb-0">Loading station profiles...</div>
+        }
+        else if (WorkbenchState.StationProfileCatalog is null || WorkbenchState.ActiveStationContext is null)
+        {
+            <div class="alert alert-secondary mb-0">
+                No station profile lifecycle data is loaded yet. Refresh after the engine endpoint is reachable.
+            </div>
+        }
+        else
+        {
+            var context = WorkbenchState.ActiveStationContext;
+            <div class="row g-3 mb-3">
+                <div class="col-lg-6">
+                    <strong>Persisted active profile:</strong>
+                    @if (context.PersistedActiveProfile is not null)
+                    {
+                        <span>@GetActiveStationSummary(context.PersistedActiveProfile)</span>
+                    }
+                    else
+                    {
+                        <span>Not configured</span>
+                    }
+                </div>
+                <div class="col-lg-6">
+                    <strong>Effective save-time station context:</strong>
+                    @if (context.EffectiveActiveProfile is not null)
+                    {
+                        <span>@GetActiveStationSummary(context.EffectiveActiveProfile)</span>
+                    }
+                    else
+                    {
+                        <span>Not configured</span>
+                    }
+                </div>
+            </div>
+
+            @if (context.HasSessionOverride && context.SessionOverrideProfile is not null)
+            {
+                <div class="alert alert-warning">
+                    <div><strong>Session override:</strong> @GetActiveStationSummary(context.SessionOverrideProfile)</div>
+                    <div class="small text-muted mt-1">
+                        This override is in-memory only and applies to new QSO saves until it is cleared.
+                    </div>
+                </div>
+            }
+
+            @if (activeStationContextPayload is not null)
+            {
+                <div class="row g-4 mb-3">
+                    <div class="col-xl-6">
+                        <PayloadCard Title="Active station context"
+                                     Payload="@activeStationContextPayload.Json" />
+                    </div>
+                </div>
+            }
+
+            <div class="alert alert-secondary">
+                <div>
+                    <strong>Available profiles (@WorkbenchState.StationProfileCatalog.Profiles.Count):</strong>
+                </div>
+                <div class="mt-2 d-flex gap-2 flex-wrap">
+                    @if (WorkbenchState.StationProfileCatalog.Profiles.Count == 0)
+                    {
+                        <span class="text-muted">No persisted station profiles yet.</span>
+                    }
+                    else
+                    {
+                        @foreach (var profile in WorkbenchState.StationProfileCatalog.Profiles)
+                        {
+                            <span class="badge @GetProfileListBadgeClass(profile, context)">
+                                @GetProfileListLabel(profile, context)
+                            </span>
+                        }
+                    }
+                </div>
+                <div class="small text-muted mt-2">
+                    Click <strong>Edit</strong> to load a profile into the editor. Click <strong>New draft</strong> before creating another profile so Save station profile does not update the currently loaded profile.
+                </div>
+            </div>
+
+            <div class="border rounded p-3 mb-3">
+                <div class="d-flex justify-content-between align-items-center mb-3 gap-3 flex-wrap">
+                    <div>
+                        <h3 class="h6 mb-1">Station profile editor</h3>
+                        <div class="small text-muted">
+                            Click <strong>New draft</strong> before creating another profile so the editor clears any loaded profile id. Leave profile id blank to let the service generate a stable id from the new profile name or callsign. The typed profile can also be applied as a process-session override without persisting it.
+                        </div>
+                    </div>
+                    <button class="btn btn-sm btn-outline-secondary"
+                            type="button"
+                            @onclick="ResetStationProfileEditor"
+                            disabled="@isStationProfilesBusy">
+                        New draft
+                    </button>
+                </div>
+
+                <EditForm EditContext="stationProfileEditContext" OnValidSubmit="SaveStationProfileAsync">
+                    <DataAnnotationsValidator />
+                    <ValidationSummary />
+
+                    <div class="row g-3">
+                        <div class="col-lg-6">
+                            <label class="form-label" for="station-profile-id">Profile id (optional)</label>
+                            <InputText id="station-profile-id"
+                                       class="form-control"
+                                       @bind-Value="stationProfileEditor.ProfileId"
+                                       disabled="@isStationProfilesBusy" />
+                        </div>
+                        <div class="col-lg-6 d-flex align-items-end">
+                            <div class="form-check mb-2">
+                                <InputCheckbox id="station-profile-make-active"
+                                               class="form-check-input"
+                                               @bind-Value="stationProfileEditor.MakeActive"
+                                               disabled="@isStationProfilesBusy" />
+                                <label class="form-check-label" for="station-profile-make-active">Make active after save</label>
+                            </div>
+                        </div>
+
+                        <div class="col-md-6">
+                            <label class="form-label" for="station-profile-name">Profile name</label>
+                            <InputText id="station-profile-name"
+                                       class="form-control"
+                                       @bind-Value="stationProfileEditor.ProfileName"
+                                       disabled="@isStationProfilesBusy" />
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label" for="station-callsign">Station callsign</label>
+                            <InputText id="station-callsign"
+                                       class="form-control"
+                                       @bind-Value="stationProfileEditor.StationCallsign"
+                                       disabled="@isStationProfilesBusy" />
+                            <ValidationMessage For="@(() => stationProfileEditor.StationCallsign)" />
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label" for="station-operator-callsign">Operator callsign</label>
+                            <InputText id="station-operator-callsign"
+                                       class="form-control"
+                                       @bind-Value="stationProfileEditor.OperatorCallsign"
+                                       disabled="@isStationProfilesBusy" />
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label" for="station-operator-name">Operator name</label>
+                            <InputText id="station-operator-name"
+                                       class="form-control"
+                                       @bind-Value="stationProfileEditor.OperatorName"
+                                       disabled="@isStationProfilesBusy" />
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label" for="station-grid">Grid</label>
+                            <InputText id="station-grid"
+                                       class="form-control"
+                                       @bind-Value="stationProfileEditor.Grid"
+                                       disabled="@isStationProfilesBusy" />
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label" for="station-county">County</label>
+                            <InputText id="station-county"
+                                       class="form-control"
+                                       @bind-Value="stationProfileEditor.County"
+                                       disabled="@isStationProfilesBusy" />
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label" for="station-state">State / province</label>
+                            <InputText id="station-state"
+                                       class="form-control"
+                                       @bind-Value="stationProfileEditor.State"
+                                       disabled="@isStationProfilesBusy" />
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label" for="station-country">Country</label>
+                            <InputText id="station-country"
+                                       class="form-control"
+                                       @bind-Value="stationProfileEditor.Country"
+                                       disabled="@isStationProfilesBusy" />
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label" for="station-dxcc">DXCC</label>
+                            <InputNumber id="station-dxcc"
+                                         class="form-control"
+                                         @bind-Value="stationProfileEditor.Dxcc"
+                                         disabled="@isStationProfilesBusy" />
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label" for="station-cq-zone">CQ zone</label>
+                            <InputNumber id="station-cq-zone"
+                                         class="form-control"
+                                         @bind-Value="stationProfileEditor.CqZone"
+                                         disabled="@isStationProfilesBusy" />
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label" for="station-itu-zone">ITU zone</label>
+                            <InputNumber id="station-itu-zone"
+                                         class="form-control"
+                                         @bind-Value="stationProfileEditor.ItuZone"
+                                         disabled="@isStationProfilesBusy" />
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label" for="station-latitude">Latitude</label>
+                            <InputNumber id="station-latitude"
+                                         class="form-control"
+                                         @bind-Value="stationProfileEditor.Latitude"
+                                         disabled="@isStationProfilesBusy" />
+                            <ValidationMessage For="@(() => stationProfileEditor.Latitude)" />
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label" for="station-longitude">Longitude</label>
+                            <InputNumber id="station-longitude"
+                                         class="form-control"
+                                         @bind-Value="stationProfileEditor.Longitude"
+                                         disabled="@isStationProfilesBusy" />
+                            <ValidationMessage For="@(() => stationProfileEditor.Longitude)" />
+                        </div>
+                        <div class="col-12">
+                            <div class="d-flex gap-2 flex-wrap">
+                                <button class="btn btn-primary"
+                                        type="submit"
+                                        disabled="@isStationProfilesBusy">
+                                    Save station profile
+                                </button>
+                                <button class="btn btn-outline-secondary"
+                                        type="button"
+                                        @onclick="ApplyTypedSessionOverrideAsync"
+                                        disabled="@isStationProfilesBusy">
+                                    Apply typed session override
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </EditForm>
+            </div>
+
+            <div class="table-responsive">
+                <table class="table table-sm align-middle mb-0">
+                    <thead>
+                        <tr>
+                            <th>Profile id</th>
+                            <th>Profile</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @if (WorkbenchState.StationProfileCatalog.Profiles.Count == 0)
+                        {
+                            <tr>
+                                <td colspan="3" class="text-muted">No persisted station profiles yet.</td>
+                            </tr>
+                        }
+                        else
+                        {
+                            @foreach (var profile in WorkbenchState.StationProfileCatalog.Profiles)
+                            {
+                                <tr>
+                                    <td><code>@profile.ProfileId</code></td>
+                                    <td>
+                                        <div>@GetActiveStationSummary(profile.Profile)</div>
+                                        <div class="mt-1 d-flex gap-1 flex-wrap">
+                                            @if (profile.IsActive)
+                                            {
+                                                <span class="badge text-bg-success">Persisted active</span>
+                                            }
+                                            @if (WorkbenchState.ActiveStationContext.HasSessionOverride
+                                                && WorkbenchState.ActiveStationContext.SessionOverrideProfile is not null
+                                                && AreSameProfile(profile.Profile, WorkbenchState.ActiveStationContext.SessionOverrideProfile))
+                                            {
+                                                <span class="badge text-bg-warning">Session override</span>
+                                            }
+                                        </div>
+                                    </td>
+                                    <td class="text-nowrap">
+                                        <div class="d-flex gap-2 flex-wrap">
+                                            <button class="btn btn-sm btn-outline-primary"
+                                                    disabled="@isStationProfilesBusy"
+                                                    @onclick="() => EditStationProfileAsync(profile.ProfileId)">
+                                                Edit
+                                            </button>
+                                            <button class="btn btn-sm btn-primary"
+                                                    disabled="@(isStationProfilesBusy || profile.IsActive)"
+                                                    @onclick="() => ActivateStationProfileAsync(profile.ProfileId)">
+                                                Activate
+                                            </button>
+                                            <button class="btn btn-sm btn-outline-secondary"
+                                                    disabled="@isStationProfilesBusy"
+                                                    @onclick="() => UseSessionOverrideAsync(profile.ProfileId)">
+                                                Use as session override
+                                            </button>
+                                            <button class="btn btn-sm btn-outline-danger"
+                                                    disabled="@(isStationProfilesBusy || profile.IsActive)"
+                                                    @onclick="() => DeleteStationProfileAsync(profile.ProfileId)">
+                                                Delete
+                                            </button>
+                                        </div>
+                                    </td>
+                                </tr>
+                            }
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+    </div>
+</div>
+
+<div class="card shadow-sm mt-4">
+    <div class="card-body">
+        <div class="d-flex justify-content-between align-items-center mb-3 gap-3 flex-wrap">
+            <div>
+                <h2 class="h5 mb-1">Persisted setup</h2>
+                <div class="small text-muted">
+                    Inspect and save the durable setup surface that configures storage, the initial station profile, and optional QRZ XML credentials.
+                </div>
+            </div>
+            <div class="d-flex gap-2 flex-wrap">
+                @if (WorkbenchState.SetupStatus?.SetupComplete == true)
+                {
+                    <button class="btn btn-sm btn-outline-secondary"
+                            @onclick="ToggleSetupExpanded"
+                            disabled="@isSetupBusy">
+                        @(isSetupExpanded ? "Hide setup" : "Show setup")
+                    </button>
+                }
+                <button class="btn btn-sm btn-outline-primary"
+                        @onclick="RefreshSetupStatusAsync"
+                        disabled="@isSetupBusy">
+                    Refresh setup status
+                </button>
+            </div>
+        </div>
+
+        @if (isSetupBusy && WorkbenchState.SetupStatus is null)
+        {
+            <div class="alert alert-info mb-0">Loading persisted setup status...</div>
+        }
+        else if (WorkbenchState.SetupStatus is null)
+        {
+            <div class="alert alert-secondary mb-3">
+                No persisted setup status is loaded yet. Refresh after the engine endpoint is reachable.
+            </div>
+        }
+        else
+        {
+            var setupStatus = WorkbenchState.SetupStatus;
+            <div class="d-flex align-items-center gap-2 mb-3 flex-wrap">
+                <span class="badge @(setupStatus.SetupComplete ? "text-bg-success" : "text-bg-warning")">
+                    @(setupStatus.SetupComplete ? "Complete" : "Incomplete")
+                </span>
+                <span><strong>Config path:</strong> <code>@setupStatus.ConfigPath</code></span>
+                @if (!string.IsNullOrWhiteSpace(setupStatus.ActiveStationProfileId))
+                {
+                    <span><strong>Active profile id:</strong> <code>@setupStatus.ActiveStationProfileId</code></span>
+                }
+                <span><strong>Profile count:</strong> @setupStatus.StationProfileCount</span>
+            </div>
+            <div class="row g-3 mb-3">
+                <div class="col-lg-6">
+                    <strong>Persisted log file:</strong> @GetSetupLogFileSummary(setupStatus)
+                </div>
+                <div class="col-lg-6">
+                    <strong>QRZ XML:</strong>
+                    @if (!string.IsNullOrWhiteSpace(setupStatus.QrzXmlUsername))
+                    {
+                        <span>@setupStatus.QrzXmlUsername (@(setupStatus.HasQrzXmlPassword ? "password stored" : "password missing"))</span>
+                    }
+                    else
+                    {
+                        <span>Not configured</span>
+                    }
+                </div>
+            </div>
+        }
+
+        @if (WorkbenchState.SetupStatus?.SetupComplete == true && !isSetupExpanded)
+        {
+            <div class="small text-muted">
+                Bootstrap setup is complete. Expand this section if you want to inspect or edit the log file path, QRZ credentials, or the currently active persisted station profile.
+            </div>
+        }
+        else
+        {
+            @if (WorkbenchState.SetupStatus?.StationProfile is not null && persistedStationProfilePayload is not null)
+            {
+                <div class="alert alert-secondary">
+                    <div>
+                        <strong>Persisted station profile:</strong> @GetActiveStationSummary(WorkbenchState.SetupStatus.StationProfile)
+                    </div>
+                    <div class="small text-muted mt-1">
+                        This is the durable bootstrap profile for the currently active persisted station context.
+                    </div>
+                </div>
+                <div class="row g-4 mb-3">
+                    <div class="col-xl-6">
+                        <PayloadCard Title="Persisted station profile"
+                                     Payload="@persistedStationProfilePayload.Json" />
+                    </div>
+                </div>
+            }
+
+            @if (WorkbenchState.SetupStatus?.Warnings.Count > 0)
+            {
+                <div class="alert alert-warning mb-3">
+                    <ul class="mb-0">
+                        @foreach (var warning in WorkbenchState.SetupStatus.Warnings)
+                        {
+                            <li>@warning</li>
+                        }
+                    </ul>
+                </div>
+            }
+
+            <div class="border rounded p-3">
+                <div class="d-flex justify-content-between align-items-center mb-3 gap-3 flex-wrap">
+                    <div>
+                        <h3 class="h6 mb-1">Setup editor</h3>
+                        <div class="small text-muted">
+                            This form calls <code>SetupService.SaveSetup</code> to edit the persisted log file path, QRZ credentials, and the currently active bootstrap station profile. Use the station profile editor above to add additional profiles. If QRZ XML is enabled, the service requires both username and password on save.
+                        </div>
+                    </div>
+                    @if (WorkbenchState.SetupStatus?.HasQrzXmlPassword == true)
+                    {
+                        <span class="badge text-bg-secondary">Stored QRZ password is write-only</span>
+                    }
+                </div>
+
+                <EditForm EditContext="setupEditContext" OnValidSubmit="SaveSetupAsync">
+                    <DataAnnotationsValidator />
+                    <ValidationSummary />
+
+                    <div class="row g-3">
+                        <div class="col-md-12">
+                            <label class="form-label" for="setup-log-file-path">Log file path</label>
+                            <InputText id="setup-log-file-path"
+                                       class="form-control"
+                                       @bind-Value="setupEditor.LogFilePath"
+                                       disabled="@isSetupBusy" />
+                            <ValidationMessage For="@(() => setupEditor.LogFilePath)" />
+                        </div>
+
+                        <div class="col-md-6">
+                            <label class="form-label" for="setup-profile-name">Profile name</label>
+                            <InputText id="setup-profile-name"
+                                       class="form-control"
+                                       @bind-Value="setupEditor.ProfileName"
+                                       disabled="@isSetupBusy" />
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label" for="setup-station-callsign">Station callsign</label>
+                            <InputText id="setup-station-callsign"
+                                       class="form-control"
+                                       @bind-Value="setupEditor.StationCallsign"
+                                       disabled="@isSetupBusy" />
+                            <ValidationMessage For="@(() => setupEditor.StationCallsign)" />
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label" for="setup-operator-callsign">Operator callsign</label>
+                            <InputText id="setup-operator-callsign"
+                                       class="form-control"
+                                       @bind-Value="setupEditor.OperatorCallsign"
+                                       disabled="@isSetupBusy" />
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label" for="setup-operator-name">Operator name</label>
+                            <InputText id="setup-operator-name"
+                                       class="form-control"
+                                       @bind-Value="setupEditor.OperatorName"
+                                       disabled="@isSetupBusy" />
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label" for="setup-grid">Grid</label>
+                            <InputText id="setup-grid"
+                                       class="form-control"
+                                       @bind-Value="setupEditor.Grid"
+                                       disabled="@isSetupBusy" />
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label" for="setup-county">County</label>
+                            <InputText id="setup-county"
+                                       class="form-control"
+                                       @bind-Value="setupEditor.County"
+                                       disabled="@isSetupBusy" />
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label" for="setup-state">State / province</label>
+                            <InputText id="setup-state"
+                                       class="form-control"
+                                       @bind-Value="setupEditor.State"
+                                       disabled="@isSetupBusy" />
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label" for="setup-country">Country</label>
+                            <InputText id="setup-country"
+                                       class="form-control"
+                                       @bind-Value="setupEditor.Country"
+                                       disabled="@isSetupBusy" />
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label" for="setup-dxcc">DXCC</label>
+                            <InputNumber id="setup-dxcc"
+                                         class="form-control"
+                                         @bind-Value="setupEditor.Dxcc"
+                                         disabled="@isSetupBusy" />
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label" for="setup-cq-zone">CQ zone</label>
+                            <InputNumber id="setup-cq-zone"
+                                         class="form-control"
+                                         @bind-Value="setupEditor.CqZone"
+                                         disabled="@isSetupBusy" />
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label" for="setup-itu-zone">ITU zone</label>
+                            <InputNumber id="setup-itu-zone"
+                                         class="form-control"
+                                         @bind-Value="setupEditor.ItuZone"
+                                         disabled="@isSetupBusy" />
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label" for="setup-latitude">Latitude</label>
+                            <InputNumber id="setup-latitude"
+                                         class="form-control"
+                                         @bind-Value="setupEditor.Latitude"
+                                         disabled="@isSetupBusy" />
+                            <ValidationMessage For="@(() => setupEditor.Latitude)" />
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label" for="setup-longitude">Longitude</label>
+                            <InputNumber id="setup-longitude"
+                                         class="form-control"
+                                         @bind-Value="setupEditor.Longitude"
+                                         disabled="@isSetupBusy" />
+                            <ValidationMessage For="@(() => setupEditor.Longitude)" />
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label" for="setup-qrz-username">QRZ XML username</label>
+                            <InputText id="setup-qrz-username"
+                                       class="form-control"
+                                       @bind-Value="setupEditor.QrzXmlUsername"
+                                       disabled="@isSetupBusy" />
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label" for="setup-qrz-password">QRZ XML password</label>
+                            <InputText id="setup-qrz-password"
+                                       type="password"
+                                       class="form-control"
+                                       @bind-Value="setupEditor.QrzXmlPassword"
+                                       disabled="@isSetupBusy" />
+                            <ValidationMessage For="@(() => setupEditor.QrzXmlPassword)" />
+                        </div>
+                        <div class="col-12">
+                            <div class="small text-muted mb-2">
+                                Stored QRZ passwords cannot be read back. Re-enter the password when saving QRZ XML credentials, or clear both QRZ fields to remove them.
+                            </div>
+                            <button class="btn btn-primary"
+                                    type="submit"
+                                    disabled="@isSetupBusy">
+                                Save setup
+                            </button>
+                        </div>
+                    </div>
+                </EditForm>
+            </div>
+        }
+    </div>
+</div>
+
+<div class="card shadow-sm mt-4">
+    <div class="card-body">
+        <div class="d-flex justify-content-between align-items-center mb-3 gap-3 flex-wrap">
+            <div>
+                <h2 class="h5 mb-1">Live runtime config</h2>
+                <div class="small text-muted">
+                    Apply hot-reloadable engine settings against the current endpoint. Storage and QRZ overrides take effect for new requests immediately.
+                </div>
+            </div>
+            <div class="d-flex gap-2 flex-wrap">
+                <button class="btn btn-sm btn-outline-primary"
+                        @onclick="RefreshRuntimeConfigAsync"
+                        disabled="@isRuntimeConfigBusy">
+                    Refresh live config
+                </button>
+                <button class="btn btn-sm btn-outline-danger"
+                        @onclick="ResetAllRuntimeOverridesAsync"
+                        disabled="@(isRuntimeConfigBusy || runtimeEntries.Count == 0)">
+                    Reset all overrides
+                </button>
+            </div>
+        </div>
+
+        @if (isRuntimeConfigBusy && runtimeEntries.Count == 0)
+        {
+            <div class="alert alert-info mb-0">Loading live runtime config...</div>
+        }
+        else if (runtimeEntries.Count == 0)
+        {
+            <div class="alert alert-secondary mb-0">
+                No live runtime config is loaded yet. Refresh after the engine endpoint is reachable.
+            </div>
+        }
+        else
+        {
+            <div class="mb-3">
+                <strong>Active storage:</strong> @WorkbenchState.GetStorageBackendDisplayName()<br />
+                <strong>Lookup provider:</strong> @WorkbenchState.RuntimeConfigSnapshot?.LookupProviderSummary
+            </div>
+
+             @if (WorkbenchState.RuntimeConfigSnapshot?.Warnings.Count > 0)
+             {
+                 <div class="alert alert-warning">
+                     <ul class="mb-0">
+                        @foreach (var warning in WorkbenchState.RuntimeConfigSnapshot.Warnings)
+                        {
+                            <li>@warning</li>
+                        }
+                    </ul>
+                 </div>
+             }
+
+             @if (WorkbenchState.RuntimeConfigSnapshot?.ActiveStationProfile is not null && activeStationProfilePayload is not null)
+             {
+                 var activeStationProfile = WorkbenchState.RuntimeConfigSnapshot.ActiveStationProfile;
+                 <div class="alert alert-secondary">
+                     <div>
+                         <strong>Active station profile:</strong> @GetActiveStationSummary(activeStationProfile)
+                     </div>
+                     <div class="small text-muted mt-1">
+                         New LogQso requests use this profile as the base station snapshot unless the request payload overrides specific station fields.
+                     </div>
+                 </div>
+                 <div class="row g-4 mb-3">
+                     <div class="col-xl-6">
+                         <PayloadCard Title="Active station profile"
+                                      Payload="@activeStationProfilePayload.Json" />
+                     </div>
+                 </div>
+             }
+
+             <div class="table-responsive">
+                 <table class="table table-sm align-middle mb-0">
+                    <thead>
+                        <tr>
+                            <th>Setting</th>
+                            <th>Effective value</th>
+                            <th>New override</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var entry in runtimeEntries)
+                        {
+                            <tr>
+                                <td class="w-40">
+                                    <div class="fw-semibold">@entry.Definition.Label</div>
+                                    <div class="small text-muted"><code>@entry.Definition.Key</code></div>
+                                    <div class="small text-muted">@entry.Definition.Description</div>
+                                </td>
+                                <td class="w-25">
+                                    <div>@entry.EffectiveDisplayValue</div>
+                                    <div class="mt-1 d-flex gap-1 flex-wrap">
+                                        @if (entry.IsOverridden)
+                                        {
+                                            <span class="badge text-bg-primary">Override</span>
+                                        }
+                                        @if (entry.CurrentValue?.Redacted == true)
+                                        {
+                                            <span class="badge text-bg-secondary">Redacted</span>
+                                        }
+                                    </div>
+                                </td>
+                                <td class="w-25">
+                                    @if (entry.HasAllowedValues)
+                                    {
+                                        <select class="form-select form-select-sm" @bind="entry.DraftValue">
+                                            @foreach (var allowedValue in entry.Definition.AllowedValues)
+                                            {
+                                                <option value="@allowedValue">@allowedValue</option>
+                                            }
+                                        </select>
+                                    }
+                                    else if (entry.IsSecret)
+                                    {
+                                        <input type="password"
+                                               class="form-control form-control-sm"
+                                               @bind="entry.DraftValue"
+                                               placeholder="Enter new value" />
+                                    }
+                                    else
+                                    {
+                                        <input class="form-control form-control-sm" @bind="entry.DraftValue" />
+                                    }
+                                </td>
+                                <td class="text-nowrap">
+                                    <div class="d-flex gap-2 flex-wrap">
+                                        <button class="btn btn-sm btn-primary"
+                                                disabled="@(!entry.CanSave || isRuntimeConfigBusy)"
+                                                @onclick="() => ApplyRuntimeEntryAsync(entry)">
+                                            Apply
+                                        </button>
+                                        <button class="btn btn-sm btn-outline-secondary"
+                                                disabled="@(!entry.IsOverridden || isRuntimeConfigBusy)"
+                                                @onclick="() => ClearRuntimeEntryAsync(entry)">
+                                            Clear
+                                        </button>
+                                    </div>
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+    </div>
+</div>
+
+<div class="card shadow-sm mt-4">
+    <div class="card-body">
+        <h2 class="h5">Rust host launch preview</h2>
+        <div class="small text-muted mb-2">
+            The command below matches the storage session configured in this page.
+        </div>
+        <pre class="payload-view">@WorkbenchState.BuildRustServerCommand()</pre>
+        <div class="small text-muted mt-2 mb-1">Equivalent environment</div>
+        @foreach (var variable in WorkbenchState.GetEngineEnvironmentOverrides())
+        {
+            <div><code>@variable.Key=@variable.Value</code></div>
+        }
+    </div>
+</div>
+
+@code {
+    private string endpoint = string.Empty;
+    private string? statusMessage;
+    private IReadOnlyList<ToolAvailability> tools = Array.Empty<ToolAvailability>();
+    private List<RuntimeConfigEditorEntry> runtimeEntries = [];
+    private ProtoPayloadView? activeStationProfilePayload;
+    private ProtoPayloadView? persistedStationProfilePayload;
+    private ProtoPayloadView? activeStationContextPayload;
+    private SetupEditorModel setupEditor = SetupEditorModel.Create(null, @".\data\qsoripper.db");
+    private StationProfileEditorModel stationProfileEditor = StationProfileEditorModel.CreateEmpty();
+    private EditContext setupEditContext = default!;
+    private EditContext stationProfileEditContext = default!;
+    private bool isSetupBusy;
+    private bool isSetupExpanded = true;
+    private bool isStationProfilesBusy;
+    private bool isRuntimeConfigBusy;
+
+    protected override async Task OnInitializedAsync()
+    {
+        endpoint = WorkbenchState.EngineEndpoint;
+        tools = ToolchainLocator.GetToolAvailability();
+        ReplaceSetupEditor(SetupEditorModel.Create(null, WorkbenchState.EngineSqlitePath));
+        ReplaceStationProfileEditor(StationProfileEditorModel.CreateEmpty());
+        await Task.WhenAll(
+            RefreshSetupStatusAsync(),
+            RefreshStationProfilesAsync(),
+            RefreshRuntimeConfigAsync());
+    }
+
+    private Task SaveEndpointAsync()
+    {
+        WorkbenchState.UpdateEngineEndpoint(endpoint);
+        statusMessage = $"Saved engine session for '{WorkbenchState.EngineEndpoint}'.";
+        return Task.CompletedTask;
+    }
+
+    private async Task ProbeAsync()
+    {
+        WorkbenchState.UpdateEngineEndpoint(endpoint);
+        statusMessage = "Probing engine transport...";
+        await WorkbenchState.ProbeAsync();
+        statusMessage = null;
+    }
+
+    private async Task RefreshRuntimeConfigAsync()
+    {
+        isRuntimeConfigBusy = true;
+        try
+        {
+            await RuntimeConfigWorkbenchService.RefreshAsync();
+            RebuildRuntimeEntries();
+        }
+        finally
+        {
+            isRuntimeConfigBusy = false;
+        }
+    }
+
+    private async Task RefreshSetupStatusAsync()
+    {
+        isSetupBusy = true;
+        try
+        {
+            await SetupWorkbenchService.RefreshAsync();
+            RefreshSetupPayload();
+            ReplaceSetupEditor(SetupEditorModel.Create(
+                WorkbenchState.SetupStatus,
+                WorkbenchState.EngineSqlitePath));
+            InitializeSetupExpansionDefault();
+        }
+        finally
+        {
+            isSetupBusy = false;
+        }
+    }
+
+    private async Task SaveSetupAsync()
+    {
+        statusMessage = "Saving persisted setup...";
+        isSetupBusy = true;
+        try
+        {
+            var status = await SetupWorkbenchService.SaveAsync(setupEditor.ToRequest());
+            if (status is null)
+            {
+                statusMessage = null;
+                return;
+            }
+
+            RefreshSetupPayload();
+            ReplaceSetupEditor(SetupEditorModel.Create(
+                status,
+                WorkbenchState.EngineSqlitePath));
+            isSetupExpanded = status.SetupComplete != true;
+            await RefreshStationProfilesAsync();
+            await RefreshRuntimeConfigAsync();
+            statusMessage = "Saved persisted setup.";
+        }
+        finally
+        {
+            isSetupBusy = false;
+        }
+    }
+
+    private async Task RefreshStationProfilesAsync()
+    {
+        isStationProfilesBusy = true;
+        try
+        {
+            await StationProfileWorkbenchService.RefreshAsync();
+            RefreshActiveStationContextPayload();
+        }
+        finally
+        {
+            isStationProfilesBusy = false;
+        }
+    }
+
+    private async Task EditStationProfileAsync(string profileId)
+    {
+        statusMessage = $"Loading station profile '{profileId}'...";
+        isStationProfilesBusy = true;
+        try
+        {
+            var profile = await StationProfileWorkbenchService.GetAsync(profileId);
+            if (profile?.Profile is null)
+            {
+                statusMessage = null;
+                return;
+            }
+
+            var editor = StationProfileEditorModel.CreateEmpty();
+            editor.LoadFrom(profile.ProfileId, profile.Profile, profile.IsActive);
+            ReplaceStationProfileEditor(editor);
+            statusMessage = $"Loaded station profile '{profileId}' into the editor.";
+        }
+        finally
+        {
+            isStationProfilesBusy = false;
+        }
+    }
+
+    private async Task SaveStationProfileAsync()
+    {
+        statusMessage = "Saving station profile...";
+        isStationProfilesBusy = true;
+        try
+        {
+            var saved = await StationProfileWorkbenchService.SaveAsync(stationProfileEditor.ToRequest());
+            if (saved?.Profile is null)
+            {
+                statusMessage = null;
+                return;
+            }
+
+            var editor = StationProfileEditorModel.CreateEmpty();
+            editor.LoadFrom(saved.ProfileId, saved.Profile, saved.IsActive);
+            ReplaceStationProfileEditor(editor);
+            RefreshActiveStationContextPayload();
+            await RefreshRuntimeConfigAsync();
+            statusMessage = $"Saved station profile '{saved.ProfileId}'.";
+        }
+        finally
+        {
+            isStationProfilesBusy = false;
+        }
+    }
+
+    private async Task DeleteStationProfileAsync(string profileId)
+    {
+        statusMessage = $"Deleting station profile '{profileId}'...";
+        isStationProfilesBusy = true;
+        try
+        {
+            var deleted = await StationProfileWorkbenchService.DeleteAsync(profileId);
+            if (!deleted)
+            {
+                statusMessage = null;
+                return;
+            }
+
+            if (string.Equals(stationProfileEditor.ProfileId, profileId, StringComparison.Ordinal))
+            {
+                ResetStationProfileEditor();
+            }
+
+            RefreshActiveStationContextPayload();
+            await RefreshRuntimeConfigAsync();
+            statusMessage = $"Deleted station profile '{profileId}'.";
+        }
+        finally
+        {
+            isStationProfilesBusy = false;
+        }
+    }
+
+    private async Task ActivateStationProfileAsync(string profileId)
+    {
+        statusMessage = $"Activating station profile '{profileId}'...";
+        isStationProfilesBusy = true;
+        try
+        {
+            var activated = await StationProfileWorkbenchService.SetActiveAsync(profileId);
+            if (!activated)
+            {
+                statusMessage = null;
+                return;
+            }
+
+            RefreshActiveStationContextPayload();
+            await RefreshRuntimeConfigAsync();
+            statusMessage = $"Activated station profile '{profileId}'.";
+        }
+        finally
+        {
+            isStationProfilesBusy = false;
+        }
+    }
+
+    private async Task UseSessionOverrideAsync(string profileId)
+    {
+        statusMessage = $"Applying session override from '{profileId}'...";
+        isStationProfilesBusy = true;
+        try
+        {
+            var applied = await StationProfileWorkbenchService.UseSessionOverrideAsync(profileId);
+            if (!applied)
+            {
+                statusMessage = null;
+                return;
+            }
+
+            RefreshActiveStationContextPayload();
+            await RefreshRuntimeConfigAsync();
+            statusMessage = $"Applied station profile '{profileId}' as the session override.";
+        }
+        finally
+        {
+            isStationProfilesBusy = false;
+        }
+    }
+
+    private async Task ApplyTypedSessionOverrideAsync()
+    {
+        if (!stationProfileEditContext.Validate())
+        {
+            return;
+        }
+
+        statusMessage = "Applying typed station session override...";
+        isStationProfilesBusy = true;
+        try
+        {
+            var applied = await StationProfileWorkbenchService.SetSessionOverrideAsync(stationProfileEditor.ToStationProfile());
+            if (!applied)
+            {
+                statusMessage = null;
+                return;
+            }
+
+            RefreshActiveStationContextPayload();
+            await RefreshRuntimeConfigAsync();
+            statusMessage = "Applied the typed station profile as the session override.";
+        }
+        finally
+        {
+            isStationProfilesBusy = false;
+        }
+    }
+
+    private async Task ClearSessionOverrideAsync()
+    {
+        statusMessage = "Clearing the station session override...";
+        isStationProfilesBusy = true;
+        try
+        {
+            var cleared = await StationProfileWorkbenchService.ClearSessionOverrideAsync();
+            if (!cleared)
+            {
+                statusMessage = null;
+                return;
+            }
+
+            RefreshActiveStationContextPayload();
+            await RefreshRuntimeConfigAsync();
+            statusMessage = "Cleared the station session override.";
+        }
+        finally
+        {
+            isStationProfilesBusy = false;
+        }
+    }
+
+    private void ResetStationProfileEditor()
+    {
+        ReplaceStationProfileEditor(StationProfileEditorModel.CreateEmpty());
+    }
+
+    private void ToggleSetupExpanded()
+    {
+        isSetupExpanded = !isSetupExpanded;
+    }
+
+    private async Task ApplyRuntimeEntryAsync(RuntimeConfigEditorEntry entry)
+    {
+        statusMessage = $"Applying {entry.Definition.Label}...";
+        isRuntimeConfigBusy = true;
+        try
+        {
+            await RuntimeConfigWorkbenchService.ApplyAsync(
+            [
+                new RuntimeConfigMutation
+                {
+                    Key = entry.Definition.Key,
+                    Kind = RuntimeConfigMutationKind.Set,
+                    Value = entry.GetMutationValue()
+                }
+            ]);
+            RebuildRuntimeEntries();
+            statusMessage = $"Applied {entry.Definition.Label}.";
+        }
+        finally
+        {
+            isRuntimeConfigBusy = false;
+        }
+    }
+
+    private async Task ClearRuntimeEntryAsync(RuntimeConfigEditorEntry entry)
+    {
+        statusMessage = $"Clearing override for {entry.Definition.Label}...";
+        isRuntimeConfigBusy = true;
+        try
+        {
+            await RuntimeConfigWorkbenchService.ResetAsync([entry.Definition.Key]);
+            RebuildRuntimeEntries();
+            statusMessage = $"Cleared override for {entry.Definition.Label}.";
+        }
+        finally
+        {
+            isRuntimeConfigBusy = false;
+        }
+    }
+
+    private async Task ResetAllRuntimeOverridesAsync()
+    {
+        statusMessage = "Clearing all live runtime overrides...";
+        isRuntimeConfigBusy = true;
+        try
+        {
+            await RuntimeConfigWorkbenchService.ResetAsync();
+            RebuildRuntimeEntries();
+            statusMessage = "Cleared all live runtime overrides.";
+        }
+        finally
+        {
+            isRuntimeConfigBusy = false;
+        }
+    }
+
+    private void RebuildRuntimeEntries()
+    {
+        if (WorkbenchState.RuntimeConfigSnapshot is null)
+        {
+            runtimeEntries = [];
+            activeStationProfilePayload = null;
+            return;
+        }
+
+        activeStationProfilePayload = WorkbenchState.RuntimeConfigSnapshot.ActiveStationProfile is null
+            ? null
+            : ProtoJsonService.Describe(WorkbenchState.RuntimeConfigSnapshot.ActiveStationProfile);
+
+        runtimeEntries = WorkbenchState.RuntimeConfigSnapshot.Definitions
+            .Select(definition =>
+            {
+                var currentValue = WorkbenchState.RuntimeConfigSnapshot.Values
+                    .FirstOrDefault(value => string.Equals(value.Key, definition.Key, StringComparison.OrdinalIgnoreCase));
+                return new RuntimeConfigEditorEntry(definition, currentValue);
+            })
+            .ToList();
+    }
+
+    private void RefreshSetupPayload()
+    {
+        persistedStationProfilePayload = WorkbenchState.SetupStatus?.StationProfile is null
+            ? null
+            : ProtoJsonService.Describe(WorkbenchState.SetupStatus.StationProfile);
+    }
+
+    private void RefreshActiveStationContextPayload()
+    {
+        activeStationContextPayload = WorkbenchState.ActiveStationContext is null
+            ? null
+            : ProtoJsonService.Describe(WorkbenchState.ActiveStationContext);
+    }
+
+    private void ReplaceSetupEditor(SetupEditorModel model)
+    {
+        setupEditor = model;
+        setupEditContext = new EditContext(setupEditor);
+    }
+
+    private void ReplaceStationProfileEditor(StationProfileEditorModel model)
+    {
+        stationProfileEditor = model;
+        stationProfileEditContext = new EditContext(stationProfileEditor);
+    }
+
+    private static string GetActiveStationSummary(StationProfile profile)
+    {
+        var summary = profile.StationCallsign;
+        if (!string.IsNullOrWhiteSpace(profile.ProfileName))
+        {
+            summary = $"{profile.ProfileName}: {summary}";
+        }
+
+        if (!string.IsNullOrWhiteSpace(profile.Grid))
+        {
+            summary = $"{summary} ({profile.Grid})";
+        }
+
+        return string.IsNullOrWhiteSpace(profile.OperatorCallsign)
+            ? summary
+            : $"{summary} operator {profile.OperatorCallsign}";
+    }
+
+    private static string GetSetupLogFileSummary(SetupStatus status)
+    {
+        if (!string.IsNullOrWhiteSpace(status.LogFilePath))
+        {
+            return status.LogFilePath;
+        }
+
+        if (status.StorageBackend == StorageBackend.Memory)
+        {
+            return "Not configured (legacy in-memory setup)";
+        }
+
+        return $"Not configured (suggested: {status.SuggestedLogFilePath})";
+    }
+
+    private static bool AreSameProfile(StationProfile left, StationProfile right)
+    {
+        return string.Equals(left.ProfileName, right.ProfileName, StringComparison.Ordinal)
+            && string.Equals(left.StationCallsign, right.StationCallsign, StringComparison.Ordinal)
+            && string.Equals(left.Grid, right.Grid, StringComparison.Ordinal)
+            && string.Equals(left.OperatorCallsign, right.OperatorCallsign, StringComparison.Ordinal);
+    }
+
+    private void InitializeSetupExpansionDefault()
+    {
+        if (WorkbenchState.SetupStatus is not null)
+        {
+            isSetupExpanded = WorkbenchState.SetupStatus.SetupComplete != true;
+        }
+    }
+
+    private static string GetProfileListBadgeClass(
+        StationProfileRecord profile,
+        ActiveStationContext context)
+    {
+        if (profile.IsActive)
+        {
+            return "text-bg-success";
+        }
+
+        return context.HasSessionOverride
+            && context.SessionOverrideProfile is not null
+            && AreSameProfile(profile.Profile, context.SessionOverrideProfile)
+            ? "text-bg-warning"
+            : "text-bg-secondary";
+    }
+
+    private static string GetProfileListLabel(
+        StationProfileRecord profile,
+        ActiveStationContext context)
+    {
+        var label = profile.ProfileId;
+        if (profile.IsActive)
+        {
+            label = $"{label} (active)";
+        }
+        else if (context.HasSessionOverride
+            && context.SessionOverrideProfile is not null
+            && AreSameProfile(profile.Profile, context.SessionOverrideProfile))
+        {
+            label = $"{label} (session override)";
+        }
+
+        return label;
+    }
+}

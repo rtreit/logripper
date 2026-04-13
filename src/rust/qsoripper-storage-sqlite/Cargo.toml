@@ -1,0 +1,19 @@
+[package]
+name = "qsoripper-storage-sqlite"
+description = "SQLite storage adapter for QsoRipper engine services"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+qsoripper-core = { path = "../qsoripper-core", version = "0.1.0" }
+prost = { workspace = true }
+prost-types = { workspace = true }
+sqlite = { workspace = true }
+tonic = { workspace = true }
+tokio = { workspace = true }
+
+[lints]
+workspace = true

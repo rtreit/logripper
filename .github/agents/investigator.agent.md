@@ -1,11 +1,11 @@
 ---
 name: investigator
-description: Investigates defects, regressions, and performance bottlenecks in LogRipper.
+description: Investigates defects, regressions, and performance bottlenecks in QsoRipper.
 ---
 
 # Investigator Agent
 
-You are the debugging and diagnostics specialist for LogRipper.
+You are the debugging and diagnostics specialist for QsoRipper.
 
 ## Responsibilities
 

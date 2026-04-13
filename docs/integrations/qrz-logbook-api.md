@@ -2,7 +2,7 @@
 
 Source specification: <https://www.qrz.com/docs/logbook/QRZLogbookAPI.html>
 
-This document is a comprehensive development reference for LogRipper's consumption of the QRZ Logbook REST API for inserting, fetching, deleting, and managing QSO records.
+This document is a comprehensive development reference for QsoRipper's consumption of the QRZ Logbook REST API for inserting, fetching, deleting, and managing QSO records.
 
 ---
 
@@ -62,8 +62,8 @@ All applications **must** provide an identifiable `User-Agent` HTTP header.
 
 **Format guidance from QRZ:**
 
-- Personal scripts: include your callsign and a unique script name, e.g. `LogRipper/0.1.0 (AA7BQ)`
-- Applications: `ApplicationName/version`, e.g. `LogRipper/1.0.0`
+- Personal scripts: include your callsign and a unique script name, e.g. `QsoRipper/0.1.0 (AA7BQ)`
+- Applications: `ApplicationName/version`, e.g. `QsoRipper/1.0.0`
 - Maximum length: **128 characters**
 
 Applications with missing or generic user agents (e.g. `node-fetch`, `python-requests`) may be subject to rate limiting or restrictions.
@@ -157,7 +157,7 @@ Deletes one or more QSO records from the logbook selected by the API access key.
 | `LOGIDS` | Comma-separated list of `logid` values that were **not found** (only when `RESULT=PARTIAL`) |
 | `COUNT` | Number of QSO records actually deleted |
 
-**Critical warning:** This command **permanently deletes** records. There is **no undo**. Deleted records cannot be recovered. LogRipper should require explicit user confirmation before executing DELETE operations.
+**Critical warning:** This command **permanently deletes** records. There is **no undo**. Deleted records cannot be recovered. QsoRipper should require explicit user confirmation before executing DELETE operations.
 
 ---
 
@@ -238,9 +238,9 @@ Large logbooks can cause timeouts if fetched in one request. Use bounded fetches
 
 ---
 
-## Error handling policy for LogRipper
+## Error handling policy for QsoRipper
 
-| Scenario | Detection | LogRipper behavior |
+| Scenario | Detection | QsoRipper behavior |
 |---|---|---|
 | Auth / privilege failure | `RESULT=AUTH` | Treat as credential/config issue; do not retry; surface to user |
 | Validation failure | `RESULT=FAIL` with `REASON` | Surface clear reason to user; keep local state unchanged |
@@ -263,7 +263,7 @@ QSO data is exchanged using ADIF (Amateur Data Interchange Format). Each field u
 <band:3>80m<mode:3>SSB<call:4>XX1X<qso_date:8>20140121<station_callsign:5>AA7BQ<time_on:4>0346<eor>
 ```
 
-The LogRipper adapter should include a robust ADIF parser/serializer that handles:
+The QsoRipper adapter should include a robust ADIF parser/serializer that handles:
 
 - Variable field lengths and ordering
 - Optional fields present or absent per record
@@ -271,13 +271,13 @@ The LogRipper adapter should include a robust ADIF parser/serializer that handle
 
 ---
 
-## Mapping into LogRipper domain
+## Mapping into QsoRipper domain
 
 The adapter should parse ADIF and map into internal QSO structures, then expose normalized domain records to the app layer.
 
 ### Minimum field mapping
 
-| ADIF field | LogRipper domain |
+| ADIF field | QsoRipper domain |
 |---|---|
 | `station_callsign` | Local station identity |
 | `call` | Worked callsign |
@@ -300,9 +300,9 @@ Use these environment variables (see `.env.example`):
 
 | Variable | Purpose |
 |---|---|
-| `LOGRIPPER_QRZ_LOGBOOK_BASE_URL` | Logbook API endpoint (default: `https://logbook.qrz.com/api`) |
-| `LOGRIPPER_QRZ_LOGBOOK_API_KEY` | QRZ-issued logbook access key |
-| `LOGRIPPER_QRZ_USER_AGENT` | User-Agent header value (e.g. `LogRipper/0.1.0 (YOURCALL)`) |
-| `LOGRIPPER_QRZ_HTTP_TIMEOUT_SECONDS` | HTTP request timeout |
-| `LOGRIPPER_QRZ_MAX_RETRIES` | Maximum retry count for transient failures |
+| `QSORIPPER_QRZ_LOGBOOK_BASE_URL` | Logbook API endpoint (default: `https://logbook.qrz.com/api`) |
+| `QSORIPPER_QRZ_LOGBOOK_API_KEY` | QRZ-issued logbook access key |
+| `QSORIPPER_QRZ_USER_AGENT` | User-Agent header value (e.g. `QsoRipper/0.1.0 (YOURCALL)`) |
+| `QSORIPPER_QRZ_HTTP_TIMEOUT_SECONDS` | HTTP request timeout |
+| `QSORIPPER_QRZ_MAX_RETRIES` | Maximum retry count for transient failures |
 

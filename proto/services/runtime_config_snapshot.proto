@@ -1,8 +1,8 @@
 syntax = "proto3";
 
-package logripper.services;
+package qsoripper.services;
 
-option csharp_namespace = "LogRipper.Services";
+option csharp_namespace = "QsoRipper.Services";
 
 import "domain/station_profile.proto";
 import "services/runtime_config_definition.proto";
@@ -14,5 +14,5 @@ message RuntimeConfigSnapshot {
   string active_storage_backend = 3;
   string lookup_provider_summary = 4;
   repeated string warnings = 5;
-  logripper.domain.StationProfile active_station_profile = 6;
+  qsoripper.domain.StationProfile active_station_profile = 6;
 }

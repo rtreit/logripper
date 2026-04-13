@@ -93,10 +93,10 @@ Legacy compatibility note: the proto still carries `storage_backend`, `sqlite_pa
 ## Persistence model
 
 - Default config path:
-  - Windows: `%APPDATA%\logripper\config.toml`
-  - Linux: `~/.config/logripper/config.toml` (or `XDG_CONFIG_HOME`)
+  - Windows: `%APPDATA%\qsoripper\config.toml`
+  - Linux: `~/.config/qsoripper/config.toml` (or `XDG_CONFIG_HOME`)
 - The server also supports overriding the config path with:
-  - environment: `LOGRIPPER_CONFIG_PATH`
+  - environment: `QSORIPPER_CONFIG_PATH`
   - CLI: `--config path\to\config.toml`
 
 Saved setup is hot-applied to the running engine for **new** requests. Existing saved QSOs remain unchanged because they already carry their own `station_snapshot`.

@@ -1,17 +1,17 @@
-﻿using System.Diagnostics;
+using System.Diagnostics;
 using System.Text;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Grpc.Core;
 using Grpc.Net.Client;
-using LogRipper.Domain;
-using LogRipper.Services;
+using QsoRipper.Domain;
+using QsoRipper.Services;
 
 var serverAddress = args.Length > 0 ? args[0] : "http://localhost:50051";
 var parallelism = args.Length > 1 ? int.Parse(args[1]) : 100;
 var durationSeconds = args.Length > 2 ? int.Parse(args[2]) : 10;
 
-Console.WriteLine($"LogRipper gRPC Stress Client");
+Console.WriteLine($"QsoRipper gRPC Stress Client");
 Console.WriteLine($"  Target:      {serverAddress}");
 Console.WriteLine($"  Parallelism: {parallelism}");
 Console.WriteLine($"  Duration:    {durationSeconds}s");

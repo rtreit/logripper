@@ -1,11 +1,11 @@
 syntax = "proto3";
 
-package logripper.services;
+package qsoripper.services;
 
-option csharp_namespace = "LogRipper.Services";
+option csharp_namespace = "QsoRipper.Services";
 
 import "domain/qso_record.proto";
 
 message ListQsosResponse {
-  logripper.domain.QsoRecord qso = 1;
+  qsoripper.domain.QsoRecord qso = 1;
 }

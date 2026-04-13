@@ -1,11 +1,11 @@
 ---
 name: feature-implementation
-description: Implement a scoped LogRipper feature with keyboard-first UX, performance, and clean architecture constraints.
+description: Implement a scoped QsoRipper feature with keyboard-first UX, performance, and clean architecture constraints.
 ---
 
 # Feature Implementation Prompt
 
-Implement the requested feature for LogRipper with the following expectations:
+Implement the requested feature for QsoRipper with the following expectations:
 
 1. Define clear acceptance criteria.
 2. Keep core logic shared between TUI and GUI.

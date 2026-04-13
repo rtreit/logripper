@@ -1,11 +1,11 @@
 ---
 name: code-reviewer
-description: Reviews LogRipper changes for correctness, risk, and maintainability.
+description: Reviews QsoRipper changes for correctness, risk, and maintainability.
 ---
 
 # Code Reviewer Agent
 
-You are the code review specialist for LogRipper.
+You are the code review specialist for QsoRipper.
 
 ## Responsibilities
 

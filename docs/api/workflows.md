@@ -1,6 +1,6 @@
 # Workflow Examples
 
-This page provides example request/response shapes and state transitions for common LogRipper engine workflows. These are intended to make integration concrete rather than requiring you to derive behavior from raw proto names.
+This page provides example request/response shapes and state transitions for common QsoRipper engine workflows. These are intended to make integration concrete rather than requiring you to derive behavior from raw proto names.
 
 All examples show field values in a language-neutral pseudo-JSON format. Actual wire encoding is binary protobuf.
 
@@ -377,7 +377,7 @@ Clients should concatenate chunk data in order to reconstruct the complete ADIF 
 Notes:
 - Filters already present in `ExportAdifRequest` (`after`, `before`, `contest_id`) are applied before serialization.
 - Export order is chronological (`oldest first`) for predictable migration output.
-- When `include_header` is `true`, the payload starts with an ADIF header containing the LogRipper program metadata.
+- When `include_header` is `true`, the payload starts with an ADIF header containing the QsoRipper program metadata.
 
 ---
 

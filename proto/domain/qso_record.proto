@@ -1,8 +1,8 @@
 syntax = "proto3";
 
-package logripper.domain;
+package qsoripper.domain;
 
-option csharp_namespace = "LogRipper.Domain";
+option csharp_namespace = "QsoRipper.Domain";
 
 import "domain/band.proto";
 import "domain/mode.proto";
@@ -12,10 +12,10 @@ import "domain/station_snapshot.proto";
 import "domain/sync_status.proto";
 import "google/protobuf/timestamp.proto";
 
-// The core QSO (contact) record. This is LogRipper's primary entity.
+// The core QSO (contact) record. This is QsoRipper's primary entity.
 message QsoRecord {
   // --- Identity ---
-  string local_id = 1;  // LogRipper-assigned UUID
+  string local_id = 1;  // QsoRipper-assigned UUID
   optional string qrz_logid = 2;  // QRZ logbook record ID (after sync)
   optional string qrz_bookid = 3;  // QRZ logbook ID
 

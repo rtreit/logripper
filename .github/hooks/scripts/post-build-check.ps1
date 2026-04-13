@@ -9,7 +9,7 @@ if (-not $Command) {
     exit 0
 }
 
-if ($env:LOGRIPPER_HOOK_VERBOSE -eq "1") {
+if ($env:QSORIPPER_HOOK_VERBOSE -eq "1") {
     Write-Host "post-build-check observed command: $Command"
 }
 

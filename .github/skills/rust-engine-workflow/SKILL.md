@@ -1,8 +1,8 @@
 ---
 name: rust-engine-workflow
 description: >-
-  Implement and review Rust engine changes for LogRipper. Use when working in src/rust/,
-  touching logripper-core, logripper-server, build.rs, ADIF/QRZ adapters, or validating
+  Implement and review Rust engine changes for QsoRipper. Use when working in src/rust/,
+  touching qsoripper-core, qsoripper-server, build.rs, ADIF/QRZ adapters, or validating
   current Rust behavior against official language guidance.
 ---
 
@@ -11,15 +11,15 @@ description: >-
 ## When to Use
 
 - Editing files under `src/rust/`
-- Adding or changing engine behavior in `logripper-core`
-- Changing tonic server startup or hosting in `logripper-server`
+- Adding or changing engine behavior in `qsoripper-core`
+- Changing tonic server startup or hosting in `qsoripper-server`
 - Reviewing Rust bugs that may depend on current language semantics or edition behavior
 - Working near `build.rs`, generated proto bindings, or the C DSP boundary
 
 ## Core Repo Rules
 
-1. Keep reusable engine logic in `src/rust/logripper-core`.
-2. Keep process startup and tonic host wiring in `src/rust/logripper-server`.
+1. Keep reusable engine logic in `src/rust/qsoripper-core`.
+2. Keep process startup and tonic host wiring in `src/rust/qsoripper-server`.
 3. Do not hand-edit generated proto code; change `proto/` and regenerate.
 4. Keep ADIF and provider-specific formats at the edge, normalized into project-owned types.
 5. Favor current stable Rust semantics over workarounds for outdated compiler behavior.
@@ -36,8 +36,8 @@ If the change affects gRPC or schema behavior:
 
 ```powershell
 buf lint
-cargo run --manifest-path src\rust\Cargo.toml -p logripper-server
-dotnet run --project src\dotnet\LogRipper.Cli -- status
+cargo run --manifest-path src\rust\Cargo.toml -p qsoripper-server
+dotnet run --project src\dotnet\QsoRipper.Cli -- status
 ```
 
 ## Current Reference Sources
@@ -47,10 +47,10 @@ dotnet run --project src\dotnet\LogRipper.Cli -- status
 - Rust release notes: https://blog.rust-lang.org/
 - Rust Style Guide: https://doc.rust-lang.org/style-guide/
 
-## LogRipper-Specific Paths
+## QsoRipper-Specific Paths
 
-- `src/rust/logripper-core/`
-- `src/rust/logripper-server/`
-- `src/rust/logripper-core/build.rs`
+- `src/rust/qsoripper-core/`
+- `src/rust/qsoripper-server/`
+- `src/rust/qsoripper-core/build.rs`
 - `proto/`
-- `src/c/logripper-dsp/`
+- `src/c/qsoripper-dsp/`

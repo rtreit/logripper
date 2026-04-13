@@ -1,7 +1,7 @@
 ---
 name: rust-clippy-and-lints
 description: >-
-  Enforce current Rust lint, formatting, and dependency-audit practices in LogRipper. Use
+  Enforce current Rust lint, formatting, and dependency-audit practices in QsoRipper. Use
   when enabling or interpreting clippy lints, deciding on lint suppressions, or aligning
   Rust code with rustfmt, current stable lints, and modern supply-chain checks.
 ---

@@ -1,8 +1,8 @@
 syntax = "proto3";
 
-package logripper.domain;
+package qsoripper.domain;
 
-option csharp_namespace = "LogRipper.Domain";
+option csharp_namespace = "QsoRipper.Domain";
 
 // QSL card / confirmation status (aligned with ADIF QSL Sent/Rcvd enumerations).
 enum QslStatus {

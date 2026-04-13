@@ -1,0 +1,23 @@
+[package]
+name = "qsoripper-server"
+description = "Runnable gRPC server host for the QsoRipper engine"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+dotenvy = "0.15"
+qsoripper-core = { path = "../qsoripper-core", version = "0.1.0" }
+qsoripper-storage-memory = { path = "../qsoripper-storage-memory", version = "0.1.0" }
+qsoripper-storage-sqlite = { path = "../qsoripper-storage-sqlite", version = "0.1.0" }
+prost-types = { workspace = true }
+serde = { version = "1", features = ["derive"] }
+tokio = { workspace = true, features = ["signal"] }
+tokio-stream = { version = "0.1", features = ["net"] }
+toml = "0.8"
+tonic = { workspace = true }
+
+[lints]
+workspace = true

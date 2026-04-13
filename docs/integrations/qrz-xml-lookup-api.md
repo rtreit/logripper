@@ -2,7 +2,7 @@
 
 Source specification: <https://www.qrz.com/docs/xml/current_spec.html> (v1.34, July 15, 2020)
 
-This document is a comprehensive development reference for LogRipper's consumption of the QRZ XML data service for callsign lookups, DXCC entity resolution, and operator enrichment.
+This document is a comprehensive development reference for QsoRipper's consumption of the QRZ XML data service for callsign lookups, DXCC entity resolution, and operator enrichment.
 
 ---
 
@@ -36,7 +36,7 @@ https://xmldata.qrz.com/xml/<version_identifier>/?<query_parameters>
 
 An invalid version identifier returns an error.
 
-**LogRipper policy:** Use `current` or a pinned version in configuration. A trailing slash after the version segment is strongly recommended by QRZ.
+**QsoRipper policy:** Use `current` or a pinned version in configuration. A trailing slash after the version segment is strongly recommended by QRZ.
 
 ### Example URLs
 
@@ -63,7 +63,7 @@ https://xmldata.qrz.com/xml/current/?username=xx1xxx;password=abcdef  (latest)
 Send `username` and `password` to obtain a session key:
 
 ```
-https://xmldata.qrz.com/xml/current/?username=xx1xxx;password=abcdef;agent=LogRipper/0.1.0
+https://xmldata.qrz.com/xml/current/?username=xx1xxx;password=abcdef;agent=QsoRipper/0.1.0
 ```
 
 **Login input fields:**
@@ -72,7 +72,7 @@ https://xmldata.qrz.com/xml/current/?username=xx1xxx;password=abcdef;agent=LogRi
 |---|---|---|
 | `username` | Yes | A valid QRZ.COM username |
 | `password` | Yes | The correct password for the username |
-| `agent` | Strongly recommended | Product name and version (e.g. `LogRipper/0.1.0`). Assists QRZ support and troubleshooting. If omitted, QRZ falls back to the HTTP `User-Agent` header. |
+| `agent` | Strongly recommended | Product name and version (e.g. `QsoRipper/0.1.0`). Assists QRZ support and troubleshooting. If omitted, QRZ falls back to the HTTP `User-Agent` header. |
 
 ### Successful login response
 
@@ -294,7 +294,7 @@ Nearly every callsign will include geographic coordinates, but accuracy varies s
 | `dxcc` | Derived from the callsign's DXCC entity (country center) |
 | `none` | No value could be determined |
 
-**LogRipper implementation note:** Surface the `geoloc` value as metadata so the UI or consumer can convey coordinate confidence. Do not treat all coordinates as equally precise.
+**QsoRipper implementation note:** Surface the `geoloc` value as metadata so the UI or consumer can convey coordinate confidence. Do not treat all coordinates as equally precise.
 
 ---
 
@@ -416,9 +416,9 @@ The session has expired or been invalidated. The `<Key>` field is **not returned
 
 This error indicates service is refused for the user. **Successful login will not be possible for at least 24 hours.** No further details are provided.
 
-### Error handling strategy for LogRipper
+### Error handling strategy for QsoRipper
 
-| Error class | Detection | LogRipper behavior |
+| Error class | Detection | QsoRipper behavior |
 |---|---|---|
 | Session timeout / invalid key | `<Error>` present AND `<Key>` absent | Re-authenticate immediately; retry the original request once |
 | Callsign not found | `<Error>` contains "Not found" AND `<Key>` present | Negative-cache with short TTL; do not retry |
@@ -430,7 +430,7 @@ In all cases, **never block the local QSO logging path** on lookup availability.
 
 ---
 
-## Normalization into LogRipper domain
+## Normalization into QsoRipper domain
 
 Map QRZ XML fields into an internal `CallsignRecord` model. Do not expose raw XML structures above the adapter boundary.
 
@@ -471,10 +471,10 @@ Use these environment variables (see `.env.example`):
 
 | Variable | Purpose |
 |---|---|
-| `LOGRIPPER_QRZ_XML_BASE_URL` | XML service base URL (default: `https://xmldata.qrz.com/xml/current/`) |
-| `LOGRIPPER_QRZ_XML_USERNAME` | QRZ username for XML API login |
-| `LOGRIPPER_QRZ_XML_PASSWORD` | QRZ password for XML API login |
-| `LOGRIPPER_QRZ_USER_AGENT` | Agent string sent with requests (e.g. `LogRipper/0.1.0`) |
-| `LOGRIPPER_QRZ_HTTP_TIMEOUT_SECONDS` | HTTP request timeout |
-| `LOGRIPPER_QRZ_MAX_RETRIES` | Maximum retry count for transient failures |
+| `QSORIPPER_QRZ_XML_BASE_URL` | XML service base URL (default: `https://xmldata.qrz.com/xml/current/`) |
+| `QSORIPPER_QRZ_XML_USERNAME` | QRZ username for XML API login |
+| `QSORIPPER_QRZ_XML_PASSWORD` | QRZ password for XML API login |
+| `QSORIPPER_QRZ_USER_AGENT` | Agent string sent with requests (e.g. `QsoRipper/0.1.0`) |
+| `QSORIPPER_QRZ_HTTP_TIMEOUT_SECONDS` | HTTP request timeout |
+| `QSORIPPER_QRZ_MAX_RETRIES` | Maximum retry count for transient failures |
 

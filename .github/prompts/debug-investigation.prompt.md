@@ -1,6 +1,6 @@
 ---
 name: debug-investigation
-description: Investigate and resolve a LogRipper bug with a root-cause-first process.
+description: Investigate and resolve a QsoRipper bug with a root-cause-first process.
 ---
 
 # Debug Investigation Prompt
