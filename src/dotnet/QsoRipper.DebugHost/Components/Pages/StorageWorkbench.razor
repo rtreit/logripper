@@ -187,16 +187,25 @@
 
     private void Preview()
     {
-        samplePayload = ProtoJsonService.Describe(SampleProtoFactory.CreateQsoRecord(workedCallsign));
-        activeStationProfilePayload = WorkbenchState.RuntimeConfigSnapshot?.ActiveStationProfile is null
+        var activeProfile = WorkbenchState.RuntimeConfigSnapshot?.ActiveStationProfile;
+        var previewQso = SampleProtoFactory.CreateQsoRecord(workedCallsign);
+
+        if (activeProfile is not null)
+        {
+            previewQso.StationCallsign = activeProfile.StationCallsign;
+        }
+
+        samplePayload = ProtoJsonService.Describe(previewQso);
+        activeStationProfilePayload = activeProfile is null
             ? null
-            : ProtoJsonService.Describe(WorkbenchState.RuntimeConfigSnapshot.ActiveStationProfile);
+            : ProtoJsonService.Describe(activeProfile);
     }
 
     private async Task RunSmokeTestAsync()
     {
         Preview();
-        result = await StorageWorkbenchService.RunSmokeTestAsync(workedCallsign, retainRecord);
+        var activeProfile = WorkbenchState.RuntimeConfigSnapshot?.ActiveStationProfile;
+        result = await StorageWorkbenchService.RunSmokeTestAsync(workedCallsign, retainRecord, activeProfile);
         logResponsePayload = result.LogResponse is null ? null : ProtoJsonService.Describe(result.LogResponse);
         loadedPayload = result.LoadedResponse?.Qso is null ? null : ProtoJsonService.Describe(result.LoadedResponse.Qso);
         loadedStationSnapshotPayload = result.LoadedResponse?.Qso?.StationSnapshot is null
