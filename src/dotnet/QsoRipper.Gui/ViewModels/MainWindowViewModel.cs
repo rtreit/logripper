@@ -1,4 +1,6 @@
 using System.Threading.Tasks;
+using Avalonia;
+using Avalonia.Controls.ApplicationLifetimes;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using QsoRipper.Gui.Services;
@@ -58,6 +60,15 @@ internal sealed partial class MainWindowViewModel : ObservableObject
         WizardViewModel = vm;
         IsWizardOpen = true;
         await vm.LoadStateAsync();
+    }
+
+    [RelayCommand]
+    private static void Exit()
+    {
+        if (Application.Current?.ApplicationLifetime is IClassicDesktopStyleApplicationLifetime lifetime)
+        {
+            lifetime.Shutdown();
+        }
     }
 
     internal void CloseWizard(bool setupComplete)

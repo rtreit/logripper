@@ -11,14 +11,14 @@
 
   <DockPanel>
     <!-- Menu bar — always on top, never covered by overlay -->
-    <Menu DockPanel.Dock="Top">
-      <MenuItem x:Name="FileMenuItem" Header="_File">
-        <MenuItem Header="_Settings" InputGesture="Ctrl+OemComma"
-                  Command="{Binding OpenWizardCommand}" />
-        <Separator />
-        <MenuItem Header="E_xit" InputGesture="Alt+F4" />
-      </MenuItem>
-    </Menu>
+      <Menu DockPanel.Dock="Top">
+        <MenuItem x:Name="FileMenuItem" Header="_File">
+          <MenuItem Header="_Settings" InputGesture="Ctrl+OemComma"
+                    Command="{Binding OpenWizardCommand}" />
+          <Separator />
+          <MenuItem Header="E_xit" InputGesture="Alt+F4" Command="{Binding ExitCommand}" />
+        </MenuItem>
+      </Menu>
 
     <!-- Content area with optional wizard overlay -->
     <Panel>
