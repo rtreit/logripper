@@ -37,7 +37,7 @@ internal sealed partial class MainWindowViewModel : ObservableObject
             if (state.Status.IsFirstRun || !state.Status.SetupComplete)
             {
                 IsSetupIncomplete = !state.Status.SetupComplete;
-                OpenWizard();
+                await OpenWizardAsync();
             }
             else
             {
@@ -52,10 +52,12 @@ internal sealed partial class MainWindowViewModel : ObservableObject
     }
 
     [RelayCommand]
-    private void OpenWizard()
+    private async Task OpenWizardAsync()
     {
-        WizardViewModel = new SetupWizardViewModel(_engine, this);
+        var vm = new SetupWizardViewModel(_engine, this);
+        WizardViewModel = vm;
         IsWizardOpen = true;
+        await vm.LoadStateAsync();
     }
 
     internal void CloseWizard(bool setupComplete)

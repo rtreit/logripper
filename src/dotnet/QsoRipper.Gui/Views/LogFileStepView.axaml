@@ -1,14 +1,40 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="using:QsoRipper.Gui.ViewModels"
+             xmlns:v="using:QsoRipper.Gui.Views"
              x:Class="QsoRipper.Gui.Views.LogFileStepView"
              x:DataType="vm:LogFileStepViewModel">
 
   <StackPanel Spacing="12">
-    <TextBlock Text="Log file path:" FontWeight="SemiBold" />
-    <TextBox Text="{Binding LogFilePath, Mode=TwoWay}"
-             PlaceholderText="e.g. C:\Users\you\qsoripper.db" />
-    <TextBlock Text="Choose where QsoRipper stores your QSO log database. The directory must exist and be writable."
+    <TextBlock Text="Log folder:" FontWeight="SemiBold" />
+    <DockPanel>
+      <Button DockPanel.Dock="Right" Content="Browse…"
+              Margin="8,0,0,0"
+              x:Name="BrowseButton" />
+      <TextBox Text="{Binding LogFolder, Mode=TwoWay}"
+               PlaceholderText="e.g. C:\Users\you\QsoRipper" />
+    </DockPanel>
+
+    <StackPanel IsVisible="{Binding DirectoryMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
+                Spacing="4">
+      <TextBlock Text="{Binding DirectoryMessage}"
+                 TextWrapping="Wrap" FontSize="12"
+                 Foreground="{Binding OfferCreateDirectory, Converter={x:Static v:LogFileStepView.DirectoryColor}}" />
+      <Button Content="Create Directory"
+              Command="{Binding CreateDirectoryCommand}"
+              IsVisible="{Binding OfferCreateDirectory}"
+              Classes="accent" />
+    </StackPanel>
+
+    <TextBlock Text="Log name:" FontWeight="SemiBold" Margin="0,4,0,0" />
+    <DockPanel>
+      <TextBlock DockPanel.Dock="Right" Text=".db"
+                 VerticalAlignment="Center" Opacity="0.5" Margin="4,0,0,0" />
+      <TextBox Text="{Binding LogFileName, Mode=TwoWay}"
+               PlaceholderText="qsoripper" />
+    </DockPanel>
+
+    <TextBlock Text="QsoRipper stores your log in a local SQLite database. Pick a folder and name — we handle the rest."
                Opacity="0.6" TextWrapping="Wrap" FontSize="12" />
   </StackPanel>
 </UserControl>

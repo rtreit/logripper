@@ -82,9 +82,15 @@ internal sealed partial class SetupWizardViewModel : ObservableObject
                         var active = state.StationProfiles.FirstOrDefault(p => p.IsActive);
                         if (active?.Profile is not null)
                         {
+                            stationStep.ProfileName = active.Profile.ProfileName;
                             stationStep.Callsign = active.Profile.StationCallsign;
+                            stationStep.OperatorCallsign = active.Profile.OperatorCallsign;
                             stationStep.GridSquare = active.Profile.Grid;
                             stationStep.OperatorName = active.Profile.OperatorName;
+                            stationStep.County = active.Profile.County;
+                            stationStep.State = active.Profile.State;
+                            stationStep.Country = active.Profile.Country;
+                            stationStep.ArrlSection = active.Profile.ArrlSection;
                         }
                     }
                 }
@@ -196,7 +202,9 @@ internal sealed partial class SetupWizardViewModel : ObservableObject
     [RelayCommand]
     private void NavigateToStep(int stepIndex)
     {
-        if (stepIndex >= 0 && stepIndex < Steps.Count && Steps[stepIndex].IsComplete)
+        // Allow navigating to completed steps or the current step
+        if (stepIndex >= 0 && stepIndex < Steps.Count
+            && (Steps[stepIndex].IsComplete || stepIndex == CurrentStepIndex))
         {
             ErrorMessage = null;
             CurrentStepIndex = stepIndex;
@@ -213,37 +221,10 @@ internal sealed partial class SetupWizardViewModel : ObservableObject
             var stationStep = Steps.OfType<StationProfileStepViewModel>().First();
             var qrzStep = Steps.OfType<QrzStepViewModel>().First();
 
-            var profile = new QsoRipper.Domain.StationProfile
-            {
-                StationCallsign = stationStep.Callsign ?? string.Empty,
-                Grid = stationStep.GridSquare ?? string.Empty,
-                OperatorName = stationStep.OperatorName ?? string.Empty,
-            };
-
-            if (!string.IsNullOrWhiteSpace(stationStep.County))
-            {
-                profile.County = stationStep.County;
-            }
-
-            if (!string.IsNullOrWhiteSpace(stationStep.State))
-            {
-                profile.State = stationStep.State;
-            }
-
-            if (!string.IsNullOrWhiteSpace(stationStep.Country))
-            {
-                profile.Country = stationStep.Country;
-            }
-
-            if (!string.IsNullOrWhiteSpace(stationStep.ArrlSection))
-            {
-                profile.ArrlSection = stationStep.ArrlSection;
-            }
-
             var request = new SaveSetupRequest
             {
                 LogFilePath = logStep.LogFilePath ?? string.Empty,
-                StationProfile = profile,
+                StationProfile = BuildStationProfile(stationStep),
             };
 
             if (!string.IsNullOrWhiteSpace(qrzStep.Username))
@@ -275,33 +256,7 @@ internal sealed partial class SetupWizardViewModel : ObservableObject
                 request.LogFilePath = logStep.LogFilePath ?? string.Empty;
                 break;
             case StationProfileStepViewModel stationStep:
-                var profile = new QsoRipper.Domain.StationProfile
-                {
-                    StationCallsign = stationStep.Callsign ?? string.Empty,
-                    Grid = stationStep.GridSquare ?? string.Empty,
-                    OperatorName = stationStep.OperatorName ?? string.Empty,
-                };
-                if (!string.IsNullOrWhiteSpace(stationStep.County))
-                {
-                    profile.County = stationStep.County;
-                }
-
-                if (!string.IsNullOrWhiteSpace(stationStep.State))
-                {
-                    profile.State = stationStep.State;
-                }
-
-                if (!string.IsNullOrWhiteSpace(stationStep.Country))
-                {
-                    profile.Country = stationStep.Country;
-                }
-
-                if (!string.IsNullOrWhiteSpace(stationStep.ArrlSection))
-                {
-                    profile.ArrlSection = stationStep.ArrlSection;
-                }
-
-                request.StationProfile = profile;
+                request.StationProfile = BuildStationProfile(stationStep);
                 break;
             case QrzStepViewModel qrzStep:
                 request.QrzXmlUsername = qrzStep.Username ?? string.Empty;
@@ -329,4 +284,68 @@ internal sealed partial class SetupWizardViewModel : ObservableObject
         3 => SetupWizardStep.Review,
         _ => SetupWizardStep.Unspecified,
     };
+
+    private static QsoRipper.Domain.StationProfile BuildStationProfile(StationProfileStepViewModel s)
+    {
+        var p = new QsoRipper.Domain.StationProfile
+        {
+            StationCallsign = s.Callsign ?? string.Empty,
+            Grid = s.GridSquare ?? string.Empty,
+            OperatorName = s.OperatorName ?? string.Empty,
+        };
+
+        if (!string.IsNullOrWhiteSpace(s.ProfileName))
+        {
+            p.ProfileName = s.ProfileName;
+        }
+
+        if (!string.IsNullOrWhiteSpace(s.OperatorCallsign))
+        {
+            p.OperatorCallsign = s.OperatorCallsign;
+        }
+
+        if (!string.IsNullOrWhiteSpace(s.County))
+        {
+            p.County = s.County;
+        }
+
+        if (!string.IsNullOrWhiteSpace(s.State))
+        {
+            p.State = s.State;
+        }
+
+        if (!string.IsNullOrWhiteSpace(s.Country))
+        {
+            p.Country = s.Country;
+        }
+
+        if (!string.IsNullOrWhiteSpace(s.ArrlSection))
+        {
+            p.ArrlSection = s.ArrlSection;
+        }
+
+        SetNumericField(s.Dxcc, v => p.Dxcc = v);
+        SetNumericField(s.CqZone, v => p.CqZone = v);
+        SetNumericField(s.ItuZone, v => p.ItuZone = v);
+        SetDoubleField(s.Latitude, v => p.Latitude = v);
+        SetDoubleField(s.Longitude, v => p.Longitude = v);
+
+        return p;
+    }
+
+    private static void SetNumericField(string? input, Action<uint> setter)
+    {
+        if (uint.TryParse(input, System.Globalization.CultureInfo.InvariantCulture, out var value))
+        {
+            setter(value);
+        }
+    }
+
+    private static void SetDoubleField(string? input, Action<double> setter)
+    {
+        if (double.TryParse(input, System.Globalization.CultureInfo.InvariantCulture, out var value))
+        {
+            setter(value);
+        }
+    }
 }

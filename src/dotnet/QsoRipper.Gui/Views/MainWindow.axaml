@@ -4,12 +4,13 @@
         xmlns:v="using:QsoRipper.Gui.Views"
         x:Class="QsoRipper.Gui.Views.MainWindow"
         x:DataType="vm:MainWindowViewModel"
-        Title="QsoRipper" Width="900" Height="600"
+        Title="QsoRipper" Width="960" Height="700"
+        MinWidth="800" MinHeight="600"
         WindowStartupLocation="CenterScreen">
 
   <Panel>
     <!-- Main content behind the wizard -->
-    <DockPanel IsEnabled="{Binding !IsWizardOpen}">
+    <DockPanel>
       <Menu DockPanel.Dock="Top">
         <MenuItem Header="_File">
           <MenuItem Header="_Settings" InputGesture="Ctrl+OemComma"
@@ -19,7 +20,8 @@
         </MenuItem>
       </Menu>
 
-      <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" Spacing="12">
+      <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" Spacing="12"
+                  IsEnabled="{Binding !IsWizardOpen}">
         <TextBlock Text="{Binding StatusMessage}"
                    FontSize="16" HorizontalAlignment="Center" />
 
@@ -36,7 +38,7 @@
             Background="#80000000">
       <Border Background="{DynamicResource SystemControlBackgroundAltHighBrush}"
               CornerRadius="8"
-              Margin="40"
+              Margin="40,24"
               BoxShadow="0 8 32 0 #40000000"
               ClipToBounds="True">
         <v:SetupWizardView DataContext="{Binding WizardViewModel}" />
