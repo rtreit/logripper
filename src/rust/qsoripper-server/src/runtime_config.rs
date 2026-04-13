@@ -158,6 +158,13 @@ impl RuntimeConfigManager {
         self.bindings.read().await.active_storage_backend.clone()
     }
 
+    pub(crate) async fn effective_values(&self) -> BTreeMap<String, String> {
+        let config_file_values = self.config_file_values.read().await.clone();
+        let overrides = self.overrides.read().await.clone();
+        let base = merged_base_values(&config_file_values, &self.startup_values);
+        merge_values(&base, &overrides)
+    }
+
     pub(crate) async fn preview_config_file_values(
         &self,
         next_config_file_values: BTreeMap<String, String>,

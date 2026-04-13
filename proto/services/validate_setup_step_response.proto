@@ -1,0 +1,14 @@
+syntax = "proto3";
+
+package qsoripper.services;
+
+option csharp_namespace = "QsoRipper.Services";
+
+import "services/setup_field_validation.proto";
+
+message ValidateSetupStepResponse {
+  // True when all fields for the step are valid.
+  bool valid = 1;
+  // Per-field validation results.
+  repeated SetupFieldValidation fields = 2;
+}

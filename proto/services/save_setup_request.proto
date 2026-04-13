@@ -8,10 +8,10 @@ import "domain/station_profile.proto";
 import "services/storage_backend.proto";
 
 message SaveSetupRequest {
-  // Legacy compatibility field. New clients should use log_file_path.
-  StorageBackend storage_backend = 1;
-  // Legacy compatibility field. New clients should use log_file_path.
-  optional string sqlite_path = 2;
+  // Deprecated: legacy storage backend selector. Use log_file_path instead.
+  StorageBackend storage_backend = 1 [deprecated = true];
+  // Deprecated: legacy SQLite path. Use log_file_path instead.
+  optional string sqlite_path = 2 [deprecated = true];
   qsoripper.domain.StationProfile station_profile = 3;
   optional string qrz_xml_username = 4;
   optional string qrz_xml_password = 5;

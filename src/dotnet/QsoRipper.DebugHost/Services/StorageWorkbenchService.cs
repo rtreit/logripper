@@ -22,11 +22,13 @@ internal sealed class StorageWorkbenchService
     public async Task<StorageSmokeTestResult> RunSmokeTestAsync(
         string workedCallsign,
         bool retainRecord,
+        StationProfile? activeStationProfile = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(workedCallsign);
 
         var sampleQso = _sampleProtoFactory.CreateQsoRecord(workedCallsign);
+        ApplyStationProfile(sampleQso, activeStationProfile);
         LogQsoResponse? logResponse = null;
         GetQsoResponse? loadedResponse = null;
         DeleteQsoResponse? deleteResponse = null;
@@ -125,6 +127,33 @@ internal sealed class StorageWorkbenchService
                 ex.Message,
                 DateTimeOffset.UtcNow);
         }
+    }
+
+    private static void ApplyStationProfile(QsoRecord qso, StationProfile? profile)
+    {
+        if (profile is null)
+        {
+            return;
+        }
+
+        qso.StationCallsign = profile.StationCallsign;
+        qso.StationSnapshot = new StationSnapshot
+        {
+            ProfileName = profile.ProfileName,
+            StationCallsign = profile.StationCallsign,
+            OperatorCallsign = profile.OperatorCallsign,
+            OperatorName = profile.OperatorName,
+            Grid = profile.Grid,
+            County = profile.County,
+            State = profile.State,
+            Country = profile.Country,
+            Dxcc = profile.Dxcc,
+            CqZone = profile.CqZone,
+            ItuZone = profile.ItuZone,
+            Latitude = profile.Latitude,
+            Longitude = profile.Longitude,
+            ArrlSection = profile.ArrlSection
+        };
     }
 
     private static async Task<bool> ConfirmDeleteAsync(

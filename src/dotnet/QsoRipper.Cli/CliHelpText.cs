@@ -28,7 +28,7 @@ internal static class CliHelpText
             Engine:
               status                           Show sync status and QSO counts
               config [--set KEY=VALUE]         View or modify runtime config
-              setup                            Check first-run setup status
+              setup [--status | --from-env]    Interactive setup wizard or headless config
 
             Options:
               --endpoint, -e <url>             Engine endpoint (default: http://127.0.0.1:50051)
@@ -141,9 +141,29 @@ internal static class CliHelpText
                   --reset              Reset all overrides to defaults
                 """,
             "setup" => """
-                Usage: setup
+                Usage: setup [--status] [--from-env]
 
-                Check first-run setup status.
+                Interactive setup wizard for first-run configuration. Walks through
+                log file path, station profile, and optional QRZ integration step by step.
+
+                Modes:
+                  (default)          Interactive wizard — prompts for each setting
+                  --status           Show current setup status (read-only)
+                  --from-env         Headless setup from environment variables (no prompts)
+
+                Environment variables for --from-env:
+                  QSORIPPER_LOG_FILE              Log file path
+                  QSORIPPER_STATION_CALLSIGN      Station callsign (required)
+                  QSORIPPER_OPERATOR_CALLSIGN     Operator callsign (defaults to station)
+                  QSORIPPER_PROFILE_NAME          Profile name (defaults to "Default")
+                  QSORIPPER_GRID                  Grid square
+                  QSORIPPER_QRZ_USERNAME          QRZ XML username (optional)
+                  QSORIPPER_QRZ_PASSWORD          QRZ XML password (optional)
+
+                Examples:
+                  setup                           Start the interactive wizard
+                  setup --status                  Check if setup is complete
+                  setup --from-env                Configure from environment variables
                 """,
             "status" => """
                 Usage: status

@@ -92,6 +92,56 @@ public class CliArgumentParserTests
         Assert.True(arguments.SkipCache);
     }
 
+    [Fact]
+    public void Parse_setup_status_flag()
+    {
+        var arguments = CliArgumentParser.Parse(["setup", "--status"]);
+
+        Assert.Equal("setup", arguments.Command);
+        Assert.True(arguments.SetupStatus);
+        Assert.False(arguments.SetupFromEnv);
+    }
+
+    [Fact]
+    public void Parse_setup_from_env_flag()
+    {
+        var arguments = CliArgumentParser.Parse(["setup", "--from-env"]);
+
+        Assert.Equal("setup", arguments.Command);
+        Assert.False(arguments.SetupStatus);
+        Assert.True(arguments.SetupFromEnv);
+    }
+
+    [Fact]
+    public void Parse_setup_without_flags_defaults_both_false()
+    {
+        var arguments = CliArgumentParser.Parse(["setup"]);
+
+        Assert.Equal("setup", arguments.Command);
+        Assert.False(arguments.SetupStatus);
+        Assert.False(arguments.SetupFromEnv);
+    }
+
+    [Fact]
+    public void Parse_setup_status_with_json()
+    {
+        var arguments = CliArgumentParser.Parse(["setup", "--status", "--json"]);
+
+        Assert.Equal("setup", arguments.Command);
+        Assert.True(arguments.SetupStatus);
+        Assert.True(arguments.JsonOutput);
+    }
+
+    [Fact]
+    public void Parse_setup_from_env_with_endpoint()
+    {
+        var arguments = CliArgumentParser.Parse(["--endpoint", "http://host:9090", "setup", "--from-env"]);
+
+        Assert.Equal("setup", arguments.Command);
+        Assert.Equal("http://host:9090", arguments.Endpoint);
+        Assert.True(arguments.SetupFromEnv);
+    }
+
     [Theory]
     [InlineData("http://localhost:50051", true)]
     [InlineData("https://example.com:7443", true)]

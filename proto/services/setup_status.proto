@@ -11,19 +11,21 @@ message SetupStatus {
   bool config_file_exists = 1;
   bool setup_complete = 2;
   string config_path = 3;
-  // Legacy compatibility field. New clients should use log_file_path.
-  StorageBackend storage_backend = 4;
-  // Legacy compatibility field. New clients should use log_file_path.
-  optional string sqlite_path = 5;
+  // Deprecated: legacy storage backend selector. Use log_file_path instead.
+  StorageBackend storage_backend = 4 [deprecated = true];
+  // Deprecated: legacy SQLite path. Use log_file_path instead.
+  optional string sqlite_path = 5 [deprecated = true];
   bool has_station_profile = 6;
   qsoripper.domain.StationProfile station_profile = 7;
   optional string qrz_xml_username = 8;
   bool has_qrz_xml_password = 9;
-  // Legacy compatibility field. New clients should use suggested_log_file_path.
-  string suggested_sqlite_path = 10;
+  // Deprecated: legacy suggested SQLite path. Use suggested_log_file_path instead.
+  string suggested_sqlite_path = 10 [deprecated = true];
   repeated string warnings = 11;
   optional string active_station_profile_id = 12;
   uint32 station_profile_count = 13;
   optional string log_file_path = 14;
   string suggested_log_file_path = 15;
+  // True when no config file exists and setup has never been completed.
+  bool is_first_run = 16;
 }

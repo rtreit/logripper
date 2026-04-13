@@ -1,0 +1,15 @@
+syntax = "proto3";
+
+package qsoripper.services;
+
+option csharp_namespace = "QsoRipper.Services";
+
+// Per-field validation result returned by ValidateSetupStep.
+message SetupFieldValidation {
+  // Field name (e.g. "log_file_path", "station_callsign").
+  string field = 1;
+  // True when the field value is acceptable.
+  bool valid = 2;
+  // Human-readable reason when invalid, empty when valid.
+  string message = 3;
+}

@@ -6,14 +6,23 @@ option csharp_namespace = "QsoRipper.Services";
 
 import "services/get_setup_status_request.proto";
 import "services/get_setup_status_response.proto";
+import "services/get_setup_wizard_state_request.proto";
+import "services/get_setup_wizard_state_response.proto";
 import "services/save_setup_request.proto";
 import "services/save_setup_response.proto";
+import "services/test_qrz_credentials_request.proto";
+import "services/test_qrz_credentials_response.proto";
+import "services/validate_setup_step_request.proto";
+import "services/validate_setup_step_response.proto";
 
 // Production setup/bootstrap surface for first-run configuration.
 //
 // This service owns persisted engine configuration, not ephemeral developer
 // runtime overrides. Clients can use it to detect missing setup, present the
 // recommended config/data paths, and save the initial station/logbook settings.
+//
+// The wizard RPCs (GetSetupWizardState, ValidateSetupStep, TestQrzCredentials)
+// support step-by-step guided setup for new users in any UI surface.
 service SetupService {
   // Read the current persisted setup status and suggested default paths.
   rpc GetSetupStatus(GetSetupStatusRequest) returns (GetSetupStatusResponse);
@@ -21,4 +30,14 @@ service SetupService {
   // Validate and persist the initial setup payload, then hot-apply it to the
   // running engine for new requests.
   rpc SaveSetup(SaveSetupRequest) returns (SaveSetupResponse);
+
+  // Return full wizard state: per-step completion, suggested defaults, and
+  // current station profiles. Used by setup wizards and settings screens.
+  rpc GetSetupWizardState(GetSetupWizardStateRequest) returns (GetSetupWizardStateResponse);
+
+  // Validate one wizard step without persisting. Returns per-field results.
+  rpc ValidateSetupStep(ValidateSetupStepRequest) returns (ValidateSetupStepResponse);
+
+  // Test QRZ XML credentials by performing a live login attempt.
+  rpc TestQrzCredentials(TestQrzCredentialsRequest) returns (TestQrzCredentialsResponse);
 }

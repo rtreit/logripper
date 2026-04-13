@@ -1,0 +1,21 @@
+syntax = "proto3";
+
+package qsoripper.services;
+
+option csharp_namespace = "QsoRipper.Services";
+
+import "services/setup_wizard_step.proto";
+import "domain/station_profile.proto";
+
+// Validate one wizard step without persisting. The client populates only the
+// fields relevant to the indicated step; the server ignores unrelated fields.
+message ValidateSetupStepRequest {
+  SetupWizardStep step = 1;
+  // Step 1: log file path.
+  optional string log_file_path = 2;
+  // Step 2: station profile being validated (one at a time).
+  qsoripper.domain.StationProfile station_profile = 3;
+  // Step 3: QRZ credentials.
+  optional string qrz_xml_username = 4;
+  optional string qrz_xml_password = 5;
+}

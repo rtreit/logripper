@@ -207,6 +207,19 @@ impl QrzXmlProvider {
         })
     }
 
+    /// Test credentials by performing a login attempt.
+    ///
+    /// Returns `Ok(())` when the login succeeds and a session key is obtained.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ProviderLookupError` when authentication fails or the network
+    /// request cannot be completed.
+    pub async fn test_login(&self) -> Result<(), ProviderLookupError> {
+        let (_key, _exchanges) = self.login().await?;
+        Ok(())
+    }
+
     async fn ensure_session_key(
         &self,
     ) -> Result<(String, Vec<DebugHttpExchange>), ProviderLookupError> {

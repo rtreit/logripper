@@ -89,9 +89,11 @@ internal sealed class DebugWorkbenchState
         SetupStatus = status;
         SetupErrorMessage = null;
 
+#pragma warning disable CS0612 // Type or member is obsolete
         var persistedLogFilePath = string.IsNullOrWhiteSpace(status.LogFilePath)
             ? status.SqlitePath
             : status.LogFilePath;
+#pragma warning restore CS0612
         if (!string.IsNullOrWhiteSpace(persistedLogFilePath))
         {
             EngineStorageBackend = EngineStorageBackend.Sqlite;
