@@ -14,6 +14,8 @@ internal static class CliArgumentParser
         var skipCache = false;
         var jsonOutput = false;
         var refresh = false;
+        var setupStatus = false;
+        var setupFromEnv = false;
 
         var remaining = new List<string>();
 
@@ -61,6 +63,18 @@ internal static class CliArgumentParser
                 continue;
             }
 
+            if (arg is "--status")
+            {
+                setupStatus = true;
+                continue;
+            }
+
+            if (arg is "--from-env")
+            {
+                setupFromEnv = true;
+                continue;
+            }
+
             if (command is null && !arg.StartsWith('-'))
             {
                 command = arg;
@@ -86,6 +100,8 @@ internal static class CliArgumentParser
             SkipCache: skipCache,
             JsonOutput: jsonOutput,
             Refresh: refresh,
+            SetupStatus: setupStatus,
+            SetupFromEnv: setupFromEnv,
             RemainingArgs: remaining.ToArray());
     }
 }

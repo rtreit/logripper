@@ -1,0 +1,23 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:QsoRipper.Gui.ViewModels"
+             x:Class="QsoRipper.Gui.Views.ReviewStepView"
+             x:DataType="vm:ReviewStepViewModel">
+
+  <StackPanel Spacing="12">
+    <TextBlock Text="Here's a summary of your configuration:"
+               Opacity="0.7" TextWrapping="Wrap" />
+
+    <Border Background="{DynamicResource SystemControlBackgroundBaseLowBrush}"
+            CornerRadius="4"
+            Padding="16">
+      <TextBlock Text="{Binding SummaryText}"
+                 FontFamily="Cascadia Mono, Consolas, monospace"
+                 FontSize="13"
+                 TextWrapping="Wrap" />
+    </Border>
+
+    <TextBlock Text="Click 'Save &amp; Start Logging' to apply these settings."
+               Opacity="0.6" FontSize="12" />
+  </StackPanel>
+</UserControl>

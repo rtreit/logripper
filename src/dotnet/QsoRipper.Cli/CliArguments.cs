@@ -9,6 +9,8 @@ internal sealed record CliArguments(
     bool SkipCache = false,
     bool JsonOutput = false,
     bool Refresh = false,
+    bool SetupStatus = false,
+    bool SetupFromEnv = false,
     string[] RemainingArgs = default!)
 {
     public string[] RemainingArgs { get; init; } = RemainingArgs ?? [];

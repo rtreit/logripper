@@ -5,19 +5,24 @@ use std::sync::Arc;
 
 use qsoripper_core::domain::lookup::normalize_callsign;
 use qsoripper_core::domain::station::station_profile_has_values;
-use qsoripper_core::lookup::{QRZ_XML_PASSWORD_ENV_VAR, QRZ_XML_USERNAME_ENV_VAR};
+use qsoripper_core::lookup::{
+    QrzXmlConfig, QrzXmlProvider, QRZ_USER_AGENT_ENV_VAR, QRZ_XML_PASSWORD_ENV_VAR,
+    QRZ_XML_USERNAME_ENV_VAR,
+};
 use qsoripper_core::proto::qsoripper::domain::StationProfile;
 use qsoripper_core::proto::qsoripper::services::{
     setup_service_server::SetupService, station_profile_service_server::StationProfileService,
     ActiveStationContext, ClearSessionStationProfileOverrideRequest,
     ClearSessionStationProfileOverrideResponse, DeleteStationProfileRequest,
     DeleteStationProfileResponse, GetActiveStationContextRequest, GetActiveStationContextResponse,
-    GetSetupStatusRequest, GetSetupStatusResponse, GetStationProfileRequest,
-    GetStationProfileResponse, ListStationProfilesRequest, ListStationProfilesResponse,
-    SaveSetupRequest, SaveSetupResponse, SaveStationProfileRequest, SaveStationProfileResponse,
-    SetActiveStationProfileRequest, SetActiveStationProfileResponse,
-    SetSessionStationProfileOverrideRequest, SetSessionStationProfileOverrideResponse, SetupStatus,
-    StationProfileRecord, StorageBackend,
+    GetSetupStatusRequest, GetSetupStatusResponse, GetSetupWizardStateRequest,
+    GetSetupWizardStateResponse, GetStationProfileRequest, GetStationProfileResponse,
+    ListStationProfilesRequest, ListStationProfilesResponse, SaveSetupRequest, SaveSetupResponse,
+    SaveStationProfileRequest, SaveStationProfileResponse, SetActiveStationProfileRequest,
+    SetActiveStationProfileResponse, SetSessionStationProfileOverrideRequest,
+    SetSessionStationProfileOverrideResponse, SetupFieldValidation, SetupStatus, SetupWizardStep,
+    SetupWizardStepStatus, StationProfileRecord, StorageBackend, TestQrzCredentialsRequest,
+    TestQrzCredentialsResponse, ValidateSetupStepRequest, ValidateSetupStepResponse,
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
@@ -86,6 +91,36 @@ impl SetupService for SetupControlSurface {
         Ok(Response::new(SaveSetupResponse {
             status: Some(status),
         }))
+    }
+
+    async fn get_setup_wizard_state(
+        &self,
+        _request: Request<GetSetupWizardStateRequest>,
+    ) -> Result<Response<GetSetupWizardStateResponse>, Status> {
+        Ok(Response::new(self.state.wizard_state().await))
+    }
+
+    async fn validate_setup_step(
+        &self,
+        request: Request<ValidateSetupStepRequest>,
+    ) -> Result<Response<ValidateSetupStepResponse>, Status> {
+        let inner = request.into_inner();
+        let step = SetupWizardStep::try_from(inner.step).unwrap_or(SetupWizardStep::Unspecified);
+        Ok(Response::new(validate_step(step, &inner)))
+    }
+
+    async fn test_qrz_credentials(
+        &self,
+        request: Request<TestQrzCredentialsRequest>,
+    ) -> Result<Response<TestQrzCredentialsResponse>, Status> {
+        let inner = request.into_inner();
+        let result = test_qrz_login(
+            &inner.qrz_xml_username,
+            &inner.qrz_xml_password,
+            &self.runtime_config,
+        )
+        .await;
+        Ok(Response::new(result))
     }
 }
 
@@ -219,6 +254,24 @@ impl SetupState {
             self.suggested_log_file_path.as_path(),
             persisted_config.as_ref(),
         )
+    }
+
+    async fn wizard_state(&self) -> GetSetupWizardStateResponse {
+        let persisted_config = self.persisted_config.read().await.clone();
+        let status = build_status(
+            self.config_path.as_path(),
+            self.suggested_log_file_path.as_path(),
+            persisted_config.as_ref(),
+        );
+        let steps = build_wizard_steps(persisted_config.as_ref());
+        let station_profiles = persisted_config
+            .as_ref()
+            .map_or_else(Vec::new, PersistedSetupConfig::list_station_profile_records);
+        GetSetupWizardStateResponse {
+            status: Some(status),
+            steps,
+            station_profiles,
+        }
     }
 
     async fn save_setup(
@@ -474,7 +527,9 @@ impl PersistedSetupConfig {
         }
 
         let requested_log_file_path = normalize_optional_string(request.log_file_path.as_deref());
+        #[allow(deprecated)]
         let legacy_sqlite_path = normalize_optional_string(request.sqlite_path.as_deref());
+        #[allow(deprecated)]
         let legacy_storage_backend = StorageBackend::try_from(request.storage_backend)
             .unwrap_or(StorageBackend::Unspecified);
         let (logbook, storage) = if let Some(log_file_path) = requested_log_file_path {
@@ -1009,6 +1064,7 @@ fn build_status(
         PersistedSetupConfig::runtime_storage_backend,
     );
 
+    #[allow(deprecated)]
     SetupStatus {
         config_file_exists: persisted_config.is_some(),
         setup_complete: persisted_config.is_some() && warnings.is_empty(),
@@ -1030,6 +1086,7 @@ fn build_status(
         }),
         log_file_path,
         suggested_log_file_path: suggested_log_file_path.display().to_string(),
+        is_first_run: persisted_config.is_none(),
     }
 }
 
@@ -1068,6 +1125,291 @@ fn build_warnings(persisted_config: Option<&PersistedSetupConfig>) -> Vec<String
     }
 
     warnings
+}
+
+fn build_wizard_steps(
+    persisted_config: Option<&PersistedSetupConfig>,
+) -> Vec<SetupWizardStepStatus> {
+    vec![
+        build_log_file_step(persisted_config),
+        build_station_profiles_step(persisted_config),
+        build_qrz_integration_step(persisted_config),
+        build_review_step(persisted_config),
+    ]
+}
+
+fn build_log_file_step(config: Option<&PersistedSetupConfig>) -> SetupWizardStepStatus {
+    let log_file = config.and_then(PersistedSetupConfig::log_file_path);
+    let complete = log_file.is_some();
+    let issues = if complete {
+        Vec::new()
+    } else {
+        vec!["A log file path is required.".to_string()]
+    };
+    SetupWizardStepStatus {
+        step: SetupWizardStep::LogFile.into(),
+        complete,
+        issues,
+    }
+}
+
+fn build_station_profiles_step(config: Option<&PersistedSetupConfig>) -> SetupWizardStepStatus {
+    let has_profiles = config.is_some_and(|c| c.station_profile_count() > 0);
+    let has_active = config
+        .and_then(PersistedSetupConfig::active_station_profile_id)
+        .is_some();
+    let complete = has_profiles && has_active;
+    let mut issues = Vec::new();
+    if !has_profiles {
+        issues.push("At least one station profile is required.".to_string());
+    }
+    if has_profiles && !has_active {
+        issues.push("An active station profile must be selected.".to_string());
+    }
+    SetupWizardStepStatus {
+        step: SetupWizardStep::StationProfiles.into(),
+        complete,
+        issues,
+    }
+}
+
+fn build_qrz_integration_step(config: Option<&PersistedSetupConfig>) -> SetupWizardStepStatus {
+    let username = config.and_then(|c| c.qrz_xml.username.as_ref());
+    let password = config.and_then(|c| c.qrz_xml.password.as_ref());
+    // QRZ is optional — step is complete if either both are set or both are absent.
+    let paired = username.is_some() == password.is_some();
+    let issues = if paired {
+        Vec::new()
+    } else {
+        vec![
+            "QRZ XML username and password must either both be set or both be omitted.".to_string(),
+        ]
+    };
+    SetupWizardStepStatus {
+        step: SetupWizardStep::QrzIntegration.into(),
+        complete: paired,
+        issues,
+    }
+}
+
+fn build_review_step(config: Option<&PersistedSetupConfig>) -> SetupWizardStepStatus {
+    let all_prior_complete = config.is_some()
+        && config
+            .and_then(PersistedSetupConfig::log_file_path)
+            .is_some()
+        && config.is_some_and(|c| c.station_profile_count() > 0)
+        && config
+            .and_then(PersistedSetupConfig::active_station_profile_id)
+            .is_some();
+    let issues = if all_prior_complete {
+        Vec::new()
+    } else {
+        vec!["Complete the previous steps before reviewing.".to_string()]
+    };
+    SetupWizardStepStatus {
+        step: SetupWizardStep::Review.into(),
+        complete: all_prior_complete,
+        issues,
+    }
+}
+
+fn validate_step(
+    step: SetupWizardStep,
+    request: &ValidateSetupStepRequest,
+) -> ValidateSetupStepResponse {
+    match step {
+        SetupWizardStep::LogFile => validate_log_file_step(request),
+        SetupWizardStep::StationProfiles => validate_station_profiles_step(request),
+        SetupWizardStep::QrzIntegration => validate_qrz_step(request),
+        SetupWizardStep::Review | SetupWizardStep::Unspecified => ValidateSetupStepResponse {
+            valid: true,
+            fields: Vec::new(),
+        },
+    }
+}
+
+fn validate_log_file_step(request: &ValidateSetupStepRequest) -> ValidateSetupStepResponse {
+    let path = normalize_optional_string(request.log_file_path.as_deref());
+    let (valid, message) = match &path {
+        Some(p) => {
+            let parent = Path::new(p.as_str()).parent();
+            match parent {
+                Some(d) if !d.as_os_str().is_empty() && !d.exists() => (
+                    false,
+                    format!("Parent directory '{}' does not exist.", d.display()),
+                ),
+                _ => (true, String::new()),
+            }
+        }
+        None => (false, "A log file path is required.".to_string()),
+    };
+    ValidateSetupStepResponse {
+        valid,
+        fields: vec![SetupFieldValidation {
+            field: "log_file_path".to_string(),
+            valid,
+            message,
+        }],
+    }
+}
+
+fn validate_station_profiles_step(request: &ValidateSetupStepRequest) -> ValidateSetupStepResponse {
+    let profile = request.station_profile.as_ref();
+    let mut fields = Vec::new();
+
+    let callsign_valid = profile
+        .and_then(|p| normalize_optional_string(Some(p.station_callsign.as_str())))
+        .is_some();
+    fields.push(SetupFieldValidation {
+        field: "station_callsign".to_string(),
+        valid: callsign_valid,
+        message: if callsign_valid {
+            String::new()
+        } else {
+            "Station callsign is required.".to_string()
+        },
+    });
+
+    let name_valid = profile
+        .and_then(|p| normalize_optional_string(p.profile_name.as_deref()))
+        .is_some();
+    fields.push(SetupFieldValidation {
+        field: "profile_name".to_string(),
+        valid: name_valid,
+        message: if name_valid {
+            String::new()
+        } else {
+            "Profile name is required.".to_string()
+        },
+    });
+
+    let operator_valid = profile
+        .and_then(|p| normalize_optional_string(p.operator_callsign.as_deref()))
+        .is_some();
+    fields.push(SetupFieldValidation {
+        field: "operator_callsign".to_string(),
+        valid: operator_valid,
+        message: if operator_valid {
+            String::new()
+        } else {
+            "Operator callsign is required.".to_string()
+        },
+    });
+
+    let grid_valid = profile
+        .and_then(|p| normalize_optional_string(p.grid.as_deref()))
+        .is_some();
+    fields.push(SetupFieldValidation {
+        field: "grid".to_string(),
+        valid: grid_valid,
+        message: if grid_valid {
+            String::new()
+        } else {
+            "Grid square is required.".to_string()
+        },
+    });
+
+    let all_valid = callsign_valid && name_valid && operator_valid && grid_valid;
+    ValidateSetupStepResponse {
+        valid: all_valid,
+        fields,
+    }
+}
+
+fn validate_qrz_step(request: &ValidateSetupStepRequest) -> ValidateSetupStepResponse {
+    let username = normalize_optional_string(request.qrz_xml_username.as_deref());
+    let password = normalize_optional_string(request.qrz_xml_password.as_deref());
+    let mut fields = Vec::new();
+
+    // Both or neither must be set — absent is valid (skip QRZ).
+    let paired = username.is_some() == password.is_some();
+
+    fields.push(SetupFieldValidation {
+        field: "qrz_xml_username".to_string(),
+        valid: paired || username.is_some(),
+        message: if !paired && username.is_none() {
+            "Username is required when password is set.".to_string()
+        } else {
+            String::new()
+        },
+    });
+
+    fields.push(SetupFieldValidation {
+        field: "qrz_xml_password".to_string(),
+        valid: paired || password.is_some(),
+        message: if !paired && password.is_none() {
+            "Password is required when username is set.".to_string()
+        } else {
+            String::new()
+        },
+    });
+
+    ValidateSetupStepResponse {
+        valid: paired,
+        fields,
+    }
+}
+
+async fn test_qrz_login(
+    username: &str,
+    password: &str,
+    runtime_config: &RuntimeConfigManager,
+) -> TestQrzCredentialsResponse {
+    let username = username.trim();
+    let password = password.trim();
+
+    if username.is_empty() || password.is_empty() {
+        return TestQrzCredentialsResponse {
+            success: false,
+            error_message: "Username and password are both required.".to_string(),
+        };
+    }
+
+    // Build a temporary QRZ config using the test credentials plus the current
+    // runtime user-agent setting (required by QRZ to identify clients).
+    let effective = runtime_config.effective_values().await;
+    let user_agent = effective
+        .get(QRZ_USER_AGENT_ENV_VAR)
+        .cloned()
+        .unwrap_or_else(|| format!("QsoRipper/0.1.0 ({username})"));
+
+    let config = QrzXmlConfig::from_value_provider(|name| match name {
+        n if n == QRZ_XML_USERNAME_ENV_VAR => Some(username.to_string()),
+        n if n == QRZ_XML_PASSWORD_ENV_VAR => Some(password.to_string()),
+        n if n == QRZ_USER_AGENT_ENV_VAR => Some(user_agent.clone()),
+        _ => effective.get(name).cloned(),
+    });
+
+    let config = match config {
+        Ok(c) => c,
+        Err(error) => {
+            return TestQrzCredentialsResponse {
+                success: false,
+                error_message: format!("Invalid QRZ configuration: {error}"),
+            };
+        }
+    };
+
+    let provider = match QrzXmlProvider::new(config) {
+        Ok(p) => p,
+        Err(error) => {
+            return TestQrzCredentialsResponse {
+                success: false,
+                error_message: format!("Failed to create QRZ provider: {error}"),
+            };
+        }
+    };
+
+    match provider.test_login().await {
+        Ok(()) => TestQrzCredentialsResponse {
+            success: true,
+            error_message: String::new(),
+        },
+        Err(error) => TestQrzCredentialsResponse {
+            success: false,
+            error_message: format!("{error}"),
+        },
+    }
 }
 
 fn normalize_optional_string(value: Option<&str>) -> Option<String> {
@@ -1139,7 +1481,12 @@ fn generate_profile_id(
 }
 
 #[cfg(test)]
-#[allow(clippy::expect_used, clippy::unwrap_used)]
+#[allow(
+    clippy::expect_used,
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    deprecated
+)]
 mod tests {
     use std::collections::BTreeMap;
     use std::fs;
@@ -1149,16 +1496,20 @@ mod tests {
     use tonic::Request;
 
     use super::{
-        default_config_path, suggested_log_file_path, PersistedSetupConfig, SetupControlSurface,
-        SetupState, StationProfileControlSurface, DEFAULT_CONFIG_FILE_NAME,
+        build_log_file_step, build_qrz_integration_step, build_review_step,
+        build_station_profiles_step, build_wizard_steps, default_config_path,
+        suggested_log_file_path, validate_log_file_step, validate_qrz_step,
+        validate_station_profiles_step, PersistedSetupConfig, SetupControlSurface, SetupState,
+        StationProfileControlSurface, DEFAULT_CONFIG_FILE_NAME,
     };
     use crate::runtime_config::RuntimeConfigManager;
     use qsoripper_core::proto::qsoripper::domain::StationProfile;
     use qsoripper_core::proto::qsoripper::services::{
         setup_service_server::SetupService, station_profile_service_server::StationProfileService,
-        GetActiveStationContextRequest, GetSetupStatusRequest, ListStationProfilesRequest,
-        SaveSetupRequest, SaveStationProfileRequest, SetActiveStationProfileRequest,
-        SetSessionStationProfileOverrideRequest, StorageBackend,
+        GetActiveStationContextRequest, GetSetupStatusRequest, GetSetupWizardStateRequest,
+        ListStationProfilesRequest, SaveSetupRequest, SaveStationProfileRequest,
+        SetActiveStationProfileRequest, SetSessionStationProfileOverrideRequest, SetupWizardStep,
+        StorageBackend, ValidateSetupStepRequest,
     };
 
     fn unique_config_path() -> std::path::PathBuf {
@@ -1653,5 +2004,355 @@ station_callsign = "K7RND"
             Some(DEFAULT_CONFIG_FILE_NAME),
             path.file_name().and_then(|name| name.to_str())
         );
+    }
+
+    // ── Wizard step builder tests ───────────────────────────────────────────
+
+    #[test]
+    fn build_wizard_steps_none_config_yields_four_steps() {
+        let steps = build_wizard_steps(None);
+        assert_eq!(4, steps.len());
+        assert_eq!(i32::from(SetupWizardStep::LogFile), steps[0].step);
+        assert_eq!(i32::from(SetupWizardStep::StationProfiles), steps[1].step);
+        assert_eq!(i32::from(SetupWizardStep::QrzIntegration), steps[2].step);
+        assert_eq!(i32::from(SetupWizardStep::Review), steps[3].step);
+    }
+
+    #[test]
+    fn log_file_step_incomplete_when_no_config() {
+        let step = build_log_file_step(None);
+        assert!(!step.complete);
+        assert!(!step.issues.is_empty());
+    }
+
+    #[test]
+    fn log_file_step_complete_when_log_file_set() {
+        let mut config = PersistedSetupConfig::default();
+        config.logbook.file_path = Some("/tmp/test.db".to_string());
+        let step = build_log_file_step(Some(&config));
+        assert!(step.complete);
+        assert!(step.issues.is_empty());
+    }
+
+    #[test]
+    fn station_profiles_step_incomplete_when_no_profiles() {
+        let step = build_station_profiles_step(None);
+        assert!(!step.complete);
+        assert!(step.issues.iter().any(|i| i.contains("At least one")));
+    }
+
+    #[test]
+    fn station_profiles_step_incomplete_without_active_profile() {
+        // The catalog falls back to the first entry when no explicit active ID is set,
+        // so we must also verify that having no entries at all is incomplete.
+        let config = PersistedSetupConfig::default();
+        let step = build_station_profiles_step(Some(&config));
+        assert!(!step.complete);
+        assert!(step.issues.iter().any(|i| i.contains("At least one")));
+    }
+
+    #[test]
+    fn station_profiles_step_complete_with_active_profile() {
+        let mut config = PersistedSetupConfig::default();
+        config
+            .station_profiles
+            .entries
+            .push(super::PersistedStationProfileEntry {
+                profile_id: "home".to_string(),
+                profile: super::PersistedStationProfile {
+                    profile_name: Some("Home".to_string()),
+                    station_callsign: Some("K7RND".to_string()),
+                    ..Default::default()
+                },
+            });
+        config.station_profiles.active_profile_id = Some("home".to_string());
+        let step = build_station_profiles_step(Some(&config));
+        assert!(step.complete);
+        assert!(step.issues.is_empty());
+    }
+
+    #[test]
+    fn qrz_step_complete_when_both_absent() {
+        let step = build_qrz_integration_step(None);
+        assert!(step.complete);
+        assert!(step.issues.is_empty());
+    }
+
+    #[test]
+    fn qrz_step_complete_when_both_present() {
+        let mut config = PersistedSetupConfig::default();
+        config.qrz_xml.username = Some("user".to_string());
+        config.qrz_xml.password = Some("pass".to_string());
+        let step = build_qrz_integration_step(Some(&config));
+        assert!(step.complete);
+        assert!(step.issues.is_empty());
+    }
+
+    #[test]
+    fn qrz_step_incomplete_when_only_username() {
+        let mut config = PersistedSetupConfig::default();
+        config.qrz_xml.username = Some("user".to_string());
+        let step = build_qrz_integration_step(Some(&config));
+        assert!(!step.complete);
+        assert!(!step.issues.is_empty());
+    }
+
+    #[test]
+    fn review_step_incomplete_when_prior_steps_incomplete() {
+        let step = build_review_step(None);
+        assert!(!step.complete);
+    }
+
+    #[test]
+    fn review_step_complete_when_all_prior_complete() {
+        let mut config = PersistedSetupConfig::default();
+        config.logbook.file_path = Some("/tmp/test.db".to_string());
+        config
+            .station_profiles
+            .entries
+            .push(super::PersistedStationProfileEntry {
+                profile_id: "home".to_string(),
+                profile: super::PersistedStationProfile {
+                    profile_name: Some("Home".to_string()),
+                    station_callsign: Some("K7RND".to_string()),
+                    ..Default::default()
+                },
+            });
+        config.station_profiles.active_profile_id = Some("home".to_string());
+        let step = build_review_step(Some(&config));
+        assert!(step.complete);
+        assert!(step.issues.is_empty());
+    }
+
+    // ── Validation tests ────────────────────────────────────────────────────
+
+    #[test]
+    fn validate_log_file_step_rejects_empty_path() {
+        let request = ValidateSetupStepRequest {
+            step: SetupWizardStep::LogFile.into(),
+            log_file_path: None,
+            ..Default::default()
+        };
+        let result = validate_log_file_step(&request);
+        assert!(!result.valid);
+        assert_eq!(1, result.fields.len());
+        assert!(!result.fields[0].valid);
+    }
+
+    #[test]
+    fn validate_log_file_step_accepts_valid_path() {
+        let dir = std::env::temp_dir();
+        let path = dir.join("test-validate.db");
+        let request = ValidateSetupStepRequest {
+            step: SetupWizardStep::LogFile.into(),
+            log_file_path: Some(path.display().to_string()),
+            ..Default::default()
+        };
+        let result = validate_log_file_step(&request);
+        assert!(result.valid);
+        assert!(result.fields[0].valid);
+    }
+
+    #[test]
+    fn validate_station_profiles_rejects_empty_profile() {
+        let request = ValidateSetupStepRequest {
+            step: SetupWizardStep::StationProfiles.into(),
+            station_profile: Some(StationProfile::default()),
+            ..Default::default()
+        };
+        let result = validate_station_profiles_step(&request);
+        assert!(!result.valid);
+        assert_eq!(4, result.fields.len());
+    }
+
+    #[test]
+    fn validate_station_profiles_accepts_complete_profile() {
+        let request = ValidateSetupStepRequest {
+            step: SetupWizardStep::StationProfiles.into(),
+            station_profile: Some(StationProfile {
+                profile_name: Some("Home".to_string()),
+                station_callsign: "K7RND".to_string(),
+                operator_callsign: Some("K7RND".to_string()),
+                grid: Some("CN87".to_string()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let result = validate_station_profiles_step(&request);
+        assert!(result.valid);
+        assert!(result.fields.iter().all(|f| f.valid));
+    }
+
+    #[test]
+    fn validate_qrz_step_accepts_both_absent() {
+        let request = ValidateSetupStepRequest {
+            step: SetupWizardStep::QrzIntegration.into(),
+            ..Default::default()
+        };
+        let result = validate_qrz_step(&request);
+        assert!(result.valid);
+    }
+
+    #[test]
+    fn validate_qrz_step_accepts_both_present() {
+        let request = ValidateSetupStepRequest {
+            step: SetupWizardStep::QrzIntegration.into(),
+            qrz_xml_username: Some("user".to_string()),
+            qrz_xml_password: Some("pass".to_string()),
+            ..Default::default()
+        };
+        let result = validate_qrz_step(&request);
+        assert!(result.valid);
+    }
+
+    #[test]
+    fn validate_qrz_step_rejects_partial_credentials() {
+        let request = ValidateSetupStepRequest {
+            step: SetupWizardStep::QrzIntegration.into(),
+            qrz_xml_username: Some("user".to_string()),
+            qrz_xml_password: None,
+            ..Default::default()
+        };
+        let result = validate_qrz_step(&request);
+        assert!(!result.valid);
+    }
+
+    // ── is_first_run tests ──────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn is_first_run_true_when_no_config() {
+        let config_path = unique_config_path();
+        let setup_state = Arc::new(SetupState::load(config_path.clone()).expect("setup state"));
+        let runtime_config = Arc::new(RuntimeConfigManager::new(BTreeMap::new()).expect("runtime"));
+        let service = SetupControlSurface::new(setup_state, runtime_config);
+
+        let status =
+            SetupService::get_setup_status(&service, Request::new(GetSetupStatusRequest {}))
+                .await
+                .expect("status")
+                .into_inner()
+                .status
+                .expect("status payload");
+
+        assert!(status.is_first_run);
+    }
+
+    #[tokio::test]
+    async fn is_first_run_false_after_save() {
+        let config_path = unique_config_path();
+        let config_directory = config_path.parent().expect("config directory");
+        fs::create_dir_all(config_directory).expect("create config directory");
+
+        let setup_state = Arc::new(SetupState::load(config_path.clone()).expect("setup state"));
+        let runtime_config = Arc::new(RuntimeConfigManager::new(BTreeMap::new()).expect("runtime"));
+        let service = SetupControlSurface::new(setup_state, runtime_config);
+
+        let log_file = absolute_log_file_path(&config_path, "test.db");
+        SetupService::save_setup(
+            &service,
+            Request::new(SaveSetupRequest {
+                log_file_path: Some(log_file),
+                station_profile: Some(StationProfile {
+                    profile_name: Some("Home".to_string()),
+                    station_callsign: "K7RND".to_string(),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+        )
+        .await
+        .expect("save setup");
+
+        let status =
+            SetupService::get_setup_status(&service, Request::new(GetSetupStatusRequest {}))
+                .await
+                .expect("status")
+                .into_inner()
+                .status
+                .expect("status payload");
+
+        assert!(!status.is_first_run);
+
+        drop(service);
+        let _ = fs::remove_dir_all(config_directory);
+    }
+
+    // ── GetSetupWizardState RPC test ────────────────────────────────────────
+
+    #[tokio::test]
+    async fn get_wizard_state_returns_steps_and_status() {
+        let config_path = unique_config_path();
+        let setup_state = Arc::new(SetupState::load(config_path.clone()).expect("setup state"));
+        let runtime_config = Arc::new(RuntimeConfigManager::new(BTreeMap::new()).expect("runtime"));
+        let service = SetupControlSurface::new(setup_state, runtime_config);
+
+        let response = SetupService::get_setup_wizard_state(
+            &service,
+            Request::new(GetSetupWizardStateRequest {}),
+        )
+        .await
+        .expect("wizard state")
+        .into_inner();
+
+        assert!(response.status.is_some());
+        assert_eq!(4, response.steps.len());
+        assert!(response.station_profiles.is_empty());
+
+        // For a fresh config, LogFile should be incomplete
+        let log_step = &response.steps[0];
+        assert_eq!(i32::from(SetupWizardStep::LogFile), log_step.step);
+        assert!(!log_step.complete);
+    }
+
+    // ── ValidateSetupStep RPC test ──────────────────────────────────────────
+
+    #[tokio::test]
+    async fn validate_step_rpc_validates_log_file() {
+        let config_path = unique_config_path();
+        let setup_state = Arc::new(SetupState::load(config_path.clone()).expect("setup state"));
+        let runtime_config = Arc::new(RuntimeConfigManager::new(BTreeMap::new()).expect("runtime"));
+        let service = SetupControlSurface::new(setup_state, runtime_config);
+
+        let dir = std::env::temp_dir();
+        let path = dir.join("validate-rpc-test.db");
+        let response = SetupService::validate_setup_step(
+            &service,
+            Request::new(ValidateSetupStepRequest {
+                step: SetupWizardStep::LogFile.into(),
+                log_file_path: Some(path.display().to_string()),
+                ..Default::default()
+            }),
+        )
+        .await
+        .expect("validate")
+        .into_inner();
+
+        assert!(response.valid);
+    }
+
+    // ── TestQrzCredentials RPC test (empty creds) ───────────────────────────
+
+    #[tokio::test]
+    async fn test_qrz_credentials_rejects_empty() {
+        let config_path = unique_config_path();
+        let setup_state = Arc::new(SetupState::load(config_path.clone()).expect("setup state"));
+        let runtime_config = Arc::new(RuntimeConfigManager::new(BTreeMap::new()).expect("runtime"));
+        let service = SetupControlSurface::new(setup_state, runtime_config);
+
+        let response = SetupService::test_qrz_credentials(
+            &service,
+            Request::new(
+                qsoripper_core::proto::qsoripper::services::TestQrzCredentialsRequest {
+                    qrz_xml_username: String::new(),
+                    qrz_xml_password: String::new(),
+                },
+            ),
+        )
+        .await
+        .expect("test qrz")
+        .into_inner();
+
+        assert!(!response.success);
+        assert!(!response.error_message.is_empty());
     }
 }

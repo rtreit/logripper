@@ -1316,7 +1316,9 @@
             return status.LogFilePath;
         }
 
+#pragma warning disable CS0612 // Type or member is obsolete
         if (status.StorageBackend == StorageBackend.Memory)
+#pragma warning restore CS0612
         {
             return "Not configured (legacy in-memory setup)";
         }

@@ -1816,17 +1816,10 @@ mod tests {
             .expect("qso");
 
         assert_eq!(original_qso.local_id, updated_qso.local_id);
-        assert_eq!(
-            "59",
-            updated_qso.rst_sent.as_ref().expect("rst_sent").raw
-        );
+        assert_eq!("59", updated_qso.rst_sent.as_ref().expect("rst_sent").raw);
         assert_eq!(
             "57",
-            updated_qso
-                .rst_received
-                .as_ref()
-                .expect("rst_received")
-                .raw
+            updated_qso.rst_received.as_ref().expect("rst_received").raw
         );
 
         server_handle.abort();

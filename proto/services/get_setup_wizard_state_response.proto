@@ -1,0 +1,19 @@
+syntax = "proto3";
+
+package qsoripper.services;
+
+option csharp_namespace = "QsoRipper.Services";
+
+import "services/setup_wizard_step_status.proto";
+import "services/setup_status.proto";
+import "services/station_profile_record.proto";
+
+// Full wizard state: per-step status, suggested defaults, and current setup.
+message GetSetupWizardStateResponse {
+  // Current setup status (superset of GetSetupStatusResponse).
+  SetupStatus status = 1;
+  // Per-step completion status in wizard order.
+  repeated SetupWizardStepStatus steps = 2;
+  // All currently persisted station profiles.
+  repeated StationProfileRecord station_profiles = 3;
+}

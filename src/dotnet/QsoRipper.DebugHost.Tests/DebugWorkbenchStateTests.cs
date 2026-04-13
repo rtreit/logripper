@@ -133,7 +133,9 @@ public class DebugWorkbenchStateTests
             ConfigFileExists = true,
             SetupComplete = true,
             ConfigPath = @".\config\config.toml",
+#pragma warning disable CS0612 // Type or member is obsolete
             StorageBackend = StorageBackend.Sqlite,
+#pragma warning restore CS0612
             LogFilePath = @".\data\portable-qsoripper.db",
             StationProfile = new StationProfile
             {

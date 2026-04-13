@@ -1,0 +1,14 @@
+syntax = "proto3";
+
+package qsoripper.services;
+
+option csharp_namespace = "QsoRipper.Services";
+
+// Identifies a single step in the setup wizard flow.
+enum SetupWizardStep {
+  SETUP_WIZARD_STEP_UNSPECIFIED = 0;
+  SETUP_WIZARD_STEP_LOG_FILE = 1;
+  SETUP_WIZARD_STEP_STATION_PROFILES = 2;
+  SETUP_WIZARD_STEP_QRZ_INTEGRATION = 3;
+  SETUP_WIZARD_STEP_REVIEW = 4;
+}

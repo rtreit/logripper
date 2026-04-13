@@ -524,7 +524,9 @@ fn qsos_match_for_duplicate(existing: &QsoRecord, candidate: &QsoRecord) -> bool
 /// key-by-key (import keys overwrite, existing keys not in import are preserved).
 fn merge_qso_for_refresh(mut existing: QsoRecord, import: &QsoRecord) -> QsoRecord {
     // Core contact fields — always take from import (they matched for duplicate).
-    existing.station_callsign.clone_from(&import.station_callsign);
+    existing
+        .station_callsign
+        .clone_from(&import.station_callsign);
     existing.worked_callsign.clone_from(&import.worked_callsign);
     existing.utc_timestamp = import.utc_timestamp;
     existing.band = import.band;
@@ -536,7 +538,9 @@ fn merge_qso_for_refresh(mut existing: QsoRecord, import: &QsoRecord) -> QsoReco
 
     // Station snapshot — import snapshot overwrites if present.
     if import.station_snapshot.is_some() {
-        existing.station_snapshot.clone_from(&import.station_snapshot);
+        existing
+            .station_snapshot
+            .clone_from(&import.station_snapshot);
     }
 
     // Signal reports — always take from import when present.

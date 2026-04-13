@@ -1,0 +1,17 @@
+syntax = "proto3";
+
+package qsoripper.services;
+
+option csharp_namespace = "QsoRipper.Services";
+
+// Per-step completion and readiness summary used by the setup wizard.
+message SetupWizardStepStatus {
+  // Which wizard step this status describes.
+  SetupWizardStep step = 1;
+  // True when the step has valid persisted data.
+  bool complete = 2;
+  // Human-readable summary of what is missing or invalid, if any.
+  repeated string issues = 3;
+}
+
+import "services/setup_wizard_step.proto";
