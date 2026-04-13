@@ -1,0 +1,55 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:QsoRipper.Gui.ViewModels"
+        xmlns:v="using:QsoRipper.Gui.Views"
+        x:Class="QsoRipper.Gui.Views.MainWindow"
+        x:DataType="vm:MainWindowViewModel"
+        Title="QsoRipper" Width="1120" Height="720"
+        MinWidth="960" MinHeight="640"
+        WindowStartupLocation="CenterScreen"
+        Icon="avares://QsoRipper.Gui/Assets/qsoripper.ico">
+
+  <Window.KeyBindings>
+    <KeyBinding Gesture="Ctrl+OemComma" Command="{Binding OpenWizardCommand}" />
+    <KeyBinding Gesture="Alt+X" Command="{Binding ExitCommand}" />
+  </Window.KeyBindings>
+
+  <DockPanel>
+    <!-- Menu bar — always on top, never covered by overlay -->
+      <Menu DockPanel.Dock="Top">
+        <MenuItem x:Name="FileMenuItem" Header="_File">
+          <MenuItem Header="_Settings" InputGesture="Ctrl+OemComma"
+                    Command="{Binding OpenWizardCommand}" />
+          <Separator />
+          <MenuItem Header="E_xit" InputGesture="Alt+X" Command="{Binding ExitCommand}" />
+        </MenuItem>
+      </Menu>
+
+    <!-- Content area with optional wizard overlay -->
+    <Panel>
+      <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" Spacing="12"
+                  IsEnabled="{Binding !IsWizardOpen}">
+        <TextBlock Text="{Binding StatusMessage}"
+                   FontSize="16" HorizontalAlignment="Center" />
+
+        <Button Content="Open Settings…"
+                Command="{Binding OpenWizardCommand}"
+                HorizontalAlignment="Center"
+                IsVisible="{Binding IsSetupIncomplete}"
+                Classes="accent" />
+      </StackPanel>
+
+      <!-- Wizard overlay — covers content area only, not the menu bar -->
+      <Border IsVisible="{Binding IsWizardOpen}"
+              Background="#80000000">
+        <Border Background="{DynamicResource SystemControlBackgroundAltHighBrush}"
+                CornerRadius="8"
+                Margin="40,24"
+                BoxShadow="0 8 32 0 #40000000"
+                ClipToBounds="True">
+          <v:SetupWizardView DataContext="{Binding WizardViewModel}" />
+        </Border>
+      </Border>
+    </Panel>
+  </DockPanel>
+</Window>
