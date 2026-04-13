@@ -4,10 +4,11 @@ use logripper_core::domain::station::station_profile_has_values;
 use logripper_core::proto::logripper::domain::StationProfile;
 
 use crate::runtime_config::{
-    STATION_CALLSIGN_ENV_VAR, STATION_COUNTRY_ENV_VAR, STATION_COUNTY_ENV_VAR,
-    STATION_CQ_ZONE_ENV_VAR, STATION_DXCC_ENV_VAR, STATION_GRID_ENV_VAR, STATION_ITU_ZONE_ENV_VAR,
-    STATION_LATITUDE_ENV_VAR, STATION_LONGITUDE_ENV_VAR, STATION_OPERATOR_CALLSIGN_ENV_VAR,
-    STATION_OPERATOR_NAME_ENV_VAR, STATION_PROFILE_NAME_ENV_VAR, STATION_STATE_ENV_VAR,
+    STATION_ARRL_SECTION_ENV_VAR, STATION_CALLSIGN_ENV_VAR, STATION_COUNTRY_ENV_VAR,
+    STATION_COUNTY_ENV_VAR, STATION_CQ_ZONE_ENV_VAR, STATION_DXCC_ENV_VAR, STATION_GRID_ENV_VAR,
+    STATION_ITU_ZONE_ENV_VAR, STATION_LATITUDE_ENV_VAR, STATION_LONGITUDE_ENV_VAR,
+    STATION_OPERATOR_CALLSIGN_ENV_VAR, STATION_OPERATOR_NAME_ENV_VAR, STATION_PROFILE_NAME_ENV_VAR,
+    STATION_STATE_ENV_VAR,
 };
 
 pub(crate) const DEFAULT_PROFILE_NAME: &str = "Home";
@@ -29,6 +30,7 @@ pub(crate) fn normalize_station_profile(
     profile.county = normalize_string(profile.county.as_deref());
     profile.state = normalize_string(profile.state.as_deref());
     profile.country = normalize_string(profile.country.as_deref());
+    profile.arrl_section = normalize_string(profile.arrl_section.as_deref());
     profile.dxcc = validate_optional_positive_integer("station_profile.dxcc", profile.dxcc)?;
     profile.cq_zone =
         validate_optional_positive_integer("station_profile.cq_zone", profile.cq_zone)?;
@@ -78,6 +80,11 @@ pub(crate) fn insert_station_profile_runtime_values(
     insert_optional_string(values, STATION_COUNTY_ENV_VAR, profile.county.as_deref());
     insert_optional_string(values, STATION_STATE_ENV_VAR, profile.state.as_deref());
     insert_optional_string(values, STATION_COUNTRY_ENV_VAR, profile.country.as_deref());
+    insert_optional_string(
+        values,
+        STATION_ARRL_SECTION_ENV_VAR,
+        profile.arrl_section.as_deref(),
+    );
     insert_optional_number(values, STATION_DXCC_ENV_VAR, profile.dxcc);
     insert_optional_number(values, STATION_CQ_ZONE_ENV_VAR, profile.cq_zone);
     insert_optional_number(values, STATION_ITU_ZONE_ENV_VAR, profile.itu_zone);

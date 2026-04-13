@@ -42,8 +42,11 @@ message QsoRecord {
   optional bool lotw_received = 33;
   optional bool eqsl_sent = 34;
   optional bool eqsl_received = 35;
+  optional google.protobuf.Timestamp qsl_sent_date = 36;  // Paper QSL sent date when known
+  optional google.protobuf.Timestamp qsl_received_date = 37;  // Paper QSL received date when known
 
   // --- Enrichment from callsign lookup ---
+  optional string worked_operator_callsign = 38;
   optional string worked_operator_name = 40;
   optional string worked_grid = 41;
   optional string worked_country = 42;
@@ -54,6 +57,7 @@ message QsoRecord {
   optional string worked_county = 47;
   optional string worked_iota = 48;
   optional string worked_continent = 49;  // 2-letter
+  optional string worked_arrl_section = 58;
 
   // --- Contest fields ---
   optional string contest_id = 50;

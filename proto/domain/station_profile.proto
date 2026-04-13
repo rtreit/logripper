@@ -19,4 +19,5 @@ message StationProfile {
   optional uint32 itu_zone = 11;  // Logging station ITU zone
   optional double latitude = 12;  // Logging station latitude in decimal degrees
   optional double longitude = 13;  // Logging station longitude in decimal degrees
+  optional string arrl_section = 14;  // Logging station ARRL section
 }

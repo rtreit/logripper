@@ -49,6 +49,18 @@ async fn parse_basic_qsos_file() {
             .and_then(|snapshot| snapshot.grid.as_deref()),
         Some("DM43an")
     );
+    assert_eq!(
+        q1.station_snapshot
+            .as_ref()
+            .and_then(|snapshot| snapshot.operator_name.as_deref()),
+        Some("Randy")
+    );
+    assert_eq!(
+        q1.station_snapshot
+            .as_ref()
+            .and_then(|snapshot| snapshot.arrl_section.as_deref()),
+        Some("WWA")
+    );
 
     // Second QSO: ON4UN on 40M SSB/USB (contest)
     let q2 = &qsos[1];
@@ -62,9 +74,27 @@ async fn parse_basic_qsos_file() {
     assert_eq!(q2.serial_sent.as_deref(), Some("033"));
     assert_eq!(q2.exchange_sent.as_deref(), Some("05 OH"));
     assert_eq!(q2.qsl_sent_status, QslStatus::Yes as i32);
-    assert_eq!(q2.qsl_received_status, QslStatus::No as i32);
+    assert_eq!(q2.qsl_received_status, QslStatus::Yes as i32);
     assert_eq!(q2.lotw_sent, Some(true));
     assert_eq!(q2.eqsl_received, Some(true));
+    assert_eq!(
+        q2.qsl_sent_date
+            .as_ref()
+            .map(|ts| chrono::DateTime::from_timestamp(ts.seconds, 0)
+                .unwrap()
+                .format("%Y%m%d")
+                .to_string()),
+        Some("20260120".to_string())
+    );
+    assert_eq!(
+        q2.qsl_received_date
+            .as_ref()
+            .map(|ts| chrono::DateTime::from_timestamp(ts.seconds, 0)
+                .unwrap()
+                .format("%Y%m%d")
+                .to_string()),
+        Some("20260122".to_string())
+    );
 
     // Third QSO: JA1ABC on 15M FT8 with geographic enrichment
     let q3 = &qsos[2];
@@ -78,6 +108,7 @@ async fn parse_basic_qsos_file() {
     assert_eq!(q3.worked_continent.as_deref(), Some("AS"));
     assert_eq!(q3.worked_cq_zone, Some(25));
     assert_eq!(q3.worked_itu_zone, Some(45));
+    assert_eq!(q3.worked_operator_callsign.as_deref(), Some("JH1XYZ"));
     assert_eq!(q3.worked_operator_name.as_deref(), Some("Taro Yama"));
     assert_eq!(q3.prop_mode.as_deref(), Some("F2"));
 }
@@ -110,7 +141,8 @@ async fn parse_contest_log() {
     assert!(q1.extra_fields.contains_key("CHECK"));
     assert!(q1.extra_fields.contains_key("CLASS"));
     assert!(q1.extra_fields.contains_key("PRECEDENCE"));
-    assert!(q1.extra_fields.contains_key("ARRL_SECT"));
+    assert_eq!(q1.worked_arrl_section.as_deref(), Some("OH"));
+    assert!(!q1.extra_fields.contains_key("ARRL_SECT"));
 
     let q2 = &qsos[1];
     assert_eq!(q2.worked_callsign, "DL1ABC");
@@ -207,6 +239,26 @@ async fn round_trip_qso_through_adif() {
             .as_ref()
             .and_then(|snapshot| snapshot.grid.as_deref())
     );
+    assert_eq!(
+        round_tripped
+            .station_snapshot
+            .as_ref()
+            .and_then(|snapshot| snapshot.operator_name.as_deref()),
+        original
+            .station_snapshot
+            .as_ref()
+            .and_then(|snapshot| snapshot.operator_name.as_deref())
+    );
+    assert_eq!(
+        round_tripped
+            .station_snapshot
+            .as_ref()
+            .and_then(|snapshot| snapshot.arrl_section.as_deref()),
+        original
+            .station_snapshot
+            .as_ref()
+            .and_then(|snapshot| snapshot.arrl_section.as_deref())
+    );
 }
 
 #[tokio::test]
@@ -255,5 +307,61 @@ async fn round_trip_extra_fields_preserved() {
             .station_snapshot
             .as_ref()
             .and_then(|snapshot| snapshot.grid.as_deref())
+    );
+}
+
+#[tokio::test]
+async fn round_trip_new_adif_top_fields() {
+    let original = logripper_core::proto::logripper::domain::QsoRecord {
+        station_callsign: "K7RND".to_string(),
+        worked_callsign: "W1AW".to_string(),
+        utc_timestamp: Some(prost_types::Timestamp {
+            seconds: 1_736_035_200,
+            nanos: 0,
+        }),
+        band: Band::Band20m as i32,
+        mode: Mode::Ssb as i32,
+        worked_operator_callsign: Some("K1OP".to_string()),
+        worked_arrl_section: Some("EMA".to_string()),
+        qsl_sent_date: Some(prost_types::Timestamp {
+            seconds: 1_737_331_200,
+            nanos: 0,
+        }),
+        qsl_received_date: Some(prost_types::Timestamp {
+            seconds: 1_737_504_000,
+            nanos: 0,
+        }),
+        ..logripper_core::proto::logripper::domain::QsoRecord::default()
+    };
+
+    let adi_string = AdifMapper::qso_to_adi(&original);
+    let mut stream = RecordStream::new(adi_string.as_bytes(), true);
+    let parsed_back = stream.next().await.unwrap().expect("Failed to re-parse");
+    let round_tripped = AdifMapper::record_to_qso(&parsed_back);
+
+    assert_eq!(
+        round_tripped.worked_operator_callsign.as_deref(),
+        Some("K1OP")
+    );
+    assert_eq!(round_tripped.worked_arrl_section.as_deref(), Some("EMA"));
+    assert_eq!(
+        round_tripped
+            .qsl_sent_date
+            .as_ref()
+            .map(|ts| chrono::DateTime::from_timestamp(ts.seconds, 0)
+                .unwrap()
+                .format("%Y%m%d")
+                .to_string()),
+        Some("20250120".to_string())
+    );
+    assert_eq!(
+        round_tripped
+            .qsl_received_date
+            .as_ref()
+            .map(|ts| chrono::DateTime::from_timestamp(ts.seconds, 0)
+                .unwrap()
+                .format("%Y%m%d")
+                .to_string()),
+        Some("20250122".to_string())
     );
 }

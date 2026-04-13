@@ -33,6 +33,7 @@ pub(crate) const STATION_GRID_ENV_VAR: &str = "LOGRIPPER_STATION_GRID";
 pub(crate) const STATION_COUNTY_ENV_VAR: &str = "LOGRIPPER_STATION_COUNTY";
 pub(crate) const STATION_STATE_ENV_VAR: &str = "LOGRIPPER_STATION_STATE";
 pub(crate) const STATION_COUNTRY_ENV_VAR: &str = "LOGRIPPER_STATION_COUNTRY";
+pub(crate) const STATION_ARRL_SECTION_ENV_VAR: &str = "LOGRIPPER_STATION_ARRL_SECTION";
 pub(crate) const STATION_DXCC_ENV_VAR: &str = "LOGRIPPER_STATION_DXCC";
 pub(crate) const STATION_CQ_ZONE_ENV_VAR: &str = "LOGRIPPER_STATION_CQ_ZONE";
 pub(crate) const STATION_ITU_ZONE_ENV_VAR: &str = "LOGRIPPER_STATION_ITU_ZONE";
@@ -376,6 +377,15 @@ const SUPPORTED_FIELDS: &[ConfigFieldSpec] = &[
         default_value: None,
     },
     ConfigFieldSpec {
+        key: STATION_ARRL_SECTION_ENV_VAR,
+        label: "Station ARRL section",
+        description: "Default local station ARRL section.",
+        kind: RuntimeConfigValueKind::String,
+        secret: false,
+        allowed_values: &[],
+        default_value: None,
+    },
+    ConfigFieldSpec {
         key: STATION_DXCC_ENV_VAR,
         label: "Station DXCC",
         description: "Default local station DXCC entity code.",
@@ -688,6 +698,7 @@ fn build_active_station_profile(
         county: values.get(STATION_COUNTY_ENV_VAR).cloned(),
         state: values.get(STATION_STATE_ENV_VAR).cloned(),
         country: values.get(STATION_COUNTRY_ENV_VAR).cloned(),
+        arrl_section: values.get(STATION_ARRL_SECTION_ENV_VAR).cloned(),
         dxcc: parse_optional_positive_integer(values, STATION_DXCC_ENV_VAR)?,
         cq_zone: parse_optional_positive_integer(values, STATION_CQ_ZONE_ENV_VAR)?,
         itu_zone: parse_optional_positive_integer(values, STATION_ITU_ZONE_ENV_VAR)?,
@@ -873,8 +884,9 @@ mod tests {
         ApplyRuntimeConfigRequest, ResetRuntimeConfigRequest, RuntimeConfigManager,
         RuntimeConfigMutation, RuntimeConfigMutationKind, QRZ_USER_AGENT_ENV_VAR,
         QRZ_XML_CAPTURE_ONLY_ENV_VAR, QRZ_XML_PASSWORD_ENV_VAR, QRZ_XML_USERNAME_ENV_VAR,
-        SQLITE_PATH_ENV_VAR, STATION_CALLSIGN_ENV_VAR, STATION_GRID_ENV_VAR,
-        STATION_LATITUDE_ENV_VAR, STATION_OPERATOR_CALLSIGN_ENV_VAR, STORAGE_BACKEND_ENV_VAR,
+        SQLITE_PATH_ENV_VAR, STATION_ARRL_SECTION_ENV_VAR, STATION_CALLSIGN_ENV_VAR,
+        STATION_GRID_ENV_VAR, STATION_LATITUDE_ENV_VAR, STATION_OPERATOR_CALLSIGN_ENV_VAR,
+        STORAGE_BACKEND_ENV_VAR,
     };
 
     fn sample_qso(local_id: &str) -> QsoRecord {
@@ -1017,6 +1029,7 @@ mod tests {
             "N7OPS".to_string(),
         );
         base_values.insert(STATION_GRID_ENV_VAR.to_string(), "CN87".to_string());
+        base_values.insert(STATION_ARRL_SECTION_ENV_VAR.to_string(), "WWA".to_string());
 
         let manager = RuntimeConfigManager::new(base_values).expect("manager");
         let snapshot = manager.snapshot().await;
@@ -1025,6 +1038,7 @@ mod tests {
         assert_eq!("K7RND", profile.station_callsign);
         assert_eq!(Some("N7OPS"), profile.operator_callsign.as_deref());
         assert_eq!(Some("CN87"), profile.grid.as_deref());
+        assert_eq!(Some("WWA"), profile.arrl_section.as_deref());
     }
 
     #[tokio::test]
@@ -1089,6 +1103,11 @@ mod tests {
                         kind: RuntimeConfigMutationKind::Set as i32,
                         value: Some("47.6205".to_string()),
                     },
+                    RuntimeConfigMutation {
+                        key: STATION_ARRL_SECTION_ENV_VAR.to_string(),
+                        kind: RuntimeConfigMutationKind::Set as i32,
+                        value: Some("WWA".to_string()),
+                    },
                 ],
             })
             .await
@@ -1097,6 +1116,7 @@ mod tests {
 
         assert_eq!("K7RND", profile.station_callsign);
         assert_eq!(Some(47.6205), profile.latitude);
+        assert_eq!(Some("WWA"), profile.arrl_section.as_deref());
     }
 
     fn assert_contains(actual: &str, expected: &str) {

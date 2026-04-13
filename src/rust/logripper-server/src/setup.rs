@@ -693,6 +693,7 @@ struct PersistedStationProfile {
     county: Option<String>,
     state: Option<String>,
     country: Option<String>,
+    arrl_section: Option<String>,
     dxcc: Option<u32>,
     cq_zone: Option<u32>,
     itu_zone: Option<u32>,
@@ -875,6 +876,7 @@ impl PersistedStationProfile {
             county: normalize_optional_string(profile.county.as_deref()),
             state: normalize_optional_string(profile.state.as_deref()),
             country: normalize_optional_string(profile.country.as_deref()),
+            arrl_section: normalize_optional_string(profile.arrl_section.as_deref()),
             dxcc: profile.dxcc,
             cq_zone: profile.cq_zone,
             itu_zone: profile.itu_zone,
@@ -893,6 +895,7 @@ impl PersistedStationProfile {
             county: self.county.clone(),
             state: self.state.clone(),
             country: self.country.clone(),
+            arrl_section: self.arrl_section.clone(),
             dxcc: self.dxcc,
             cq_zone: self.cq_zone,
             itu_zone: self.itu_zone,
@@ -1304,6 +1307,7 @@ station_callsign = "K7RND"
                 station_profile: Some(StationProfile {
                     station_callsign: "k7rnd".to_string(),
                     operator_name: Some("Randy".to_string()),
+                    arrl_section: Some("WWA".to_string()),
                     ..StationProfile::default()
                 }),
                 qrz_xml_username: Some("k7rnd".to_string()),
@@ -1326,6 +1330,7 @@ station_callsign = "K7RND"
         assert_eq!(status.log_file_path, status.sqlite_path);
         assert_eq!(Some("Home"), station_profile.profile_name.as_deref());
         assert_eq!("K7RND", station_profile.station_callsign);
+        assert_eq!(Some("WWA"), station_profile.arrl_section.as_deref());
         assert!(config_path.exists());
         let saved_config = fs::read_to_string(&config_path).expect("saved config");
         let parsed_config =
@@ -1333,6 +1338,10 @@ station_callsign = "K7RND"
         assert_eq!(
             Some(log_file_path.as_str()),
             parsed_config.logbook.file_path.as_deref()
+        );
+        assert_eq!(
+            Some("WWA"),
+            parsed_config.station_profile.arrl_section.as_deref()
         );
         assert!(parsed_config.storage.backend.is_none());
         assert!(parsed_config.storage.sqlite_path.is_none());

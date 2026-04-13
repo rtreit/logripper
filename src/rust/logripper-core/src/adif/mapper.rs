@@ -108,6 +108,7 @@ impl AdifMapper {
                 "TX_PWR" => qso.tx_power = Some(value_str.to_owned()),
 
                 // --- Geographic / enrichment ---
+                "CONTACTED_OP" => qso.worked_operator_callsign = Some(value_str.to_owned()),
                 "NAME" => qso.worked_operator_name = Some(value_str.to_owned()),
                 "GRIDSQUARE" => qso.worked_grid = Some(value_str.to_owned()),
                 "COUNTRY" => qso.worked_country = Some(value_str.to_owned()),
@@ -130,6 +131,12 @@ impl AdifMapper {
                     }
                 }
                 "IOTA" => qso.worked_iota = Some(value_str.to_owned()),
+                "ARRL_SECT" => qso.worked_arrl_section = Some(value_str.to_owned()),
+                "MY_NAME" => {
+                    station_snapshot
+                        .get_or_insert_with(StationSnapshot::default)
+                        .operator_name = Some(value_str.to_owned());
+                }
                 "MY_GRIDSQUARE" => {
                     station_snapshot
                         .get_or_insert_with(StationSnapshot::default)
@@ -195,10 +202,29 @@ impl AdifMapper {
                         qso.extra_fields.insert(key_upper, value_str.to_owned());
                     }
                 }
+                "MY_ARRL_SECT" => {
+                    station_snapshot
+                        .get_or_insert_with(StationSnapshot::default)
+                        .arrl_section = Some(value_str.to_owned());
+                }
 
                 // --- QSL ---
                 "QSL_SENT" => qso.qsl_sent_status = qsl_status_from_adif(value_str).into(),
                 "QSL_RCVD" => qso.qsl_received_status = qsl_status_from_adif(value_str).into(),
+                "QSLSDATE" => {
+                    if let Some(ts) = parse_adif_datetime(value_str, None) {
+                        qso.qsl_sent_date = Some(ts);
+                    } else {
+                        qso.extra_fields.insert(key_upper, value_str.to_owned());
+                    }
+                }
+                "QSLRDATE" => {
+                    if let Some(ts) = parse_adif_datetime(value_str, None) {
+                        qso.qsl_received_date = Some(ts);
+                    } else {
+                        qso.extra_fields.insert(key_upper, value_str.to_owned());
+                    }
+                }
                 "LOTW_QSL_SENT" => map_confirmation_field(
                     &mut qso.lotw_sent,
                     &mut qso.extra_fields,
@@ -393,6 +419,9 @@ impl AdifMapper {
         }
 
         // Geographic
+        if let Some(v) = qso.worked_operator_callsign.as_deref() {
+            push_field(&mut fields, "CONTACTED_OP", v);
+        }
         if let Some(v) = qso.worked_operator_name.as_deref() {
             push_field(&mut fields, "NAME", v);
         }
@@ -423,7 +452,13 @@ impl AdifMapper {
         if let Some(v) = qso.worked_iota.as_deref() {
             push_field(&mut fields, "IOTA", v);
         }
+        if let Some(v) = qso.worked_arrl_section.as_deref() {
+            push_field(&mut fields, "ARRL_SECT", v);
+        }
         if let Some(snapshot) = station_snapshot.as_ref() {
+            if let Some(v) = snapshot.operator_name.as_deref() {
+                push_field(&mut fields, "MY_NAME", v.to_string());
+            }
             if let Some(v) = snapshot.grid.as_deref() {
                 push_field(&mut fields, "MY_GRIDSQUARE", v.to_string());
             }
@@ -457,6 +492,9 @@ impl AdifMapper {
             {
                 push_field(&mut fields, "MY_LON", longitude);
             }
+            if let Some(v) = snapshot.arrl_section.as_deref() {
+                push_field(&mut fields, "MY_ARRL_SECT", v.to_string());
+            }
         }
 
         // QSL
@@ -474,6 +512,12 @@ impl AdifMapper {
         );
         if let Some(s) = rcvd {
             push_field(&mut fields, "QSL_RCVD", s);
+        }
+        if let Some(ts) = qso.qsl_sent_date.as_ref().and_then(format_adif_date) {
+            push_field(&mut fields, "QSLSDATE", ts);
+        }
+        if let Some(ts) = qso.qsl_received_date.as_ref().and_then(format_adif_date) {
+            push_field(&mut fields, "QSLRDATE", ts);
         }
 
         push_confirmation_field(&mut fields, "LOTW_QSL_SENT", qso.lotw_sent);
@@ -617,6 +661,12 @@ fn format_adif_datetime(ts: &prost_types::Timestamp) -> Option<(String, String)>
     Some((date, time))
 }
 
+fn format_adif_date(ts: &prost_types::Timestamp) -> Option<String> {
+    let nanos = u32::try_from(ts.nanos).ok()?;
+    let dt = chrono::DateTime::from_timestamp(ts.seconds, nanos)?.naive_utc();
+    Some(dt.format("%Y%m%d").to_string())
+}
+
 fn parse_adif_location(raw_value: &str, latitude: bool) -> Option<f64> {
     let trimmed = raw_value.trim();
     if trimmed.len() != 11 || !trimmed.is_ascii() {
@@ -754,6 +804,14 @@ fn field_is_overridden(
         station_snapshot
             .and_then(|snapshot| snapshot.operator_callsign.as_ref())
             .is_some()
+    } else if key.eq_ignore_ascii_case("CONTACTED_OP") {
+        qso.worked_operator_callsign.is_some()
+    } else if key.eq_ignore_ascii_case("ARRL_SECT") {
+        qso.worked_arrl_section.is_some()
+    } else if key.eq_ignore_ascii_case("MY_NAME") {
+        station_snapshot
+            .and_then(|snapshot| snapshot.operator_name.as_ref())
+            .is_some()
     } else if key.eq_ignore_ascii_case("MY_GRIDSQUARE") {
         station_snapshot
             .and_then(|snapshot| snapshot.grid.as_ref())
@@ -789,6 +847,20 @@ fn field_is_overridden(
     } else if key.eq_ignore_ascii_case("MY_LON") {
         station_snapshot
             .and_then(|snapshot| snapshot.longitude)
+            .is_some()
+    } else if key.eq_ignore_ascii_case("MY_ARRL_SECT") {
+        station_snapshot
+            .and_then(|snapshot| snapshot.arrl_section.as_ref())
+            .is_some()
+    } else if key.eq_ignore_ascii_case("QSLSDATE") {
+        qso.qsl_sent_date
+            .as_ref()
+            .and_then(format_adif_date)
+            .is_some()
+    } else if key.eq_ignore_ascii_case("QSLRDATE") {
+        qso.qsl_received_date
+            .as_ref()
+            .and_then(format_adif_date)
             .is_some()
     } else if key.eq_ignore_ascii_case("QSO_DATE_OFF") || key.eq_ignore_ascii_case("TIME_OFF") {
         qso.utc_end_timestamp.is_some()
@@ -906,7 +978,9 @@ mod tests {
         let mut rec = Record::new();
         rec.insert("CALL", "W1AW").unwrap();
         rec.insert("QSL_SENT", "Y").unwrap();
-        rec.insert("QSL_RCVD", "N").unwrap();
+        rec.insert("QSL_RCVD", "Y").unwrap();
+        rec.insert("QSLSDATE", "20260120").unwrap();
+        rec.insert("QSLRDATE", "20260122").unwrap();
         rec.insert("LOTW_QSL_SENT", "Y").unwrap();
         rec.insert("LOTW_QSL_RCVD", "N").unwrap();
         rec.insert("EQSL_QSL_SENT", "N").unwrap();
@@ -919,12 +993,20 @@ mod tests {
         );
         assert_eq!(
             qso.qsl_received_status,
-            crate::proto::logripper::domain::QslStatus::No as i32
+            crate::proto::logripper::domain::QslStatus::Yes as i32
         );
         assert_eq!(qso.lotw_sent, Some(true));
         assert_eq!(qso.lotw_received, Some(false));
         assert_eq!(qso.eqsl_sent, Some(false));
         assert_eq!(qso.eqsl_received, Some(true));
+        assert_eq!(
+            format_adif_date(&qso.qsl_sent_date.expect("qsl sent date")).as_deref(),
+            Some("20260120")
+        );
+        assert_eq!(
+            format_adif_date(&qso.qsl_received_date.expect("qsl received date")).as_deref(),
+            Some("20260122")
+        );
     }
 
     #[test]
@@ -1018,6 +1100,8 @@ mod tests {
         rec.insert("CQZ", "25").unwrap();
         rec.insert("ITUZ", "45").unwrap();
         rec.insert("IOTA", "AS-007").unwrap();
+        rec.insert("ARRL_SECT", "DX").unwrap();
+        rec.insert("CONTACTED_OP", "JH1XYZ").unwrap();
         rec.insert("NAME", "Taro").unwrap();
 
         let qso = AdifMapper::record_to_qso(&rec);
@@ -1028,6 +1112,8 @@ mod tests {
         assert_eq!(qso.worked_cq_zone, Some(25));
         assert_eq!(qso.worked_itu_zone, Some(45));
         assert_eq!(qso.worked_iota.as_deref(), Some("AS-007"));
+        assert_eq!(qso.worked_arrl_section.as_deref(), Some("DX"));
+        assert_eq!(qso.worked_operator_callsign.as_deref(), Some("JH1XYZ"));
         assert_eq!(qso.worked_operator_name.as_deref(), Some("Taro"));
     }
 
@@ -1051,11 +1137,13 @@ mod tests {
         rec.insert("CALL", "W1AW").unwrap();
         rec.insert("STATION_CALLSIGN", "K7RND").unwrap();
         rec.insert("OPERATOR", "N7OPS").unwrap();
+        rec.insert("MY_NAME", "Randy").unwrap();
         rec.insert("MY_GRIDSQUARE", "CN87").unwrap();
         rec.insert("MY_STATE", "WA").unwrap();
         rec.insert("MY_DXCC", "291").unwrap();
         rec.insert("MY_LAT", "N047 36.372").unwrap();
         rec.insert("MY_LON", "W122 19.866").unwrap();
+        rec.insert("MY_ARRL_SECT", "WWA").unwrap();
 
         let qso = AdifMapper::record_to_qso(&rec);
         let snapshot = qso.station_snapshot.expect("snapshot");
@@ -1063,11 +1151,13 @@ mod tests {
         assert_eq!("K7RND", qso.station_callsign);
         assert_eq!("K7RND", snapshot.station_callsign);
         assert_eq!(Some("N7OPS"), snapshot.operator_callsign.as_deref());
+        assert_eq!(Some("Randy"), snapshot.operator_name.as_deref());
         assert_eq!(Some("CN87"), snapshot.grid.as_deref());
         assert_eq!(Some("WA"), snapshot.state.as_deref());
         assert_eq!(Some(291), snapshot.dxcc);
         assert_eq!(Some(47.6062), snapshot.latitude);
         assert_eq!(Some(-122.3311), snapshot.longitude);
+        assert_eq!(Some("WWA"), snapshot.arrl_section.as_deref());
     }
 
     #[test]
@@ -1221,10 +1311,12 @@ mod tests {
             station_snapshot: Some(StationSnapshot {
                 station_callsign: "K7RND".into(),
                 operator_callsign: Some("N7OPS".into()),
+                operator_name: Some("Randy".into()),
                 grid: Some("CN87".into()),
                 state: Some("WA".into()),
                 latitude: Some(47.6062),
                 longitude: Some(-122.3311),
+                arrl_section: Some("WWA".into()),
                 ..StationSnapshot::default()
             }),
             ..Default::default()
@@ -1238,10 +1330,41 @@ mod tests {
 
         assert_eq!(field_map.get("STATION_CALLSIGN"), Some(&"K7RND"));
         assert_eq!(field_map.get("OPERATOR"), Some(&"N7OPS"));
+        assert_eq!(field_map.get("MY_NAME"), Some(&"Randy"));
         assert_eq!(field_map.get("MY_GRIDSQUARE"), Some(&"CN87"));
         assert_eq!(field_map.get("MY_STATE"), Some(&"WA"));
         assert_eq!(field_map.get("MY_LAT"), Some(&"N047 36.372"));
         assert_eq!(field_map.get("MY_LON"), Some(&"W122 19.866"));
+        assert_eq!(field_map.get("MY_ARRL_SECT"), Some(&"WWA"));
+    }
+
+    #[test]
+    fn qso_to_adif_fields_emits_contacted_operator_arrl_section_and_qsl_dates() {
+        let qso = crate::proto::logripper::domain::QsoRecord {
+            worked_callsign: "W1AW".into(),
+            worked_operator_callsign: Some("K1OP".into()),
+            worked_arrl_section: Some("EMA".into()),
+            qsl_sent_date: Some(prost_types::Timestamp {
+                seconds: 1_737_331_200,
+                nanos: 0,
+            }),
+            qsl_received_date: Some(prost_types::Timestamp {
+                seconds: 1_737_504_000,
+                nanos: 0,
+            }),
+            ..Default::default()
+        };
+
+        let fields = AdifMapper::qso_to_adif_fields(&qso);
+        let field_map: std::collections::HashMap<&str, &str> = fields
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect();
+
+        assert_eq!(field_map.get("CONTACTED_OP"), Some(&"K1OP"));
+        assert_eq!(field_map.get("ARRL_SECT"), Some(&"EMA"));
+        assert_eq!(field_map.get("QSLSDATE"), Some(&"20250120"));
+        assert_eq!(field_map.get("QSLRDATE"), Some(&"20250122"));
     }
 
     #[test]
@@ -1289,16 +1412,34 @@ mod tests {
             station_snapshot: Some(StationSnapshot {
                 station_callsign: "K7RND".into(),
                 grid: Some("CN87".into()),
+                operator_name: Some("Randy".into()),
+                arrl_section: Some("WWA".into()),
                 ..StationSnapshot::default()
             }),
             extra_fields: [
                 ("station_callsign".to_string(), "OLD".to_string()),
+                ("contacted_op".to_string(), "OLDOP".to_string()),
+                ("arrl_sect".to_string(), "OLDSECT".to_string()),
+                ("my_name".to_string(), "OLDNAME".to_string()),
                 ("my_gridsquare".to_string(), "OLDGRID".to_string()),
+                ("my_arrl_sect".to_string(), "OLDWWA".to_string()),
+                ("qslsdate".to_string(), "19990101".to_string()),
+                ("qslrdate".to_string(), "19990102".to_string()),
                 ("lotw_qsl_sent".to_string(), "R".to_string()),
                 ("eqsl_qsl_rcvd".to_string(), "I".to_string()),
             ]
             .into_iter()
             .collect(),
+            worked_operator_callsign: Some("K1OP".into()),
+            worked_arrl_section: Some("EMA".into()),
+            qsl_sent_date: Some(prost_types::Timestamp {
+                seconds: 1_737_331_200,
+                nanos: 0,
+            }),
+            qsl_received_date: Some(prost_types::Timestamp {
+                seconds: 1_737_504_000,
+                nanos: 0,
+            }),
             ..Default::default()
         };
 
@@ -1318,16 +1459,52 @@ mod tests {
             .filter(|(k, _)| k == "STATION_CALLSIGN")
             .map(|(_, v)| v.as_str())
             .collect();
+        let contacted_op_values: Vec<&str> = fields
+            .iter()
+            .filter(|(k, _)| k == "CONTACTED_OP")
+            .map(|(_, v)| v.as_str())
+            .collect();
+        let arrl_sect_values: Vec<&str> = fields
+            .iter()
+            .filter(|(k, _)| k == "ARRL_SECT")
+            .map(|(_, v)| v.as_str())
+            .collect();
+        let my_name_values: Vec<&str> = fields
+            .iter()
+            .filter(|(k, _)| k == "MY_NAME")
+            .map(|(_, v)| v.as_str())
+            .collect();
         let grid_values: Vec<&str> = fields
             .iter()
             .filter(|(k, _)| k == "MY_GRIDSQUARE")
+            .map(|(_, v)| v.as_str())
+            .collect();
+        let my_arrl_sect_values: Vec<&str> = fields
+            .iter()
+            .filter(|(k, _)| k == "MY_ARRL_SECT")
+            .map(|(_, v)| v.as_str())
+            .collect();
+        let qsl_sent_date_values: Vec<&str> = fields
+            .iter()
+            .filter(|(k, _)| k == "QSLSDATE")
+            .map(|(_, v)| v.as_str())
+            .collect();
+        let qsl_received_date_values: Vec<&str> = fields
+            .iter()
+            .filter(|(k, _)| k == "QSLRDATE")
             .map(|(_, v)| v.as_str())
             .collect();
 
         assert_eq!(lotw_values, vec!["Y"]);
         assert_eq!(eqsl_values, vec!["N"]);
         assert_eq!(station_callsign_values, vec!["K7RND"]);
+        assert_eq!(contacted_op_values, vec!["K1OP"]);
+        assert_eq!(arrl_sect_values, vec!["EMA"]);
+        assert_eq!(my_name_values, vec!["Randy"]);
         assert_eq!(grid_values, vec!["CN87"]);
+        assert_eq!(my_arrl_sect_values, vec!["WWA"]);
+        assert_eq!(qsl_sent_date_values, vec!["20250120"]);
+        assert_eq!(qsl_received_date_values, vec!["20250122"]);
     }
 
     #[test]
@@ -1402,6 +1579,37 @@ mod tests {
             Some("19700101"),
             "Negative nanos should not silently produce epoch date"
         );
+    }
+
+    #[test]
+    fn invalid_qsl_dates_fall_back_to_overflow_fields() {
+        let qso = crate::proto::logripper::domain::QsoRecord {
+            worked_callsign: "W1AW".into(),
+            qsl_sent_date: Some(prost_types::Timestamp {
+                seconds: 1_700_000_000,
+                nanos: -1,
+            }),
+            qsl_received_date: Some(prost_types::Timestamp {
+                seconds: 1_700_000_100,
+                nanos: -1,
+            }),
+            extra_fields: [
+                ("QSLSDATE".to_string(), "20250120".to_string()),
+                ("QSLRDATE".to_string(), "20250122".to_string()),
+            ]
+            .into_iter()
+            .collect(),
+            ..Default::default()
+        };
+
+        let fields = AdifMapper::qso_to_adif_fields(&qso);
+        let field_map: std::collections::HashMap<&str, &str> = fields
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect();
+
+        assert_eq!(field_map.get("QSLSDATE"), Some(&"20250120"));
+        assert_eq!(field_map.get("QSLRDATE"), Some(&"20250122"));
     }
 
     #[test]

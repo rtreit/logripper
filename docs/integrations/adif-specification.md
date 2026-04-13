@@ -625,6 +625,7 @@ The ADIF parser (Rust-side edge adapter) converts ADIF fields to/from proto `Qso
 | RST_SENT | rst_sent | Parse into RstReport |
 | RST_RCVD | rst_received | Parse into RstReport |
 | TX_PWR | tx_power | — |
+| CONTACTED_OP | worked_operator_callsign | — |
 | GRIDSQUARE | worked_grid | — |
 | COUNTRY | worked_country | — |
 | DXCC | worked_dxcc | — |
@@ -634,6 +635,7 @@ The ADIF parser (Rust-side edge adapter) converts ADIF fields to/from proto `Qso
 | ITUZ | worked_itu_zone | — |
 | CNTY | worked_county | — |
 | IOTA | worked_iota | — |
+| ARRL_SECT | worked_arrl_section | — |
 | NAME | worked_operator_name | — |
 | CONTEST_ID | contest_id | — |
 | STX | serial_sent | — |
@@ -644,12 +646,16 @@ The ADIF parser (Rust-side edge adapter) converts ADIF fields to/from proto `Qso
 | NOTES | notes | — |
 | QSL_SENT | qsl_sent_status | Map Y/N/R/Q/I to QslStatus enum |
 | QSL_RCVD | qsl_received_status | Map Y/N/R/I to QslStatus enum |
+| QSLSDATE | qsl_sent_date | Stored as a Timestamp at 00:00:00 UTC |
+| QSLRDATE | qsl_received_date | Stored as a Timestamp at 00:00:00 UTC |
 | LOTW_QSL_SENT | lotw_sent | Map to bool |
 | LOTW_QSL_RCVD | lotw_received | Map to bool |
 | EQSL_QSL_SENT | eqsl_sent | Map to bool |
 | EQSL_QSL_RCVD | eqsl_received | Map to bool |
+| MY_NAME | station_snapshot.operator_name | Logging-station snapshot field |
+| MY_ARRL_SECT | station_snapshot.arrl_section | Logging-station snapshot field |
 
-**Fields not in QsoRecord** (such as MY_ fields, propagation data, satellite info, etc.) are preserved in an overflow map or separate structures for round-trip fidelity during ADIF import/export.
+**Fields not in QsoRecord or its nested station snapshot** (such as unsupported `MY_` fields, propagation data, satellite info, etc.) are preserved in an overflow map for round-trip fidelity during ADIF import/export.
 
 ---
 
