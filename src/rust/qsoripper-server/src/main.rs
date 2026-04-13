@@ -397,9 +397,11 @@ impl LogbookService for DeveloperLogbookService {
         let (engine, active_station_profile) = self.runtime_config.logbook_context().await;
         let mut stream = request.into_inner();
         let mut adif_bytes = Vec::new();
+        let mut refresh = false;
 
-        while let Some(chunk) = stream.message().await? {
-            let chunk = chunk
+        while let Some(msg) = stream.message().await? {
+            refresh = refresh || msg.refresh;
+            let chunk = msg
                 .chunk
                 .ok_or_else(|| Status::invalid_argument("ImportAdifRequest requires a chunk."))?;
             adif_bytes.extend_from_slice(&chunk.data);
@@ -409,7 +411,7 @@ impl LogbookService for DeveloperLogbookService {
             .await
             .map_err(Status::invalid_argument)?;
         let summary = engine
-            .import_adif_qsos(qsos, active_station_profile.as_ref())
+            .import_adif_qsos(qsos, active_station_profile.as_ref(), refresh)
             .await
             .map_err(map_logbook_error)?;
 
@@ -417,6 +419,7 @@ impl LogbookService for DeveloperLogbookService {
             records_imported: summary.records_imported,
             records_skipped: summary.records_skipped,
             warnings: summary.warnings,
+            records_updated: summary.records_updated,
         }))
     }
 
@@ -1137,9 +1140,21 @@ mod tests {
         client: &mut LogbookServiceClient<Channel>,
         chunks: Vec<Vec<u8>>,
     ) -> ImportAdifResponse {
-        let stream = tokio_stream::iter(chunks.into_iter().map(|chunk| ImportAdifRequest {
-            chunk: Some(AdifChunk { data: chunk }),
-        }));
+        import_adif_payload_with_refresh(client, chunks, false).await
+    }
+
+    async fn import_adif_payload_with_refresh(
+        client: &mut LogbookServiceClient<Channel>,
+        chunks: Vec<Vec<u8>>,
+        refresh: bool,
+    ) -> ImportAdifResponse {
+        let stream =
+            tokio_stream::iter(chunks.into_iter().enumerate().map(move |(index, chunk)| {
+                ImportAdifRequest {
+                    chunk: Some(AdifChunk { data: chunk }),
+                    refresh: refresh && index == 0,
+                }
+            }));
 
         client
             .import_adif(Request::new(stream))
@@ -1736,6 +1751,161 @@ mod tests {
             .warnings
             .iter()
             .any(|warning| warning.contains("unrecognized ADIF band '11M'")));
+
+        server_handle.abort();
+    }
+
+    #[tokio::test]
+    async fn adif_import_refresh_updates_existing_records() {
+        let service = DeveloperLogbookService::new(test_runtime_config_with_logbook(
+            StorageBackendKind::Memory,
+            None,
+            true,
+        ));
+        let (mut client, server_handle) = grpc_logbook_client(service).await;
+
+        // First import: record with original RST.
+        let original = b"<CALL:4>W1AW<STATION_CALLSIGN:5>K1ABC<QSO_DATE:8>20250102<TIME_ON:6>010203<BAND:3>20M<MODE:3>SSB<RST_SENT:2>55<RST_RCVD:2>44<EOR>\n";
+        let first = import_adif_payload(&mut client, vec![original.to_vec()]).await;
+        assert_eq!(1, first.records_imported);
+
+        // Capture the local_id assigned by the engine.
+        let original_qso = client
+            .list_qsos(Request::new(ListQsosRequest {
+                limit: 1,
+                sort: QsoSortOrder::NewestFirst as i32,
+                ..ListQsosRequest::default()
+            }))
+            .await
+            .expect("list")
+            .into_inner()
+            .next()
+            .await
+            .expect("item")
+            .expect("msg")
+            .qso
+            .expect("qso");
+
+        // Re-import same file without refresh: should skip.
+        let no_refresh = import_adif_payload(&mut client, vec![original.to_vec()]).await;
+        assert_eq!(0, no_refresh.records_imported);
+        assert_eq!(1, no_refresh.records_skipped);
+        assert_eq!(0, no_refresh.records_updated);
+
+        // Re-import with corrected RST and refresh=true.
+        let corrected = b"<CALL:4>W1AW<STATION_CALLSIGN:5>K1ABC<QSO_DATE:8>20250102<TIME_ON:6>010203<BAND:3>20M<MODE:3>SSB<RST_SENT:2>59<RST_RCVD:2>57<EOR>\n";
+        let refreshed =
+            import_adif_payload_with_refresh(&mut client, vec![corrected.to_vec()], true).await;
+        assert_eq!(0, refreshed.records_imported);
+        assert_eq!(0, refreshed.records_skipped);
+        assert_eq!(1, refreshed.records_updated);
+        assert!(refreshed
+            .warnings
+            .iter()
+            .any(|w| w.contains("refreshed existing record")));
+
+        // Verify the record was updated in-place (same local_id, new RST).
+        let updated_qso = client
+            .get_qso(Request::new(GetQsoRequest {
+                local_id: original_qso.local_id.clone(),
+            }))
+            .await
+            .expect("get")
+            .into_inner()
+            .qso
+            .expect("qso");
+
+        assert_eq!(original_qso.local_id, updated_qso.local_id);
+        assert_eq!("59", updated_qso.rst_sent.as_ref().expect("rst_sent").raw);
+        assert_eq!(
+            "57",
+            updated_qso.rst_received.as_ref().expect("rst_received").raw
+        );
+
+        server_handle.abort();
+    }
+
+    #[tokio::test]
+    async fn adif_import_refresh_preserves_fields_absent_from_import() {
+        let service = DeveloperLogbookService::new(test_runtime_config_with_logbook(
+            StorageBackendKind::Memory,
+            None,
+            true,
+        ));
+        let (mut client, server_handle) = grpc_logbook_client(service).await;
+
+        // Import a record with notes via the log RPC (richer than ADIF).
+        let original = b"<CALL:4>W1AW<STATION_CALLSIGN:5>K1ABC<QSO_DATE:8>20250105<TIME_ON:6>120000<BAND:3>40M<MODE:2>CW<RST_SENT:3>559<COMMENT:14>My field notes<EOR>\n";
+        let first = import_adif_payload(&mut client, vec![original.to_vec()]).await;
+        assert_eq!(1, first.records_imported);
+
+        // Re-import with corrected RST but no COMMENT field — notes should be preserved.
+        let corrected = b"<CALL:4>W1AW<STATION_CALLSIGN:5>K1ABC<QSO_DATE:8>20250105<TIME_ON:6>120000<BAND:3>40M<MODE:2>CW<RST_SENT:3>599<EOR>\n";
+        let refreshed =
+            import_adif_payload_with_refresh(&mut client, vec![corrected.to_vec()], true).await;
+        assert_eq!(1, refreshed.records_updated);
+
+        let updated_qso = client
+            .list_qsos(Request::new(ListQsosRequest {
+                limit: 1,
+                sort: QsoSortOrder::NewestFirst as i32,
+                ..ListQsosRequest::default()
+            }))
+            .await
+            .expect("list")
+            .into_inner()
+            .next()
+            .await
+            .expect("item")
+            .expect("msg")
+            .qso
+            .expect("qso");
+
+        assert_eq!(
+            "599",
+            updated_qso.rst_sent.as_ref().expect("rst_sent").raw,
+            "RST should be refreshed from import"
+        );
+        assert_eq!(
+            Some("My field notes"),
+            updated_qso.comment.as_deref(),
+            "COMMENT from original should be preserved when absent from refresh import"
+        );
+
+        server_handle.abort();
+    }
+
+    #[tokio::test]
+    async fn adif_import_refresh_handles_mixed_new_and_existing() {
+        let service = DeveloperLogbookService::new(test_runtime_config_with_logbook(
+            StorageBackendKind::Memory,
+            None,
+            true,
+        ));
+        let (mut client, server_handle) = grpc_logbook_client(service).await;
+
+        // Import one record.
+        let original = b"<CALL:4>W1AW<STATION_CALLSIGN:5>K1ABC<QSO_DATE:8>20250110<TIME_ON:6>080000<BAND:3>20M<MODE:3>SSB<EOR>\n";
+        let first = import_adif_payload(&mut client, vec![original.to_vec()]).await;
+        assert_eq!(1, first.records_imported);
+
+        // Re-import with the same record plus a new one, with refresh.
+        let mixed = concat!(
+            "<CALL:4>W1AW<STATION_CALLSIGN:5>K1ABC<QSO_DATE:8>20250110<TIME_ON:6>080000<BAND:3>20M<MODE:3>SSB<RST_SENT:2>59<EOR>\n",
+            "<CALL:5>DL1AA<STATION_CALLSIGN:5>K1ABC<QSO_DATE:8>20250110<TIME_ON:6>090000<BAND:3>15M<MODE:2>CW<EOR>\n"
+        );
+        let refreshed =
+            import_adif_payload_with_refresh(&mut client, vec![mixed.as_bytes().to_vec()], true)
+                .await;
+        assert_eq!(
+            1, refreshed.records_imported,
+            "new record should be imported"
+        );
+        assert_eq!(
+            1, refreshed.records_updated,
+            "existing record should be updated"
+        );
+        assert_eq!(0, refreshed.records_skipped);
 
         server_handle.abort();
     }

@@ -13,6 +13,7 @@ internal static class CliArgumentParser
         string? callsign = null;
         var skipCache = false;
         var jsonOutput = false;
+        var refresh = false;
         var setupStatus = false;
         var setupFromEnv = false;
 
@@ -47,6 +48,12 @@ internal static class CliArgumentParser
             if (arg is "--skip-cache")
             {
                 skipCache = true;
+                continue;
+            }
+
+            if (arg is "--refresh")
+            {
+                refresh = true;
                 continue;
             }
 
@@ -92,6 +99,7 @@ internal static class CliArgumentParser
             Callsign: callsign,
             SkipCache: skipCache,
             JsonOutput: jsonOutput,
+            Refresh: refresh,
             SetupStatus: setupStatus,
             SetupFromEnv: setupFromEnv,
             RemainingArgs: remaining.ToArray());
