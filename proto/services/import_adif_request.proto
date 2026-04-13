@@ -8,4 +8,9 @@ import "services/adif_chunk.proto";
 
 message ImportAdifRequest {
   AdifChunk chunk = 1;
+  // When true, duplicate records are updated (merged) instead of skipped.
+  // Non-empty import fields overwrite existing values; fields absent from the
+  // import are preserved. Set on the first streamed chunk; the server uses the
+  // value from the first message that carries it.
+  bool refresh = 2;
 }

@@ -197,18 +197,25 @@ impl LogbookEngine {
         &self,
         qsos: Vec<QsoRecord>,
         active_station_profile: Option<&StationProfile>,
+        refresh: bool,
     ) -> Result<AdifImportSummary, LogbookError> {
         let mut summary = AdifImportSummary::default();
 
         for (index, qso) in qsos.into_iter().enumerate() {
             let outcome = self
-                .import_single_adif_qso(index + 1, qso, active_station_profile)
+                .import_single_adif_qso(index + 1, qso, active_station_profile, refresh)
                 .await?;
 
-            if outcome.imported {
-                summary.records_imported = summary.records_imported.saturating_add(1);
-            } else {
-                summary.records_skipped = summary.records_skipped.saturating_add(1);
+            match outcome.kind {
+                AdifImportOutcomeKind::Imported => {
+                    summary.records_imported = summary.records_imported.saturating_add(1);
+                }
+                AdifImportOutcomeKind::Updated => {
+                    summary.records_updated = summary.records_updated.saturating_add(1);
+                }
+                AdifImportOutcomeKind::Skipped => {
+                    summary.records_skipped = summary.records_skipped.saturating_add(1);
+                }
             }
 
             summary.warnings.extend(outcome.warnings);
@@ -235,6 +242,7 @@ impl LogbookEngine {
         record_number: usize,
         mut qso: QsoRecord,
         active_station_profile: Option<&StationProfile>,
+        refresh: bool,
     ) -> Result<AdifImportOutcome, LogbookError> {
         let had_imported_station_context = qso_has_station_context(&qso);
         let mut warnings = Vec::new();
@@ -261,26 +269,42 @@ impl LogbookEngine {
             )));
         }
 
-        if self.is_duplicate_import(&qso).await? {
+        if let Some(existing) = self.find_duplicate_import(&qso).await? {
+            if refresh {
+                let merged = merge_qso_for_refresh(existing, &qso);
+                self.storage.logbook().update_qso(&merged).await?;
+                warnings.push(format!(
+                    "Record {record_number}: refreshed existing record '{}'.",
+                    merged.local_id
+                ));
+                return Ok(AdifImportOutcome {
+                    kind: AdifImportOutcomeKind::Updated,
+                    warnings,
+                });
+            }
+
             warnings.push(format!(
                 "Record {record_number}: duplicate skipped; matched an existing QSO on station_callsign, worked_callsign, utc_timestamp, band, mode, and compatible submode/frequency."
             ));
             return Ok(AdifImportOutcome {
-                imported: false,
+                kind: AdifImportOutcomeKind::Skipped,
                 warnings,
             });
         }
 
         let _ = self.log_qso(qso).await?;
         Ok(AdifImportOutcome {
-            imported: true,
+            kind: AdifImportOutcomeKind::Imported,
             warnings,
         })
     }
 
-    async fn is_duplicate_import(&self, candidate: &QsoRecord) -> Result<bool, LogbookError> {
+    async fn find_duplicate_import(
+        &self,
+        candidate: &QsoRecord,
+    ) -> Result<Option<QsoRecord>, LogbookError> {
         let Some(timestamp) = candidate.utc_timestamp else {
-            return Ok(false);
+            return Ok(None);
         };
 
         let callsign_filter = non_empty_trimmed(&candidate.worked_callsign)
@@ -297,8 +321,8 @@ impl LogbookEngine {
             .await?;
 
         Ok(existing
-            .iter()
-            .any(|existing_qso| qsos_match_for_duplicate(existing_qso, candidate)))
+            .into_iter()
+            .find(|existing_qso| qsos_match_for_duplicate(existing_qso, candidate)))
     }
 }
 
@@ -324,6 +348,8 @@ pub struct AdifImportSummary {
     pub records_imported: u32,
     /// Number of records skipped due to duplicates or validation problems.
     pub records_skipped: u32,
+    /// Number of existing records updated during a refresh import.
+    pub records_updated: u32,
     /// Human-readable warnings collected during import.
     pub warnings: Vec<String>,
 }
@@ -355,15 +381,22 @@ pub enum LogbookError {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+enum AdifImportOutcomeKind {
+    Imported,
+    Updated,
+    Skipped,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct AdifImportOutcome {
-    imported: bool,
+    kind: AdifImportOutcomeKind,
     warnings: Vec<String>,
 }
 
 impl AdifImportOutcome {
     fn skipped(warning: String) -> Self {
         Self {
-            imported: false,
+            kind: AdifImportOutcomeKind::Skipped,
             warnings: vec![warning],
         }
     }
@@ -481,6 +514,130 @@ fn qsos_match_for_duplicate(existing: &QsoRecord, candidate: &QsoRecord) -> bool
         )
         && optional_strings_compatible(existing.submode.as_deref(), candidate.submode.as_deref())
         && optional_u64_compatible(existing.frequency_khz, candidate.frequency_khz)
+}
+
+/// Merge import data onto an existing record for refresh mode.
+///
+/// Non-empty import fields overwrite existing values. Identity fields (`local_id`,
+/// `created_at`, `sync_status`, `qrz_logid`, `qrz_bookid`) and QSL confirmation
+/// fields are always preserved from the existing record. Extra fields are merged
+/// key-by-key (import keys overwrite, existing keys not in import are preserved).
+fn merge_qso_for_refresh(mut existing: QsoRecord, import: &QsoRecord) -> QsoRecord {
+    // Core contact fields — always take from import (they matched for duplicate).
+    existing
+        .station_callsign
+        .clone_from(&import.station_callsign);
+    existing.worked_callsign.clone_from(&import.worked_callsign);
+    existing.utc_timestamp = import.utc_timestamp;
+    existing.band = import.band;
+    existing.mode = import.mode;
+
+    merge_optional_u64(&mut existing.frequency_khz, import.frequency_khz);
+    merge_optional_str(&mut existing.submode, import.submode.as_deref());
+    merge_optional_timestamp(&mut existing.utc_end_timestamp, import.utc_end_timestamp);
+
+    // Station snapshot — import snapshot overwrites if present.
+    if import.station_snapshot.is_some() {
+        existing
+            .station_snapshot
+            .clone_from(&import.station_snapshot);
+    }
+
+    // Signal reports — always take from import when present.
+    if import.rst_sent.is_some() {
+        existing.rst_sent.clone_from(&import.rst_sent);
+    }
+    if import.rst_received.is_some() {
+        existing.rst_received.clone_from(&import.rst_received);
+    }
+    merge_optional_str(&mut existing.tx_power, import.tx_power.as_deref());
+
+    // Worked-station enrichment.
+    merge_optional_str(
+        &mut existing.worked_operator_callsign,
+        import.worked_operator_callsign.as_deref(),
+    );
+    merge_optional_str(
+        &mut existing.worked_operator_name,
+        import.worked_operator_name.as_deref(),
+    );
+    merge_optional_str(&mut existing.worked_grid, import.worked_grid.as_deref());
+    merge_optional_str(
+        &mut existing.worked_country,
+        import.worked_country.as_deref(),
+    );
+    merge_optional_u32(&mut existing.worked_dxcc, import.worked_dxcc);
+    merge_optional_str(&mut existing.worked_state, import.worked_state.as_deref());
+    merge_optional_u32(&mut existing.worked_cq_zone, import.worked_cq_zone);
+    merge_optional_u32(&mut existing.worked_itu_zone, import.worked_itu_zone);
+    merge_optional_str(&mut existing.worked_county, import.worked_county.as_deref());
+    merge_optional_str(&mut existing.worked_iota, import.worked_iota.as_deref());
+    merge_optional_str(
+        &mut existing.worked_continent,
+        import.worked_continent.as_deref(),
+    );
+    merge_optional_str(
+        &mut existing.worked_arrl_section,
+        import.worked_arrl_section.as_deref(),
+    );
+
+    // Contest fields.
+    merge_optional_str(&mut existing.contest_id, import.contest_id.as_deref());
+    merge_optional_str(&mut existing.serial_sent, import.serial_sent.as_deref());
+    merge_optional_str(
+        &mut existing.serial_received,
+        import.serial_received.as_deref(),
+    );
+    merge_optional_str(&mut existing.exchange_sent, import.exchange_sent.as_deref());
+    merge_optional_str(
+        &mut existing.exchange_received,
+        import.exchange_received.as_deref(),
+    );
+
+    // Propagation.
+    merge_optional_str(&mut existing.prop_mode, import.prop_mode.as_deref());
+    merge_optional_str(&mut existing.sat_name, import.sat_name.as_deref());
+    merge_optional_str(&mut existing.sat_mode, import.sat_mode.as_deref());
+
+    // Notes — import overwrites when non-empty.
+    merge_optional_str(&mut existing.notes, import.notes.as_deref());
+    merge_optional_str(&mut existing.comment, import.comment.as_deref());
+
+    // Extra fields — merge key-by-key.
+    for (key, value) in &import.extra_fields {
+        existing.extra_fields.insert(key.clone(), value.clone());
+    }
+
+    existing.updated_at = Some(now_timestamp());
+
+    existing
+}
+
+fn merge_optional_str(target: &mut Option<String>, source: Option<&str>) {
+    if let Some(value) = source.and_then(|s| {
+        let trimmed = s.trim();
+        (!trimmed.is_empty()).then(|| trimmed.to_string())
+    }) {
+        *target = Some(value);
+    }
+}
+
+fn merge_optional_u32(target: &mut Option<u32>, source: Option<u32>) {
+    if let Some(value) = source.filter(|v| *v > 0) {
+        *target = Some(value);
+    }
+}
+
+fn merge_optional_u64(target: &mut Option<u64>, source: Option<u64>) {
+    if let Some(value) = source.filter(|v| *v > 0) {
+        *target = Some(value);
+    }
+}
+
+fn merge_optional_timestamp(target: &mut Option<Timestamp>, source: Option<Timestamp>) {
+    if source.is_some() {
+        *target = source;
+    }
 }
 
 fn timestamps_match(left: Option<&Timestamp>, right: Option<&Timestamp>) -> bool {

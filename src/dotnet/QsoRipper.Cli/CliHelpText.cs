@@ -105,9 +105,13 @@ internal static class CliHelpText
                 Delete a QSO by its local ID.
                 """,
             "import" => """
-                Usage: import <file-path>
+                Usage: import <file-path> [--refresh]
 
                 Import QSOs from an ADIF (.adi) file.
+
+                  --refresh            Update existing records instead of skipping duplicates.
+                                       Non-empty import fields overwrite; fields absent from the
+                                       import are preserved.
                 """,
             "export" => """
                 Usage: export [options]

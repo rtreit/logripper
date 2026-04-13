@@ -8,4 +8,5 @@ message ImportAdifResponse {
   uint32 records_imported = 1;
   uint32 records_skipped = 2;  // Duplicates or parse errors
   repeated string warnings = 3;
+  uint32 records_updated = 4;  // Records refreshed during a --refresh import
 }

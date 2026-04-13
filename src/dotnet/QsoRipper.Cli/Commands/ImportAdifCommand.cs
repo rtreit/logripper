@@ -9,7 +9,7 @@ internal static class ImportAdifCommand
 {
     private const int ChunkSize = 65536;
 
-    public static async Task<int> RunAsync(GrpcChannel channel, string filePath)
+    public static async Task<int> RunAsync(GrpcChannel channel, string filePath, bool refresh)
     {
         if (!File.Exists(filePath))
         {
@@ -21,7 +21,7 @@ internal static class ImportAdifCommand
         using var call = client.ImportAdif();
         await using var input = File.OpenRead(filePath);
 
-        await foreach (var request in ReadRequestsAsync(input))
+        await foreach (var request in ReadRequestsAsync(input, refresh))
         {
             await call.RequestStream.WriteAsync(request);
         }
@@ -30,6 +30,7 @@ internal static class ImportAdifCommand
         var response = await call.ResponseAsync;
 
         Console.WriteLine($"Imported:  {response.RecordsImported}");
+        Console.WriteLine($"Updated:   {response.RecordsUpdated}");
         Console.WriteLine($"Skipped:   {response.RecordsSkipped}");
 
         foreach (var warning in response.Warnings)
@@ -42,11 +43,13 @@ internal static class ImportAdifCommand
 
     internal static async IAsyncEnumerable<ImportAdifRequest> ReadRequestsAsync(
         Stream input,
+        bool refresh = false,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(input);
 
         var buffer = new byte[ChunkSize];
+        var isFirst = true;
 
         while (true)
         {
@@ -56,13 +59,21 @@ internal static class ImportAdifCommand
                 yield break;
             }
 
-            yield return new ImportAdifRequest
+            var request = new ImportAdifRequest
             {
                 Chunk = new AdifChunk
                 {
                     Data = ByteString.CopyFrom(buffer, 0, bytesRead)
                 }
             };
+
+            if (isFirst && refresh)
+            {
+                request.Refresh = true;
+                isFirst = false;
+            }
+
+            yield return request;
         }
     }
 }

@@ -81,6 +81,8 @@ service LogbookService {
   // Returns a summary with counts and any per-record warnings.
   // Duplicate policy: an incoming record is skipped when it matches an existing QSO on
   // station_callsign, worked_callsign, utc_timestamp, band, mode, and compatible submode/frequency.
+  // When refresh=true on the request, duplicates are updated instead of skipped: non-empty import
+  // fields overwrite the existing record while preserving fields absent from the import.
   rpc ImportAdif(stream ImportAdifRequest) returns (ImportAdifResponse);
 
   // Export QSOs to ADIF format. The server streams raw ADIF bytes back.
