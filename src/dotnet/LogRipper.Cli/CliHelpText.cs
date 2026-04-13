@@ -13,6 +13,7 @@ internal static class CliHelpText
               log <call> <band> <mode>         Log a QSO (e.g., log W1AW 20m FT8)
               get <local-id>                   Get a QSO by ID
               list [filters]                   List QSOs (--callsign, --band, --mode, --limit)
+              update <local-id> [fields]       Update a QSO (--grid, --freq, --enrich, etc.)
               delete <local-id>                Delete a QSO
 
             ADIF:
@@ -77,6 +78,26 @@ internal static class CliHelpText
                   --show-id            Include the QSO local ID column
                   --show-rst           Include RST sent/received columns
                   --show-comment       Include comment/notes column
+                """,
+            "update" => """
+                Usage: update <local-id> [options]
+
+                Update fields on an existing QSO.
+
+                  --grid <grid>        Set grid square (e.g., CN87)
+                  --country <name>     Set country
+                  --state <abbr>       Set state (e.g., WA)
+                  --freq <khz>         Set frequency in kHz
+                  --band <band>        Change band
+                  --mode <mode>        Change mode
+                  --rst-sent <rst>     Update RST sent
+                  --rst-rcvd <rst>     Update RST received
+                  --comment <text>     Set comment/notes
+                  --enrich             Re-run QRZ lookup enrichment
+
+                Examples:
+                  update abc123 --grid CN87 --freq 14074
+                  update abc123 --enrich
                 """,
             "delete" => """
                 Usage: delete <local-id>

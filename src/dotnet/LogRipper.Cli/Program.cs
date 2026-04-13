@@ -40,6 +40,7 @@ try
         "log" => await LogQsoCommand.RunAsync(channel, arguments.Callsign!, arguments.RemainingArgs),
         "get" => await GetQsoCommand.RunAsync(channel, arguments.Callsign!, arguments.JsonOutput),
         "list" => await ListQsosCommand.RunAsync(channel, arguments.RemainingArgs, arguments.JsonOutput),
+        "update" => await UpdateQsoCommand.RunAsync(channel, arguments.Callsign!, arguments.RemainingArgs),
         "delete" => await DeleteQsoCommand.RunAsync(channel, arguments.Callsign!),
         "import" => await ImportAdifCommand.RunAsync(channel, arguments.Callsign ?? arguments.RemainingArgs.FirstOrDefault() ?? ""),
         "export" => await ExportAdifCommand.RunAsync(channel, arguments.RemainingArgs),
