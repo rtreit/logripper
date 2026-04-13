@@ -1,0 +1,6 @@
+[*.cs]
+# CA1812: Avalonia XAML compiler instantiates internal views via generated code
+dotnet_diagnostic.CA1812.severity = none
+
+# CA1308: ToLowerInvariant is required as input to TextInfo.ToTitleCase (display, not comparison)
+dotnet_diagnostic.CA1308.severity = none
