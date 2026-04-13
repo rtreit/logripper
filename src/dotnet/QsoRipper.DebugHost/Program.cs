@@ -17,6 +17,7 @@ builder.Services.AddScoped<DebugWorkbenchState>();
 builder.Services.AddScoped<GrpcClientFactory>();
 builder.Services.AddScoped<LookupWorkbenchService>();
 builder.Services.AddScoped<StorageWorkbenchService>();
+builder.Services.AddScoped<QsoViewerService>();
 builder.Services.AddScoped<RuntimeConfigWorkbenchService>();
 builder.Services.AddScoped<SetupWorkbenchService>();
 builder.Services.AddScoped<StationProfileWorkbenchService>();

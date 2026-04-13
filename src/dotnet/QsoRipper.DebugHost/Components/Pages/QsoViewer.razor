@@ -1,0 +1,303 @@
+@page "/qso-viewer"
+@inject DebugWorkbenchState WorkbenchState
+@inject RuntimeConfigWorkbenchService RuntimeConfigWorkbenchService
+@inject QsoViewerService QsoViewerService
+@inject ProtoJsonService ProtoJsonService
+
+<PageTitle>QSO Viewer</PageTitle>
+
+<h1 class="mb-3">QSO Viewer</h1>
+<p class="text-muted">
+    Browse and inspect QSO records stored in the active engine. All data is fetched through
+    the <code>ListQsos</code> and <code>GetQso</code> gRPC contracts — the viewer does not access
+    storage directly.
+</p>
+
+<div class="alert alert-secondary">
+    <div><strong>Current engine endpoint:</strong> @WorkbenchState.EngineEndpoint</div>
+    <div class="mt-1">
+        <strong>Active backend:</strong> @WorkbenchState.GetStorageBackendDisplayName()
+        @if (WorkbenchState.EngineStorageBackend == EngineStorageBackend.Sqlite)
+        {
+            <span> using <code>@WorkbenchState.EngineSqlitePath</code></span>
+        }
+    </div>
+</div>
+
+<div class="card shadow-sm mb-4">
+    <div class="card-body">
+        <div class="row g-3 align-items-end">
+            <div class="col-md-3">
+                <label class="form-label" for="filter-callsign">Callsign filter</label>
+                <InputText id="filter-callsign" class="form-control" @bind-Value="callsignFilter"
+                           placeholder="e.g. W1AW" />
+            </div>
+            <div class="col-md-2">
+                <label class="form-label" for="filter-band">Band</label>
+                <InputSelect id="filter-band" class="form-select" @bind-Value="selectedBand">
+                    <option value="@QsoRipper.Domain.Band.Unspecified">(any)</option>
+                    @foreach (var band in BandValues)
+                    {
+                        <option value="@band">@FormatBand(band)</option>
+                    }
+                </InputSelect>
+            </div>
+            <div class="col-md-2">
+                <label class="form-label" for="filter-mode">Mode</label>
+                <InputSelect id="filter-mode" class="form-select" @bind-Value="selectedMode">
+                    <option value="@QsoRipper.Domain.Mode.Unspecified">(any)</option>
+                    @foreach (var mode in ModeValues)
+                    {
+                        <option value="@mode">@FormatMode(mode)</option>
+                    }
+                </InputSelect>
+            </div>
+            <div class="col-md-2">
+                <label class="form-label" for="filter-limit">Limit</label>
+                <InputNumber id="filter-limit" class="form-control" @bind-Value="limit" />
+            </div>
+            <div class="col-md-2">
+                <label class="form-label" for="filter-sort">Sort</label>
+                <InputSelect id="filter-sort" class="form-select" @bind-Value="sortOrder">
+                    <option value="@QsoRipper.Services.QsoSortOrder.NewestFirst">Newest first</option>
+                    <option value="@QsoRipper.Services.QsoSortOrder.OldestFirst">Oldest first</option>
+                </InputSelect>
+            </div>
+            <div class="col-md-1 d-flex align-items-end">
+                <button class="btn btn-primary w-100" @onclick="FetchQsosAsync" disabled="@loading">
+                    @(loading ? "…" : "Fetch")
+                </button>
+            </div>
+        </div>
+
+        @if (currentOffset > 0 || canPageForward)
+        {
+            <div class="d-flex gap-2 mt-3">
+                <button class="btn btn-sm btn-outline-secondary" disabled="@(currentOffset == 0 || loading)"
+                        @onclick="PreviousPageAsync">
+                    ← Previous
+                </button>
+                <span class="align-self-center text-muted small">
+                    Showing @(currentOffset + 1)–@(currentOffset + displayedCount)
+                </span>
+                <button class="btn btn-sm btn-outline-secondary" disabled="@(!canPageForward || loading)"
+                        @onclick="NextPageAsync">
+                    Next →
+                </button>
+            </div>
+        }
+    </div>
+</div>
+
+@if (errorMessage is not null)
+{
+    <div class="alert alert-danger">@errorMessage</div>
+}
+
+@if (result is not null)
+{
+    <div class="card shadow-sm mb-4">
+        <div class="card-body p-0">
+            <div class="table-responsive">
+                <table class="table table-hover table-sm mb-0 qso-viewer-table">
+                    <thead class="table-light">
+                        <tr>
+                            <th style="width: 2rem"></th>
+                            <th>Worked</th>
+                            <th>UTC</th>
+                            <th>Band</th>
+                            <th>Mode</th>
+                            <th>Freq (kHz)</th>
+                            <th>RST Sent</th>
+                            <th>RST Rcvd</th>
+                            <th>Station</th>
+                            <th>Grid</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var (qso, index) in result.Records.Select((q, i) => (q, i)))
+                        {
+                            var isExpanded = expandedIndex == index;
+                            <tr class="@(isExpanded ? "table-active" : "")" style="cursor: pointer"
+                                @onclick="() => ToggleExpand(index)">
+                                <td class="text-center">@(isExpanded ? "▾" : "▸")</td>
+                                <td><strong>@qso.WorkedCallsign</strong></td>
+                                <td>@FormatTimestamp(qso.UtcTimestamp)</td>
+                                <td>@FormatBand(qso.Band)</td>
+                                <td>@FormatMode(qso.Mode)</td>
+                                <td>@(qso.HasFrequencyKhz ? qso.FrequencyKhz.ToString("N0") : "—")</td>
+                                <td>@(qso.RstSent?.Raw ?? "—")</td>
+                                <td>@(qso.RstReceived?.Raw ?? "—")</td>
+                                <td>@qso.StationCallsign</td>
+                                <td>@(qso.WorkedGrid ?? "—")</td>
+                            </tr>
+                            @if (isExpanded)
+                            {
+                                <tr>
+                                    <td colspan="10" class="p-3 bg-light">
+                                        <div class="row g-3">
+                                            <div class="col-xl-6">
+                                                <PayloadCard Title="QSO record"
+                                                             Payload="@GetExpandedPayload(qso).Json"
+                                                             BadgeText="@qso.LocalId" />
+                                            </div>
+                                            @if (qso.StationSnapshot is not null)
+                                            {
+                                                <div class="col-xl-6">
+                                                    <PayloadCard Title="Station snapshot"
+                                                                 Payload="@GetSnapshotPayload(qso.StationSnapshot).Json" />
+                                                </div>
+                                            }
+                                        </div>
+                                    </td>
+                                </tr>
+                            }
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <div class="text-muted small mb-4">
+        Fetched @result.TotalFetched record(s) at @result.CompletedAtUtc.LocalDateTime.ToString("g")
+    </div>
+}
+
+@code {
+    private string callsignFilter = string.Empty;
+    private QsoRipper.Domain.Band selectedBand = QsoRipper.Domain.Band.Unspecified;
+    private QsoRipper.Domain.Mode selectedMode = QsoRipper.Domain.Mode.Unspecified;
+    private QsoRipper.Services.QsoSortOrder sortOrder = QsoRipper.Services.QsoSortOrder.NewestFirst;
+    private int limit = 50;
+    private uint currentOffset;
+    private int? expandedIndex;
+    private bool loading;
+    private string? errorMessage;
+    private QsoRipper.DebugHost.Models.QsoViewerResult? result;
+
+    private readonly Dictionary<string, ProtoPayloadView> _payloadCache = [];
+    private readonly Dictionary<string, ProtoPayloadView> _snapshotCache = [];
+
+    private uint displayedCount => (uint)(result?.Records.Count ?? 0);
+    private bool canPageForward => result is not null && result.Records.Count == limit;
+
+    private static readonly QsoRipper.Domain.Band[] BandValues = System.Enum.GetValues<QsoRipper.Domain.Band>()
+        .Where(b => b != QsoRipper.Domain.Band.Unspecified)
+        .ToArray();
+
+    private static readonly QsoRipper.Domain.Mode[] ModeValues = System.Enum.GetValues<QsoRipper.Domain.Mode>()
+        .Where(m => m != QsoRipper.Domain.Mode.Unspecified)
+        .ToArray();
+
+    protected override async Task OnInitializedAsync()
+    {
+        await RuntimeConfigWorkbenchService.RefreshAsync();
+    }
+
+    private async Task FetchQsosAsync()
+    {
+        loading = true;
+        errorMessage = null;
+        expandedIndex = null;
+        _payloadCache.Clear();
+        _snapshotCache.Clear();
+
+        try
+        {
+            var request = new QsoRipper.Services.ListQsosRequest
+            {
+                Limit = (uint)Math.Max(1, limit),
+                Offset = currentOffset,
+                Sort = sortOrder
+            };
+
+            if (!string.IsNullOrWhiteSpace(callsignFilter))
+            {
+                request.CallsignFilter = callsignFilter.Trim();
+            }
+
+            if (selectedBand != QsoRipper.Domain.Band.Unspecified)
+            {
+                request.BandFilter = selectedBand;
+            }
+
+            if (selectedMode != QsoRipper.Domain.Mode.Unspecified)
+            {
+                request.ModeFilter = selectedMode;
+            }
+
+            result = await QsoViewerService.ListQsosAsync(request);
+            errorMessage = result.ErrorMessage;
+        }
+        finally
+        {
+            loading = false;
+        }
+    }
+
+    private async Task NextPageAsync()
+    {
+        currentOffset += (uint)limit;
+        await FetchQsosAsync();
+    }
+
+    private async Task PreviousPageAsync()
+    {
+        currentOffset = (uint)Math.Max(0, (int)currentOffset - limit);
+        await FetchQsosAsync();
+    }
+
+    private void ToggleExpand(int index)
+    {
+        expandedIndex = expandedIndex == index ? null : index;
+    }
+
+    private ProtoPayloadView GetExpandedPayload(QsoRipper.Domain.QsoRecord qso)
+    {
+        if (!_payloadCache.TryGetValue(qso.LocalId, out var view))
+        {
+            view = ProtoJsonService.Describe(qso);
+            _payloadCache[qso.LocalId] = view;
+        }
+
+        return view;
+    }
+
+    private ProtoPayloadView GetSnapshotPayload(QsoRipper.Domain.StationSnapshot snapshot)
+    {
+        var key = snapshot.StationCallsign + snapshot.ProfileName;
+        if (!_snapshotCache.TryGetValue(key, out var view))
+        {
+            view = ProtoJsonService.Describe(snapshot);
+            _snapshotCache[key] = view;
+        }
+
+        return view;
+    }
+
+    private static string FormatTimestamp(Google.Protobuf.WellKnownTypes.Timestamp? ts)
+    {
+        if (ts is null) return "—";
+        var dt = ts.ToDateTimeOffset();
+        return dt.ToString("yyyy-MM-dd HH:mm");
+    }
+
+    private static string FormatBand(QsoRipper.Domain.Band band)
+    {
+        return band.ToString().Replace("Band", "").Replace("_", ".").ToUpperInvariant() switch
+        {
+            var s when s.StartsWith("BAND", StringComparison.Ordinal) => s[4..],
+            var s => s
+        };
+    }
+
+    private static string FormatMode(QsoRipper.Domain.Mode mode)
+    {
+        return mode.ToString().Replace("Mode", "").ToUpperInvariant() switch
+        {
+            var s when s.StartsWith("MODE", StringComparison.Ordinal) => s[4..],
+            var s => s
+        };
+    }
+}
