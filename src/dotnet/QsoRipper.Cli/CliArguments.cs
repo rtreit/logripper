@@ -8,6 +8,8 @@ internal sealed record CliArguments(
     string? Callsign = null,
     bool SkipCache = false,
     bool JsonOutput = false,
+    bool SetupStatus = false,
+    bool SetupFromEnv = false,
     string[] RemainingArgs = default!)
 {
     public string[] RemainingArgs { get; init; } = RemainingArgs ?? [];

@@ -45,7 +45,7 @@ try
         "import" => await ImportAdifCommand.RunAsync(channel, arguments.Callsign ?? arguments.RemainingArgs.FirstOrDefault() ?? ""),
         "export" => await ExportAdifCommand.RunAsync(channel, arguments.RemainingArgs),
         "config" => await ConfigCommand.RunAsync(channel, arguments.RemainingArgs, arguments.JsonOutput),
-        "setup" => await SetupCommand.RunAsync(channel, arguments.JsonOutput),
+        "setup" => await SetupCommand.RunAsync(channel, arguments),
         _ => ShowHelp($"Unknown command: {arguments.Command}")
     };
 }
