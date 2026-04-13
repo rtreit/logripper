@@ -9,14 +9,19 @@
         WindowStartupLocation="CenterScreen"
         Icon="avares://QsoRipper.Gui/Assets/qsoripper.ico">
 
+  <Window.KeyBindings>
+    <KeyBinding Gesture="Ctrl+OemComma" Command="{Binding OpenWizardCommand}" />
+    <KeyBinding Gesture="Alt+X" Command="{Binding ExitCommand}" />
+  </Window.KeyBindings>
+
   <DockPanel>
     <!-- Menu bar — always on top, never covered by overlay -->
       <Menu DockPanel.Dock="Top">
         <MenuItem x:Name="FileMenuItem" Header="_File">
-          <MenuItem Header="_Settings" HotKey="Ctrl+OemComma"
+          <MenuItem Header="_Settings" InputGesture="Ctrl+OemComma"
                     Command="{Binding OpenWizardCommand}" />
           <Separator />
-          <MenuItem Header="E_xit" HotKey="Alt+X" Command="{Binding ExitCommand}" />
+          <MenuItem Header="E_xit" InputGesture="Alt+X" Command="{Binding ExitCommand}" />
         </MenuItem>
       </Menu>
 
