@@ -35,7 +35,9 @@ $ErrorActionPreference = 'Stop'
 $RustManifest = Join-Path $PSScriptRoot 'src' 'rust' 'Cargo.toml'
 $DotnetSolution = Join-Path $PSScriptRoot 'src' 'dotnet' 'QsoRipper.slnx'
 $DotnetCliProject = Join-Path $PSScriptRoot 'src' 'dotnet' 'QsoRipper.Cli' 'QsoRipper.Cli.csproj'
+$DotnetGuiProject = Join-Path $PSScriptRoot 'src' 'dotnet' 'QsoRipper.Gui' 'QsoRipper.Gui.csproj'
 $DotnetCliPublishDir = Join-Path $PSScriptRoot 'artifacts' 'publish' | Join-Path -ChildPath 'QsoRipper.Cli' | Join-Path -ChildPath $Configuration
+$DotnetGuiPublishDir = Join-Path $PSScriptRoot 'artifacts' 'publish' | Join-Path -ChildPath 'QsoRipper.Gui' | Join-Path -ChildPath $Configuration
 $RustDir = Join-Path $PSScriptRoot 'src' 'rust'
 $IsReleaseBuild = $Configuration -eq 'Release'
 
@@ -70,6 +72,16 @@ function Build-Dotnet {
         '--use-current-runtime',
         '-o',
         $DotnetCliPublishDir
+    )
+
+    Invoke-Build "Publishing QsoRipper.Gui ($Configuration)" dotnet @(
+        'publish',
+        $DotnetGuiProject,
+        '-c',
+        $Configuration,
+        '--use-current-runtime',
+        '-o',
+        $DotnetGuiPublishDir
     )
 }
 
@@ -135,18 +147,18 @@ QsoRipper Build Script
 Usage: ./build.ps1 [command] [-Configuration Release|Debug]
 
 Commands:
-  build         Build Rust and publish the Native AOT CLI (default: Release)
+  build         Build Rust and publish the CLI and GUI apps (default: Release)
   check         Full CI-equivalent quality check
   rust          Build Rust only
-  dotnet        Publish the Native AOT CLI only
+  dotnet        Publish the CLI and GUI apps only
   check-rust    Rust quality: fmt, clippy, test, buf lint, cargo deny
   check-dotnet  .NET quality: format, build, test
   proto         Run buf lint
   help          Show this help
 
 Examples:
-  ./build.ps1                                 # Build Rust and publish the Native AOT CLI in Release
-  ./build.ps1 -Configuration Debug            # Build Rust and publish the Native AOT CLI in Debug
+  ./build.ps1                                 # Build Rust and publish the CLI and GUI apps in Release
+  ./build.ps1 -Configuration Debug            # Build Rust and publish the CLI and GUI apps in Debug
   ./build.ps1 check                           # Run all quality checks before pushing
   ./build.ps1 check-dotnet -Configuration Debug
 
