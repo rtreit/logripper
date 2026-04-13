@@ -1,0 +1,15 @@
+syntax = "proto3";
+
+package qsoripper.services;
+
+option csharp_namespace = "QsoRipper.Services";
+
+import "google/protobuf/timestamp.proto";
+import "services/stress_log_level.proto";
+
+message StressLogEntry {
+  google.protobuf.Timestamp occurred_at_utc = 1;
+  StressLogLevel level = 2;
+  string message = 3;
+  optional string vector_id = 4;
+}

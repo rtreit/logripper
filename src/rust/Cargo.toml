@@ -4,7 +4,7 @@ members = [
     "qsoripper-core",
     "qsoripper-server",
     "qsoripper-storage-memory",
-    "qsoripper-storage-sqlite",
+    "qsoripper-storage-sqlite", "qsoripper-stress", "qsoripper-stress-tui",
 ]
 
 [workspace.package]

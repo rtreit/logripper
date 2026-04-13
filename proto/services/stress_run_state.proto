@@ -1,0 +1,16 @@
+syntax = "proto3";
+
+package qsoripper.services;
+
+option csharp_namespace = "QsoRipper.Services";
+
+enum StressRunState {
+  STRESS_RUN_STATE_UNSPECIFIED = 0;
+  STRESS_RUN_STATE_IDLE = 1;
+  STRESS_RUN_STATE_STARTING = 2;
+  STRESS_RUN_STATE_RUNNING = 3;
+  STRESS_RUN_STATE_STOPPING = 4;
+  STRESS_RUN_STATE_COMPLETED = 5;
+  STRESS_RUN_STATE_FAILED = 6;
+  STRESS_RUN_STATE_STOPPED = 7;
+}

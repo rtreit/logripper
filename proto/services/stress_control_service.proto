@@ -1,0 +1,34 @@
+syntax = "proto3";
+
+package qsoripper.services;
+
+option csharp_namespace = "QsoRipper.Services";
+
+import "services/get_stress_run_status_request.proto";
+import "services/get_stress_run_status_response.proto";
+import "services/list_stress_profiles_request.proto";
+import "services/list_stress_profiles_response.proto";
+import "services/start_stress_run_request.proto";
+import "services/start_stress_run_response.proto";
+import "services/stop_stress_run_request.proto";
+import "services/stop_stress_run_response.proto";
+import "services/stream_stress_run_events_request.proto";
+import "services/stream_stress_run_events_response.proto";
+
+// Developer-only control surface for the long-haul stress harness and dashboard.
+service StressControlService {
+  // Start a new stress run when the harness is idle.
+  rpc StartStressRun(StartStressRunRequest) returns (StartStressRunResponse);
+
+  // Stop the active stress run, if any.
+  rpc StopStressRun(StopStressRunRequest) returns (StopStressRunResponse);
+
+  // Read the current live stress snapshot.
+  rpc GetStressRunStatus(GetStressRunStatusRequest) returns (GetStressRunStatusResponse);
+
+  // Stream the latest stress snapshot whenever it changes.
+  rpc StreamStressRunEvents(StreamStressRunEventsRequest) returns (stream StreamStressRunEventsResponse);
+
+  // List the built-in stress profiles that the dashboard can launch.
+  rpc ListStressProfiles(ListStressProfilesRequest) returns (ListStressProfilesResponse);
+}

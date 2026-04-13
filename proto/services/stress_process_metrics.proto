@@ -1,0 +1,13 @@
+syntax = "proto3";
+
+package qsoripper.services;
+
+option csharp_namespace = "QsoRipper.Services";
+
+message StressProcessMetrics {
+  string process_name = 1;
+  optional uint32 process_id = 2;
+  double cpu_usage_percent = 3;
+  uint64 working_set_bytes = 4;
+  uint64 virtual_memory_bytes = 5;
+}
