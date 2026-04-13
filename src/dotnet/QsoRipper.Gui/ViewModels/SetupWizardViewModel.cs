@@ -91,6 +91,30 @@ internal sealed partial class SetupWizardViewModel : ObservableObject
                             stationStep.State = active.Profile.State;
                             stationStep.Country = active.Profile.Country;
                             stationStep.ArrlSection = active.Profile.ArrlSection;
+                            if (active.Profile.Dxcc != 0)
+                            {
+                                stationStep.Dxcc = active.Profile.Dxcc.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                            }
+
+                            if (active.Profile.CqZone != 0)
+                            {
+                                stationStep.CqZone = active.Profile.CqZone.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                            }
+
+                            if (active.Profile.ItuZone != 0)
+                            {
+                                stationStep.ItuZone = active.Profile.ItuZone.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                            }
+
+                            if (active.Profile.Latitude != 0)
+                            {
+                                stationStep.Latitude = active.Profile.Latitude.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                            }
+
+                            if (active.Profile.Longitude != 0)
+                            {
+                                stationStep.Longitude = active.Profile.Longitude.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                            }
                         }
                     }
                 }
