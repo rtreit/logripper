@@ -118,6 +118,7 @@ fn handle_event(
         AppEvent::Key(key) => handle_key(app, key, event_tx, lookup_tx, endpoint),
         AppEvent::Tick => {
             app.utc_now = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
+            app.tick_debounce();
         }
         AppEvent::LookupResult(result) => {
             if let Some(ref info) = result {
@@ -146,7 +147,7 @@ fn handle_event(
             app.form.mode_idx = mode_idx;
             app.form.on_band_change();
             app.lookup_result = None;
-            app.qso_started_at = std::time::Instant::now();
+            app.reset_timer();
             refresh_recent_qsos(event_tx, endpoint);
         }
         AppEvent::QsoLogFailed(err) => {
@@ -162,7 +163,7 @@ fn handle_event(
             app.form.on_band_change();
             app.lookup_result = None;
             app.editing_local_id = None;
-            app.qso_started_at = std::time::Instant::now();
+            app.reset_timer();
             refresh_recent_qsos(event_tx, endpoint);
         }
         AppEvent::QsoUpdateFailed(err) => {
@@ -315,7 +316,7 @@ fn handle_key(
                 app.form = LogForm::new();
                 app.lookup_result = None;
                 app.editing_local_id = None;
-                app.qso_started_at = std::time::Instant::now();
+                app.reset_timer();
             }
             app::View::Help | app::View::ConfirmDeleteQso => {}
         },
@@ -333,6 +334,7 @@ fn handle_key(
             }
             if focused == Field::Callsign {
                 let callsign = app.form.callsign.clone();
+                app.on_callsign_changed();
                 let _ = lookup_tx.send(callsign);
             }
         }
@@ -496,6 +498,7 @@ fn handle_char_key(app: &mut App, c: char, lookup_tx: &watch::Sender<String>) {
                 }
             }
             if focused == Field::Callsign {
+                app.on_callsign_changed();
                 let callsign = app.form.callsign.clone();
                 let _ = lookup_tx.send(callsign);
             }

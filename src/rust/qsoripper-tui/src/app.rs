@@ -109,6 +109,10 @@ pub(crate) struct StatusMessage {
 }
 
 /// Top-level application state passed through the event loop and renderer.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each bool is a distinct independent flag; a state machine would be more complex"
+)]
 pub(crate) struct App {
     /// Active view / screen.
     pub(crate) view: View,
@@ -144,6 +148,13 @@ pub(crate) struct App {
     ///
     /// Reset by F7, by Esc (form clear), and after each QSO is successfully logged or updated.
     pub(crate) qso_started_at: Instant,
+    /// Set when the debounce fires and the duration timer is actively counting.
+    ///
+    /// Starts `false`; becomes `true` once a callsign has been stable for ~1.5 s.
+    /// Cleared on form reset, Esc, and after log/update.
+    pub(crate) qso_timer_active: bool,
+    /// When the callsign field was last modified; drives the debounce that starts the timer.
+    pub(crate) callsign_last_typed_at: Option<Instant>,
 }
 
 impl App {
@@ -167,6 +178,8 @@ impl App {
             running: true,
             endpoint,
             qso_started_at: Instant::now(),
+            qso_timer_active: false,
+            callsign_last_typed_at: None,
         }
     }
 
@@ -193,21 +206,56 @@ impl App {
     pub(crate) fn reset_qso_start_time(&mut self) {
         let now = chrono::Utc::now();
         self.qso_started_at = Instant::now();
+        self.qso_timer_active = true;
         self.form.date = now.format("%Y-%m-%d").to_string();
         self.form.time = now.format("%H:%M").to_string();
     }
 
+    /// Called on each tick: activates the duration timer once the callsign has been
+    /// stable (no typing) for at least 1.5 seconds.
+    pub(crate) fn tick_debounce(&mut self) {
+        if self.qso_timer_active || self.form.callsign.is_empty() {
+            return;
+        }
+        if let Some(last) = self.callsign_last_typed_at {
+            if last.elapsed().as_millis() >= 1500 {
+                self.qso_started_at = Instant::now();
+                self.qso_timer_active = true;
+            }
+        }
+    }
+
+    /// Reset all timer state — called after logging, updating, or clearing the form.
+    pub(crate) fn reset_timer(&mut self) {
+        self.qso_started_at = Instant::now();
+        self.qso_timer_active = false;
+        self.callsign_last_typed_at = None;
+    }
+
+    /// Signal that the callsign field was just modified.
+    pub(crate) fn on_callsign_changed(&mut self) {
+        self.callsign_last_typed_at = Some(Instant::now());
+        if self.form.callsign.is_empty() {
+            self.qso_timer_active = false;
+        }
+    }
+
     /// Format the elapsed QSO duration as `M:SS` (< 1 h) or `H:MM:SS`.
-    pub(crate) fn qso_duration_str(&self) -> String {
+    ///
+    /// Returns `None` when the timer is not yet active.
+    pub(crate) fn qso_duration_str(&self) -> Option<String> {
+        if !self.qso_timer_active {
+            return None;
+        }
         let secs = self.qso_started_at.elapsed().as_secs();
         let h = secs / 3600;
         let m = (secs % 3600) / 60;
         let s = secs % 60;
-        if h > 0 {
+        Some(if h > 0 {
             format!("{h}:{m:02}:{s:02}")
         } else {
             format!("{m}:{s:02}")
-        }
+        })
     }
 
     /// Set a success status message, replacing any current message.

@@ -157,24 +157,25 @@ fn render_freq_row(frame: &mut Frame, area: Rect, form: &crate::form::LogForm) {
 
 /// Render the live QSO duration row.
 fn render_duration_row(frame: &mut Frame, area: Rect, app: &App) {
-    let duration = app.qso_duration_str();
+    let (label, style) = match app.qso_duration_str() {
+        Some(d) => (
+            d,
+            Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::BOLD),
+        ),
+        None if app.form.callsign.is_empty() => {
+            ("---".to_string(), Style::default().fg(Color::DarkGray))
+        }
+        None => (
+            "starting\u{2026}".to_string(),
+            Style::default().fg(Color::DarkGray),
+        ),
+    };
     frame.render_widget(
         Paragraph::new(Line::from(vec![
             Span::styled("QSO duration  ", Style::default().fg(Color::Cyan)),
-            Span::styled(
-                duration,
-                Style::default()
-                    .fg(Color::Green)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::raw("   "),
-            Span::styled(
-                "F7",
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(" Reset start time", Style::default().fg(Color::DarkGray)),
+            Span::styled(label, style),
         ])),
         area,
     );
