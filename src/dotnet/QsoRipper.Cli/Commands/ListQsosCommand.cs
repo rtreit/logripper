@@ -9,6 +9,8 @@ namespace QsoRipper.Cli.Commands;
 
 internal static class ListQsosCommand
 {
+    private const int CommentColumnWidth = 40;
+
     public static async Task<int> RunAsync(GrpcChannel channel, string[] args, bool jsonOutput = false)
     {
         if (!TryParseArgs(args, out var request, out var displayOptions, out var error))
@@ -77,7 +79,7 @@ internal static class ListQsosCommand
 
         if (options.ShowComment)
         {
-            header += $" {"Comment"}";
+            header += $" {"Comment",-40}";
         }
 
         Console.WriteLine(header);
@@ -107,8 +109,7 @@ internal static class ListQsosCommand
 
         if (options.ShowComment)
         {
-            var comment = qso.HasComment ? qso.Comment : (qso.HasNotes ? qso.Notes : "");
-            row += $" {comment}";
+            row += $" {FormatCommentPreview(qso),-40}";
         }
 
         Console.WriteLine(row);
@@ -228,13 +229,30 @@ internal static class ListQsosCommand
             ? $"{rst.Readability}{rst.Strength}{rst.Tone}"
             : $"{rst.Readability}{rst.Strength}";
     }
+
+    internal static string FormatCommentPreview(QsoRecord qso)
+    {
+        var comment = qso.HasComment ? qso.Comment : (qso.HasNotes ? qso.Notes : "");
+        return TrimComment(comment);
+    }
+
+    internal static string TrimComment(string value)
+    {
+        var sanitized = value.ReplaceLineEndings(" ").Trim();
+        if (sanitized.Length <= CommentColumnWidth)
+        {
+            return sanitized;
+        }
+
+        return $"{sanitized[..(CommentColumnWidth - 3)]}...";
+    }
 }
 
 internal sealed class ListDisplayOptions
 {
+    public bool ShowComment { get; set; } = true;
+
     public bool ShowId { get; set; }
 
     public bool ShowRst { get; set; }
-
-    public bool ShowComment { get; set; }
 }

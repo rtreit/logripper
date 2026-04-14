@@ -40,6 +40,16 @@ internal static class LogQsoCommand
             Console.WriteLine($"  Country: {requestQso.WorkedCountry}");
         }
 
+        if (requestQso.HasComment)
+        {
+            Console.WriteLine($"  Comment: {requestQso.Comment}");
+        }
+
+        if (requestQso.HasNotes)
+        {
+            Console.WriteLine($"  Notes: {requestQso.Notes}");
+        }
+
         if (response.HasSyncError)
         {
             Console.WriteLine($"  QRZ sync: {response.SyncError}");
@@ -56,7 +66,7 @@ internal static class LogQsoCommand
 
         if (args.Length < 2 || args.Any(static a => a is "help" or "-?" or "--help"))
         {
-            error = "Usage: log <callsign> <band> <mode> [--station call] [--at time] [--rst-sent 59] [--rst-rcvd 59] [--freq khz] [--no-enrich]";
+            error = "Usage: log <callsign> <band> <mode> [--station call] [--at time] [--rst-sent 59] [--rst-rcvd 59] [--freq khz] [--comment text] [--notes text] [--no-enrich]";
             return false;
         }
 
@@ -161,6 +171,18 @@ internal static class LogQsoCommand
                     break;
                 case "--freq":
                     error = "Missing value for --freq.";
+                    return false;
+                case "--comment" when i < args.Length - 1:
+                    qso.Comment = args[++i];
+                    break;
+                case "--comment":
+                    error = "Missing value for --comment.";
+                    return false;
+                case "--notes" when i < args.Length - 1:
+                    qso.Notes = args[++i];
+                    break;
+                case "--notes":
+                    error = "Missing value for --notes.";
                     return false;
                 case "--no-enrich":
                     noEnrich = true;

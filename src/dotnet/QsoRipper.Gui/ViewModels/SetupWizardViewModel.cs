@@ -12,7 +12,7 @@ namespace QsoRipper.Gui.ViewModels;
 
 internal sealed partial class SetupWizardViewModel : ObservableObject
 {
-    private readonly EngineGrpcService _engine;
+    private readonly IEngineClient _engine;
     private readonly MainWindowViewModel _owner;
 
     public ObservableCollection<WizardStepViewModel> Steps { get; } = [];
@@ -39,7 +39,7 @@ internal sealed partial class SetupWizardViewModel : ObservableObject
     public bool CanGoBack => CurrentStepIndex > 0;
     public bool IsLastStep => CurrentStepIndex == Steps.Count - 1;
 
-    public SetupWizardViewModel(EngineGrpcService engine, MainWindowViewModel owner)
+    public SetupWizardViewModel(IEngineClient engine, MainWindowViewModel owner)
     {
         _engine = engine;
         _owner = owner;
@@ -220,7 +220,7 @@ internal sealed partial class SetupWizardViewModel : ObservableObject
     [RelayCommand]
     private void Cancel()
     {
-        _owner.CloseWizard(setupComplete: false);
+        _owner.CancelWizard();
     }
 
     [RelayCommand]
