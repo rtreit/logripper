@@ -132,8 +132,8 @@
                 ColumnSpacing="8"
                 VerticalAlignment="Center">
              <TextBox x:Name="RecentQsoSearchBox"
+                      Grid.Column="0"
                       AutomationProperties.AutomationId="RecentQsoSearchBox"
-                       Grid.Column="0"
                       Height="30"
                       MinWidth="200"
                       MaxWidth="400"
@@ -211,8 +211,8 @@
           <Grid ColumnDefinitions="*,Auto">
             <Grid Grid.Column="0">
               <DataGrid x:Name="RecentQsoGrid"
+                         Margin="8,2,8,0"
                          AutomationProperties.AutomationId="RecentQsoGrid"
-                          Margin="8,2,8,0"
                          RowHeight="{Binding RecentQsos.GridRowHeight}"
                          ColumnHeaderHeight="{Binding RecentQsos.GridHeaderHeight}"
                          FontSize="{Binding RecentQsos.GridFontSize}"

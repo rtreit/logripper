@@ -25,7 +25,6 @@ internal sealed partial class MainWindow : Window
     private bool _gridLayoutApplied;
     private bool _menuAccessKeysPrimed;
     private Dictionary<RecentQsoGridColumn, DataGridColumn> _columnMap = [];
-
     internal bool IsInspectionMode { get; set; }
 
     public MainWindow()
@@ -297,7 +296,6 @@ internal sealed partial class MainWindow : Window
         await dialog.ShowDialog(this);
         await _viewModel.OnSettingsClosedAsync(settingsVm.DidSave);
     }
-
     private void CommitAndSaveGridEdits()
     {
         if (_recentQsoGrid is null || _viewModel is null)
@@ -401,7 +399,6 @@ internal sealed partial class MainWindow : Window
             [RecentQsoGridColumn.Qth] = _recentQsoGrid.Columns[17],
             [RecentQsoGridColumn.Sync] = _recentQsoGrid.Columns[18]
         };
-
     }
 
     private void SubscribeColumnOptions(RecentQsoListViewModel viewModel)
