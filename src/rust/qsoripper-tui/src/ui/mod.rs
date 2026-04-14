@@ -1,5 +1,6 @@
 //! UI rendering — header, form, lookup panel, recent QSOs, footer, and help overlay.
 
+mod advanced_form;
 mod footer;
 mod header;
 mod help;
@@ -37,7 +38,11 @@ pub(crate) fn render_ui(app: &App, frame: &mut Frame) {
 
     header::render(app, frame, header_area);
     render_info_row(app, frame, info_area);
-    log_form::render(app, frame, form_area);
+    if matches!(app.view, View::Advanced) {
+        advanced_form::render(app, frame, form_area);
+    } else {
+        log_form::render(app, frame, form_area);
+    }
     lookup_panel::render(app, frame, lookup_area);
     recent_qsos::render(app, frame, recent_area);
     footer::render(frame, footer_area);
@@ -72,6 +77,9 @@ fn render_info_row(app: &App, frame: &mut Frame, area: Rect) {
         let sf_str = sw
             .solar_flux
             .map_or_else(|| "SFI=?".to_string(), |sf| format!("SFI={sf:.0}"));
+        let sun_str = sw
+            .sunspot_number
+            .map_or_else(|| "SN=?".to_string(), |sn| format!("SN={sn}"));
 
         let k_color = sw.k_index.map_or(Color::DarkGray, |k| {
             if k <= 3.0 {
@@ -91,11 +99,13 @@ fn render_info_row(app: &App, frame: &mut Frame, area: Rect) {
             Span::raw("  "),
             Span::styled(sf_str, Style::default().fg(Color::Cyan)),
             Span::raw("  "),
+            Span::styled(sun_str, Style::default().fg(Color::Yellow)),
+            Span::raw("  "),
             Span::styled(&sw.status, Style::default().fg(Color::DarkGray)),
         ])
     } else {
         Line::from(Span::styled(
-            "Not available  (F5 to refresh)",
+            "Not available",
             Style::default().fg(Color::DarkGray),
         ))
     };

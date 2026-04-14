@@ -23,10 +23,10 @@ pub(super) fn render(frame: &mut Frame, area: Rect) {
         ("Tab / Shift+Tab", "Next / previous field"),
         ("Left / Right   ", "Cycle Band or Mode"),
         ("F1             ", "This help screen"),
-        ("F5             ", "Refresh space weather"),
+        ("F2             ", "Toggle advanced fields"),
         ("F10            ", "Log the QSO"),
-        ("Esc            ", "Clear the form"),
-        ("Q              ", "Quit"),
+        ("Esc            ", "Clear form (or close advanced)"),
+        ("Ctrl+Q         ", "Quit"),
     ];
 
     let key_style = Style::default()

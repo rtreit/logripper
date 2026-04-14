@@ -32,6 +32,11 @@ pub(crate) fn spawn_key_task(tx: mpsc::UnboundedSender<AppEvent>) {
         match crossterm::event::poll(Duration::from_millis(100)) {
             Ok(true) => match crossterm::event::read() {
                 Ok(crossterm::event::Event::Key(key)) => {
+                    // Only handle Press events; crossterm on Windows also emits
+                    // Release/Repeat which would double every character.
+                    if key.kind != crossterm::event::KeyEventKind::Press {
+                        continue;
+                    }
                     if tx.send(AppEvent::Key(key)).is_err() {
                         break;
                     }

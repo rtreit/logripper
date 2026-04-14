@@ -28,12 +28,6 @@ pub(crate) enum Field {
     Band,
     /// Mode selector (cycles through [`MODES`]).
     Mode,
-    /// Frequency in MHz (free-text).
-    FrequencyMhz,
-    /// UTC date (`YYYY-MM-DD`).
-    Date,
-    /// UTC time (`HH:MM`).
-    Time,
     /// RST sent report.
     RstSent,
     /// RST received report.
@@ -42,23 +36,55 @@ pub(crate) enum Field {
     Comment,
     /// Operator notes.
     Notes,
+    /// Frequency in MHz (free-text).
+    FrequencyMhz,
+    /// UTC date (`YYYY-MM-DD`).
+    Date,
+    /// UTC time (`HH:MM`).
+    Time,
+    // Advanced fields shown in the advanced view.
+    /// Transmitter power.
+    TxPower,
+    /// Submode override (e.g., USB, LSB, FT4).
+    Submode,
+    /// Contest identifier.
+    ContestId,
+    /// Serial number sent.
+    SerialSent,
+    /// Serial number received.
+    SerialRcvd,
+    /// Exchange sent.
+    ExchangeSent,
+    /// Exchange received.
+    ExchangeRcvd,
 }
 
-/// Canonical navigation order for Tab/Shift-Tab.
+/// Primary navigation order for Tab/Shift-Tab in the log entry view.
 const FIELD_ORDER: &[Field] = &[
     Field::Callsign,
     Field::Band,
     Field::Mode,
-    Field::FrequencyMhz,
-    Field::Date,
-    Field::Time,
     Field::RstSent,
     Field::RstRcvd,
     Field::Comment,
     Field::Notes,
+    Field::FrequencyMhz,
+    Field::Date,
+    Field::Time,
 ];
 
-/// State of the QSO entry form.
+/// Navigation order for Tab/Shift-Tab in the advanced view.
+const ADVANCED_FIELD_ORDER: &[Field] = &[
+    Field::TxPower,
+    Field::Submode,
+    Field::ContestId,
+    Field::SerialSent,
+    Field::SerialRcvd,
+    Field::ExchangeSent,
+    Field::ExchangeRcvd,
+];
+
+/// State of the QSO entry form (basic + advanced fields).
 #[derive(Clone)]
 pub(crate) struct LogForm {
     /// Currently focused field.
@@ -83,6 +109,21 @@ pub(crate) struct LogForm {
     pub(crate) comment: String,
     /// Operator notes.
     pub(crate) notes: String,
+    // Advanced fields
+    /// Transmitter power (e.g., "100W", "5W").
+    pub(crate) tx_power: String,
+    /// Submode override supplied by operator (overrides mode-derived submode).
+    pub(crate) submode_override: String,
+    /// Contest identifier (e.g., "CQWW", "ARRL-DX").
+    pub(crate) contest_id: String,
+    /// Contest serial number sent.
+    pub(crate) serial_sent: String,
+    /// Contest serial number received.
+    pub(crate) serial_rcvd: String,
+    /// Full exchange sent string.
+    pub(crate) exchange_sent: String,
+    /// Full exchange received string.
+    pub(crate) exchange_rcvd: String,
 }
 
 impl Default for LogForm {
@@ -107,12 +148,19 @@ impl LogForm {
             rst_rcvd: String::new(),
             comment: String::new(),
             notes: String::new(),
+            tx_power: String::new(),
+            submode_override: String::new(),
+            contest_id: String::new(),
+            serial_sent: String::new(),
+            serial_rcvd: String::new(),
+            exchange_sent: String::new(),
+            exchange_rcvd: String::new(),
         };
         form.on_band_change();
         form
     }
 
-    /// Move focus to the next field, wrapping around.
+    /// Move focus to the next basic field, wrapping around.
     pub(crate) fn next_field(&mut self) {
         let idx = FIELD_ORDER
             .iter()
@@ -124,7 +172,7 @@ impl LogForm {
             .unwrap_or(Field::Callsign);
     }
 
-    /// Move focus to the previous field, wrapping around.
+    /// Move focus to the previous basic field, wrapping around.
     pub(crate) fn prev_field(&mut self) {
         let idx = FIELD_ORDER
             .iter()
@@ -136,6 +184,35 @@ impl LogForm {
             idx - 1
         };
         self.focused = FIELD_ORDER.get(new_idx).cloned().unwrap_or(Field::Callsign);
+    }
+
+    /// Move focus to the next advanced field, wrapping around.
+    pub(crate) fn next_advanced_field(&mut self) {
+        let idx = ADVANCED_FIELD_ORDER
+            .iter()
+            .position(|f| f == &self.focused)
+            .unwrap_or(0);
+        self.focused = ADVANCED_FIELD_ORDER
+            .get((idx + 1) % ADVANCED_FIELD_ORDER.len())
+            .cloned()
+            .unwrap_or(Field::TxPower);
+    }
+
+    /// Move focus to the previous advanced field, wrapping around.
+    pub(crate) fn prev_advanced_field(&mut self) {
+        let idx = ADVANCED_FIELD_ORDER
+            .iter()
+            .position(|f| f == &self.focused)
+            .unwrap_or(0);
+        let new_idx = if idx == 0 {
+            ADVANCED_FIELD_ORDER.len().saturating_sub(1)
+        } else {
+            idx - 1
+        };
+        self.focused = ADVANCED_FIELD_ORDER
+            .get(new_idx)
+            .cloned()
+            .unwrap_or(Field::TxPower);
     }
 
     /// Update frequency and RST defaults after the band changes.
@@ -168,6 +245,13 @@ impl LogForm {
             Field::RstRcvd => Some(&mut self.rst_rcvd),
             Field::Comment => Some(&mut self.comment),
             Field::Notes => Some(&mut self.notes),
+            Field::TxPower => Some(&mut self.tx_power),
+            Field::Submode => Some(&mut self.submode_override),
+            Field::ContestId => Some(&mut self.contest_id),
+            Field::SerialSent => Some(&mut self.serial_sent),
+            Field::SerialRcvd => Some(&mut self.serial_rcvd),
+            Field::ExchangeSent => Some(&mut self.exchange_sent),
+            Field::ExchangeRcvd => Some(&mut self.exchange_rcvd),
             Field::Band | Field::Mode => None,
         }
     }
@@ -180,11 +264,6 @@ impl LogForm {
     /// Current mode name from the [`MODES`] slice.
     pub(crate) fn mode_str(&self) -> &str {
         MODES.get(self.mode_idx).copied().unwrap_or("SSB")
-    }
-
-    /// Returns `true` if the focused field accepts free-text keyboard input.
-    pub(crate) fn is_text_field_focused(&self) -> bool {
-        !matches!(self.focused, Field::Band | Field::Mode)
     }
 
     /// Returns `true` if the focused field is a Left/Right cycle selector.

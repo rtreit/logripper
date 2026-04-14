@@ -14,10 +14,10 @@ pub(super) fn render(frame: &mut Frame, area: Rect) {
         ("Tab", "Next field"),
         ("←/→", "Cycle Band/Mode"),
         ("F1", "Help"),
-        ("F5", "Weather"),
+        ("F2", "Advanced"),
         ("F10", "Log QSO"),
         ("Esc", "Clear"),
-        ("Q", "Quit"),
+        ("Ctrl+Q", "Quit"),
     ];
 
     let mut spans: Vec<Span> = Vec::new();

@@ -149,7 +149,7 @@ fn handle_key(
     lookup_tx: &watch::Sender<String>,
     endpoint: &str,
 ) {
-    use crossterm::event::KeyCode;
+    use crossterm::event::{KeyCode, KeyModifiers};
 
     // Any key closes the help overlay.
     if matches!(app.view, app::View::Help) {
@@ -158,19 +158,26 @@ fn handle_key(
     }
 
     match key.code {
-        KeyCode::Tab => app.form.next_field(),
-        KeyCode::BackTab => app.form.prev_field(),
+        KeyCode::Tab => match app.view {
+            app::View::Advanced => app.form.next_advanced_field(),
+            _ => app.form.next_field(),
+        },
+        KeyCode::BackTab => match app.view {
+            app::View::Advanced => app.form.prev_advanced_field(),
+            _ => app.form.prev_field(),
+        },
         KeyCode::F(1) => app.view = app::View::Help,
-        KeyCode::F(5) => {
-            let tx = event_tx.clone();
-            let ep = endpoint.to_string();
-            tokio::spawn(async move {
-                if let Ok(ch) = grpc::create_channel(&ep).await {
-                    let result = grpc::get_space_weather(ch).await.ok().flatten();
-                    let _ = tx.send(AppEvent::SpaceWeather(result));
-                }
-            });
-        }
+        KeyCode::F(2) => match app.view {
+            app::View::Advanced => {
+                app.view = app::View::LogEntry;
+                app.form.focused = Field::Callsign;
+            }
+            app::View::LogEntry => {
+                app.view = app::View::Advanced;
+                app.form.focused = Field::TxPower;
+            }
+            app::View::Help => {}
+        },
         KeyCode::F(10) => {
             let tx = event_tx.clone();
             let ep = endpoint.to_string();
@@ -191,11 +198,18 @@ fn handle_key(
                 }
             });
         }
-        KeyCode::Esc => {
-            app.form = LogForm::new();
-            app.lookup_result = None;
-        }
-        KeyCode::Char('q' | 'Q') if !app.form.is_text_field_focused() => {
+        KeyCode::Esc => match app.view {
+            app::View::Advanced => {
+                app.view = app::View::LogEntry;
+                app.form.focused = Field::Callsign;
+            }
+            app::View::LogEntry => {
+                app.form = LogForm::new();
+                app.lookup_result = None;
+            }
+            app::View::Help => {}
+        },
+        KeyCode::Char('q' | 'Q') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             app.running = false;
         }
         KeyCode::Left if app.form.is_cycle_field() => {

@@ -8,6 +8,8 @@ use crate::form::LogForm;
 pub(crate) enum View {
     /// QSO entry form — the primary screen.
     LogEntry,
+    /// Extended field entry overlay (F2 to toggle).
+    Advanced,
     /// Full-screen help overlay.
     Help,
 }
@@ -60,6 +62,8 @@ pub(crate) struct SpaceWeatherInfo {
     pub(crate) k_index: Option<f64>,
     /// Solar flux index (sfu).
     pub(crate) solar_flux: Option<f64>,
+    /// International sunspot number.
+    pub(crate) sunspot_number: Option<u32>,
     /// Human-readable data-age status.
     pub(crate) status: String,
 }

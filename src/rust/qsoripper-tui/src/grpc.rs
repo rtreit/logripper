@@ -47,19 +47,21 @@ pub(crate) async fn log_qso(channel: Channel, form: &LogForm) -> anyhow::Result<
         mode: i32::from(mode),
         utc_timestamp,
         frequency_khz,
-        submode: submode.map(str::to_string),
+        submode: if form.submode_override.is_empty() {
+            submode.map(str::to_string)
+        } else {
+            Some(form.submode_override.clone())
+        },
         rst_sent: parse_rst(&form.rst_sent),
         rst_received: parse_rst(&form.rst_rcvd),
-        comment: if form.comment.is_empty() {
-            None
-        } else {
-            Some(form.comment.clone())
-        },
-        notes: if form.notes.is_empty() {
-            None
-        } else {
-            Some(form.notes.clone())
-        },
+        comment: opt_string(&form.comment),
+        notes: opt_string(&form.notes),
+        tx_power: opt_string(&form.tx_power),
+        contest_id: opt_string(&form.contest_id),
+        serial_sent: opt_string(&form.serial_sent),
+        serial_received: opt_string(&form.serial_rcvd),
+        exchange_sent: opt_string(&form.exchange_sent),
+        exchange_received: opt_string(&form.exchange_rcvd),
         ..Default::default()
     };
 
@@ -215,6 +217,7 @@ pub(crate) async fn get_space_weather(
     Ok(Some(SpaceWeatherInfo {
         k_index: snapshot.planetary_k_index,
         solar_flux: snapshot.solar_flux_index,
+        sunspot_number: snapshot.sunspot_number,
         status,
     }))
 }
@@ -229,6 +232,15 @@ fn mhz_to_khz(mhz: f64) -> u64 {
     )]
     {
         khz as u64
+    }
+}
+
+/// Return `Some(s.to_string())` if non-empty, `None` otherwise.
+fn opt_string(s: &str) -> Option<String> {
+    if s.is_empty() {
+        None
+    } else {
+        Some(s.to_string())
     }
 }
 
