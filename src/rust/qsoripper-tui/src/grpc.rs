@@ -206,19 +206,10 @@ pub(crate) async fn get_space_weather(
         return Ok(None);
     };
 
-    let status = match snapshot.status {
-        1 => "Current",
-        2 => "Stale",
-        3 => "Error",
-        _ => "Unknown",
-    }
-    .to_string();
-
     Ok(Some(SpaceWeatherInfo {
         k_index: snapshot.planetary_k_index,
         solar_flux: snapshot.solar_flux_index,
         sunspot_number: snapshot.sunspot_number,
-        status,
     }))
 }
 

@@ -65,8 +65,6 @@ pub(crate) struct SpaceWeatherInfo {
     pub(crate) solar_flux: Option<f64>,
     /// International sunspot number.
     pub(crate) sunspot_number: Option<u32>,
-    /// Human-readable data-age status.
-    pub(crate) status: String,
 }
 
 /// A transient status bar message that auto-expires after three seconds.
