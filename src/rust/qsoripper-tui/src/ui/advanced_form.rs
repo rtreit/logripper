@@ -73,7 +73,7 @@ fn render_tab_bar(frame: &mut Frame, area: Rect, active: AdvancedTab) {
 
 #[expect(
     clippy::too_many_lines,
-    reason = "renders seven field rows for the main tab"
+    reason = "renders six content rows plus a hint line for the main tab"
 )]
 fn render_main_tab(frame: &mut Frame, area: Rect, form: &crate::form::LogForm, wide: usize) {
     if area.height == 0 {
@@ -81,16 +81,16 @@ fn render_main_tab(frame: &mut Frame, area: Rect, form: &crate::form::LogForm, w
     }
     let rows = Layout::vertical([
         Constraint::Length(1), // callsign / band / mode
-        Constraint::Length(1), // freq / date
-        Constraint::Length(1), // time / time-off / qth
+        Constraint::Length(1), // freq / date / time / time-off
+        Constraint::Length(1), // qth / name
         Constraint::Length(1), // rst sent / rst rcvd
-        Constraint::Length(1), // name
         Constraint::Length(1), // comment
         Constraint::Length(1), // notes
-        Constraint::Fill(1),
+        Constraint::Fill(1),   // hint
     ])
     .split(area);
 
+    // Row 0: [C]allsign  [B]and  [M]ode
     if let Some(row) = rows.first().copied() {
         let cs_focused = form.focused == Field::Callsign;
         let cs_selected = cs_focused && form.field_selected;
@@ -99,139 +99,137 @@ fn render_main_tab(frame: &mut Frame, area: Rect, form: &crate::form::LogForm, w
         let cs_val = adv_field(&form.callsign, cs_focused, cs_selected, 12);
         let band_val = cycle_adv(form.band_str(), band_focused);
         let mode_val = cycle_adv(form.mode_str(), mode_focused);
-        frame.render_widget(
-            Paragraph::new(Line::from(vec![
-                label("Callsign "),
-                styled_field(cs_val, cs_focused, cs_selected),
-                Span::raw("  "),
-                label("Band "),
-                Span::styled(
-                    band_val,
-                    Style::default()
-                        .fg(if band_focused {
-                            Color::Yellow
-                        } else {
-                            Color::Gray
-                        })
-                        .add_modifier(if band_focused {
-                            Modifier::BOLD
-                        } else {
-                            Modifier::empty()
-                        }),
-                ),
-                Span::raw("  "),
-                label("Mode "),
-                Span::styled(
-                    mode_val,
-                    Style::default()
-                        .fg(if mode_focused {
-                            Color::Yellow
-                        } else {
-                            Color::Gray
-                        })
-                        .add_modifier(if mode_focused {
-                            Modifier::BOLD
-                        } else {
-                            Modifier::empty()
-                        }),
-                ),
-            ])),
-            row,
-        );
+        let mut spans: Vec<Span<'static>> = Vec::new();
+        spans.extend(kl("", 'c', "allsign "));
+        spans.push(styled_field(cs_val, cs_focused, cs_selected));
+        spans.push(Span::raw("  "));
+        spans.extend(kl("", 'b', "and "));
+        spans.push(Span::styled(
+            band_val,
+            Style::default()
+                .fg(if band_focused {
+                    Color::Yellow
+                } else {
+                    Color::Gray
+                })
+                .add_modifier(if band_focused {
+                    Modifier::BOLD
+                } else {
+                    Modifier::empty()
+                }),
+        ));
+        spans.push(Span::raw("  "));
+        spans.extend(kl("", 'm', "ode "));
+        spans.push(Span::styled(
+            mode_val,
+            Style::default()
+                .fg(if mode_focused {
+                    Color::Yellow
+                } else {
+                    Color::Gray
+                })
+                .add_modifier(if mode_focused {
+                    Modifier::BOLD
+                } else {
+                    Modifier::empty()
+                }),
+        ));
+        frame.render_widget(Paragraph::new(Line::from(spans)), row);
     }
+
+    // Row 1: [F]req  [D]ate  [T]ime  T[e]nd (time off)
     if let Some(row) = rows.get(1).copied() {
-        let freq_focused = form.focused == Field::FrequencyMhz;
-        let freq_selected = freq_focused && form.field_selected;
-        let date_focused = form.focused == Field::Date;
-        let date_selected = date_focused && form.field_selected;
-        let freq_val = adv_field(&form.frequency_mhz, freq_focused, freq_selected, 10);
-        let date_val = adv_field(&form.date, date_focused, date_selected, 10);
-        frame.render_widget(
-            Paragraph::new(Line::from(vec![
-                label("Freq MHz "),
-                styled_field(freq_val, freq_focused, freq_selected),
-                Span::raw("  "),
-                label("Date     "),
-                styled_field(date_val, date_focused, date_selected),
-            ])),
-            row,
-        );
+        let ff = form.focused == Field::FrequencyMhz;
+        let fs = ff && form.field_selected;
+        let df = form.focused == Field::Date;
+        let ds = df && form.field_selected;
+        let tf = form.focused == Field::Time;
+        let ts = tf && form.field_selected;
+        let ef = form.focused == Field::TimeOff;
+        let es = ef && form.field_selected;
+        let fv = adv_field(&form.frequency_mhz, ff, fs, 9);
+        let dv = adv_field(&form.date, df, ds, 10);
+        let tv = adv_field(&form.time, tf, ts, 8);
+        let ev = adv_field(&form.time_off, ef, es, 8);
+        let mut spans: Vec<Span<'static>> = Vec::new();
+        spans.extend(kl("", 'f', "req "));
+        spans.push(styled_field(fv, ff, fs));
+        spans.push(Span::raw("  "));
+        spans.extend(kl("", 'd', "ate "));
+        spans.push(styled_field(dv, df, ds));
+        spans.push(Span::raw("  "));
+        spans.extend(kl("", 't', "ime "));
+        spans.push(styled_field(tv, tf, ts));
+        spans.push(Span::raw("  "));
+        spans.extend(kl("T", 'e', "nd  "));
+        spans.push(styled_field(ev, ef, es));
+        frame.render_widget(Paragraph::new(Line::from(spans)), row);
     }
+
+    // Row 2: [Q]th  N[a]me
     if let Some(row) = rows.get(2).copied() {
-        let time_focused = form.focused == Field::Time;
-        let time_selected = time_focused && form.field_selected;
-        let toff_focused = form.focused == Field::TimeOff;
-        let toff_selected = toff_focused && form.field_selected;
-        let qth_focused = form.focused == Field::Qth;
-        let qth_selected = qth_focused && form.field_selected;
-        let time_val = adv_field(&form.time, time_focused, time_selected, 8);
-        let toff_val = adv_field(&form.time_off, toff_focused, toff_selected, 8);
-        let qth_val = adv_field(&form.qth, qth_focused, qth_selected, 15);
-        frame.render_widget(
-            Paragraph::new(Line::from(vec![
-                label("Time On  "),
-                styled_field(time_val, time_focused, time_selected),
-                Span::raw("  "),
-                label("Time Off "),
-                styled_field(toff_val, toff_focused, toff_selected),
-                Span::raw("  "),
-                label("QTH      "),
-                styled_field(qth_val, qth_focused, qth_selected),
-            ])),
-            row,
-        );
+        let qf = form.focused == Field::Qth;
+        let qs = qf && form.field_selected;
+        let nf = form.focused == Field::WorkedName;
+        let ns = nf && form.field_selected;
+        let half = wide.saturating_sub(8) / 2;
+        let qv = adv_field(&form.qth, qf, qs, half.max(8));
+        let nv = adv_field(&form.worked_name, nf, ns, half.max(8));
+        let mut spans: Vec<Span<'static>> = Vec::new();
+        spans.extend(kl("", 'q', "th      "));
+        spans.push(styled_field(qv, qf, qs));
+        spans.push(Span::raw("  "));
+        spans.extend(kl("N", 'a', "me     "));
+        spans.push(styled_field(nv, nf, ns));
+        frame.render_widget(Paragraph::new(Line::from(spans)), row);
     }
+
+    // Row 3: RST [S]nt  RST [R]cv
     if let Some(row) = rows.get(3).copied() {
-        let sent_focused = form.focused == Field::RstSent;
-        let sent_selected = sent_focused && form.field_selected;
-        let rcvd_focused = form.focused == Field::RstRcvd;
-        let rcvd_selected = rcvd_focused && form.field_selected;
-        let sent_val = adv_field(&form.rst_sent, sent_focused, sent_selected, 5);
-        let rcvd_val = adv_field(&form.rst_rcvd, rcvd_focused, rcvd_selected, 5);
-        frame.render_widget(
-            Paragraph::new(Line::from(vec![
-                label("RST Sent "),
-                styled_field(sent_val, sent_focused, sent_selected),
-                Span::raw("   "),
-                label("RST Rcvd "),
-                styled_field(rcvd_val, rcvd_focused, rcvd_selected),
-            ])),
-            row,
-        );
+        let sf = form.focused == Field::RstSent;
+        let ss = sf && form.field_selected;
+        let rf = form.focused == Field::RstRcvd;
+        let rs = rf && form.field_selected;
+        let sv = adv_field(&form.rst_sent, sf, ss, 5);
+        let rv = adv_field(&form.rst_rcvd, rf, rs, 5);
+        let mut spans: Vec<Span<'static>> = Vec::new();
+        spans.extend(kl("RST ", 's', "nt  "));
+        spans.push(styled_field(sv, sf, ss));
+        spans.push(Span::raw("    "));
+        spans.extend(kl("RST ", 'r', "cv  "));
+        spans.push(styled_field(rv, rf, rs));
+        frame.render_widget(Paragraph::new(Line::from(spans)), row);
     }
+
+    // Row 4: C[o]mment
     if let Some(row) = rows.get(4).copied() {
-        let focused = form.focused == Field::WorkedName;
-        let selected = focused && form.field_selected;
-        let val = adv_field(&form.worked_name, focused, selected, wide);
-        frame.render_widget(
-            Paragraph::new(Line::from(vec![
-                label("Name     "),
-                styled_field(val, focused, selected),
-            ])),
-            row,
-        );
-    }
-    if let Some(row) = rows.get(5).copied() {
         let focused = form.focused == Field::Comment;
         let selected = focused && form.field_selected;
         let val = adv_field(&form.comment, focused, selected, wide);
-        frame.render_widget(
-            Paragraph::new(Line::from(vec![
-                label("Comment  "),
-                styled_field(val, focused, selected),
-            ])),
-            row,
-        );
+        let mut spans: Vec<Span<'static>> = Vec::new();
+        spans.extend(kl("C", 'o', "mment  "));
+        spans.push(styled_field(val, focused, selected));
+        frame.render_widget(Paragraph::new(Line::from(spans)), row);
     }
-    if let Some(row) = rows.get(6).copied() {
+
+    // Row 5: [N]otes
+    if let Some(row) = rows.get(5).copied() {
         let focused = form.focused == Field::Notes;
         let selected = focused && form.field_selected;
         let val = adv_field(&form.notes, focused, selected, wide);
+        let mut spans: Vec<Span<'static>> = Vec::new();
+        spans.extend(kl("", 'n', "otes   "));
+        spans.push(styled_field(val, focused, selected));
+        frame.render_widget(Paragraph::new(Line::from(spans)), row);
+    }
+
+    // Hint row
+    if let Some(row) = rows.get(6).copied() {
         frame.render_widget(
-            Paragraph::new(Line::from(vec![
-                label("Notes    "),
-                styled_field(val, focused, selected),
-            ])),
+            Paragraph::new(Span::styled(
+                "Alt+key to jump to field  |  Tab/ShiftTab to navigate  |  F5/F6 to switch tabs",
+                Style::default().fg(Color::DarkGray),
+            )),
             row,
         );
     }
@@ -452,6 +450,23 @@ fn adv_field(text: &str, focused: bool, selected: bool, width: usize) -> String 
 
 fn label(text: &str) -> Span<'static> {
     Span::styled(text.to_string(), Style::default().fg(Color::Cyan))
+}
+
+/// Build a label with one underlined shortcut key character.
+///
+/// `prefix` appears before the key, `suffix` after it. The key renders in yellow+underlined;
+/// prefix and suffix render in cyan. All three together form the complete label.
+fn kl(prefix: &'static str, key: char, suffix: &'static str) -> [Span<'static>; 3] {
+    [
+        Span::styled(prefix, Style::default().fg(Color::Cyan)),
+        Span::styled(
+            key.to_ascii_uppercase().to_string(),
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::UNDERLINED),
+        ),
+        Span::styled(suffix, Style::default().fg(Color::Cyan)),
+    ]
 }
 
 fn cycle_adv(text: &str, focused: bool) -> String {

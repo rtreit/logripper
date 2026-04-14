@@ -509,10 +509,14 @@ fn jump_to_field(app: &mut App, ch: char) {
         'f' => Field::FrequencyMhz,
         'd' => Field::Date,
         't' => Field::Time,
+        'e' => Field::TimeOff,
+        'q' => Field::Qth,
+        'a' => Field::WorkedName,
         _ => return,
     };
-    if matches!(app.view, app::View::Advanced) {
-        app.view = app::View::LogEntry;
+    if !matches!(app.view, app::View::Advanced) && matches!(target, Field::WorkedName) {
+        app.view = app::View::Advanced;
+        app.form.advanced_tab = AdvancedTab::Main;
     }
     app.form.focused = target;
     app.form.field_selected = true;
