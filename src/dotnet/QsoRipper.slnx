@@ -5,4 +5,5 @@
   <Project Path="QsoRipper.DebugHost/QsoRipper.DebugHost.csproj" />
   <Project Path="QsoRipper.DebugHost.Tests/QsoRipper.DebugHost.Tests.csproj" />
   <Project Path="QsoRipper.Gui/QsoRipper.Gui.csproj" />
+  <Project Path="QsoRipper.Gui.Tests/QsoRipper.Gui.Tests.csproj" />
 </Solution>
