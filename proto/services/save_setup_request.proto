@@ -5,6 +5,7 @@ package qsoripper.services;
 option csharp_namespace = "QsoRipper.Services";
 
 import "domain/station_profile.proto";
+import "domain/sync_config.proto";
 import "services/storage_backend.proto";
 
 message SaveSetupRequest {
@@ -16,4 +17,8 @@ message SaveSetupRequest {
   optional string qrz_xml_username = 4;
   optional string qrz_xml_password = 5;
   optional string log_file_path = 6;
+  // QRZ logbook API key for bidirectional sync with logbook.qrz.com.
+  optional string qrz_logbook_api_key = 7;
+  // Sync behaviour configuration. Omit to leave unchanged.
+  optional qsoripper.domain.SyncConfig sync_config = 8;
 }

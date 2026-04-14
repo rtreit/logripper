@@ -22,7 +22,8 @@ use qsoripper_core::proto::qsoripper::services::{
     SetActiveStationProfileResponse, SetSessionStationProfileOverrideRequest,
     SetSessionStationProfileOverrideResponse, SetupFieldValidation, SetupStatus, SetupWizardStep,
     SetupWizardStepStatus, StationProfileRecord, StorageBackend, TestQrzCredentialsRequest,
-    TestQrzCredentialsResponse, ValidateSetupStepRequest, ValidateSetupStepResponse,
+    TestQrzCredentialsResponse, TestQrzLogbookCredentialsRequest,
+    TestQrzLogbookCredentialsResponse, ValidateSetupStepRequest, ValidateSetupStepResponse,
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
@@ -121,6 +122,16 @@ impl SetupService for SetupControlSurface {
         )
         .await;
         Ok(Response::new(result))
+    }
+
+    async fn test_qrz_logbook_credentials(
+        &self,
+        _request: Request<TestQrzLogbookCredentialsRequest>,
+    ) -> Result<Response<TestQrzLogbookCredentialsResponse>, Status> {
+        // TODO: implement when QRZ logbook HTTP client is built
+        Err(Status::unimplemented(
+            "TestQrzLogbookCredentials is not implemented yet.",
+        ))
     }
 }
 
@@ -1087,6 +1098,8 @@ fn build_status(
         log_file_path,
         suggested_log_file_path: suggested_log_file_path.display().to_string(),
         is_first_run: persisted_config.is_none(),
+        has_qrz_logbook_api_key: false, // TODO: populate from persisted config
+        sync_config: None,              // TODO: populate from persisted config
     }
 }
 
@@ -1663,6 +1676,7 @@ station_callsign = "K7RND"
                 }),
                 qrz_xml_username: Some("k7rnd".to_string()),
                 qrz_xml_password: Some("secret".to_string()),
+                ..Default::default()
             }),
         )
         .await
@@ -1741,6 +1755,7 @@ station_callsign = "K7RND"
                 }),
                 qrz_xml_username: None,
                 qrz_xml_password: None,
+                ..Default::default()
             }),
         )
         .await
@@ -1776,6 +1791,7 @@ station_callsign = "K7RND"
                 }),
                 qrz_xml_username: Some("k7rnd".to_string()),
                 qrz_xml_password: Some("secret".to_string()),
+                ..Default::default()
             }),
         )
         .await
@@ -1859,6 +1875,7 @@ station_callsign = "K7RND"
                 }),
                 qrz_xml_username: Some("k7rnd".to_string()),
                 qrz_xml_password: None,
+                ..Default::default()
             }),
         )
         .await
@@ -1893,6 +1910,7 @@ station_callsign = "K7RND"
                 }),
                 qrz_xml_username: None,
                 qrz_xml_password: None,
+                ..Default::default()
             }),
         )
         .await

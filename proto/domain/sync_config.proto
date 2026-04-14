@@ -1,0 +1,17 @@
+syntax = "proto3";
+
+package qsoripper.domain;
+
+option csharp_namespace = "QsoRipper.Domain";
+
+import "domain/conflict_policy.proto";
+
+// Persisted configuration governing automatic and manual QRZ logbook sync.
+message SyncConfig {
+  // Whether the engine should automatically sync on a periodic schedule.
+  bool auto_sync_enabled = 1;
+  // Interval between automatic syncs, in seconds. Default: 300 (5 minutes).
+  uint32 sync_interval_seconds = 2;
+  // How to handle conflicting records during sync.
+  ConflictPolicy conflict_policy = 3;
+}

@@ -12,6 +12,8 @@ import "services/save_setup_request.proto";
 import "services/save_setup_response.proto";
 import "services/test_qrz_credentials_request.proto";
 import "services/test_qrz_credentials_response.proto";
+import "services/test_qrz_logbook_credentials_request.proto";
+import "services/test_qrz_logbook_credentials_response.proto";
 import "services/validate_setup_step_request.proto";
 import "services/validate_setup_step_response.proto";
 
@@ -40,4 +42,7 @@ service SetupService {
 
   // Test QRZ XML credentials by performing a live login attempt.
   rpc TestQrzCredentials(TestQrzCredentialsRequest) returns (TestQrzCredentialsResponse);
+
+  // Test a QRZ logbook API key by calling the logbook STATUS endpoint.
+  rpc TestQrzLogbookCredentials(TestQrzLogbookCredentialsRequest) returns (TestQrzLogbookCredentialsResponse);
 }

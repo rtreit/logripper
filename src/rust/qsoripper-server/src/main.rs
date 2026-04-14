@@ -387,6 +387,10 @@ impl LogbookService for DeveloperLogbookService {
             pending_upload: sync_status.pending_upload,
             last_sync: sync_status.last_sync,
             qrz_logbook_owner: sync_status.qrz_logbook_owner,
+            is_syncing: false,        // TODO: wire to sync scheduler state
+            next_sync: None,          // TODO: wire to sync scheduler state
+            auto_sync_enabled: false, // TODO: wire to runtime config
+            last_sync_error: None,    // TODO: wire to sync scheduler state
         }))
     }
 

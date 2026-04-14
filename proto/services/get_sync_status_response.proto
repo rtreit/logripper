@@ -12,4 +12,12 @@ message GetSyncStatusResponse {
   uint32 pending_upload = 3;
   optional google.protobuf.Timestamp last_sync = 4;
   optional string qrz_logbook_owner = 5;
+  // True when a background or manual sync is currently running.
+  bool is_syncing = 6;
+  // Scheduled time of the next automatic sync, if auto-sync is enabled.
+  optional google.protobuf.Timestamp next_sync = 7;
+  // True when periodic automatic sync is enabled and an API key is configured.
+  bool auto_sync_enabled = 8;
+  // Human-readable error from the most recent sync attempt, if it failed.
+  optional string last_sync_error = 9;
 }

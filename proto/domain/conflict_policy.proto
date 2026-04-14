@@ -1,0 +1,15 @@
+syntax = "proto3";
+
+package qsoripper.domain;
+
+option csharp_namespace = "QsoRipper.Domain";
+
+// Controls how conflicts between local and remote QSO records are resolved
+// during a QRZ logbook sync.
+enum ConflictPolicy {
+  // Newer record wins based on UTC timestamp comparison.
+  CONFLICT_POLICY_LAST_WRITE_WINS = 0;
+  // Both versions are preserved and the local record is flagged as
+  // SYNC_STATUS_CONFLICT for manual review.
+  CONFLICT_POLICY_FLAG_FOR_REVIEW = 1;
+}
