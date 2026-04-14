@@ -65,6 +65,18 @@ internal sealed class EngineGrpcService : IEngineClient, IDisposable
             new GetSetupStatusRequest(), cancellationToken: ct);
     }
 
+    public async Task<TestQrzLogbookCredentialsResponse> TestQrzLogbookCredentialsAsync(
+        string apiKey,
+        CancellationToken ct = default)
+    {
+        return await _setupClient.TestQrzLogbookCredentialsAsync(
+            new TestQrzLogbookCredentialsRequest
+            {
+                ApiKey = apiKey,
+            },
+            cancellationToken: ct);
+    }
+
     public async Task<IReadOnlyList<QsoRecord>> ListRecentQsosAsync(int limit = 200, CancellationToken ct = default)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(limit);
@@ -103,6 +115,27 @@ internal sealed class EngineGrpcService : IEngineClient, IDisposable
                 SyncToQrz = syncToQrz
             },
             cancellationToken: ct);
+    }
+
+    public async Task<SyncWithQrzResponse> SyncWithQrzAsync(CancellationToken ct = default)
+    {
+        using var call = _logbookClient.SyncWithQrz(
+            new SyncWithQrzRequest(),
+            cancellationToken: ct);
+
+        SyncWithQrzResponse? last = null;
+        await foreach (var response in call.ResponseStream.ReadAllAsync(ct))
+        {
+            last = response;
+        }
+
+        return last ?? new SyncWithQrzResponse();
+    }
+
+    public async Task<GetSyncStatusResponse> GetSyncStatusAsync(CancellationToken ct = default)
+    {
+        return await _logbookClient.GetSyncStatusAsync(
+            new GetSyncStatusRequest(), cancellationToken: ct);
     }
 
     public void Dispose()

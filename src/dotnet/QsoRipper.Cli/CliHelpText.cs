@@ -27,6 +27,9 @@ internal static class CliHelpText
 
             Engine:
               status                           Show sync status and QSO counts
+              sync [--force]                   Sync with QRZ logbook (--force = full sync)
+              sync-status                      Detailed sync status and scheduling info
+              test-logbook [--api-key <key>]   Test QRZ logbook API key
               config [--set KEY=VALUE]         View or modify runtime config
               setup [--status | --from-env]    Interactive setup wizard or headless config
 
@@ -175,6 +178,27 @@ internal static class CliHelpText
                 Usage: status
 
                 Show engine sync status and QSO counts.
+                """,
+            "sync" => """
+                Usage: sync [--force]
+
+                Trigger a sync with the QRZ logbook. Shows streaming progress updates.
+
+                  --force              Run a full sync instead of incremental
+                """,
+            "sync-status" => """
+                Usage: sync-status
+
+                Show detailed sync status: local/QRZ counts, pending uploads,
+                auto-sync scheduling, and last error.
+                """,
+            "test-logbook" => """
+                Usage: test-logbook [--api-key <key>]
+
+                Test QRZ logbook API key by querying the logbook STATUS endpoint.
+                Uses the configured key if --api-key is not provided.
+
+                  --api-key <key>      API key to test (optional)
                 """,
             _ => $"No help available for '{command}'."
         };

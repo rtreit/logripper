@@ -8,6 +8,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+chrono = "0.4"
 dotenvy = "0.15"
 qsoripper-core = { path = "../qsoripper-core", version = "0.1.0" }
 qsoripper-storage-memory = { path = "../qsoripper-storage-memory", version = "0.1.0" }

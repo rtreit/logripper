@@ -13,5 +13,7 @@ pub mod ffi;
 pub mod lookup;
 /// Generated protobuf and gRPC bindings.
 pub mod proto;
+/// QRZ Logbook API client for bidirectional QSO sync.
+pub mod qrz_logbook;
 /// Storage ports, errors, and query types for engine-owned persistence.
 pub mod storage;

@@ -388,6 +388,9 @@ public class RecentQsoListViewModelTests
         public Task<GetSetupStatusResponse> GetSetupStatusAsync(CancellationToken ct = default) =>
             throw new NotImplementedException();
 
+        public Task<TestQrzLogbookCredentialsResponse> TestQrzLogbookCredentialsAsync(string apiKey, CancellationToken ct = default) =>
+            throw new NotImplementedException();
+
         public Task<IReadOnlyList<QsoRecord>> ListRecentQsosAsync(int limit = 200, CancellationToken ct = default)
         {
             if (RefreshException is not null)
@@ -403,5 +406,11 @@ public class RecentQsoListViewModelTests
             UpdatedQsos.Add(qso.Clone());
             return Task.FromResult(new UpdateQsoResponse { Success = true });
         }
+
+        public Task<SyncWithQrzResponse> SyncWithQrzAsync(CancellationToken ct = default) =>
+            Task.FromResult(new SyncWithQrzResponse());
+
+        public Task<GetSyncStatusResponse> GetSyncStatusAsync(CancellationToken ct = default) =>
+            Task.FromResult(new GetSyncStatusResponse());
     }
 }

@@ -1,0 +1,957 @@
+//! QRZ Logbook API client for bidirectional QSO sync.
+//!
+//! This module talks to the QRZ Logbook HTTP API (`https://logbook.qrz.com/api`)
+//! to fetch, upload, and delete QSO records. Authentication uses a
+//! per-user API key (distinct from the QRZ XML session key used for callsign
+//! enrichment in [`crate::lookup::qrz_xml`]).
+//!
+//! Responses from the QRZ Logbook API come in two forms:
+//! - **Key-value** pairs (`KEY=VALUE&KEY=VALUE`) for status, insert, and delete.
+//! - **ADIF** payload for the FETCH action.
+//!
+//! The client reuses the existing [`crate::adif`] module for ADIF
+//! parsing and serialization.
+
+use std::{collections::HashMap, env, fmt, time::Duration};
+
+use reqwest::Client;
+
+use crate::{
+    adif::{self, mapper::AdifMapper},
+    proto::qsoripper::domain::QsoRecord,
+};
+
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
+/// Default QRZ Logbook API endpoint.
+pub const DEFAULT_QRZ_LOGBOOK_BASE_URL: &str = "https://logbook.qrz.com/api";
+
+/// Default user-agent string sent with requests.
+const DEFAULT_USER_AGENT: &str = "QsoRipper/0.1";
+
+/// Environment variable that provides the QRZ Logbook API key.
+pub const QRZ_LOGBOOK_API_KEY_ENV_VAR: &str = "QSORIPPER_QRZ_LOGBOOK_API_KEY";
+
+/// Environment variable that overrides the QRZ Logbook base URL.
+pub const QRZ_LOGBOOK_BASE_URL_ENV_VAR: &str = "QSORIPPER_QRZ_LOGBOOK_BASE_URL";
+
+/// Environment variable that overrides the user-agent string.
+pub const QRZ_LOGBOOK_USER_AGENT_ENV_VAR: &str = "QSORIPPER_QRZ_LOGBOOK_USER_AGENT";
+
+/// Default HTTP timeout in seconds for logbook requests.
+const DEFAULT_HTTP_TIMEOUT_SECONDS: u64 = 30;
+
+// ---------------------------------------------------------------------------
+// Configuration
+// ---------------------------------------------------------------------------
+
+/// Configuration for the QRZ Logbook API client.
+#[derive(Clone)]
+pub struct QrzLogbookConfig {
+    /// QRZ Logbook API key.
+    api_key: String,
+    /// Base URL for the logbook API endpoint.
+    base_url: String,
+    /// User-agent header sent with every request.
+    user_agent: String,
+    /// HTTP timeout per request.
+    http_timeout: Duration,
+}
+
+impl fmt::Debug for QrzLogbookConfig {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("QrzLogbookConfig")
+            .field("api_key", &"<redacted>")
+            .field("base_url", &self.base_url)
+            .field("user_agent", &self.user_agent)
+            .field("http_timeout", &self.http_timeout)
+            .finish()
+    }
+}
+
+impl QrzLogbookConfig {
+    /// Create a configuration with explicit values.
+    #[must_use]
+    pub fn new(api_key: String, base_url: String, user_agent: String) -> Self {
+        Self {
+            api_key,
+            base_url,
+            user_agent,
+            http_timeout: Duration::from_secs(DEFAULT_HTTP_TIMEOUT_SECONDS),
+        }
+    }
+
+    /// Load configuration from environment variables.
+    ///
+    /// Required: `QSORIPPER_QRZ_LOGBOOK_API_KEY`
+    /// Optional: `QSORIPPER_QRZ_LOGBOOK_BASE_URL`, `QSORIPPER_QRZ_LOGBOOK_USER_AGENT`
+    ///
+    /// # Errors
+    ///
+    /// Returns [`QrzLogbookError::AuthenticationFailed`] when the API key
+    /// environment variable is missing or blank.
+    pub fn from_env() -> Result<Self, QrzLogbookError> {
+        let api_key = env::var(QRZ_LOGBOOK_API_KEY_ENV_VAR)
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| {
+                QrzLogbookError::AuthenticationFailed(format!(
+                    "Required environment variable '{QRZ_LOGBOOK_API_KEY_ENV_VAR}' is missing or blank"
+                ))
+            })?;
+
+        let base_url = env::var(QRZ_LOGBOOK_BASE_URL_ENV_VAR)
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| DEFAULT_QRZ_LOGBOOK_BASE_URL.to_string());
+
+        let user_agent = env::var(QRZ_LOGBOOK_USER_AGENT_ENV_VAR)
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| DEFAULT_USER_AGENT.to_string());
+
+        Ok(Self::new(api_key, base_url, user_agent))
+    }
+
+    /// Return the configured base URL for diagnostics.
+    #[must_use]
+    pub fn base_url(&self) -> &str {
+        &self.base_url
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Error type
+// ---------------------------------------------------------------------------
+
+/// Errors produced by the QRZ Logbook client.
+#[derive(Debug, thiserror::Error)]
+pub enum QrzLogbookError {
+    /// The API key was rejected or is missing.
+    #[error("QRZ Logbook authentication failed: {0}")]
+    AuthenticationFailed(String),
+
+    /// QRZ Logbook returned `RESULT=FAIL` with a reason.
+    #[error("QRZ Logbook API error: {0}")]
+    ApiError(String),
+
+    /// HTTP transport failure.
+    #[error("QRZ Logbook network error: {0}")]
+    NetworkError(#[from] reqwest::Error),
+
+    /// Response body could not be parsed as expected.
+    #[error("QRZ Logbook parse error: {0}")]
+    ParseError(String),
+
+    /// The server returned HTTP 429 Too Many Requests.
+    #[error("QRZ Logbook rate limited")]
+    RateLimited,
+}
+
+// ---------------------------------------------------------------------------
+// Response types
+// ---------------------------------------------------------------------------
+
+/// Result of a successful STATUS call.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QrzLogbookStatus {
+    /// Owner callsign of the logbook.
+    pub owner: String,
+    /// Number of QSOs in the logbook.
+    pub qso_count: u32,
+}
+
+/// Result of a successful INSERT call.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QrzUploadResult {
+    /// QRZ-assigned logbook record identifier.
+    pub logid: String,
+}
+
+// ---------------------------------------------------------------------------
+// Response parsing helpers (pure functions, easily testable)
+// ---------------------------------------------------------------------------
+
+/// Parse a QRZ key-value response body (`KEY=VALUE&KEY=VALUE`) into a map.
+///
+/// QRZ sometimes returns values that contain `&` inside angle-bracket
+/// delimiters, so we do a simple split on `&` and `=`. Fields whose values
+/// are empty are still inserted.
+fn parse_kv_response(body: &str) -> HashMap<String, String> {
+    let trimmed = body.trim();
+    let mut map = HashMap::new();
+    for pair in trimmed.split('&') {
+        if let Some((key, value)) = pair.split_once('=') {
+            map.insert(key.to_uppercase(), value.to_string());
+        }
+    }
+    map
+}
+
+/// Check a parsed key-value response for `RESULT=OK`.
+///
+/// Returns `Ok(map)` when the result is OK, or an appropriate
+/// [`QrzLogbookError`] variant when it is not.
+fn check_result(map: HashMap<String, String>) -> Result<HashMap<String, String>, QrzLogbookError> {
+    match map.get("RESULT").map(String::as_str) {
+        Some("OK") => Ok(map),
+        Some("FAIL") => {
+            let reason = map
+                .get("REASON")
+                .cloned()
+                .unwrap_or_else(|| "unknown error".to_string());
+            if is_auth_error(&reason) {
+                Err(QrzLogbookError::AuthenticationFailed(reason))
+            } else {
+                Err(QrzLogbookError::ApiError(reason))
+            }
+        }
+        Some(other) => Err(QrzLogbookError::ParseError(format!(
+            "unexpected RESULT value: {other}"
+        ))),
+        None => Err(QrzLogbookError::ParseError(
+            "response missing RESULT field".to_string(),
+        )),
+    }
+}
+
+/// Determine whether a QRZ error reason indicates an authentication problem.
+fn is_auth_error(reason: &str) -> bool {
+    let lower = reason.to_ascii_lowercase();
+    lower.contains("invalid api key")
+        || lower.contains("api key required")
+        || lower.contains("access denied")
+}
+
+// ---------------------------------------------------------------------------
+// Client
+// ---------------------------------------------------------------------------
+
+/// HTTP client for the QRZ Logbook API.
+#[derive(Debug)]
+pub struct QrzLogbookClient {
+    config: QrzLogbookConfig,
+    client: Client,
+}
+
+impl QrzLogbookClient {
+    /// Create a new client from validated configuration.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`QrzLogbookError::NetworkError`] if the underlying HTTP client
+    /// cannot be built.
+    pub fn new(config: QrzLogbookConfig) -> Result<Self, QrzLogbookError> {
+        let client = Client::builder()
+            .user_agent(config.user_agent.clone())
+            .timeout(config.http_timeout)
+            .build()?;
+        Ok(Self { config, client })
+    }
+
+    /// Test the connection and return logbook status.
+    ///
+    /// Calls the QRZ Logbook `STATUS` action.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when authentication fails, the API returns an error,
+    /// or the response cannot be parsed.
+    pub async fn test_connection(&self) -> Result<QrzLogbookStatus, QrzLogbookError> {
+        let body = self.post_form(&[("ACTION", "STATUS")]).await?;
+        let map = parse_kv_response(&body);
+        let map = check_result(map)?;
+
+        let owner = map
+            .get("CALLSIGN")
+            .or_else(|| map.get("OWNER"))
+            .cloned()
+            .unwrap_or_default();
+        let qso_count = map
+            .get("COUNT")
+            .and_then(|value| value.parse::<u32>().ok())
+            .unwrap_or(0);
+
+        Ok(QrzLogbookStatus { owner, qso_count })
+    }
+
+    /// Fetch QSO records from the QRZ Logbook.
+    ///
+    /// When `since` is `Some("YYYY-MM-DD")`, only QSOs modified after that
+    /// date are returned. Otherwise all QSOs are fetched.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error on network failure, authentication failure, or ADIF
+    /// parse failure.
+    pub async fn fetch_qsos(&self, since: Option<&str>) -> Result<Vec<QsoRecord>, QrzLogbookError> {
+        let option_value = match since {
+            Some(date) => format!("MODSINCE:{date}"),
+            None => "ALL".to_string(),
+        };
+
+        let body = self
+            .post_form(&[("ACTION", "FETCH"), ("OPTION", &option_value)])
+            .await?;
+
+        // The FETCH response body is ADIF data.  If QRZ returned a kv error
+        // instead (e.g. RESULT=FAIL), detect that first.
+        if body.trim_start().starts_with("RESULT=") {
+            let map = parse_kv_response(&body);
+            check_result(map)?;
+            // If RESULT=OK but no ADIF data, return empty.
+            return Ok(Vec::new());
+        }
+
+        adif::parse_adi_qsos(body.as_bytes())
+            .await
+            .map_err(QrzLogbookError::ParseError)
+    }
+
+    /// Upload a single QSO to the QRZ Logbook.
+    ///
+    /// The QSO is serialized to an ADIF record string and sent via the
+    /// `INSERT` action.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error on network failure, authentication failure, or if
+    /// the QRZ API rejects the record.
+    pub async fn upload_qso(&self, qso: &QsoRecord) -> Result<QrzUploadResult, QrzLogbookError> {
+        let adif_record = AdifMapper::qso_to_adi(qso);
+
+        let body = self
+            .post_form(&[("ACTION", "INSERT"), ("ADIF", &adif_record)])
+            .await?;
+        let map = parse_kv_response(&body);
+        let map = check_result(map)?;
+
+        let logid = map.get("LOGID").cloned().unwrap_or_default();
+        if logid.is_empty() {
+            return Err(QrzLogbookError::ParseError(
+                "INSERT response missing LOGID".to_string(),
+            ));
+        }
+
+        Ok(QrzUploadResult { logid })
+    }
+
+    /// Delete a QSO from the QRZ Logbook by its logbook record ID.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error on network failure, authentication failure, or if
+    /// the QRZ API rejects the deletion.
+    pub async fn delete_qso(&self, logid: &str) -> Result<(), QrzLogbookError> {
+        let body = self
+            .post_form(&[("ACTION", "DELETE"), ("LOGID", logid)])
+            .await?;
+        let map = parse_kv_response(&body);
+        check_result(map)?;
+        Ok(())
+    }
+
+    /// Send a form-encoded POST to the QRZ Logbook API.
+    ///
+    /// Every request includes the API key. Returns the response body as text,
+    /// or an appropriate error for HTTP-level failures.
+    async fn post_form(&self, params: &[(&str, &str)]) -> Result<String, QrzLogbookError> {
+        let mut form: Vec<(&str, &str)> = vec![("KEY", &self.config.api_key)];
+        form.extend_from_slice(params);
+
+        let response = self
+            .client
+            .post(&self.config.base_url)
+            .form(&form)
+            .send()
+            .await?;
+
+        let status = response.status();
+
+        if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+            return Err(QrzLogbookError::RateLimited);
+        }
+
+        if !status.is_success() {
+            return Err(QrzLogbookError::ApiError(format!("HTTP {status}")));
+        }
+
+        response.text().await.map_err(QrzLogbookError::NetworkError)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing
+)]
+mod tests {
+    use super::*;
+
+    // -- Response parsing helpers -------------------------------------------
+
+    #[test]
+    fn parse_kv_response_extracts_fields() {
+        let body = "RESULT=OK&COUNT=42&CALLSIGN=W1AW";
+        let map = parse_kv_response(body);
+        assert_eq!(map.get("RESULT").unwrap(), "OK");
+        assert_eq!(map.get("COUNT").unwrap(), "42");
+        assert_eq!(map.get("CALLSIGN").unwrap(), "W1AW");
+    }
+
+    #[test]
+    fn parse_kv_response_uppercases_keys() {
+        let body = "result=OK&count=7";
+        let map = parse_kv_response(body);
+        assert_eq!(map.get("RESULT").unwrap(), "OK");
+        assert_eq!(map.get("COUNT").unwrap(), "7");
+    }
+
+    #[test]
+    fn parse_kv_response_handles_empty_body() {
+        let map = parse_kv_response("");
+        assert!(map.is_empty());
+    }
+
+    #[test]
+    fn parse_kv_response_trims_whitespace() {
+        let body = "  RESULT=OK&COUNT=1  \n";
+        let map = parse_kv_response(body);
+        assert_eq!(map.get("RESULT").unwrap(), "OK");
+    }
+
+    #[test]
+    fn check_result_ok_returns_map() {
+        let map = parse_kv_response("RESULT=OK&LOGID=12345");
+        let result = check_result(map).unwrap();
+        assert_eq!(result.get("LOGID").unwrap(), "12345");
+    }
+
+    #[test]
+    fn check_result_fail_returns_api_error() {
+        let map = parse_kv_response("RESULT=FAIL&REASON=bad record format");
+        let err = check_result(map).unwrap_err();
+        match err {
+            QrzLogbookError::ApiError(reason) => assert_eq!(reason, "bad record format"),
+            other => panic!("expected ApiError, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn check_result_fail_auth_error() {
+        let map = parse_kv_response("RESULT=FAIL&REASON=invalid api key");
+        let err = check_result(map).unwrap_err();
+        assert!(matches!(err, QrzLogbookError::AuthenticationFailed(_)));
+    }
+
+    #[test]
+    fn check_result_missing_result_field() {
+        let map = parse_kv_response("LOGID=12345");
+        let err = check_result(map).unwrap_err();
+        assert!(matches!(err, QrzLogbookError::ParseError(_)));
+    }
+
+    #[test]
+    fn check_result_unexpected_result_value() {
+        let map = parse_kv_response("RESULT=MAYBE");
+        let err = check_result(map).unwrap_err();
+        assert!(matches!(err, QrzLogbookError::ParseError(_)));
+    }
+
+    #[test]
+    fn check_result_fail_without_reason_uses_default() {
+        let map = parse_kv_response("RESULT=FAIL");
+        let err = check_result(map).unwrap_err();
+        match err {
+            QrzLogbookError::ApiError(reason) => assert_eq!(reason, "unknown error"),
+            other => panic!("expected ApiError, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn is_auth_error_detects_common_messages() {
+        assert!(is_auth_error("invalid api key"));
+        assert!(is_auth_error("Invalid API Key"));
+        assert!(is_auth_error("API key required"));
+        assert!(is_auth_error("Access Denied"));
+        assert!(!is_auth_error("bad record format"));
+        assert!(!is_auth_error("duplicate QSO"));
+    }
+
+    // -- Status parsing -----------------------------------------------------
+
+    #[test]
+    fn status_parsing_extracts_owner_and_count() {
+        let body = "RESULT=OK&CALLSIGN=KC7AVA&COUNT=1234";
+        let map = parse_kv_response(body);
+        let map = check_result(map).unwrap();
+
+        let owner = map
+            .get("CALLSIGN")
+            .or_else(|| map.get("OWNER"))
+            .cloned()
+            .unwrap_or_default();
+        let qso_count = map
+            .get("COUNT")
+            .and_then(|v| v.parse::<u32>().ok())
+            .unwrap_or(0);
+
+        assert_eq!(owner, "KC7AVA");
+        assert_eq!(qso_count, 1234);
+    }
+
+    #[test]
+    fn status_parsing_uses_owner_field_as_fallback() {
+        let body = "RESULT=OK&OWNER=N0CALL&COUNT=0";
+        let map = parse_kv_response(body);
+        let map = check_result(map).unwrap();
+
+        let owner = map
+            .get("CALLSIGN")
+            .or_else(|| map.get("OWNER"))
+            .cloned()
+            .unwrap_or_default();
+
+        assert_eq!(owner, "N0CALL");
+    }
+
+    #[test]
+    fn status_parsing_defaults_count_when_missing() {
+        let body = "RESULT=OK&CALLSIGN=W1AW";
+        let map = parse_kv_response(body);
+        let map = check_result(map).unwrap();
+
+        let qso_count = map
+            .get("COUNT")
+            .and_then(|v| v.parse::<u32>().ok())
+            .unwrap_or(0);
+
+        assert_eq!(qso_count, 0);
+    }
+
+    // -- Insert response parsing --------------------------------------------
+
+    #[test]
+    fn insert_response_extracts_logid() {
+        let body = "RESULT=OK&LOGID=987654&LOGIDS=987654";
+        let map = parse_kv_response(body);
+        let map = check_result(map).unwrap();
+        let logid = map.get("LOGID").cloned().unwrap_or_default();
+        assert_eq!(logid, "987654");
+    }
+
+    #[test]
+    fn insert_response_missing_logid_is_error() {
+        let body = "RESULT=OK";
+        let map = parse_kv_response(body);
+        let map = check_result(map).unwrap();
+        let logid = map.get("LOGID").cloned().unwrap_or_default();
+        assert!(logid.is_empty(), "expected empty logid");
+    }
+
+    // -- ADIF pipeline tests ------------------------------------------------
+
+    #[test]
+    fn qso_serializes_to_adif_record_for_upload() {
+        let qso = QsoRecord {
+            worked_callsign: "W1AW".to_string(),
+            ..Default::default()
+        };
+        let adif = AdifMapper::qso_to_adi(&qso);
+        assert!(adif.contains("<CALL:4>W1AW"));
+        assert!(adif.contains("<eor>"));
+    }
+
+    #[tokio::test]
+    async fn adif_round_trip_through_parse() {
+        let qso = QsoRecord {
+            worked_callsign: "W1AW".to_string(),
+            ..Default::default()
+        };
+        let adif_bytes = adif::serialize_adi_qsos(&[qso], false);
+        let parsed = adif::parse_adi_qsos(&adif_bytes)
+            .await
+            .expect("round-trip parse");
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].worked_callsign, "W1AW");
+    }
+
+    // -- Config tests -------------------------------------------------------
+
+    #[test]
+    fn config_debug_redacts_api_key() {
+        let config = QrzLogbookConfig::new(
+            "secret-key".to_string(),
+            DEFAULT_QRZ_LOGBOOK_BASE_URL.to_string(),
+            DEFAULT_USER_AGENT.to_string(),
+        );
+        let debug = format!("{config:?}");
+        assert!(debug.contains("<redacted>"));
+        assert!(!debug.contains("secret-key"));
+    }
+
+    #[test]
+    fn config_new_sets_defaults() {
+        let config = QrzLogbookConfig::new(
+            "key".to_string(),
+            "http://localhost".to_string(),
+            "Agent/1.0".to_string(),
+        );
+        assert_eq!(config.base_url(), "http://localhost");
+        assert_eq!(
+            config.http_timeout,
+            Duration::from_secs(DEFAULT_HTTP_TIMEOUT_SECONDS)
+        );
+    }
+
+    // -- Integration-level tests using a local TCP server -------------------
+
+    use std::sync::{Arc, Mutex as StdMutex};
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::{TcpListener, TcpStream},
+    };
+
+    fn test_config(base_url: String) -> QrzLogbookConfig {
+        QrzLogbookConfig {
+            api_key: "test-api-key".to_string(),
+            base_url,
+            user_agent: "QsoRipper/test".to_string(),
+            http_timeout: Duration::from_secs(2),
+        }
+    }
+
+    /// Spawn a minimal HTTP server that serves pre-canned responses in order.
+    async fn spawn_logbook_server(
+        responses: &[(&str, &str)],
+    ) -> (String, Arc<StdMutex<Vec<String>>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let address = listener.local_addr().expect("local addr");
+        let recorded_requests = Arc::new(StdMutex::new(Vec::new()));
+        let recorded_clone = Arc::clone(&recorded_requests);
+        let responses: Vec<(String, String)> = responses
+            .iter()
+            .map(|(ct, body)| ((*ct).to_string(), (*body).to_string()))
+            .collect();
+
+        tokio::spawn(async move {
+            for (content_type, response_body) in responses {
+                let (mut socket, _) = listener.accept().await.expect("accept");
+                let request = read_http_request(&mut socket).await;
+                recorded_clone
+                    .lock()
+                    .expect("recorded requests")
+                    .push(request);
+                write_http_response(&mut socket, &content_type, &response_body).await;
+            }
+        });
+
+        (format!("http://{address}/api"), recorded_requests)
+    }
+
+    async fn read_http_request(socket: &mut TcpStream) -> String {
+        let mut bytes = Vec::new();
+        let mut buffer = [0_u8; 4096];
+        let mut content_length: Option<usize> = None;
+
+        loop {
+            let read = socket.read(&mut buffer).await.expect("read request");
+            if read == 0 {
+                break;
+            }
+            bytes.extend_from_slice(buffer.get(..read).expect("buffer slice"));
+
+            // Check if we've received all headers.
+            if let Some(pos) = bytes.windows(4).position(|w| w == b"\r\n\r\n") {
+                let header_end = pos + 4;
+                // Extract Content-Length from headers.
+                let header_str =
+                    String::from_utf8_lossy(bytes.get(..header_end).unwrap_or_default());
+                for line in header_str.lines() {
+                    if let Some(value) = line.strip_prefix("Content-Length: ") {
+                        content_length = value.trim().parse().ok();
+                    }
+                    // Also handle lowercase
+                    if let Some(value) = line.strip_prefix("content-length: ") {
+                        content_length = value.trim().parse().ok();
+                    }
+                }
+
+                let expected_total = header_end + content_length.unwrap_or(0);
+                if bytes.len() >= expected_total {
+                    break;
+                }
+            }
+        }
+
+        String::from_utf8_lossy(&bytes).into_owned()
+    }
+
+    async fn write_http_response(socket: &mut TcpStream, content_type: &str, body: &str) {
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        socket
+            .write_all(response.as_bytes())
+            .await
+            .expect("write response");
+    }
+
+    async fn write_http_response_with_status(
+        socket: &mut TcpStream,
+        status_code: u16,
+        status_text: &str,
+        body: &str,
+    ) {
+        let response = format!(
+            "HTTP/1.1 {status_code} {status_text}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        socket
+            .write_all(response.as_bytes())
+            .await
+            .expect("write response");
+    }
+
+    // -- test_connection integration ----------------------------------------
+
+    #[tokio::test]
+    async fn test_connection_success() {
+        let (base_url, requests) =
+            spawn_logbook_server(&[("text/plain", "RESULT=OK&CALLSIGN=KC7AVA&COUNT=500")]).await;
+        let client = QrzLogbookClient::new(test_config(base_url)).expect("client");
+
+        let status = client.test_connection().await.expect("status");
+
+        assert_eq!(status.owner, "KC7AVA");
+        assert_eq!(status.qso_count, 500);
+
+        let reqs = requests.lock().expect("requests");
+        assert_eq!(reqs.len(), 1);
+        assert!(reqs[0].contains("ACTION=STATUS"));
+        assert!(reqs[0].contains("KEY=test-api-key"));
+    }
+
+    #[tokio::test]
+    async fn test_connection_auth_failure() {
+        let (base_url, _) =
+            spawn_logbook_server(&[("text/plain", "RESULT=FAIL&REASON=invalid api key")]).await;
+        let client = QrzLogbookClient::new(test_config(base_url)).expect("client");
+
+        let err = client.test_connection().await.unwrap_err();
+
+        assert!(
+            matches!(err, QrzLogbookError::AuthenticationFailed(_)),
+            "expected AuthenticationFailed, got: {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_connection_api_error() {
+        let (base_url, _) =
+            spawn_logbook_server(&[("text/plain", "RESULT=FAIL&REASON=service unavailable")]).await;
+        let client = QrzLogbookClient::new(test_config(base_url)).expect("client");
+
+        let err = client.test_connection().await.unwrap_err();
+
+        match err {
+            QrzLogbookError::ApiError(reason) => {
+                assert_eq!(reason, "service unavailable");
+            }
+            other => panic!("expected ApiError, got: {other:?}"),
+        }
+    }
+
+    // -- fetch_qsos integration ---------------------------------------------
+
+    #[tokio::test]
+    async fn fetch_qsos_parses_adif_response() {
+        let adif_body = "<CALL:4>W1AW <BAND:3>20M <FREQ:6>14.250 <MODE:3>SSB <QSO_DATE:8>20250101 <TIME_ON:4>1200 <EOR>\n\
+                         <CALL:6>N0CALL <BAND:3>40M <FREQ:5>7.200 <MODE:2>CW <QSO_DATE:8>20250102 <TIME_ON:4>1300 <EOR>\n";
+        let (base_url, requests) = spawn_logbook_server(&[("text/plain", adif_body)]).await;
+        let client = QrzLogbookClient::new(test_config(base_url)).expect("client");
+
+        let qsos = client.fetch_qsos(None).await.expect("fetch");
+
+        assert_eq!(qsos.len(), 2);
+        assert_eq!(qsos[0].worked_callsign, "W1AW");
+        assert_eq!(qsos[1].worked_callsign, "N0CALL");
+
+        let reqs = requests.lock().expect("requests");
+        assert!(reqs[0].contains("ACTION=FETCH"));
+        assert!(reqs[0].contains("OPTION=ALL"));
+    }
+
+    #[tokio::test]
+    async fn fetch_qsos_sends_modsince_option() {
+        let adif_body = "<CALL:4>W1AW <EOR>\n";
+        let (base_url, requests) = spawn_logbook_server(&[("text/plain", adif_body)]).await;
+        let client = QrzLogbookClient::new(test_config(base_url)).expect("client");
+
+        let qsos = client.fetch_qsos(Some("2025-06-01")).await.expect("fetch");
+
+        assert_eq!(qsos.len(), 1);
+        let reqs = requests.lock().expect("requests");
+        // URL-encoded colon: %3A
+        assert!(
+            reqs[0].contains("MODSINCE") && reqs[0].contains("2025-06-01"),
+            "expected MODSINCE with date in request: {}",
+            reqs[0]
+        );
+    }
+
+    #[tokio::test]
+    async fn fetch_qsos_handles_kv_error_response() {
+        let (base_url, _) =
+            spawn_logbook_server(&[("text/plain", "RESULT=FAIL&REASON=invalid api key")]).await;
+        let client = QrzLogbookClient::new(test_config(base_url)).expect("client");
+
+        let err = client.fetch_qsos(None).await.unwrap_err();
+
+        assert!(
+            matches!(err, QrzLogbookError::AuthenticationFailed(_)),
+            "expected AuthenticationFailed, got: {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn fetch_qsos_returns_empty_for_ok_with_no_adif() {
+        let (base_url, _) = spawn_logbook_server(&[("text/plain", "RESULT=OK")]).await;
+        let client = QrzLogbookClient::new(test_config(base_url)).expect("client");
+
+        let qsos = client.fetch_qsos(None).await.expect("fetch");
+
+        assert!(qsos.is_empty());
+    }
+
+    // -- upload_qso integration ---------------------------------------------
+
+    #[tokio::test]
+    async fn upload_qso_sends_adif_and_returns_logid() {
+        let (base_url, requests) =
+            spawn_logbook_server(&[("text/plain", "RESULT=OK&LOGID=999888&LOGIDS=999888")]).await;
+        let client = QrzLogbookClient::new(test_config(base_url)).expect("client");
+
+        let qso = QsoRecord {
+            worked_callsign: "W1AW".to_string(),
+            ..Default::default()
+        };
+        let result = client.upload_qso(&qso).await.expect("upload");
+
+        assert_eq!(result.logid, "999888");
+
+        let reqs = requests.lock().expect("requests");
+        assert!(reqs[0].contains("ACTION=INSERT"));
+        // The ADIF record should be in the form body (URL-encoded)
+        assert!(reqs[0].contains("ADIF="));
+    }
+
+    #[tokio::test]
+    async fn upload_qso_returns_error_on_missing_logid() {
+        let (base_url, _) = spawn_logbook_server(&[("text/plain", "RESULT=OK")]).await;
+        let client = QrzLogbookClient::new(test_config(base_url)).expect("client");
+
+        let qso = QsoRecord {
+            worked_callsign: "W1AW".to_string(),
+            ..Default::default()
+        };
+        let err = client.upload_qso(&qso).await.unwrap_err();
+
+        assert!(
+            matches!(err, QrzLogbookError::ParseError(_)),
+            "expected ParseError, got: {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn upload_qso_surfaces_api_failure() {
+        let (base_url, _) =
+            spawn_logbook_server(&[("text/plain", "RESULT=FAIL&REASON=duplicate QSO")]).await;
+        let client = QrzLogbookClient::new(test_config(base_url)).expect("client");
+
+        let qso = QsoRecord::default();
+        let err = client.upload_qso(&qso).await.unwrap_err();
+
+        match err {
+            QrzLogbookError::ApiError(reason) => assert_eq!(reason, "duplicate QSO"),
+            other => panic!("expected ApiError, got: {other:?}"),
+        }
+    }
+
+    // -- delete_qso integration ---------------------------------------------
+
+    #[tokio::test]
+    async fn delete_qso_success() {
+        let (base_url, requests) = spawn_logbook_server(&[("text/plain", "RESULT=OK")]).await;
+        let client = QrzLogbookClient::new(test_config(base_url)).expect("client");
+
+        client.delete_qso("123456").await.expect("delete");
+
+        let reqs = requests.lock().expect("requests");
+        assert!(reqs[0].contains("ACTION=DELETE"));
+        assert!(reqs[0].contains("LOGID=123456"));
+    }
+
+    #[tokio::test]
+    async fn delete_qso_api_failure() {
+        let (base_url, _) =
+            spawn_logbook_server(&[("text/plain", "RESULT=FAIL&REASON=record not found")]).await;
+        let client = QrzLogbookClient::new(test_config(base_url)).expect("client");
+
+        let err = client.delete_qso("000000").await.unwrap_err();
+
+        match err {
+            QrzLogbookError::ApiError(reason) => assert_eq!(reason, "record not found"),
+            other => panic!("expected ApiError, got: {other:?}"),
+        }
+    }
+
+    // -- Rate limiting ------------------------------------------------------
+
+    #[tokio::test]
+    async fn rate_limited_response_returns_error() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let address = listener.local_addr().expect("local addr");
+
+        tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.expect("accept");
+            let mut buffer = [0_u8; 4096];
+            // Read the full request.
+            loop {
+                let n = socket.read(&mut buffer).await.expect("read");
+                if n == 0 {
+                    break;
+                }
+                if buffer
+                    .get(..n)
+                    .unwrap_or_default()
+                    .windows(4)
+                    .any(|w| w == b"\r\n\r\n")
+                {
+                    break;
+                }
+            }
+            write_http_response_with_status(&mut socket, 429, "Too Many Requests", "").await;
+        });
+
+        let config = test_config(format!("http://{address}/api"));
+        let client = QrzLogbookClient::new(config).expect("client");
+
+        let err = client.test_connection().await.unwrap_err();
+
+        assert!(
+            matches!(err, QrzLogbookError::RateLimited),
+            "expected RateLimited, got: {err:?}"
+        );
+    }
+}

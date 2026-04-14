@@ -14,6 +14,7 @@ internal static class CliArgumentParser
         var skipCache = false;
         var jsonOutput = false;
         var refresh = false;
+        var force = false;
         var setupStatus = false;
         var setupFromEnv = false;
 
@@ -54,6 +55,12 @@ internal static class CliArgumentParser
             if (arg is "--refresh")
             {
                 refresh = true;
+                continue;
+            }
+
+            if (arg is "--force")
+            {
+                force = true;
                 continue;
             }
 
@@ -100,6 +107,7 @@ internal static class CliArgumentParser
             SkipCache: skipCache,
             JsonOutput: jsonOutput,
             Refresh: refresh,
+            Force: force,
             SetupStatus: setupStatus,
             SetupFromEnv: setupFromEnv,
             RemainingArgs: remaining.ToArray());

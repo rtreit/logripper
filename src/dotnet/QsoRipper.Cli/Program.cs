@@ -46,6 +46,9 @@ try
         "export" => await ExportAdifCommand.RunAsync(channel, arguments.RemainingArgs),
         "config" => await ConfigCommand.RunAsync(channel, arguments.RemainingArgs, arguments.JsonOutput),
         "setup" => await SetupCommand.RunAsync(channel, arguments),
+        "sync" => await SyncCommand.RunAsync(channel, arguments.Force),
+        "sync-status" => await SyncStatusCommand.RunAsync(channel, arguments.JsonOutput),
+        "test-logbook" => await TestLogbookCommand.RunAsync(channel, arguments.RemainingArgs),
         _ => ShowHelp($"Unknown command: {arguments.Command}")
     };
 }

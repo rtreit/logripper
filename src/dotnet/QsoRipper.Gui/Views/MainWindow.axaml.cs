@@ -58,6 +58,7 @@ internal sealed partial class MainWindow : Window
         if (_viewModel is not null)
         {
             _viewModel.SearchFocusRequested -= OnSearchFocusRequested;
+            _viewModel.SettingsRequested -= OnSettingsRequested;
             UnsubscribeColumnOptions(_viewModel.RecentQsos);
             _viewModel = null;
         }
@@ -231,6 +232,7 @@ internal sealed partial class MainWindow : Window
         if (_viewModel is not null)
         {
             _viewModel.SearchFocusRequested -= OnSearchFocusRequested;
+            _viewModel.SettingsRequested -= OnSettingsRequested;
             UnsubscribeColumnOptions(_viewModel.RecentQsos);
         }
 
@@ -238,6 +240,7 @@ internal sealed partial class MainWindow : Window
         if (_viewModel is not null)
         {
             _viewModel.SearchFocusRequested += OnSearchFocusRequested;
+            _viewModel.SettingsRequested += OnSettingsRequested;
             SubscribeColumnOptions(_viewModel.RecentQsos);
             ApplyDefaultColumnVisibility();
             ApplyPersistedGridLayout();
@@ -247,6 +250,23 @@ internal sealed partial class MainWindow : Window
     private void OnSearchFocusRequested(object? sender, EventArgs e)
     {
         FocusRecentQsoSearchBox();
+    }
+
+    private async void OnSettingsRequested(object? sender, EventArgs e)
+    {
+        if (_viewModel is null)
+        {
+            return;
+        }
+
+        _viewModel.IsSettingsOpen = true;
+        var settingsVm = _viewModel.CreateSettingsViewModel();
+        await settingsVm.LoadAsync();
+
+        var dialog = new SettingsView { DataContext = settingsVm };
+        await dialog.ShowDialog(this);
+
+        await _viewModel.OnSettingsClosedAsync(settingsVm.DidSave);
     }
 
     private void FocusRecentQsoSearchBox()

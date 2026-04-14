@@ -9,7 +9,7 @@ use qsoripper_core::lookup::{
     QrzXmlConfig, QrzXmlProvider, QRZ_USER_AGENT_ENV_VAR, QRZ_XML_PASSWORD_ENV_VAR,
     QRZ_XML_USERNAME_ENV_VAR,
 };
-use qsoripper_core::proto::qsoripper::domain::StationProfile;
+use qsoripper_core::proto::qsoripper::domain::{ConflictPolicy, StationProfile, SyncConfig};
 use qsoripper_core::proto::qsoripper::services::{
     setup_service_server::SetupService, station_profile_service_server::StationProfileService,
     ActiveStationContext, ClearSessionStationProfileOverrideRequest,
@@ -25,11 +25,16 @@ use qsoripper_core::proto::qsoripper::services::{
     TestQrzCredentialsResponse, TestQrzLogbookCredentialsRequest,
     TestQrzLogbookCredentialsResponse, ValidateSetupStepRequest, ValidateSetupStepResponse,
 };
+use qsoripper_core::qrz_logbook::{QrzLogbookClient, QrzLogbookConfig};
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 use tonic::{Request, Response, Status};
 
-use crate::runtime_config::{RuntimeConfigManager, SQLITE_PATH_ENV_VAR, STORAGE_BACKEND_ENV_VAR};
+use crate::runtime_config::{
+    RuntimeConfigManager, DEFAULT_QRZ_LOGBOOK_BASE_URL, QRZ_LOGBOOK_API_KEY_ENV_VAR,
+    QRZ_LOGBOOK_BASE_URL_ENV_VAR, SQLITE_PATH_ENV_VAR, STORAGE_BACKEND_ENV_VAR,
+    SYNC_AUTO_ENABLED_ENV_VAR, SYNC_CONFLICT_POLICY_ENV_VAR, SYNC_INTERVAL_SECONDS_ENV_VAR,
+};
 use crate::station_profile_support::{
     insert_station_profile_runtime_values, normalize_station_profile as normalize_profile_payload,
     DEFAULT_PROFILE_NAME,
@@ -126,12 +131,11 @@ impl SetupService for SetupControlSurface {
 
     async fn test_qrz_logbook_credentials(
         &self,
-        _request: Request<TestQrzLogbookCredentialsRequest>,
+        request: Request<TestQrzLogbookCredentialsRequest>,
     ) -> Result<Response<TestQrzLogbookCredentialsResponse>, Status> {
-        // TODO: implement when QRZ logbook HTTP client is built
-        Err(Status::unimplemented(
-            "TestQrzLogbookCredentials is not implemented yet.",
-        ))
+        let inner = request.into_inner();
+        let result = test_qrz_logbook_api_key(&inner.api_key, &self.runtime_config).await;
+        Ok(Response::new(result))
     }
 }
 
@@ -511,6 +515,10 @@ struct PersistedSetupConfig {
     station_profiles: PersistedStationProfileCatalog,
     #[serde(default)]
     qrz_xml: PersistedQrzXmlConfig,
+    #[serde(default, skip_serializing_if = "PersistedQrzLogbookConfig::is_empty")]
+    qrz_logbook: PersistedQrzLogbookConfig,
+    #[serde(default, skip_serializing_if = "PersistedSyncConfig::is_empty")]
+    sync: PersistedSyncConfig,
 }
 
 impl PersistedSetupConfig {
@@ -597,6 +605,18 @@ impl PersistedSetupConfig {
             username: qrz_xml_username,
             password: qrz_xml_password,
         };
+
+        // QRZ logbook API key: update when explicitly provided, otherwise keep existing.
+        let qrz_logbook_api_key = normalize_optional_string(request.qrz_logbook_api_key.as_deref());
+        if qrz_logbook_api_key.is_some() {
+            config.qrz_logbook.api_key = qrz_logbook_api_key;
+        }
+
+        // Sync config: update when explicitly provided, otherwise keep existing.
+        if let Some(ref sync_config) = request.sync_config {
+            config.sync = PersistedSyncConfig::from_proto(sync_config);
+        }
+
         config.sync_active_station_profile();
 
         Ok(config)
@@ -628,6 +648,33 @@ impl PersistedSetupConfig {
         }
         if let Some(password) = self.qrz_xml.password.as_deref() {
             values.insert(QRZ_XML_PASSWORD_ENV_VAR.to_string(), password.to_string());
+        }
+
+        // QRZ logbook config
+        if let Some(api_key) = self.qrz_logbook.api_key.as_deref() {
+            values.insert(QRZ_LOGBOOK_API_KEY_ENV_VAR.to_string(), api_key.to_string());
+        }
+        if let Some(base_url) = self.qrz_logbook.base_url.as_deref() {
+            values.insert(
+                QRZ_LOGBOOK_BASE_URL_ENV_VAR.to_string(),
+                base_url.to_string(),
+            );
+        }
+
+        // Sync config
+        values.insert(
+            SYNC_AUTO_ENABLED_ENV_VAR.to_string(),
+            self.sync.auto_sync_enabled.to_string(),
+        );
+        values.insert(
+            SYNC_INTERVAL_SECONDS_ENV_VAR.to_string(),
+            self.sync.sync_interval_seconds.to_string(),
+        );
+        if !self.sync.conflict_policy.is_empty() {
+            values.insert(
+                SYNC_CONFLICT_POLICY_ENV_VAR.to_string(),
+                self.sync.conflict_policy.clone(),
+            );
         }
 
         values
@@ -981,6 +1028,73 @@ struct PersistedQrzXmlConfig {
     password: Option<String>,
 }
 
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+struct PersistedQrzLogbookConfig {
+    api_key: Option<String>,
+    base_url: Option<String>,
+}
+
+impl PersistedQrzLogbookConfig {
+    fn is_empty(config: &Self) -> bool {
+        normalize_optional_string(config.api_key.as_deref()).is_none()
+            && normalize_optional_string(config.base_url.as_deref()).is_none()
+    }
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+struct PersistedSyncConfig {
+    #[serde(default)]
+    auto_sync_enabled: bool,
+    #[serde(default = "default_sync_interval_seconds")]
+    sync_interval_seconds: u32,
+    #[serde(default)]
+    conflict_policy: String,
+}
+
+fn default_sync_interval_seconds() -> u32 {
+    300
+}
+
+impl PersistedSyncConfig {
+    fn is_empty(config: &Self) -> bool {
+        !config.auto_sync_enabled
+            && config.sync_interval_seconds == default_sync_interval_seconds()
+            && (config.conflict_policy.is_empty() || config.conflict_policy == "last_write_wins")
+    }
+
+    fn from_proto(sync_config: &SyncConfig) -> Self {
+        let conflict_policy = match ConflictPolicy::try_from(sync_config.conflict_policy) {
+            Ok(ConflictPolicy::FlagForReview) => "flag_for_review".to_string(),
+            _ => "last_write_wins".to_string(),
+        };
+        Self {
+            auto_sync_enabled: sync_config.auto_sync_enabled,
+            sync_interval_seconds: if sync_config.sync_interval_seconds == 0 {
+                default_sync_interval_seconds()
+            } else {
+                sync_config.sync_interval_seconds
+            },
+            conflict_policy,
+        }
+    }
+
+    fn to_proto(&self) -> SyncConfig {
+        let conflict_policy = match self.conflict_policy.as_str() {
+            "flag_for_review" => ConflictPolicy::FlagForReview,
+            _ => ConflictPolicy::LastWriteWins,
+        };
+        SyncConfig {
+            auto_sync_enabled: self.auto_sync_enabled,
+            sync_interval_seconds: if self.sync_interval_seconds == 0 {
+                default_sync_interval_seconds()
+            } else {
+                self.sync_interval_seconds
+            },
+            conflict_policy: conflict_policy as i32,
+        }
+    }
+}
+
 pub(crate) fn default_config_path() -> Result<PathBuf, String> {
     #[cfg(target_os = "windows")]
     {
@@ -1098,8 +1212,10 @@ fn build_status(
         log_file_path,
         suggested_log_file_path: suggested_log_file_path.display().to_string(),
         is_first_run: persisted_config.is_none(),
-        has_qrz_logbook_api_key: false, // TODO: populate from persisted config
-        sync_config: None,              // TODO: populate from persisted config
+        has_qrz_logbook_api_key: persisted_config
+            .and_then(|config| config.qrz_logbook.api_key.as_ref())
+            .is_some(),
+        sync_config: persisted_config.map(|config| config.sync.to_proto()),
     }
 }
 
@@ -1425,6 +1541,56 @@ async fn test_qrz_login(
     }
 }
 
+async fn test_qrz_logbook_api_key(
+    api_key: &str,
+    runtime_config: &RuntimeConfigManager,
+) -> TestQrzLogbookCredentialsResponse {
+    let api_key = api_key.trim();
+    if api_key.is_empty() {
+        return TestQrzLogbookCredentialsResponse {
+            success: false,
+            error_message: "API key is required.".to_string(),
+            qso_count: None,
+            logbook_owner: None,
+        };
+    }
+
+    let effective = runtime_config.effective_values().await;
+    let base_url = effective
+        .get(QRZ_LOGBOOK_BASE_URL_ENV_VAR)
+        .cloned()
+        .unwrap_or_else(|| DEFAULT_QRZ_LOGBOOK_BASE_URL.to_string());
+
+    let config = QrzLogbookConfig::new(api_key.to_string(), base_url, "QsoRipper/1.0".to_string());
+
+    let client = match QrzLogbookClient::new(config) {
+        Ok(c) => c,
+        Err(error) => {
+            return TestQrzLogbookCredentialsResponse {
+                success: false,
+                error_message: format!("Failed to create logbook client: {error}"),
+                qso_count: None,
+                logbook_owner: None,
+            };
+        }
+    };
+
+    match client.test_connection().await {
+        Ok(status) => TestQrzLogbookCredentialsResponse {
+            success: true,
+            error_message: String::new(),
+            qso_count: Some(status.qso_count),
+            logbook_owner: Some(status.owner),
+        },
+        Err(error) => TestQrzLogbookCredentialsResponse {
+            success: false,
+            error_message: format!("{error}"),
+            qso_count: None,
+            logbook_owner: None,
+        },
+    }
+}
+
 fn normalize_optional_string(value: Option<&str>) -> Option<String> {
     let trimmed = value?.trim();
     if trimmed.is_empty() {
@@ -1516,7 +1682,7 @@ mod tests {
         StationProfileControlSurface, DEFAULT_CONFIG_FILE_NAME,
     };
     use crate::runtime_config::RuntimeConfigManager;
-    use qsoripper_core::proto::qsoripper::domain::StationProfile;
+    use qsoripper_core::proto::qsoripper::domain::{ConflictPolicy, StationProfile, SyncConfig};
     use qsoripper_core::proto::qsoripper::services::{
         setup_service_server::SetupService, station_profile_service_server::StationProfileService,
         GetActiveStationContextRequest, GetSetupStatusRequest, GetSetupWizardStateRequest,
@@ -2372,5 +2538,255 @@ station_callsign = "K7RND"
 
         assert!(!response.success);
         assert!(!response.error_message.is_empty());
+    }
+
+    // ── QRZ logbook API key and sync config tests ───────────────────────────
+
+    #[tokio::test]
+    async fn save_setup_persists_logbook_api_key_and_reports_in_status() {
+        let config_path = unique_config_path();
+        let log_file_path = absolute_log_file_path(&config_path, "logbook-key.db");
+        let setup_state = Arc::new(SetupState::load(config_path.clone()).expect("setup state"));
+        let runtime_config = Arc::new(RuntimeConfigManager::new(BTreeMap::new()).expect("runtime"));
+        let service = SetupControlSurface::new(setup_state.clone(), runtime_config.clone());
+
+        // Save with logbook API key
+        let response = SetupService::save_setup(
+            &service,
+            Request::new(SaveSetupRequest {
+                log_file_path: Some(log_file_path),
+                station_profile: Some(StationProfile {
+                    station_callsign: "k7rnd".to_string(),
+                    ..StationProfile::default()
+                }),
+                qrz_logbook_api_key: Some("abc-123-logbook-key".to_string()),
+                ..Default::default()
+            }),
+        )
+        .await
+        .expect("save setup")
+        .into_inner();
+
+        let status = response.status.expect("status payload");
+        assert!(status.has_qrz_logbook_api_key);
+
+        // Verify it round-trips through persisted config on disk
+        let saved_toml = fs::read_to_string(&config_path).expect("read config");
+        let parsed =
+            toml::from_str::<PersistedSetupConfig>(&saved_toml).expect("parse saved config");
+        assert_eq!(
+            Some("abc-123-logbook-key"),
+            parsed.qrz_logbook.api_key.as_deref()
+        );
+
+        // Verify runtime values include the key
+        let runtime_values = setup_state.runtime_config_values().await;
+        assert_eq!(
+            Some("abc-123-logbook-key"),
+            runtime_values
+                .get(crate::runtime_config::QRZ_LOGBOOK_API_KEY_ENV_VAR)
+                .map(String::as_str)
+        );
+
+        drop(service);
+        drop(runtime_config);
+        drop(setup_state);
+
+        let config_directory = config_path.parent().expect("config directory");
+        let _ = fs::remove_dir_all(config_directory);
+    }
+
+    #[tokio::test]
+    async fn save_setup_without_logbook_key_reports_false() {
+        let config_path = unique_config_path();
+        let log_file_path = absolute_log_file_path(&config_path, "no-logbook-key.db");
+        let setup_state = Arc::new(SetupState::load(config_path.clone()).expect("setup state"));
+        let runtime_config = Arc::new(RuntimeConfigManager::new(BTreeMap::new()).expect("runtime"));
+        let service = SetupControlSurface::new(setup_state, runtime_config);
+
+        let response = SetupService::save_setup(
+            &service,
+            Request::new(SaveSetupRequest {
+                log_file_path: Some(log_file_path),
+                station_profile: Some(StationProfile {
+                    station_callsign: "k7rnd".to_string(),
+                    ..StationProfile::default()
+                }),
+                ..Default::default()
+            }),
+        )
+        .await
+        .expect("save setup")
+        .into_inner();
+
+        let status = response.status.expect("status payload");
+        assert!(!status.has_qrz_logbook_api_key);
+        // Default sync config should be present
+        let sync = status.sync_config.expect("sync_config should be present");
+        assert!(!sync.auto_sync_enabled);
+        assert_eq!(300, sync.sync_interval_seconds);
+        assert_eq!(ConflictPolicy::LastWriteWins as i32, sync.conflict_policy);
+
+        drop(service);
+        let config_directory = config_path.parent().expect("config directory");
+        let _ = fs::remove_dir_all(config_directory);
+    }
+
+    #[tokio::test]
+    async fn save_setup_persists_sync_config_and_round_trips() {
+        let config_path = unique_config_path();
+        let log_file_path = absolute_log_file_path(&config_path, "sync-config.db");
+        let setup_state = Arc::new(SetupState::load(config_path.clone()).expect("setup state"));
+        let runtime_config = Arc::new(RuntimeConfigManager::new(BTreeMap::new()).expect("runtime"));
+        let service = SetupControlSurface::new(setup_state.clone(), runtime_config.clone());
+
+        let response = SetupService::save_setup(
+            &service,
+            Request::new(SaveSetupRequest {
+                log_file_path: Some(log_file_path),
+                station_profile: Some(StationProfile {
+                    station_callsign: "k7rnd".to_string(),
+                    ..StationProfile::default()
+                }),
+                sync_config: Some(SyncConfig {
+                    auto_sync_enabled: true,
+                    sync_interval_seconds: 600,
+                    conflict_policy: ConflictPolicy::FlagForReview as i32,
+                }),
+                ..Default::default()
+            }),
+        )
+        .await
+        .expect("save setup")
+        .into_inner();
+
+        let status = response.status.expect("status payload");
+        let sync = status.sync_config.expect("sync_config");
+        assert!(sync.auto_sync_enabled);
+        assert_eq!(600, sync.sync_interval_seconds);
+        assert_eq!(ConflictPolicy::FlagForReview as i32, sync.conflict_policy);
+
+        // Verify persisted TOML
+        let saved_toml = fs::read_to_string(&config_path).expect("read config");
+        let parsed =
+            toml::from_str::<PersistedSetupConfig>(&saved_toml).expect("parse saved config");
+        assert!(parsed.sync.auto_sync_enabled);
+        assert_eq!(600, parsed.sync.sync_interval_seconds);
+        assert_eq!("flag_for_review", parsed.sync.conflict_policy);
+
+        // Verify runtime values
+        let runtime_values = setup_state.runtime_config_values().await;
+        assert_eq!(
+            Some("true"),
+            runtime_values
+                .get(crate::runtime_config::SYNC_AUTO_ENABLED_ENV_VAR)
+                .map(String::as_str)
+        );
+        assert_eq!(
+            Some("600"),
+            runtime_values
+                .get(crate::runtime_config::SYNC_INTERVAL_SECONDS_ENV_VAR)
+                .map(String::as_str)
+        );
+        assert_eq!(
+            Some("flag_for_review"),
+            runtime_values
+                .get(crate::runtime_config::SYNC_CONFLICT_POLICY_ENV_VAR)
+                .map(String::as_str)
+        );
+
+        drop(service);
+        drop(runtime_config);
+        drop(setup_state);
+
+        let config_directory = config_path.parent().expect("config directory");
+        let _ = fs::remove_dir_all(config_directory);
+    }
+
+    #[tokio::test]
+    async fn save_setup_preserves_logbook_key_when_omitted_in_subsequent_save() {
+        let config_path = unique_config_path();
+        let log_file_path = absolute_log_file_path(&config_path, "preserve-key.db");
+        let setup_state = Arc::new(SetupState::load(config_path.clone()).expect("setup state"));
+        let runtime_config = Arc::new(RuntimeConfigManager::new(BTreeMap::new()).expect("runtime"));
+        let service = SetupControlSurface::new(setup_state.clone(), runtime_config.clone());
+
+        // First save: set the key
+        SetupService::save_setup(
+            &service,
+            Request::new(SaveSetupRequest {
+                log_file_path: Some(log_file_path.clone()),
+                station_profile: Some(StationProfile {
+                    station_callsign: "k7rnd".to_string(),
+                    ..StationProfile::default()
+                }),
+                qrz_logbook_api_key: Some("original-key".to_string()),
+                ..Default::default()
+            }),
+        )
+        .await
+        .expect("first save");
+
+        // Second save: omit the key
+        let response = SetupService::save_setup(
+            &service,
+            Request::new(SaveSetupRequest {
+                log_file_path: Some(log_file_path),
+                station_profile: Some(StationProfile {
+                    station_callsign: "k7rnd".to_string(),
+                    ..StationProfile::default()
+                }),
+                // qrz_logbook_api_key omitted
+                ..Default::default()
+            }),
+        )
+        .await
+        .expect("second save")
+        .into_inner();
+
+        let status = response.status.expect("status payload");
+        assert!(
+            status.has_qrz_logbook_api_key,
+            "logbook key should be preserved across saves when omitted"
+        );
+
+        drop(service);
+        drop(runtime_config);
+        drop(setup_state);
+
+        let config_directory = config_path.parent().expect("config directory");
+        let _ = fs::remove_dir_all(config_directory);
+    }
+
+    #[test]
+    fn persisted_sync_config_round_trips_through_proto() {
+        let proto = SyncConfig {
+            auto_sync_enabled: true,
+            sync_interval_seconds: 120,
+            conflict_policy: ConflictPolicy::FlagForReview as i32,
+        };
+        let persisted = super::PersistedSyncConfig::from_proto(&proto);
+        assert!(persisted.auto_sync_enabled);
+        assert_eq!(120, persisted.sync_interval_seconds);
+        assert_eq!("flag_for_review", persisted.conflict_policy);
+
+        let back = persisted.to_proto();
+        assert!(back.auto_sync_enabled);
+        assert_eq!(120, back.sync_interval_seconds);
+        assert_eq!(ConflictPolicy::FlagForReview as i32, back.conflict_policy);
+    }
+
+    #[test]
+    fn persisted_sync_config_defaults_interval_when_zero() {
+        let proto = SyncConfig {
+            auto_sync_enabled: false,
+            sync_interval_seconds: 0,
+            conflict_policy: ConflictPolicy::LastWriteWins as i32,
+        };
+        let persisted = super::PersistedSyncConfig::from_proto(&proto);
+        assert_eq!(300, persisted.sync_interval_seconds);
+
+        let back = persisted.to_proto();
+        assert_eq!(300, back.sync_interval_seconds);
     }
 }

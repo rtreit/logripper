@@ -47,7 +47,9 @@ internal sealed partial class ReviewStepViewModel : WizardStepViewModel
 
     private static string MaskIfSensitive(string key, string value)
     {
-        if (key.Contains("password", StringComparison.OrdinalIgnoreCase) && value.Length > 0)
+        if ((key.Contains("password", StringComparison.OrdinalIgnoreCase)
+            || key.Contains("api_key", StringComparison.OrdinalIgnoreCase))
+            && value.Length > 0)
         {
             return new string('•', value.Length);
         }

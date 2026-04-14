@@ -10,7 +10,7 @@
         Icon="avares://QsoRipper.Gui/Assets/qsoripper.ico">
 
   <Window.KeyBindings>
-    <KeyBinding Gesture="Ctrl+OemComma" Command="{Binding OpenWizardCommand}" />
+    <KeyBinding Gesture="Ctrl+OemComma" Command="{Binding OpenSettingsCommand}" />
     <KeyBinding Gesture="Alt+X" Command="{Binding ExitCommand}" />
     <KeyBinding Gesture="Ctrl+F" Command="{Binding FocusSearchCommand}" />
     <KeyBinding Gesture="Ctrl+S" Command="{Binding RecentQsos.SaveEditsCommand}" />
@@ -18,6 +18,7 @@
     <KeyBinding Gesture="Ctrl+Shift+S" Command="{Binding ToggleSortChooserCommand}" />
     <KeyBinding Gesture="Ctrl+H" Command="{Binding ToggleColumnChooserCommand}" />
     <KeyBinding Gesture="Alt+Enter" Command="{Binding ToggleInspectorCommand}" />
+    <KeyBinding Gesture="F6" Command="{Binding SyncNowCommand}" />
   </Window.KeyBindings>
 
   <Window.Styles>
@@ -61,7 +62,7 @@
     <Menu DockPanel.Dock="Top">
       <MenuItem x:Name="FileMenuItem" Header="_File">
         <MenuItem Header="_Settings" InputGesture="Ctrl+OemComma"
-                  Command="{Binding OpenWizardCommand}" />
+                  Command="{Binding OpenSettingsCommand}" />
         <MenuItem Header="_Save Edits" InputGesture="Ctrl+S"
                   Command="{Binding RecentQsos.SaveEditsCommand}" />
         <Separator />
@@ -85,6 +86,10 @@
                   Command="{Binding ToggleColumnChooserCommand}" />
         <MenuItem Header="_Inspector" InputGesture="Alt+Enter"
                   Command="{Binding ToggleInspectorCommand}" />
+      </MenuItem>
+      <MenuItem Header="_Tools">
+        <MenuItem Header="Sync _Now" InputGesture="F6"
+                  Command="{Binding SyncNowCommand}" />
       </MenuItem>
     </Menu>
 
@@ -162,6 +167,11 @@
                        ToolTip.Tip="{Binding RecentQsos.SyncSummaryText}" />
             <TextBlock Classes="commandCaption"
                        Text="{Binding RecentQsos.RefreshIndicatorText}" />
+            <Button Content="{Binding SyncStatusText}"
+                    Command="{Binding SyncNowCommand}"
+                    Height="26"
+                    MinWidth="54"
+                    ToolTip.Tip="Sync with QRZ (F6)" />
             <TextBlock Classes="commandCaption"
                        Text="UTC" />
             <TextBlock Text="{Binding CurrentUtcTime}"
@@ -537,10 +547,15 @@
                          FontSize="11.5"
                          TextTrimming="CharacterEllipsis"
                          MaxWidth="420" />
+              <TextBlock Text="|" Opacity="0.45" />
+              <TextBlock Text="{Binding SyncStatusText}"
+                         FontSize="11.5"
+                         TextTrimming="CharacterEllipsis"
+                         MaxWidth="200" />
             </StackPanel>
 
             <TextBlock Grid.Column="1"
-                       Text="F2 Edit • Ctrl+S Save • Ctrl+A Select • Ctrl+Wheel Zoom • Alt+Enter Details"
+                       Text="F2 Edit • Ctrl+S Save • F5 Refresh • F6 Sync • Alt+Enter Details"
                        FontSize="11.5"
                        Opacity="0.68"
                        VerticalAlignment="Center"

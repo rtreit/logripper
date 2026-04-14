@@ -85,6 +85,9 @@
               <DataTemplate DataType="vm:QrzStepViewModel">
                 <v:QrzStepView />
               </DataTemplate>
+              <DataTemplate DataType="vm:QrzLogbookStepViewModel">
+                <v:QrzLogbookStepView />
+              </DataTemplate>
               <DataTemplate DataType="vm:ReviewStepViewModel">
                 <v:ReviewStepView />
               </DataTemplate>

@@ -1,0 +1,36 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:QsoRipper.Gui.ViewModels"
+             x:Class="QsoRipper.Gui.Views.QrzLogbookStepView"
+             x:DataType="vm:QrzLogbookStepViewModel">
+
+  <StackPanel Spacing="12">
+    <TextBlock TextWrapping="Wrap" Opacity="0.7"
+               Text="Enter your QRZ.com Logbook API key. You can find this at qrz.com → Logbook → Settings → API Key." />
+
+    <TextBlock Text="QRZ Logbook API Key:" FontWeight="SemiBold" />
+    <TextBox Text="{Binding ApiKey, Mode=TwoWay}"
+             PasswordChar="•"
+             PlaceholderText="Paste your API key here" />
+
+    <TextBlock Text="A key is already configured. Leave blank to keep it."
+               IsVisible="{Binding HasExistingKey}"
+               Opacity="0.6" FontSize="12" />
+
+    <CheckBox Content="Enable automatic sync"
+              IsChecked="{Binding AutoSyncEnabled, Mode=TwoWay}"
+              Margin="0,8,0,0" />
+
+    <StackPanel Spacing="4" IsEnabled="{Binding IsSyncIntervalEnabled}">
+      <TextBlock Text="Sync interval (seconds):" FontWeight="SemiBold" />
+      <NumericUpDown Value="{Binding SyncIntervalSeconds, Mode=TwoWay}"
+                     Minimum="60" Maximum="3600" Increment="60"
+                     FormatString="0" />
+      <TextBlock Text="How often to sync with QRZ logbook (60–3600 seconds)."
+                 Opacity="0.6" FontSize="12" />
+    </StackPanel>
+
+    <TextBlock Text="If you don't have a QRZ Logbook API key, skip this step — local logging works without it."
+               Opacity="0.5" TextWrapping="Wrap" FontSize="12" Margin="0,8,0,0" />
+  </StackPanel>
+</UserControl>

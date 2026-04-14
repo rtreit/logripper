@@ -39,9 +39,22 @@ pub(crate) const STATION_CQ_ZONE_ENV_VAR: &str = "QSORIPPER_STATION_CQ_ZONE";
 pub(crate) const STATION_ITU_ZONE_ENV_VAR: &str = "QSORIPPER_STATION_ITU_ZONE";
 pub(crate) const STATION_LATITUDE_ENV_VAR: &str = "QSORIPPER_STATION_LATITUDE";
 pub(crate) const STATION_LONGITUDE_ENV_VAR: &str = "QSORIPPER_STATION_LONGITUDE";
+pub(crate) const QRZ_LOGBOOK_API_KEY_ENV_VAR: &str = "QSORIPPER_QRZ_LOGBOOK_API_KEY";
+pub(crate) const QRZ_LOGBOOK_BASE_URL_ENV_VAR: &str = "QSORIPPER_QRZ_LOGBOOK_BASE_URL";
+pub(crate) const SYNC_AUTO_ENABLED_ENV_VAR: &str = "QSORIPPER_SYNC_AUTO_ENABLED";
+pub(crate) const SYNC_INTERVAL_SECONDS_ENV_VAR: &str = "QSORIPPER_SYNC_INTERVAL_SECONDS";
+pub(crate) const SYNC_CONFLICT_POLICY_ENV_VAR: &str = "QSORIPPER_SYNC_CONFLICT_POLICY";
+
+pub(crate) const DEFAULT_QRZ_LOGBOOK_BASE_URL: &str = "https://logbook.qrz.com/api";
+const DEFAULT_SYNC_AUTO_ENABLED: &str = "false";
+const DEFAULT_SYNC_INTERVAL_SECONDS: &str = "300";
+const DEFAULT_SYNC_CONFLICT_POLICY: &str = "last_write_wins";
+
 const DEFAULT_STORAGE_BACKEND: &str = "memory";
 const DEFAULT_SQLITE_PATH: &str = "qsoripper.db";
 const REDACTED_VALUE: &str = "<redacted>";
+
+const CONFLICT_POLICY_ALLOWED_VALUES: &[&str] = &["last_write_wins", "flag_for_review"];
 
 #[derive(Clone)]
 struct RuntimeBindings {
@@ -501,6 +514,51 @@ const SUPPORTED_FIELDS: &[ConfigFieldSpec] = &[
         allowed_values: BOOLEAN_ALLOWED_VALUES,
         default_value: Some("false"),
     },
+    ConfigFieldSpec {
+        key: QRZ_LOGBOOK_API_KEY_ENV_VAR,
+        label: "QRZ logbook API key",
+        description: "API key for bidirectional sync with the QRZ logbook.",
+        kind: RuntimeConfigValueKind::String,
+        secret: true,
+        allowed_values: &[],
+        default_value: None,
+    },
+    ConfigFieldSpec {
+        key: QRZ_LOGBOOK_BASE_URL_ENV_VAR,
+        label: "QRZ logbook base URL",
+        description: "QRZ logbook API endpoint URL.",
+        kind: RuntimeConfigValueKind::String,
+        secret: false,
+        allowed_values: &[],
+        default_value: Some(DEFAULT_QRZ_LOGBOOK_BASE_URL),
+    },
+    ConfigFieldSpec {
+        key: SYNC_AUTO_ENABLED_ENV_VAR,
+        label: "Sync auto-enabled",
+        description: "Whether the engine should automatically sync with the QRZ logbook on a periodic schedule.",
+        kind: RuntimeConfigValueKind::Boolean,
+        secret: false,
+        allowed_values: BOOLEAN_ALLOWED_VALUES,
+        default_value: Some(DEFAULT_SYNC_AUTO_ENABLED),
+    },
+    ConfigFieldSpec {
+        key: SYNC_INTERVAL_SECONDS_ENV_VAR,
+        label: "Sync interval seconds",
+        description: "Interval between automatic QRZ logbook syncs, in seconds.",
+        kind: RuntimeConfigValueKind::Integer,
+        secret: false,
+        allowed_values: &[],
+        default_value: Some(DEFAULT_SYNC_INTERVAL_SECONDS),
+    },
+    ConfigFieldSpec {
+        key: SYNC_CONFLICT_POLICY_ENV_VAR,
+        label: "Sync conflict policy",
+        description: "How to handle conflicting records during QRZ logbook sync.",
+        kind: RuntimeConfigValueKind::String,
+        secret: false,
+        allowed_values: CONFLICT_POLICY_ALLOWED_VALUES,
+        default_value: Some(DEFAULT_SYNC_CONFLICT_POLICY),
+    },
 ];
 
 fn capture_supported_env() -> BTreeMap<String, String> {
@@ -588,6 +646,29 @@ fn normalize_value(key: &'static str, raw_value: &str) -> Result<String, String>
         parse_bounded_f64(key, trimmed, -90.0, 90.0).map(|value| value.to_string())
     } else if key == STATION_LONGITUDE_ENV_VAR {
         parse_bounded_f64(key, trimmed, -180.0, 180.0).map(|value| value.to_string())
+    } else if key == SYNC_AUTO_ENABLED_ENV_VAR {
+        parse_bool(trimmed).map(|value| {
+            if value {
+                "true".to_string()
+            } else {
+                "false".to_string()
+            }
+        })
+    } else if key == SYNC_INTERVAL_SECONDS_ENV_VAR {
+        trimmed
+            .parse::<u32>()
+            .map(|value| value.to_string())
+            .map_err(|_| format!("'{key}' expects an integer value."))
+    } else if key == SYNC_CONFLICT_POLICY_ENV_VAR {
+        let lower = trimmed.to_ascii_lowercase();
+        if CONFLICT_POLICY_ALLOWED_VALUES.contains(&lower.as_str()) {
+            Ok(lower)
+        } else {
+            Err(format!(
+                "'{key}' must be one of: {}.",
+                CONFLICT_POLICY_ALLOWED_VALUES.join(", ")
+            ))
+        }
     } else {
         Ok(trimmed.to_string())
     }

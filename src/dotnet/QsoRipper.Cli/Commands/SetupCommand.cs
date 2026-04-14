@@ -51,6 +51,7 @@ internal static class SetupCommand
         Console.WriteLine($"Setup complete:    {status.SetupComplete}");
         Console.WriteLine($"Config path:       {status.ConfigPath}");
         Console.WriteLine($"QRZ username:      {status.QrzXmlUsername ?? "(not set)"}");
+        Console.WriteLine($"QRZ Logbook key:   {(status.HasQrzLogbookApiKey ? "(configured)" : "(not set)")}");
         Console.WriteLine($"Station profile:   {status.HasStationProfile}");
 #pragma warning disable CS0612 // Type or member is obsolete
         Console.WriteLine($"Storage backend:   {status.StorageBackend}");
@@ -76,6 +77,9 @@ internal static class SetupCommand
         var grid = Environment.GetEnvironmentVariable("QSORIPPER_GRID");
         var qrzUsername = Environment.GetEnvironmentVariable("QSORIPPER_QRZ_USERNAME");
         var qrzPassword = Environment.GetEnvironmentVariable("QSORIPPER_QRZ_PASSWORD");
+        var qrzLogbookApiKey = Environment.GetEnvironmentVariable("QSORIPPER_QRZ_LOGBOOK_API_KEY");
+        var autoSyncEnv = Environment.GetEnvironmentVariable("QSORIPPER_AUTO_SYNC");
+        var syncIntervalEnv = Environment.GetEnvironmentVariable("QSORIPPER_SYNC_INTERVAL");
 
         // If no log file path, fetch the suggested one from the engine.
         if (string.IsNullOrWhiteSpace(logFilePath))
@@ -142,6 +146,15 @@ internal static class SetupCommand
             }
         }
 
+        // Validate sync interval bounds if provided.
+        if (!string.IsNullOrWhiteSpace(syncIntervalEnv)
+            && int.TryParse(syncIntervalEnv, System.Globalization.CultureInfo.InvariantCulture, out var syncInterval)
+            && syncInterval is < 60 or > 3600)
+        {
+            Console.Error.WriteLine("Error: QSORIPPER_SYNC_INTERVAL must be between 60 and 3600 seconds.");
+            return 1;
+        }
+
         // Save.
         var saveRequest = new SaveSetupRequest
         {
@@ -157,6 +170,33 @@ internal static class SetupCommand
         if (!string.IsNullOrWhiteSpace(qrzPassword))
         {
             saveRequest.QrzXmlPassword = qrzPassword;
+        }
+
+        if (!string.IsNullOrWhiteSpace(qrzLogbookApiKey))
+        {
+            saveRequest.QrzLogbookApiKey = qrzLogbookApiKey;
+        }
+
+        // Include sync config when a logbook API key is provided.
+        if (!string.IsNullOrWhiteSpace(qrzLogbookApiKey))
+        {
+            var autoSync = !string.IsNullOrWhiteSpace(autoSyncEnv)
+                && (autoSyncEnv.Equals("true", StringComparison.OrdinalIgnoreCase)
+                    || autoSyncEnv.Equals("yes", StringComparison.OrdinalIgnoreCase)
+                    || autoSyncEnv == "1");
+
+            uint intervalSeconds = 300;
+            if (!string.IsNullOrWhiteSpace(syncIntervalEnv)
+                && uint.TryParse(syncIntervalEnv, System.Globalization.CultureInfo.InvariantCulture, out var parsed))
+            {
+                intervalSeconds = parsed;
+            }
+
+            saveRequest.SyncConfig = new QsoRipper.Domain.SyncConfig
+            {
+                AutoSyncEnabled = autoSync,
+                SyncIntervalSeconds = intervalSeconds,
+            };
         }
 
         var saveResponse = await client.SaveSetupAsync(saveRequest);
@@ -195,7 +235,7 @@ internal static class SetupCommand
 
         // ── Step 1: Log File Path ──────────────────────────────────
         Console.WriteLine();
-        Console.WriteLine("Step 1 of 4: Log File Path");
+        Console.WriteLine("Step 1 of 5: Log File Path");
         Console.WriteLine(new string('-', 30));
 
         var suggestedPath = status.SuggestedLogFilePath;
@@ -232,7 +272,7 @@ internal static class SetupCommand
 
         // ── Step 2: Station Profile ────────────────────────────────
         Console.WriteLine();
-        Console.WriteLine("Step 2 of 4: Station Profile");
+        Console.WriteLine("Step 2 of 5: Station Profile");
         Console.WriteLine(new string('-', 30));
 
         var existingProfile = status.StationProfile;
@@ -294,7 +334,7 @@ internal static class SetupCommand
 
         // ── Step 3: QRZ Integration (Optional) ────────────────────
         Console.WriteLine();
-        Console.WriteLine("Step 3 of 4: QRZ Integration (Optional)");
+        Console.WriteLine("Step 3 of 5: QRZ Integration (Optional)");
         Console.WriteLine(new string('-', 30));
 
         string? qrzUsername = null;
@@ -379,9 +419,68 @@ internal static class SetupCommand
             }
         }
 
-        // ── Step 4: Review & Save ──────────────────────────────────
+        // ── Step 4: QRZ Logbook (Optional) ────────────────────────
         Console.WriteLine();
-        Console.WriteLine("Step 4 of 4: Review & Save");
+        Console.WriteLine("Step 4 of 5: QRZ Logbook (Optional)");
+        Console.WriteLine(new string('-', 30));
+        Console.WriteLine("  Enter your QRZ.com Logbook API key for bidirectional sync.");
+        Console.WriteLine("  You can find this at qrz.com → Logbook → Settings → API Key.");
+
+        string? qrzLogbookApiKey = null;
+        var autoSyncEnabled = false;
+        uint syncIntervalSeconds = 300;
+
+        var hasExistingLogbookKey = status.HasQrzLogbookApiKey;
+        if (hasExistingLogbookKey)
+        {
+            Console.WriteLine("  A logbook API key is already configured.");
+        }
+
+        var setupLogbook = PromptYesNo("Set up QRZ Logbook sync?", defaultYes: false);
+
+        if (setupLogbook)
+        {
+            if (hasExistingLogbookKey)
+            {
+                Console.WriteLine("  Leave blank to keep the existing key.");
+            }
+
+            qrzLogbookApiKey = PromptField("QRZ Logbook API key", "");
+
+            if (string.IsNullOrWhiteSpace(qrzLogbookApiKey))
+            {
+                qrzLogbookApiKey = null;
+                if (!hasExistingLogbookKey)
+                {
+                    Console.WriteLine("  No API key entered. Skipping logbook sync.");
+                }
+            }
+
+            if (!string.IsNullOrWhiteSpace(qrzLogbookApiKey) || hasExistingLogbookKey)
+            {
+                autoSyncEnabled = PromptYesNo("Enable automatic sync?", defaultYes: false);
+
+                if (autoSyncEnabled)
+                {
+                    while (true)
+                    {
+                        var intervalInput = PromptField("Sync interval (seconds)", "300");
+                        if (uint.TryParse(intervalInput, System.Globalization.CultureInfo.InvariantCulture, out var parsed)
+                            && parsed is >= 60 and <= 3600)
+                        {
+                            syncIntervalSeconds = parsed;
+                            break;
+                        }
+
+                        Console.WriteLine("  Sync interval must be between 60 and 3600 seconds.");
+                    }
+                }
+            }
+        }
+
+        // ── Step 5: Review & Save ──────────────────────────────────
+        Console.WriteLine();
+        Console.WriteLine("Step 5 of 5: Review & Save");
         Console.WriteLine(new string('-', 30));
         Console.WriteLine();
         Console.WriteLine($"  Log file path:       {logFilePath}");
@@ -391,6 +490,8 @@ internal static class SetupCommand
         Console.WriteLine($"  Grid square:         {(string.IsNullOrWhiteSpace(grid) ? "(not set)" : grid)}");
         Console.WriteLine($"  QRZ username:        {(string.IsNullOrWhiteSpace(qrzUsername) ? "(not set)" : qrzUsername)}");
         Console.WriteLine($"  QRZ password:        {(string.IsNullOrWhiteSpace(qrzPassword) ? "(not set)" : "********")}");
+        Console.WriteLine($"  QRZ Logbook key:     {(string.IsNullOrWhiteSpace(qrzLogbookApiKey) ? hasExistingLogbookKey ? "(configured)" : "(not set)" : "********")}");
+        Console.WriteLine($"  Auto-sync:           {(autoSyncEnabled ? $"enabled (every {syncIntervalSeconds}s)" : "disabled")}");
         Console.WriteLine();
 
         var save = PromptYesNo("Save and apply?", defaultYes: true);
@@ -427,6 +528,21 @@ internal static class SetupCommand
         if (!string.IsNullOrWhiteSpace(qrzPassword))
         {
             saveRequest.QrzXmlPassword = qrzPassword;
+        }
+
+        if (!string.IsNullOrWhiteSpace(qrzLogbookApiKey))
+        {
+            saveRequest.QrzLogbookApiKey = qrzLogbookApiKey;
+        }
+
+        // Include sync config when the logbook feature is in use.
+        if (!string.IsNullOrWhiteSpace(qrzLogbookApiKey) || hasExistingLogbookKey)
+        {
+            saveRequest.SyncConfig = new QsoRipper.Domain.SyncConfig
+            {
+                AutoSyncEnabled = autoSyncEnabled,
+                SyncIntervalSeconds = syncIntervalSeconds,
+            };
         }
 
         var saveResponse = await client.SaveSetupAsync(saveRequest);

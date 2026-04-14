@@ -1,0 +1,282 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:QsoRipper.Gui.ViewModels"
+        xmlns:v="using:QsoRipper.Gui.Views"
+        x:Class="QsoRipper.Gui.Views.SettingsView"
+        x:DataType="vm:SettingsViewModel"
+        Title="Settings"
+        Width="560" Height="640"
+        MinWidth="480" MinHeight="520"
+        WindowStartupLocation="CenterOwner"
+        CanResize="True">
+
+  <Window.KeyBindings>
+    <KeyBinding Gesture="Escape" Command="{Binding CancelCommand}" />
+  </Window.KeyBindings>
+
+  <DockPanel>
+    <!-- Footer: Save / Cancel -->
+    <Border DockPanel.Dock="Bottom"
+            Padding="16,10"
+            BorderThickness="0,1,0,0"
+            BorderBrush="{DynamicResource SystemControlForegroundBaseMediumLowBrush}">
+      <DockPanel>
+        <TextBlock DockPanel.Dock="Left"
+                   Text="{Binding ErrorMessage}"
+                   Foreground="IndianRed"
+                   FontWeight="SemiBold"
+                   TextWrapping="Wrap"
+                   VerticalAlignment="Center"
+                   IsVisible="{Binding ErrorMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+
+        <StackPanel DockPanel.Dock="Right"
+                    Orientation="Horizontal"
+                    Spacing="8"
+                    HorizontalAlignment="Right">
+          <Button Content="Cancel"
+                  Command="{Binding CancelCommand}"
+                  IsEnabled="{Binding !IsSaving}" />
+          <Button Content="Save"
+                  Command="{Binding SaveCommand}"
+                  Classes="accent"
+                  IsDefault="True"
+                  IsEnabled="{Binding !IsSaving}" />
+        </StackPanel>
+      </DockPanel>
+    </Border>
+
+    <!-- Loading indicator -->
+    <ProgressBar DockPanel.Dock="Top"
+                 IsIndeterminate="True"
+                 IsVisible="{Binding IsLoading}"
+                 Margin="0,0,0,4" />
+
+    <!-- Scrollable settings form -->
+    <ScrollViewer VerticalScrollBarVisibility="Auto"
+                  HorizontalScrollBarVisibility="Disabled"
+                  Padding="24,16">
+      <StackPanel Spacing="20">
+
+        <!-- Station Profile -->
+        <StackPanel Spacing="8">
+          <TextBlock Text="Station Profile"
+                     FontSize="16" FontWeight="SemiBold" />
+
+          <Grid ColumnDefinitions="140,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto"
+                ColumnSpacing="12" RowSpacing="6">
+            <TextBlock Grid.Row="0" Grid.Column="0"
+                       Text="Callsign:" VerticalAlignment="Center" />
+            <TextBox Grid.Row="0" Grid.Column="1"
+                     Text="{Binding Callsign, Mode=TwoWay}"
+                     PlaceholderText="e.g. W1AW" />
+
+            <TextBlock Grid.Row="1" Grid.Column="0"
+                       Text="Grid Square:" VerticalAlignment="Center" />
+            <TextBox Grid.Row="1" Grid.Column="1"
+                     Text="{Binding GridSquare, Mode=TwoWay}"
+                     PlaceholderText="e.g. FN31" />
+
+            <TextBlock Grid.Row="2" Grid.Column="0"
+                       Text="Operator Name:" VerticalAlignment="Center" />
+            <TextBox Grid.Row="2" Grid.Column="1"
+                     Text="{Binding OperatorName, Mode=TwoWay}" />
+
+            <TextBlock Grid.Row="3" Grid.Column="0"
+                       Text="Operator Call:" VerticalAlignment="Center" />
+            <TextBox Grid.Row="3" Grid.Column="1"
+                     Text="{Binding OperatorCallsign, Mode=TwoWay}" />
+
+            <TextBlock Grid.Row="4" Grid.Column="0"
+                       Text="Profile Name:" VerticalAlignment="Center" />
+            <TextBox Grid.Row="4" Grid.Column="1"
+                     Text="{Binding ProfileName, Mode=TwoWay}"
+                     PlaceholderText="Default" />
+          </Grid>
+
+          <!-- Expander for extended station fields -->
+          <Expander Header="More Station Fields" Padding="0,4">
+            <Grid ColumnDefinitions="140,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto"
+                  ColumnSpacing="12" RowSpacing="6" Margin="0,4,0,0">
+              <TextBlock Grid.Row="0" Grid.Column="0"
+                         Text="County:" VerticalAlignment="Center" />
+              <TextBox Grid.Row="0" Grid.Column="1"
+                       Text="{Binding County, Mode=TwoWay}" />
+
+              <TextBlock Grid.Row="1" Grid.Column="0"
+                         Text="State:" VerticalAlignment="Center" />
+              <TextBox Grid.Row="1" Grid.Column="1"
+                       Text="{Binding State, Mode=TwoWay}" />
+
+              <TextBlock Grid.Row="2" Grid.Column="0"
+                         Text="Country:" VerticalAlignment="Center" />
+              <TextBox Grid.Row="2" Grid.Column="1"
+                       Text="{Binding Country, Mode=TwoWay}" />
+
+              <TextBlock Grid.Row="3" Grid.Column="0"
+                         Text="DXCC:" VerticalAlignment="Center" />
+              <TextBox Grid.Row="3" Grid.Column="1"
+                       Text="{Binding Dxcc, Mode=TwoWay}"
+                       PlaceholderText="e.g. 291" />
+
+              <TextBlock Grid.Row="4" Grid.Column="0"
+                         Text="CQ Zone:" VerticalAlignment="Center" />
+              <TextBox Grid.Row="4" Grid.Column="1"
+                       Text="{Binding CqZone, Mode=TwoWay}" />
+
+              <TextBlock Grid.Row="5" Grid.Column="0"
+                         Text="ITU Zone:" VerticalAlignment="Center" />
+              <TextBox Grid.Row="5" Grid.Column="1"
+                       Text="{Binding ItuZone, Mode=TwoWay}" />
+
+              <TextBlock Grid.Row="6" Grid.Column="0"
+                         Text="Latitude:" VerticalAlignment="Center" />
+              <TextBox Grid.Row="6" Grid.Column="1"
+                       Text="{Binding Latitude, Mode=TwoWay}"
+                       PlaceholderText="Decimal degrees" />
+
+              <TextBlock Grid.Row="7" Grid.Column="0"
+                         Text="Longitude:" VerticalAlignment="Center" />
+              <TextBox Grid.Row="7" Grid.Column="1"
+                       Text="{Binding Longitude, Mode=TwoWay}"
+                       PlaceholderText="Decimal degrees" />
+
+              <TextBlock Grid.Row="8" Grid.Column="0"
+                         Text="ARRL Section:" VerticalAlignment="Center" />
+              <TextBox Grid.Row="8" Grid.Column="1"
+                       Text="{Binding ArrlSection, Mode=TwoWay}" />
+            </Grid>
+          </Expander>
+        </StackPanel>
+
+        <Separator />
+
+        <!-- QRZ XML Credentials -->
+        <StackPanel Spacing="8">
+          <TextBlock Text="QRZ XML Lookup"
+                     FontSize="16" FontWeight="SemiBold" />
+          <TextBlock Text="Used for callsign lookups. Leave blank to disable."
+                     Opacity="0.6" TextWrapping="Wrap" />
+
+          <Grid ColumnDefinitions="140,*" RowDefinitions="Auto,Auto"
+                ColumnSpacing="12" RowSpacing="6">
+            <TextBlock Grid.Row="0" Grid.Column="0"
+                       Text="Username:" VerticalAlignment="Center" />
+            <TextBox Grid.Row="0" Grid.Column="1"
+                     Text="{Binding QrzXmlUsername, Mode=TwoWay}" />
+
+            <TextBlock Grid.Row="1" Grid.Column="0"
+                       Text="Password:" VerticalAlignment="Center" />
+            <TextBox Grid.Row="1" Grid.Column="1"
+                     Text="{Binding QrzXmlPassword, Mode=TwoWay}"
+                     PasswordChar="•"
+                     PlaceholderText="Enter to update" />
+          </Grid>
+
+          <StackPanel Orientation="Horizontal" Spacing="12">
+            <Button Content="Test XML Connection"
+                    Command="{Binding TestQrzXmlCommand}"
+                    IsEnabled="{Binding !IsTestingQrzXml}" />
+            <ProgressBar IsIndeterminate="True"
+                         IsVisible="{Binding IsTestingQrzXml}"
+                         Width="100" VerticalAlignment="Center" />
+          </StackPanel>
+
+          <TextBlock Text="{Binding QrzXmlTestResult}"
+                     TextWrapping="Wrap"
+                     IsVisible="{Binding QrzXmlTestResult, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
+                     Foreground="{Binding QrzXmlTestSucceeded, Converter={x:Static v:SettingsView.TestResultColor}}" />
+        </StackPanel>
+
+        <Separator />
+
+        <!-- QRZ Logbook -->
+        <StackPanel Spacing="8">
+          <TextBlock Text="QRZ Logbook Sync"
+                     FontSize="16" FontWeight="SemiBold" />
+          <TextBlock Text="API key for bidirectional sync with logbook.qrz.com."
+                     Opacity="0.6" TextWrapping="Wrap" />
+
+          <Grid ColumnDefinitions="140,*" RowDefinitions="Auto"
+                ColumnSpacing="12" RowSpacing="6">
+            <TextBlock Grid.Row="0" Grid.Column="0"
+                       Text="API Key:" VerticalAlignment="Center" />
+            <TextBox Grid.Row="0" Grid.Column="1"
+                     Text="{Binding QrzLogbookApiKey, Mode=TwoWay}"
+                     PasswordChar="•"
+                     PlaceholderText="Enter to update" />
+          </Grid>
+
+          <StackPanel Orientation="Horizontal" Spacing="12">
+            <Button Content="Test Logbook"
+                    Command="{Binding TestQrzLogbookCommand}"
+                    IsEnabled="{Binding !IsTestingLogbook}" />
+            <ProgressBar IsIndeterminate="True"
+                         IsVisible="{Binding IsTestingLogbook}"
+                         Width="100" VerticalAlignment="Center" />
+          </StackPanel>
+
+          <TextBlock Text="{Binding LogbookTestResult}"
+                     TextWrapping="Wrap"
+                     IsVisible="{Binding LogbookTestResult, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
+                     Foreground="{Binding LogbookTestSucceeded, Converter={x:Static v:SettingsView.TestResultColor}}" />
+        </StackPanel>
+
+        <Separator />
+
+        <!-- Sync Settings -->
+        <StackPanel Spacing="8">
+          <TextBlock Text="Sync Settings"
+                     FontSize="16" FontWeight="SemiBold" />
+
+          <CheckBox Content="Enable automatic sync"
+                    IsChecked="{Binding AutoSyncEnabled, Mode=TwoWay}" />
+
+          <Grid ColumnDefinitions="140,*" RowDefinitions="Auto,Auto"
+                ColumnSpacing="12" RowSpacing="6">
+            <TextBlock Grid.Row="0" Grid.Column="0"
+                       Text="Interval (sec):" VerticalAlignment="Center" />
+            <NumericUpDown Grid.Row="0" Grid.Column="1"
+                          Value="{Binding SyncIntervalSeconds, Mode=TwoWay}"
+                          Minimum="30" Maximum="86400"
+                          Increment="30"
+                          FormatString="F0"
+                          HorizontalAlignment="Left"
+                          Width="140" />
+
+            <TextBlock Grid.Row="1" Grid.Column="0"
+                       Text="Conflict Policy:" VerticalAlignment="Center" />
+            <ComboBox Grid.Row="1" Grid.Column="1"
+                      SelectedIndex="{Binding ConflictPolicy, Mode=TwoWay, Converter={x:Static v:SettingsView.ConflictPolicyIndex}}"
+                      HorizontalAlignment="Left"
+                      Width="220">
+              <ComboBoxItem Content="Last Write Wins" />
+              <ComboBoxItem Content="Flag for Review" />
+            </ComboBox>
+          </Grid>
+        </StackPanel>
+
+        <Separator />
+
+        <!-- Log File Path (informational) -->
+        <StackPanel Spacing="8">
+          <TextBlock Text="Log File"
+                     FontSize="16" FontWeight="SemiBold" />
+
+          <Grid ColumnDefinitions="140,*"
+                ColumnSpacing="12">
+            <TextBlock Grid.Column="0"
+                       Text="Path:" VerticalAlignment="Center" />
+            <TextBox Grid.Column="1"
+                     Text="{Binding LogFilePath, Mode=TwoWay}" />
+          </Grid>
+        </StackPanel>
+
+        <!-- Saving indicator -->
+        <ProgressBar IsIndeterminate="True"
+                     IsVisible="{Binding IsSaving}"
+                     Margin="0,8,0,0" />
+
+      </StackPanel>
+    </ScrollViewer>
+  </DockPanel>
+</Window>

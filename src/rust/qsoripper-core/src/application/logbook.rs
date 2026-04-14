@@ -31,6 +31,16 @@ impl LogbookEngine {
         self.storage.backend_name()
     }
 
+    /// Return the logbook-oriented storage surface for direct store access.
+    ///
+    /// Used by the sync workflow which needs fine-grained control over
+    /// individual QSO reads and writes without the validation/normalization
+    /// pipeline applied by the higher-level CRUD methods on this engine.
+    #[must_use]
+    pub fn logbook_store(&self) -> &dyn crate::storage::LogbookStore {
+        self.storage.logbook()
+    }
+
     /// Persist a new QSO and return the normalized stored record.
     ///
     /// # Errors

@@ -47,6 +47,7 @@ internal sealed partial class SetupWizardViewModel : ObservableObject
         Steps.Add(new LogFileStepViewModel());
         Steps.Add(new StationProfileStepViewModel());
         Steps.Add(new QrzStepViewModel(engine));
+        Steps.Add(new QrzLogbookStepViewModel());
         Steps.Add(new ReviewStepViewModel());
     }
 
@@ -120,6 +121,19 @@ internal sealed partial class SetupWizardViewModel : ObservableObject
                 }
             }
 
+            if (Steps[3] is QrzLogbookStepViewModel logbookStep)
+            {
+                logbookStep.HasExistingKey = state.Status.HasQrzLogbookApiKey;
+                if (state.Status.SyncConfig is { } syncConfig)
+                {
+                    logbookStep.AutoSyncEnabled = syncConfig.AutoSyncEnabled;
+                    if (syncConfig.SyncIntervalSeconds > 0)
+                    {
+                        logbookStep.SyncIntervalSeconds = (int)syncConfig.SyncIntervalSeconds;
+                    }
+                }
+            }
+
             foreach (var ss in state.Steps)
             {
                 var idx = StepIndex(ss.Step);
@@ -158,14 +172,26 @@ internal sealed partial class SetupWizardViewModel : ObservableObject
         ErrorMessage = null;
         try
         {
-            var request = BuildValidationRequest(CurrentStepIndex);
-            var result = await _engine.ValidateStepAsync(request);
-
-            if (!result.Valid)
+            // QRZ Logbook step uses client-side validation only (no server round-trip).
+            if (CurrentStep is QrzLogbookStepViewModel logbookStep)
             {
-                CurrentStep.ApplyValidationErrors(result.Fields);
-                ErrorMessage = "Please fix the errors above before continuing.";
-                return;
+                if (!logbookStep.ValidateLocally())
+                {
+                    ErrorMessage = "Please fix the errors above before continuing.";
+                    return;
+                }
+            }
+            else
+            {
+                var request = BuildValidationRequest(CurrentStepIndex);
+                var result = await _engine.ValidateStepAsync(request);
+
+                if (!result.Valid)
+                {
+                    CurrentStep.ApplyValidationErrors(result.Fields);
+                    ErrorMessage = "Please fix the errors above before continuing.";
+                    return;
+                }
             }
 
             CurrentStep.IsComplete = true;
@@ -202,8 +228,7 @@ internal sealed partial class SetupWizardViewModel : ObservableObject
     [RelayCommand]
     private void Skip()
     {
-        // Only QRZ step is skippable
-        if (CurrentStep is QrzStepViewModel)
+        if (CurrentStep is QrzStepViewModel or QrzLogbookStepViewModel)
         {
             CurrentStep.IsComplete = true;
             CurrentStep.ClearErrors();
@@ -244,6 +269,7 @@ internal sealed partial class SetupWizardViewModel : ObservableObject
             var logStep = Steps.OfType<LogFileStepViewModel>().First();
             var stationStep = Steps.OfType<StationProfileStepViewModel>().First();
             var qrzStep = Steps.OfType<QrzStepViewModel>().First();
+            var logbookStep = Steps.OfType<QrzLogbookStepViewModel>().First();
 
             var request = new SaveSetupRequest
             {
@@ -255,6 +281,21 @@ internal sealed partial class SetupWizardViewModel : ObservableObject
             {
                 request.QrzXmlUsername = qrzStep.Username;
                 request.QrzXmlPassword = qrzStep.Password ?? string.Empty;
+            }
+
+            if (!string.IsNullOrWhiteSpace(logbookStep.ApiKey))
+            {
+                request.QrzLogbookApiKey = logbookStep.ApiKey;
+            }
+
+            // Include sync config when the logbook feature is in use.
+            if (!string.IsNullOrWhiteSpace(logbookStep.ApiKey) || logbookStep.HasExistingKey)
+            {
+                request.SyncConfig = new QsoRipper.Domain.SyncConfig
+                {
+                    AutoSyncEnabled = logbookStep.AutoSyncEnabled,
+                    SyncIntervalSeconds = (uint)logbookStep.SyncIntervalSeconds,
+                };
             }
 
             var response = await _engine.SaveSetupAsync(request);
@@ -296,7 +337,8 @@ internal sealed partial class SetupWizardViewModel : ObservableObject
         SetupWizardStep.LogFile => 0,
         SetupWizardStep.StationProfiles => 1,
         SetupWizardStep.QrzIntegration => 2,
-        SetupWizardStep.Review => 3,
+        // Index 3 (QrzLogbook) has no server-side wizard step.
+        SetupWizardStep.Review => 4,
         _ => -1,
     };
 
@@ -305,7 +347,8 @@ internal sealed partial class SetupWizardViewModel : ObservableObject
         0 => SetupWizardStep.LogFile,
         1 => SetupWizardStep.StationProfiles,
         2 => SetupWizardStep.QrzIntegration,
-        3 => SetupWizardStep.Review,
+        // Index 3 (QrzLogbook) is client-validated only.
+        4 => SetupWizardStep.Review,
         _ => SetupWizardStep.Unspecified,
     };
 

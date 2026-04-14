@@ -19,6 +19,9 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
     private bool _setupCompleteBeforeWizard;
 
     [ObservableProperty]
+    private bool _isSettingsOpen;
+
+    [ObservableProperty]
     private bool _isWizardOpen;
 
     [ObservableProperty]
@@ -41,6 +44,12 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
 
     [ObservableProperty]
     private bool _isInspectorOpen;
+
+    [ObservableProperty]
+    private bool _isSyncing;
+
+    [ObservableProperty]
+    private string _syncStatusText = "Sync: never";
 
     [ObservableProperty]
     private bool _isSortChooserOpen;
@@ -77,6 +86,12 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
     public event EventHandler? SearchFocusRequested;
 
     /// <summary>
+    /// Raised when the user requests the Settings dialog. The View subscribes to
+    /// this event and opens the modal <see cref="Views.SettingsView"/>.
+    /// </summary>
+    internal event EventHandler? SettingsRequested;
+
+    /// <summary>
     /// Called after the main window has loaded. Checks first-run state.
     /// </summary>
     public async Task CheckFirstRunAsync()
@@ -85,15 +100,15 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
         {
             var state = await _engine.GetWizardStateAsync();
             ApplySetupContext(state);
-            if (state.Status.IsFirstRun || !state.Status.SetupComplete)
+            IsSetupIncomplete = !state.Status.SetupComplete;
+
+            if (state.Status.IsFirstRun)
             {
-                IsSetupIncomplete = !state.Status.SetupComplete;
-                StatusMessage = IsSetupIncomplete ? "Setup incomplete" : "Welcome";
+                StatusMessage = "Welcome";
                 await OpenWizardAsync();
             }
             else
             {
-                IsSetupIncomplete = false;
                 await ActivateDashboardAsync(focusSearch: true);
             }
         }
@@ -111,6 +126,66 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
         WizardViewModel = vm;
         IsWizardOpen = true;
         await vm.LoadStateAsync();
+    }
+
+    [RelayCommand]
+    private void OpenSettings()
+    {
+        if (!IsWizardOpen && !IsSettingsOpen)
+        {
+            SettingsRequested?.Invoke(this, EventArgs.Empty);
+        }
+    }
+
+    [RelayCommand(CanExecute = nameof(CanSyncNow))]
+    private async Task SyncNowAsync()
+    {
+        IsSyncing = true;
+        SyncStatusText = "Syncing\u2026";
+        try
+        {
+            var response = await _engine.SyncWithQrzAsync();
+            var up = response.UploadedRecords;
+            var down = response.DownloadedRecords;
+            SyncStatusText = $"Synced: \u2191{up} \u2193{down}";
+            await RecentQsos.RefreshAsync();
+        }
+        catch (Grpc.Core.RpcException)
+        {
+            SyncStatusText = "Sync failed";
+        }
+        finally
+        {
+            IsSyncing = false;
+        }
+    }
+
+    private bool CanSyncNow() => !IsSyncing && !IsWizardOpen;
+
+    partial void OnIsSyncingChanged(bool value) => SyncNowCommand.NotifyCanExecuteChanged();
+
+    partial void OnIsWizardOpenChanged(bool value)
+    {
+        SyncNowCommand.NotifyCanExecuteChanged();
+    }
+
+    /// <summary>
+    /// Creates a <see cref="SettingsViewModel"/> wired to the shared engine client.
+    /// Called by the View layer when handling <see cref="SettingsRequested"/>.
+    /// </summary>
+    internal SettingsViewModel CreateSettingsViewModel() => new(_engine);
+
+    /// <summary>
+    /// Called by the View layer after the Settings dialog closes.
+    /// </summary>
+    internal async Task OnSettingsClosedAsync(bool didSave)
+    {
+        IsSettingsOpen = false;
+        if (didSave)
+        {
+            await RefreshSetupContextAsync();
+            await ActivateDashboardAsync(focusSearch: false);
+        }
     }
 
     [RelayCommand]
@@ -212,6 +287,7 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
     {
         StatusMessage = "Ready";
         await RecentQsos.RefreshAsync();
+        await RefreshSyncStatusAsync();
 
         if (focusSearch && !IsWizardOpen)
         {
@@ -287,5 +363,36 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
         return string.IsNullOrWhiteSpace(stationCallsign)
             ? "Station: -"
             : $"Station: {stationCallsign.Trim()}";
+    }
+
+    private async Task RefreshSyncStatusAsync()
+    {
+        try
+        {
+            var status = await _engine.GetSyncStatusAsync();
+            if (status.IsSyncing)
+            {
+                SyncStatusText = "Syncing\u2026";
+            }
+            else if (status.LastSync is not null)
+            {
+                var elapsed = DateTimeOffset.UtcNow - status.LastSync.ToDateTimeOffset();
+                SyncStatusText = elapsed.TotalMinutes < 1
+                    ? "Last sync: just now"
+                    : elapsed.TotalHours < 1
+                        ? $"Last sync: {(int)elapsed.TotalMinutes}m ago"
+                        : elapsed.TotalDays < 1
+                            ? $"Last sync: {(int)elapsed.TotalHours}h ago"
+                            : $"Last sync: {(int)elapsed.TotalDays}d ago";
+            }
+            else
+            {
+                SyncStatusText = "Sync: never";
+            }
+        }
+        catch (Grpc.Core.RpcException)
+        {
+            // Sync status unavailable — leave current text unchanged.
+        }
     }
 }
