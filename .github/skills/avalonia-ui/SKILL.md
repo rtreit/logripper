@@ -92,7 +92,6 @@ When a user asks to "look at the UI", "launch the GUI and inspect it", "try resi
 2. Use `.\scripts\drive-avalonia.ps1` for live interaction against the fixture-backed inspection surfaces (`MainWindow`, `Settings`, `Wizard`).
 3. Prefer existing smoke/action scripts under `scripts\automation\` before inventing ad hoc manual steps.
 4. Only fall back to a plain `dotnet run` launch when the task is explicitly about startup failures, binding warnings, or runtime exceptions rather than visible behavior.
-
 ## Current References
 
 Prioritize these official Avalonia references when reasoning about QsoRipper UI work:
