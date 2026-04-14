@@ -16,6 +16,7 @@ description: >-
 - Improving density, compactness, keyboard-first behavior, or grid performance
 - Working on custom title bar, window chrome, drag regions, or Windows-specific UI behavior
 - Choosing between `DataGrid`, custom virtualized lists, or other Avalonia controls for large datasets
+- Launching the Avalonia GUI to inspect real visuals, interact with controls, or reproduce layout bugs
 
 ## Design Rules
 
@@ -29,6 +30,7 @@ description: >-
 8. Be careful with custom title bar and custom window chrome work; validate drag regions, caption behavior, and Windows-specific theme behavior.
 9. Do not assume WPF patterns map directly to Avalonia without verification.
 10. Keep XAML and styling lightweight; avoid unnecessary visual tree depth on hot screens.
+11. When the task is visual inspection rather than code editing, use the repo's automation/capture scripts instead of treating startup logs as proof of visible behavior.
 
 ## Review Checklist
 
@@ -58,25 +60,38 @@ description: >-
 
 When the Avalonia UI looks wrong, debug in this order:
 
-1. **Binding correctness**
+1. **Capture or inspect the real UI first**
+   - For deterministic screenshots use `.\scripts\capture-avalonia.ps1`
+   - For real interaction use `.\scripts\drive-avalonia.ps1`
+   - Do not claim a visual inspection result from `dotnet run` output alone
+
+2. **Binding correctness**
    - Verify data context scope
    - Prefer compiled bindings
    - Check for property name drift and template scope mistakes
 
-2. **Theme/resource correctness**
+3. **Theme/resource correctness**
    - Verify the correct Fluent theme setup
    - Verify any extra control theme includes are present
 
-3. **Layout correctness**
+4. **Layout correctness**
    - Inspect column widths, alignment, clipping, ellipsis, and container constraints
    - Reduce nested panels if the layout is unstable
 
-4. **Control choice**
+5. **Control choice**
    - Re-check whether the chosen control is appropriate for dense, virtualized, editable tabular data
 
-5. **Window/chrome correctness**
+6. **Window/chrome correctness**
    - For shell/title bar issues, verify drag regions and custom decoration behavior
 
+## Visual Inspection Workflow
+
+When a user asks to "look at the UI", "launch the GUI and inspect it", "try resizing columns", or otherwise expects real interaction:
+
+1. Use `.\scripts\capture-avalonia.ps1` for deterministic screenshots of `MainWindow` or a named control such as `RecentQsoGrid`.
+2. Use `.\scripts\drive-avalonia.ps1` for live interaction against the fixture-backed inspection surfaces (`MainWindow`, `Settings`, `Wizard`).
+3. Prefer existing smoke/action scripts under `scripts\automation\` before inventing ad hoc manual steps.
+4. Only fall back to a plain `dotnet run` launch when the task is explicitly about startup failures, binding warnings, or runtime exceptions rather than visible behavior.
 ## Current References
 
 Prioritize these official Avalonia references when reasoning about QsoRipper UI work:
@@ -91,6 +106,7 @@ Prioritize these official Avalonia references when reasoning about QsoRipper UI 
 ## Notes for This Repo
 
 - Use this skill together with:
+  - `skills/ux-inspection/SKILL.md`
   - `instructions/ui-ux.instructions.md`
   - `skills/keyboard-first-ui/SKILL.md`
   - `instructions/performance.instructions.md`
