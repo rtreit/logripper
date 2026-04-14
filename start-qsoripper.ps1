@@ -138,22 +138,22 @@ function Get-LogTail([string]$Path) {
     return Get-Content -LiteralPath $Path -Tail 20
 }
 
-function Stop-TrackedProcess([int]$Pid) {
-    $process = Get-Process -Id $Pid -ErrorAction SilentlyContinue
+function Stop-TrackedProcess([int]$ProcessId) {
+    $process = Get-Process -Id $ProcessId -ErrorAction SilentlyContinue
     if ($null -eq $process) {
         return
     }
 
-    Stop-Process -Id $Pid
+    Stop-Process -Id $ProcessId
 
     for ($attempt = 0; $attempt -lt 50; $attempt++) {
         Start-Sleep -Milliseconds 200
-        if ($null -eq (Get-Process -Id $Pid -ErrorAction SilentlyContinue)) {
+        if ($null -eq (Get-Process -Id $ProcessId -ErrorAction SilentlyContinue)) {
             return
         }
     }
 
-    throw "Timed out waiting for process $Pid to stop."
+    throw "Timed out waiting for process $ProcessId to stop."
 }
 
 New-Item -ItemType Directory -Path $runtimeDirectory -Force | Out-Null
@@ -168,7 +168,7 @@ if ($null -ne $existing) {
     }
 
     Write-Info "Stopping existing QsoRipper process $($existing.Process.Id)."
-    Stop-TrackedProcess -Pid $existing.Process.Id
+    Stop-TrackedProcess -ProcessId $existing.Process.Id
     Remove-Item -LiteralPath $statePath -Force -ErrorAction SilentlyContinue
 }
 
