@@ -5,6 +5,7 @@ using QsoRipper.Services;
 namespace QsoRipper.Cli.Tests;
 
 #pragma warning disable CA1707 // Remove underscores from member names - xUnit allows underscores in test methods
+[Collection("ConsoleCapture")]
 public sealed class CliUtilityTests
 {
     [Theory]

@@ -1,4 +1,3 @@
-using System.Text;
 using Google.Protobuf.WellKnownTypes;
 using QsoRipper.Cli.Commands;
 using QsoRipper.Domain;
@@ -6,6 +5,7 @@ using QsoRipper.Domain;
 namespace QsoRipper.Cli.Tests;
 
 #pragma warning disable CA1707
+[Collection("ConsoleCapture")]
 public sealed class SpaceWeatherCommandTests
 {
     [Fact]
