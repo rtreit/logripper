@@ -457,15 +457,14 @@ fn label(text: &str) -> Span<'static> {
 /// `prefix` appears before the key, `suffix` after it. The key renders in yellow+underlined;
 /// prefix and suffix render in cyan. All three together form the complete label.
 fn kl(prefix: &'static str, key: char, suffix: &'static str) -> [Span<'static>; 3] {
+    let label_style = Style::default().fg(Color::Cyan);
     [
-        Span::styled(prefix, Style::default().fg(Color::Cyan)),
+        Span::styled(prefix, label_style),
         Span::styled(
             key.to_ascii_uppercase().to_string(),
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::UNDERLINED),
+            label_style.add_modifier(Modifier::UNDERLINED),
         ),
-        Span::styled(suffix, Style::default().fg(Color::Cyan)),
+        Span::styled(suffix, label_style),
     ]
 }
 
