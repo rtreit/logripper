@@ -17,12 +17,33 @@ use std::fmt::Write as _;
 ///
 /// Returns an error when the ADIF payload is malformed and cannot be parsed.
 pub async fn parse_adi_qsos(data: &[u8]) -> Result<Vec<QsoRecord>, String> {
-    let mut stream = RecordStream::new(data, true);
+    parse_adi_qsos_internal(data, true).await
+}
+
+/// Parse an ADI payload while treating all records as QSO records.
+///
+/// This variant disables header detection, which is useful for provider payloads
+/// that omit `<EOH>` or otherwise confuse header classification.
+///
+/// # Errors
+///
+/// Returns an error when the ADIF payload is malformed and cannot be parsed.
+pub async fn parse_adi_qsos_without_header_detection(
+    data: &[u8],
+) -> Result<Vec<QsoRecord>, String> {
+    parse_adi_qsos_internal(data, false).await
+}
+
+async fn parse_adi_qsos_internal(
+    data: &[u8],
+    detect_headers: bool,
+) -> Result<Vec<QsoRecord>, String> {
+    let mut stream = RecordStream::new(data, detect_headers);
     let mut qsos = Vec::new();
 
     while let Some(result) = stream.next().await {
         let record = result.map_err(|error| error.to_string())?;
-        if record.is_header() {
+        if detect_headers && record.is_header() {
             continue;
         }
 
@@ -64,7 +85,7 @@ fn adif_header() -> String {
 #[cfg(test)]
 #[allow(clippy::expect_used, clippy::unwrap_used)]
 mod tests {
-    use super::{parse_adi_qsos, serialize_adi_qsos};
+    use super::{parse_adi_qsos, parse_adi_qsos_without_header_detection, serialize_adi_qsos};
 
     #[tokio::test]
     async fn parse_adi_qsos_skips_header_records() {
@@ -83,5 +104,14 @@ mod tests {
         assert!(text.contains("<ADIF_VER:5>3.1.7"));
         assert!(text.contains("<PROGRAMID:9>QsoRipper"));
         assert!(text.contains("<EOH>"));
+    }
+
+    #[tokio::test]
+    async fn parse_adi_qsos_without_header_detection_parses_basic_payload() {
+        let data = b"<CALL:4>W1AW <QSO_DATE:8>20250101 <TIME_ON:4>1200 <EOR>\n";
+        let qsos = parse_adi_qsos_without_header_detection(data)
+            .await
+            .expect("parsed qsos");
+        assert_eq!(qsos.len(), 1);
     }
 }

@@ -161,7 +161,26 @@ async fn download_phase(
         }
     };
 
-    let since_date = if full_sync {
+    // Load all local QSOs for matching and sync-policy decisions.
+    let local_qsos = match store.list_qsos(&QsoListQuery::default()).await {
+        Ok(qsos) => qsos,
+        Err(err) => {
+            send_complete(
+                progress_tx,
+                0,
+                0,
+                0,
+                Some(format!("Failed to load local QSOs: {err}")),
+            )
+            .await;
+            return metadata;
+        }
+    };
+
+    // If the local logbook is empty, force a full remote fetch even for
+    // incremental sync requests. This recovers from stale metadata and gives
+    // first-time users the expected "download everything" behavior.
+    let since_date = if full_sync || local_qsos.is_empty() {
         None
     } else {
         metadata
@@ -199,22 +218,6 @@ async fn download_phase(
         counters.conflicts,
     )
     .await;
-
-    // Load all local QSOs for matching.
-    let local_qsos = match store.list_qsos(&QsoListQuery::default()).await {
-        Ok(qsos) => qsos,
-        Err(err) => {
-            send_complete(
-                progress_tx,
-                0,
-                0,
-                0,
-                Some(format!("Failed to load local QSOs: {err}")),
-            )
-            .await;
-            return metadata;
-        }
-    };
 
     // Build lookup indexes.
     let (mut by_qrz_logid, mut by_key) = build_local_indexes(&local_qsos);
@@ -1024,6 +1027,10 @@ mod tests {
     async fn incremental_sync_uses_last_sync_date() {
         let store = MemoryStorage::new();
 
+        // Add at least one local record so incremental sync uses last_sync.
+        let local = make_qso("W1AW", "K7LOCAL", Band::Band20m, Mode::Cw, 1_700_000_050);
+        store.insert_qso(&local).await.unwrap();
+
         // Seed metadata with a previous sync timestamp.
         let metadata = SyncMetadata {
             last_sync: Some(Timestamp {
@@ -1048,6 +1055,38 @@ mod tests {
 
         let captured = since_capture.lock().unwrap().clone();
         assert_eq!(captured.as_deref(), Some("2023-11-14"));
+    }
+
+    #[tokio::test]
+    async fn incremental_sync_with_empty_local_log_uses_full_fetch() {
+        let store = MemoryStorage::new();
+
+        // Metadata exists, but there are no local QSOs yet.
+        let metadata = SyncMetadata {
+            last_sync: Some(Timestamp {
+                seconds: 1_700_000_000,
+                nanos: 0,
+            }),
+            ..SyncMetadata::default()
+        };
+        store.upsert_sync_metadata(&metadata).await.unwrap();
+
+        let since_capture: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+        let api = CapturingApi {
+            since: since_capture.clone(),
+        };
+
+        let (tx, rx) = mpsc::channel(16);
+        execute_sync(&api, &store, false, ConflictPolicy::LastWriteWins, &tx).await;
+        drop(tx);
+
+        drop(collect_final(rx).await);
+
+        let captured = since_capture.lock().unwrap().clone();
+        assert!(
+            captured.is_none(),
+            "empty local log should force a full remote fetch"
+        );
     }
 
     #[tokio::test]

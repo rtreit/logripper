@@ -97,8 +97,8 @@
       <Grid RowDefinitions="Auto,* ,Auto"
             IsEnabled="{Binding !IsWizardOpen}">
         <Grid Grid.Row="0"
-              Height="34"
-              Margin="10,4,10,6"
+              MinHeight="40"
+              Margin="10,6,10,8"
               ColumnDefinitions="Auto,*,Auto"
               ColumnSpacing="12">
           <StackPanel Grid.Column="0"
@@ -124,12 +124,12 @@
                 ColumnDefinitions="Auto,*"
                 ColumnSpacing="8"
                 VerticalAlignment="Center">
-            <TextBox x:Name="RecentQsoSearchBox"
-                     Grid.Column="0"
-                     Height="28"
-                     MinWidth="200"
-                     MaxWidth="400"
-                     VerticalAlignment="Center"
+             <TextBox x:Name="RecentQsoSearchBox"
+                      Grid.Column="0"
+                      Height="30"
+                      MinWidth="200"
+                      MaxWidth="400"
+                      VerticalAlignment="Center"
                      PlaceholderText="Search callsign, grid, name, contest, note..."
                      Text="{Binding RecentQsos.SearchText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
 
@@ -162,13 +162,13 @@
                     Command="{Binding OpenWizardCommand}"
                     Classes="accent"
                     MinWidth="62"
-                    Height="26"
+                    Height="28"
                     IsVisible="{Binding IsSetupIncomplete}" />
             <TextBlock Classes="commandCaption"
                        Text="{Binding RecentQsos.RefreshIndicatorText}" />
             <Button Content="⟳ Sync"
                     Command="{Binding SyncNowCommand}"
-                    Height="26"
+                    Height="28"
                     MinWidth="54"
                     ToolTip.Tip="Sync with QRZ (F6)" />
             <TextBlock Classes="commandCaption"
@@ -182,11 +182,11 @@
                        Text="{Binding CurrentUtcDate}" />
             <Button Content="Sort"
                     Command="{Binding ToggleSortChooserCommand}"
-                    Height="26"
+                    Height="28"
                     MinWidth="54" />
             <Button Content="Cols"
                     Command="{Binding ToggleColumnChooserCommand}"
-                    Height="26"
+                    Height="28"
                     MinWidth="54" />
           </StackPanel>
         </Grid>
@@ -195,7 +195,7 @@
           <Grid ColumnDefinitions="*,Auto">
             <Grid Grid.Column="0">
               <DataGrid x:Name="RecentQsoGrid"
-                         Margin="8,0,8,0"
+                         Margin="8,2,8,0"
                          RowHeight="{Binding RecentQsos.GridRowHeight}"
                          ColumnHeaderHeight="{Binding RecentQsos.GridHeaderHeight}"
                          FontSize="{Binding RecentQsos.GridFontSize}"
@@ -205,34 +205,42 @@
                 <DataGrid.Columns>
                   <DataGridTextColumn Header="UTC"
                                       Width="104"
+                                      MinWidth="96"
                                       Binding="{ReflectionBinding UtcDisplay, Mode=TwoWay}"
                                       SortMemberPath="UtcSortKey" />
                   <DataGridTextColumn Header="Call"
                                       Width="92"
+                                      MinWidth="88"
                                       Binding="{ReflectionBinding WorkedCallsign, Mode=TwoWay}"
                                       SortMemberPath="WorkedCallsign" />
                   <DataGridTextColumn Header="Band"
                                       Width="56"
+                                      MinWidth="64"
                                       Binding="{ReflectionBinding Band, Mode=TwoWay}"
                                       SortMemberPath="Band" />
                   <DataGridTextColumn Header="Mode"
                                       Width="64"
+                                      MinWidth="64"
                                       Binding="{ReflectionBinding Mode, Mode=TwoWay}"
                                       SortMemberPath="Mode" />
                   <DataGridTextColumn Header="Freq"
                                       Width="82"
+                                      MinWidth="80"
                                       Binding="{ReflectionBinding Frequency, Mode=TwoWay}"
                                       SortMemberPath="FrequencySortKey" />
                   <DataGridTextColumn Header="RST"
                                       Width="70"
+                                      MinWidth="64"
                                       Binding="{ReflectionBinding Rst, Mode=TwoWay}"
                                       SortMemberPath="Rst" />
                   <DataGridTextColumn Header="DXCC"
                                       Width="58"
+                                      MinWidth="64"
                                       Binding="{ReflectionBinding Dxcc, Mode=TwoWay}"
                                       SortMemberPath="DxccSortKey" />
                   <DataGridTemplateColumn Header="Country"
                                           Width="120"
+                                          MinWidth="96"
                                           SortMemberPath="Country">
                     <DataGridTemplateColumn.CellTemplate>
                       <DataTemplate x:DataType="vm:RecentQsoItemViewModel">
@@ -253,6 +261,7 @@
                   </DataGridTemplateColumn>
                   <DataGridTemplateColumn Header="Name"
                                           Width="122"
+                                          MinWidth="96"
                                           SortMemberPath="OperatorName">
                     <DataGridTemplateColumn.CellTemplate>
                       <DataTemplate x:DataType="vm:RecentQsoItemViewModel">
@@ -273,14 +282,17 @@
                   </DataGridTemplateColumn>
                   <DataGridTextColumn Header="Grid"
                                       Width="72"
+                                      MinWidth="64"
                                       Binding="{ReflectionBinding Grid, Mode=TwoWay}"
                                       SortMemberPath="Grid" />
                   <DataGridTextColumn Header="Exch"
                                       Width="76"
+                                      MinWidth="72"
                                       Binding="{ReflectionBinding Exchange, Mode=TwoWay}"
                                       SortMemberPath="Exchange" />
                   <DataGridTemplateColumn Header="Contest"
                                           Width="92"
+                                          MinWidth="80"
                                           SortMemberPath="Contest">
                     <DataGridTemplateColumn.CellTemplate>
                       <DataTemplate x:DataType="vm:RecentQsoItemViewModel">
@@ -301,10 +313,12 @@
                   </DataGridTemplateColumn>
                   <DataGridTextColumn Header="Station"
                                       Width="92"
+                                      MinWidth="80"
                                       Binding="{ReflectionBinding Station, Mode=TwoWay}"
                                       SortMemberPath="Station" />
                   <DataGridTemplateColumn Header="Note"
                                           Width="2*"
+                                          MinWidth="120"
                                           MaxWidth="240"
                                           SortMemberPath="Note">
                     <DataGridTemplateColumn.CellTemplate>
@@ -326,21 +340,25 @@
                   </DataGridTemplateColumn>
                   <DataGridTextColumn Header="End"
                                       Width="104"
+                                      MinWidth="96"
                                       Binding="{ReflectionBinding UtcEndDisplay, Mode=TwoWay}"
                                       SortMemberPath="UtcEndSortKey"
                                       IsVisible="False" />
                   <DataGridTextColumn Header="CQ"
                                       Width="50"
+                                      MinWidth="64"
                                       Binding="{ReflectionBinding CqZone, Mode=TwoWay}"
                                       SortMemberPath="CqZone"
                                       IsVisible="False" />
                   <DataGridTextColumn Header="ITU"
                                       Width="50"
+                                      MinWidth="64"
                                       Binding="{ReflectionBinding ItuZone, Mode=TwoWay}"
                                       SortMemberPath="ItuZone"
                                       IsVisible="False" />
                   <DataGridTemplateColumn Header="QTH"
                                           Width="120"
+                                          MinWidth="96"
                                           SortMemberPath="Qth"
                                           IsVisible="False"
                                           IsReadOnly="True">
@@ -355,6 +373,7 @@
                   </DataGridTemplateColumn>
                   <DataGridTextColumn Header="Sync"
                                       Width="78"
+                                      MinWidth="72"
                                       Binding="{ReflectionBinding SyncStatus}"
                                       SortMemberPath="SyncStatus"
                                       IsReadOnly="True"

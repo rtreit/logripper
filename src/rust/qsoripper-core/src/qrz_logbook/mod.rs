@@ -226,6 +226,16 @@ fn is_auth_error(reason: &str) -> bool {
         || lower.contains("access denied")
 }
 
+fn find_adif_marker_index(body: &str) -> Option<usize> {
+    body.to_ascii_uppercase().find("ADIF=")
+}
+
+fn starts_with_result_header(body: &str) -> bool {
+    body.trim_start()
+        .get(..7)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("RESULT="))
+}
+
 /// Extract the ADIF payload from a QRZ FETCH response body.
 ///
 /// QRZ FETCH responses use the format:
@@ -235,14 +245,97 @@ fn is_auth_error(reason: &str) -> bool {
 /// the body. We cannot use `parse_kv_response` to extract it because the
 /// ADIF content contains `&` and `=` characters inside angle-bracket fields.
 fn extract_adif_from_fetch_body(body: &str) -> Option<String> {
-    // Case-insensitive search for the ADIF= marker.
-    let upper = body.to_ascii_uppercase();
-    let marker_pos = upper.find("ADIF=")?;
+    let marker_pos = find_adif_marker_index(body)?;
     let start = marker_pos + "ADIF=".len();
     if start >= body.len() {
         return None;
     }
     Some(body[start..].to_string())
+}
+
+/// Decode HTML entities that QRZ may return for FETCH ADIF payloads.
+fn decode_fetch_adif_payload(payload: &str) -> String {
+    if !payload.contains('&') {
+        return payload.to_string();
+    }
+
+    payload
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        // Decode ampersands last to avoid re-encoding other entities.
+        .replace("&amp;", "&")
+}
+
+/// Ensure ADIF has an explicit `<EOH>` marker so the parser treats entries as
+/// QSO records even when the payload starts with arbitrary field order.
+fn ensure_adif_has_eoh(payload: &str) -> String {
+    if payload.to_ascii_uppercase().contains("<EOH>") {
+        payload.to_string()
+    } else {
+        format!("<EOH>\n{payload}")
+    }
+}
+
+fn normalize_adif_record_markers(payload: &str) -> String {
+    payload.replace("<eor>", "<EOR>").replace("<eoh>", "<EOH>")
+}
+
+async fn parse_adif_records_tolerantly(payload: &str) -> Vec<QsoRecord> {
+    if !payload.to_ascii_uppercase().contains("<EOR>") {
+        return Vec::new();
+    }
+
+    let mut parsed = Vec::new();
+    for record_fragment in payload.split("<EOR>") {
+        let record = record_fragment.trim();
+        if record.is_empty() {
+            continue;
+        }
+
+        let candidate = format!("<EOH>\n{record}<EOR>\n");
+        if let Ok(mut qsos) =
+            adif::parse_adi_qsos_without_header_detection(candidate.as_bytes()).await
+        {
+            parsed.append(&mut qsos);
+        }
+    }
+
+    parsed
+}
+
+async fn parse_fetch_adif_payload(
+    adif_payload: &str,
+    expected_count: Option<usize>,
+) -> Result<Vec<QsoRecord>, QrzLogbookError> {
+    let decoded_adif = decode_fetch_adif_payload(adif_payload);
+    let normalized_markers = normalize_adif_record_markers(&decoded_adif);
+    let normalized_adif = ensure_adif_has_eoh(&normalized_markers);
+
+    let strict_result = adif::parse_adi_qsos(normalized_adif.as_bytes()).await;
+    let strict_parse_error = match strict_result {
+        Ok(qsos) if !qsos.is_empty() => {
+            let over_parsed =
+                expected_count.is_some_and(|expected| expected > 0 && qsos.len() > expected);
+            if !over_parsed {
+                return Ok(qsos);
+            }
+            None
+        }
+        Ok(_) => None,
+        Err(err) => Some(err),
+    };
+
+    let tolerant = parse_adif_records_tolerantly(&normalized_adif).await;
+    if !tolerant.is_empty() {
+        return Ok(tolerant);
+    }
+
+    if let Some(err) = strict_parse_error {
+        return Err(QrzLogbookError::ParseError(err));
+    }
+    Ok(Vec::new())
 }
 
 // ---------------------------------------------------------------------------
@@ -316,34 +409,31 @@ impl QrzLogbookClient {
             .post_form(&[("ACTION", "FETCH"), ("OPTION", &option_value)])
             .await?;
 
-        // QRZ FETCH responses use the format:
-        //   RESULT=OK&COUNT=N&ADIF=<adif data here...>
-        // The ADIF key's value contains newlines and the full record set.
-        // If RESULT=FAIL, detect and report the error.
-        if body.trim_start().starts_with("RESULT=") {
-            // Extract the ADIF portion before parsing the kv header.
-            // The ADIF data starts after "ADIF=" and may contain '&' chars
-            // inside field values, so we locate the marker directly.
-            let adif_data = extract_adif_from_fetch_body(&body);
-
-            // Parse only the header portion (before the ADIF data) for
-            // RESULT/COUNT/REASON etc.
-            let header = match body.find("ADIF=") {
-                Some(pos) => &body[..pos],
-                None => &body,
-            };
-            let map = parse_kv_response(header);
+        // Some error/empty FETCH responses are key-value only (no ADIF field).
+        if starts_with_result_header(&body) && find_adif_marker_index(&body).is_none() {
+            let map = parse_kv_response(&body);
             check_result(map)?;
-
-            // Parse whatever ADIF data was present.
-            if let Some(adif) = adif_data {
-                if !adif.trim().is_empty() {
-                    return adif::parse_adi_qsos(adif.as_bytes())
-                        .await
-                        .map_err(QrzLogbookError::ParseError);
-                }
-            }
             return Ok(Vec::new());
+        }
+
+        // QRZ FETCH responses commonly use:
+        //   RESULT=OK&COUNT=N&ADIF=<adif data...>
+        // Detect that shape by splitting at ADIF= and checking for RESULT in
+        // the prefix.
+        if let Some(marker_pos) = find_adif_marker_index(&body) {
+            let header = &body[..marker_pos];
+            let map = parse_kv_response(header);
+            if map.contains_key("RESULT") {
+                let map = check_result(map)?;
+                let expected_count = map
+                    .get("COUNT")
+                    .and_then(|value| value.parse::<usize>().ok());
+                let adif = extract_adif_from_fetch_body(&body).unwrap_or_default();
+                if !adif.trim().is_empty() {
+                    return parse_fetch_adif_payload(&adif, expected_count).await;
+                }
+                return Ok(Vec::new());
+            }
         }
 
         adif::parse_adi_qsos(body.as_bytes())
@@ -891,6 +981,48 @@ mod tests {
         assert_eq!(qsos[1].worked_callsign, "N0CALL");
     }
 
+    #[tokio::test]
+    async fn fetch_qsos_decodes_html_encoded_inline_adif() {
+        let body = "RESULT=OK&COUNT=1&ADIF=&lt;CALL:4&gt;W1AW &lt;BAND:3&gt;20M \
+                    &lt;MODE:3&gt;SSB &lt;QSO_DATE:8&gt;20250101 &lt;TIME_ON:4&gt;1200 \
+                    &lt;EOR&gt;\n";
+        let (base_url, _) = spawn_logbook_server(&[("text/plain", body)]).await;
+        let client = QrzLogbookClient::new(test_config(base_url)).expect("client");
+
+        let qsos = client.fetch_qsos(None).await.expect("fetch");
+
+        assert_eq!(qsos.len(), 1, "expected one decoded QSO");
+        assert_eq!(qsos[0].worked_callsign, "W1AW");
+    }
+
+    #[tokio::test]
+    async fn fetch_qsos_decodes_html_encoded_lowercase_eor_markers() {
+        let body = "RESULT=OK&COUNT=1&ADIF=&lt;CALL:4&gt;W1AW &lt;BAND:3&gt;20M \
+                    &lt;MODE:3&gt;SSB &lt;QSO_DATE:8&gt;20250101 &lt;TIME_ON:4&gt;1200 \
+                    &lt;eor&gt;\n";
+        let (base_url, _) = spawn_logbook_server(&[("text/plain", body)]).await;
+        let client = QrzLogbookClient::new(test_config(base_url)).expect("client");
+
+        let qsos = client.fetch_qsos(None).await.expect("fetch");
+
+        assert_eq!(qsos.len(), 1, "expected one decoded QSO");
+        assert_eq!(qsos[0].worked_callsign, "W1AW");
+    }
+
+    #[tokio::test]
+    async fn fetch_qsos_parses_inline_adif_without_eoh_and_non_call_first_field() {
+        // QRZ often starts each record with fields like DXCC/FREQ before CALL.
+        let body = "RESULT=OK&COUNT=1&ADIF=<DXCC:3>339 <FREQ:6>28.405 <CALL:4>W1AW \
+                    <BAND:3>10M <MODE:3>SSB <QSO_DATE:8>20250101 <TIME_ON:4>1200 <EOR>\n";
+        let (base_url, _) = spawn_logbook_server(&[("text/plain", body)]).await;
+        let client = QrzLogbookClient::new(test_config(base_url)).expect("client");
+
+        let qsos = client.fetch_qsos(None).await.expect("fetch");
+
+        assert_eq!(qsos.len(), 1, "expected one QSO from non-CALL-first record");
+        assert_eq!(qsos[0].worked_callsign, "W1AW");
+    }
+
     #[test]
     fn extract_adif_from_fetch_body_extracts_content() {
         let body = "RESULT=OK&COUNT=1&ADIF=<CALL:4>W1AW <EOR>\n";
@@ -910,6 +1042,34 @@ mod tests {
         let body = "RESULT=OK&COUNT=1&adif=<CALL:4>W1AW <EOR>\n";
         let adif = extract_adif_from_fetch_body(body);
         assert_eq!(adif.as_deref(), Some("<CALL:4>W1AW <EOR>\n"));
+    }
+
+    #[test]
+    fn decode_fetch_adif_payload_decodes_entities() {
+        let encoded = "&lt;CALL:4&gt;W1AW &lt;EOR&gt; &amp; &quot;OK&quot; &#39;QSO&#39;";
+        let decoded = decode_fetch_adif_payload(encoded);
+        assert_eq!(decoded, "<CALL:4>W1AW <EOR> & \"OK\" 'QSO'");
+    }
+
+    #[test]
+    fn ensure_adif_has_eoh_adds_header_marker_when_missing() {
+        let payload = "<CALL:4>W1AW <EOR>\n";
+        let normalized = ensure_adif_has_eoh(payload);
+        assert!(normalized.starts_with("<EOH>\n"));
+    }
+
+    #[test]
+    fn ensure_adif_has_eoh_preserves_existing_marker() {
+        let payload = "<ADIF_VER:5>3.1.0\n<EOH>\n<CALL:4>W1AW <EOR>\n";
+        let normalized = ensure_adif_has_eoh(payload);
+        assert_eq!(normalized, payload);
+    }
+
+    #[test]
+    fn normalize_adif_record_markers_converts_lowercase_markers() {
+        let payload = "<CALL:4>W1AW <eor>\n<eoh>\n";
+        let normalized = normalize_adif_record_markers(payload);
+        assert_eq!(normalized, "<CALL:4>W1AW <EOR>\n<EOH>\n");
     }
 
     // -- upload_qso integration ---------------------------------------------
