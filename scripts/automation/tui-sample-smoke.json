@@ -1,0 +1,77 @@
+{
+  "fixture": "sample-tui",
+  "terminal": {
+    "columns": 100,
+    "rows": 30
+  },
+  "actions": [
+    {
+      "type": "wait-for-text",
+      "text": "QsoRipper Sample TUI",
+      "source": "screen",
+      "timeoutMs": 5000
+    },
+    {
+      "type": "snapshot",
+      "path": "sample-start"
+    },
+    {
+      "type": "send-keys",
+      "keys": "{right}{tab}",
+      "settleMs": 150
+    },
+    {
+      "type": "send-text",
+      "text": "cw",
+      "settleMs": 150
+    },
+    {
+      "type": "wait-for-text",
+      "text": "Filter: cw",
+      "source": "screen",
+      "timeoutMs": 5000
+    },
+    {
+      "type": "snapshot",
+      "path": "sample-filtered"
+    },
+    {
+      "type": "send-keys",
+      "keys": "{tab}{down}{enter}",
+      "settleMs": 150
+    },
+    {
+      "type": "wait-for-text",
+      "text": "Details: Low-noise path after sunset.",
+      "source": "screen",
+      "timeoutMs": 5000
+    },
+    {
+      "type": "snapshot",
+      "path": "sample-details"
+    },
+    {
+      "type": "send-keys",
+      "keys": "{escape}{tab}{left}",
+      "settleMs": 150
+    },
+    {
+      "type": "wait-for-text",
+      "text": "[Recent]",
+      "source": "screen",
+      "timeoutMs": 5000
+    },
+    {
+      "type": "snapshot",
+      "path": "sample-returned"
+    },
+    {
+      "type": "send-keys",
+      "keys": "{ctrl+c}"
+    },
+    {
+      "type": "wait-for-exit",
+      "timeoutMs": 5000
+    }
+  ]
+}
