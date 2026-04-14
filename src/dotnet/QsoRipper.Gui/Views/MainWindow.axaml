@@ -4,8 +4,8 @@
         xmlns:v="using:QsoRipper.Gui.Views"
         x:Class="QsoRipper.Gui.Views.MainWindow"
         x:DataType="vm:MainWindowViewModel"
-        Title="QsoRipper" Width="1500" Height="820"
-        MinWidth="1380" MinHeight="700"
+        Title="QsoRipper" Width="1280" Height="760"
+        MinWidth="1024" MinHeight="640"
         WindowStartupLocation="CenterScreen"
         Icon="avares://QsoRipper.Gui/Assets/qsoripper.ico">
 
