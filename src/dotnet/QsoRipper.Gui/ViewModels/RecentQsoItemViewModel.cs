@@ -591,7 +591,7 @@ internal sealed class RecentQsoItemViewModel : ObservableObject, IEditableObject
         DisplayOrDash(qso.WorkedCallsign),
         ProtoEnumDisplay.ForBand(qso.Band),
         ProtoEnumDisplay.ForMode(qso.Mode),
-        qso.HasFrequencyKhz ? qso.FrequencyKhz.ToString("N0", CultureInfo.InvariantCulture) : "-",
+        qso.HasFrequencyKhz ? qso.FrequencyKhz.ToString(CultureInfo.InvariantCulture) : "-",
         BuildCombinedReport(DisplayOrDash(qso.RstSent?.Raw), DisplayOrDash(qso.RstReceived?.Raw)),
         BuildDxcc(qso),
         BuildCountry(qso),

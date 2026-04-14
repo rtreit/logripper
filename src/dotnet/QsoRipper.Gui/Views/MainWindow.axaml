@@ -59,7 +59,7 @@
 
   </Window.Styles>
 
-  <DockPanel>
+  <DockPanel ClipToBounds="True">
       <Menu DockPanel.Dock="Top">
         <MenuItem x:Name="FileMenuItem"
                   AutomationProperties.AutomationId="FileMenuItem"
@@ -175,7 +175,9 @@
                     Height="28"
                     IsVisible="{Binding IsSetupIncomplete}" />
             <TextBlock Classes="commandCaption"
-                       Text="{Binding RecentQsos.RefreshIndicatorText}" />
+                       Text="{Binding RecentQsos.RefreshIndicatorText}"
+                       MaxWidth="140"
+                       TextTrimming="CharacterEllipsis" />
             <Button x:Name="SyncNowButton"
                     AutomationProperties.AutomationId="SyncNowButton"
                     Content="⟳ Sync"
@@ -183,8 +185,6 @@
                     Height="28"
                     MinWidth="54"
                     ToolTip.Tip="Sync with QRZ (F6)" />
-            <TextBlock Classes="commandCaption"
-                       Text="UTC" />
             <TextBlock Text="{Binding CurrentUtcTime}"
                        FontFamily="Cascadia Mono, Consolas, monospace"
                        FontSize="12.5"
@@ -221,7 +221,7 @@
                          SelectedItem="{Binding RecentQsos.SelectedQso, Mode=TwoWay}">
                 <DataGrid.Columns>
                   <DataGridTextColumn Header="UTC"
-                                      Width="104"
+                                      Width="130"
                                       MinWidth="96"
                                       Binding="{ReflectionBinding UtcDisplay, Mode=TwoWay}"
                                       SortMemberPath="UtcSortKey" />
@@ -231,12 +231,12 @@
                                       Binding="{ReflectionBinding WorkedCallsign, Mode=TwoWay}"
                                       SortMemberPath="WorkedCallsign" />
                   <DataGridTextColumn Header="Band"
-                                      Width="56"
+                                      Width="72"
                                       MinWidth="64"
                                       Binding="{ReflectionBinding Band, Mode=TwoWay}"
                                       SortMemberPath="Band" />
                   <DataGridTextColumn Header="Mode"
-                                      Width="64"
+                                      Width="74"
                                       MinWidth="64"
                                       Binding="{ReflectionBinding Mode, Mode=TwoWay}"
                                       SortMemberPath="Mode" />
@@ -246,12 +246,12 @@
                                       Binding="{ReflectionBinding Frequency, Mode=TwoWay}"
                                       SortMemberPath="FrequencySortKey" />
                   <DataGridTextColumn Header="RST"
-                                      Width="70"
+                                      Width="96"
                                       MinWidth="64"
                                       Binding="{ReflectionBinding Rst, Mode=TwoWay}"
                                       SortMemberPath="Rst" />
                   <DataGridTextColumn Header="DXCC"
-                                      Width="58"
+                                      Width="72"
                                       MinWidth="64"
                                       Binding="{ReflectionBinding Dxcc, Mode=TwoWay}"
                                       SortMemberPath="DxccSortKey" />
@@ -308,7 +308,7 @@
                                       Binding="{ReflectionBinding Exchange, Mode=TwoWay}"
                                       SortMemberPath="Exchange" />
                   <DataGridTemplateColumn Header="Contest"
-                                          Width="92"
+                                          Width="130"
                                           MinWidth="80"
                                           SortMemberPath="Contest">
                     <DataGridTemplateColumn.CellTemplate>
@@ -335,7 +335,7 @@
                                       SortMemberPath="Station" />
                   <DataGridTemplateColumn Header="Note"
                                           Width="2*"
-                                          MinWidth="120"
+                                          MinWidth="80"
                                           MaxWidth="240"
                                           SortMemberPath="Note">
                     <DataGridTemplateColumn.CellTemplate>
@@ -551,14 +551,17 @@
               <TextBlock Text="Visible columns"
                          FontSize="12.5"
                          FontWeight="SemiBold" />
-              <ItemsControl ItemsSource="{Binding RecentQsos.ColumnOptions}">
-                <ItemsControl.ItemTemplate>
-                  <DataTemplate x:DataType="vm:RecentQsoColumnOptionViewModel">
-                    <CheckBox Content="{Binding Label}"
-                              IsChecked="{Binding IsVisible, Mode=TwoWay}" />
-                  </DataTemplate>
-                </ItemsControl.ItemTemplate>
-              </ItemsControl>
+              <ScrollViewer MaxHeight="400"
+                            VerticalScrollBarVisibility="Auto">
+                <ItemsControl ItemsSource="{Binding RecentQsos.ColumnOptions}">
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="vm:RecentQsoColumnOptionViewModel">
+                      <CheckBox Content="{Binding Label}"
+                                IsChecked="{Binding IsVisible, Mode=TwoWay}" />
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+              </ScrollViewer>
             </StackPanel>
           </Border>
         </Panel>
@@ -571,28 +574,29 @@
                 ColumnSpacing="12">
             <StackPanel Orientation="Horizontal"
                         Spacing="10"
-                        VerticalAlignment="Center">
+                        VerticalAlignment="Center"
+                        ClipToBounds="True">
               <TextBlock Text="{Binding RecentQsos.CountStatusText}" FontSize="11.5" />
               <TextBlock Text="|" Opacity="0.45" />
-              <TextBlock Text="{Binding RecentQsos.FilterStatusText}" FontSize="11.5" />
+              <TextBlock Text="{Binding RecentQsos.FilterStatusText}" FontSize="11.5" TextTrimming="CharacterEllipsis" />
               <TextBlock Text="|" Opacity="0.45" />
-              <TextBlock Text="{Binding RecentQsos.SortStatusText}" FontSize="11.5" />
+              <TextBlock Text="{Binding RecentQsos.SortStatusText}" FontSize="11.5" TextTrimming="CharacterEllipsis" />
               <TextBlock Text="|" Opacity="0.45" />
               <TextBlock Text="{Binding RecentQsos.EditStatusText}" FontSize="11.5" />
               <TextBlock Text="|" Opacity="0.45" />
               <TextBlock Text="{Binding RecentQsos.GridZoomStatusText}" FontSize="11.5" />
               <TextBlock Text="|" Opacity="0.45" />
-              <TextBlock Text="{Binding ActiveStationText}" FontSize="11.5" />
+              <TextBlock Text="{Binding ActiveStationText}" FontSize="11.5" TextTrimming="CharacterEllipsis" />
               <TextBlock Text="|" Opacity="0.45" />
               <TextBlock Text="{Binding RecentQsos.SyncSummaryText}"
                          FontSize="11.5"
                          TextTrimming="CharacterEllipsis"
-                         MaxWidth="420" />
+                         MaxWidth="200" />
               <TextBlock Text="|" Opacity="0.45" />
               <TextBlock Text="{Binding SyncStatusText}"
                          FontSize="11.5"
                          TextTrimming="CharacterEllipsis"
-                         MaxWidth="200" />
+                         MaxWidth="140" />
             </StackPanel>
 
             <TextBlock Grid.Column="1"
