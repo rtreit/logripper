@@ -10,16 +10,22 @@
                Text="QRZ provides callsign lookups and logbook sync. If you don't have a QRZ account, skip this step — local logging works without it." />
 
     <TextBlock Text="QRZ Username:" FontWeight="SemiBold" />
-    <TextBox Text="{Binding Username, Mode=TwoWay}"
-             PlaceholderText="Your QRZ username" />
+    <TextBox x:Name="WizardQrzUsernameBox"
+             AutomationProperties.AutomationId="WizardQrzUsernameBox"
+              Text="{Binding Username, Mode=TwoWay}"
+              PlaceholderText="Your QRZ username" />
 
     <TextBlock Text="QRZ Password:" FontWeight="SemiBold" />
-    <TextBox Text="{Binding Password, Mode=TwoWay}"
-             PasswordChar="•"
-             PlaceholderText="Your QRZ password" />
+    <TextBox x:Name="WizardQrzPasswordBox"
+             AutomationProperties.AutomationId="WizardQrzPasswordBox"
+              Text="{Binding Password, Mode=TwoWay}"
+              PasswordChar="•"
+              PlaceholderText="Your QRZ password" />
 
     <StackPanel Orientation="Horizontal" Spacing="12">
-      <Button Content="Test Connection"
+      <Button x:Name="WizardTestQrzConnectionButton"
+              AutomationProperties.AutomationId="WizardTestQrzConnectionButton"
+              Content="Test Connection"
               Command="{Binding TestConnectionCommand}"
               IsEnabled="{Binding !IsTesting}" />
       <ProgressBar IsIndeterminate="True"

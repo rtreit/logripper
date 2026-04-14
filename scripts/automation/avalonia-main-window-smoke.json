@@ -1,0 +1,82 @@
+{
+  "inspectSurface": "MainWindow",
+  "window": {
+    "title": "QsoRipper",
+    "x": 80,
+    "y": 80,
+    "width": 1280,
+    "height": 760
+  },
+  "actions": [
+    {
+      "type": "wait",
+      "milliseconds": 600
+    },
+    {
+      "type": "dump-tree",
+      "path": "main-window-tree.json"
+    },
+    {
+      "type": "screenshot",
+      "path": "main-window-start.png"
+    },
+    {
+      "type": "set-text",
+      "automationId": "RecentQsoSearchBox",
+      "value": "DL1"
+    },
+    {
+      "type": "wait",
+      "milliseconds": 250
+    },
+    {
+      "type": "screenshot",
+      "path": "main-window-search.png"
+    },
+    {
+      "type": "drag",
+      "name": "UTC",
+      "controlType": "HeaderItem",
+      "relativeX": 0.98,
+      "relativeY": 0.5,
+      "deltaX": 40,
+      "deltaY": 0
+    },
+    {
+      "type": "wait",
+      "milliseconds": 250
+    },
+    {
+      "type": "screenshot",
+      "path": "main-window-resized-column.png"
+    },
+    {
+      "type": "click",
+      "automationId": "ColumnsButton"
+    },
+    {
+      "type": "wait",
+      "milliseconds": 200
+    },
+    {
+      "type": "screenshot",
+      "path": "main-window-column-chooser.png"
+    },
+    {
+      "type": "click",
+      "automationId": "SortButton"
+    },
+    {
+      "type": "wait",
+      "milliseconds": 200
+    },
+    {
+      "type": "screenshot",
+      "path": "main-window-sort-chooser.png"
+    },
+    {
+      "type": "screenshot",
+      "path": "main-window-finish.png"
+    }
+  ]
+}

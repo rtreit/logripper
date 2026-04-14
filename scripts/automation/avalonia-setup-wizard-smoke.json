@@ -1,0 +1,102 @@
+{
+  "inspectSurface": "Wizard",
+  "window": {
+    "title": "QsoRipper",
+    "x": 80,
+    "y": 80,
+    "width": 1280,
+    "height": 760
+  },
+  "actions": [
+    {
+      "type": "wait",
+      "milliseconds": 800
+    },
+    {
+      "type": "dump-tree",
+      "path": "wizard-tree.json"
+    },
+    {
+      "type": "screenshot",
+      "path": "wizard-start.png"
+    },
+    {
+      "type": "set-text",
+      "automationId": "WizardLogFolderBox",
+      "value": "C:\\Users\\Public\\QsoRipper"
+    },
+    {
+      "type": "set-text",
+      "automationId": "WizardLogNameBox",
+      "value": "automation-demo"
+    },
+    {
+      "type": "click",
+      "automationId": "WizardNextButton"
+    },
+    {
+      "type": "wait",
+      "milliseconds": 200
+    },
+    {
+      "type": "set-text",
+      "automationId": "WizardProfileNameBox",
+      "value": "Automation"
+    },
+    {
+      "type": "set-text",
+      "automationId": "WizardStationCallsignBox",
+      "value": "K7AUT"
+    },
+    {
+      "type": "set-text",
+      "automationId": "WizardOperatorCallsignBox",
+      "value": "K7AUT"
+    },
+    {
+      "type": "set-text",
+      "automationId": "WizardGridSquareBox",
+      "value": "CN87"
+    },
+    {
+      "type": "click",
+      "automationId": "WizardNextButton"
+    },
+    {
+      "type": "wait",
+      "milliseconds": 200
+    },
+    {
+      "type": "click",
+      "automationId": "WizardSkipButton"
+    },
+    {
+      "type": "wait",
+      "milliseconds": 200
+    },
+    {
+      "type": "click",
+      "automationId": "WizardSkipButton"
+    },
+    {
+      "type": "wait",
+      "milliseconds": 200
+    },
+    {
+      "type": "screenshot",
+      "path": "wizard-review.png"
+    },
+    {
+      "type": "click",
+      "automationId": "WizardNextButton"
+    },
+    {
+      "type": "wait",
+      "milliseconds": 500
+    },
+    {
+      "type": "screenshot",
+      "path": "wizard-finish.png"
+    }
+  ]
+}

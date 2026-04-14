@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Linq;
+using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
@@ -24,6 +25,7 @@ internal sealed partial class MainWindow : Window
     private bool _gridLayoutApplied;
     private bool _menuAccessKeysPrimed;
     private Dictionary<RecentQsoGridColumn, DataGridColumn> _columnMap = [];
+    internal bool IsInspectionMode { get; set; }
 
     public MainWindow()
     {
@@ -43,11 +45,14 @@ internal sealed partial class MainWindow : Window
     {
         base.OnOpened(e);
         ClampToCurrentScreen();
-        PrimeMenuAccessKeys();
-        ApplyPersistedGridLayout();
-        if (DataContext is MainWindowViewModel vm)
+        if (!IsInspectionMode)
         {
-            await vm.CheckFirstRunAsync();
+            PrimeMenuAccessKeys();
+            ApplyPersistedGridLayout();
+            if (DataContext is MainWindowViewModel vm)
+            {
+                await vm.CheckFirstRunAsync();
+            }
         }
     }
 
@@ -243,7 +248,10 @@ internal sealed partial class MainWindow : Window
             _viewModel.SettingsRequested += OnSettingsRequested;
             SubscribeColumnOptions(_viewModel.RecentQsos);
             ApplyDefaultColumnVisibility();
-            ApplyPersistedGridLayout();
+            if (!IsInspectionMode)
+            {
+                ApplyPersistedGridLayout();
+            }
         }
     }
 
@@ -254,19 +262,7 @@ internal sealed partial class MainWindow : Window
 
     private async void OnSettingsRequested(object? sender, EventArgs e)
     {
-        if (_viewModel is null)
-        {
-            return;
-        }
-
-        _viewModel.IsSettingsOpen = true;
-        var settingsVm = _viewModel.CreateSettingsViewModel();
-        await settingsVm.LoadAsync();
-
-        var dialog = new SettingsView { DataContext = settingsVm };
-        await dialog.ShowDialog(this);
-
-        await _viewModel.OnSettingsClosedAsync(settingsVm.DidSave);
+        await ShowSettingsDialogAsync();
     }
 
     private void FocusRecentQsoSearchBox()
@@ -285,6 +281,21 @@ internal sealed partial class MainWindow : Window
             DispatcherPriority.Input);
     }
 
+    private async Task ShowSettingsDialogAsync()
+    {
+        if (_viewModel is null || _viewModel.IsWizardOpen || _viewModel.IsSettingsOpen)
+        {
+            return;
+        }
+
+        _viewModel.IsSettingsOpen = true;
+        var settingsVm = _viewModel.CreateSettingsViewModel();
+        await settingsVm.LoadAsync();
+
+        var dialog = new SettingsView { DataContext = settingsVm };
+        await dialog.ShowDialog(this);
+        await _viewModel.OnSettingsClosedAsync(settingsVm.DidSave);
+    }
     private void CommitAndSaveGridEdits()
     {
         if (_recentQsoGrid is null || _viewModel is null)
@@ -432,7 +443,7 @@ internal sealed partial class MainWindow : Window
 
     private void ApplyPersistedGridLayout()
     {
-        if (_gridLayoutApplied || _viewModel is null || _recentQsoGrid is null || _columnMap.Count == 0)
+        if (IsInspectionMode || _gridLayoutApplied || _viewModel is null || _recentQsoGrid is null || _columnMap.Count == 0)
         {
             return;
         }
@@ -477,7 +488,7 @@ internal sealed partial class MainWindow : Window
 
     private void SaveGridLayout()
     {
-        if (_viewModel is null || _columnMap.Count == 0)
+        if (IsInspectionMode || _viewModel is null || _columnMap.Count == 0)
         {
             return;
         }

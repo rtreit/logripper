@@ -1,0 +1,18 @@
+{
+  "name": "qsoripper-ux-inspection",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "ux:capture:web": "tsx scripts/capture-web.ts",
+    "ux:diff:web": "tsx scripts/capture-web-diff.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^24.6.0",
+    "@types/pngjs": "^6.0.5",
+    "pixelmatch": "^7.1.0",
+    "playwright": "^1.55.0",
+    "pngjs": "^7.0.0",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3"
+  }
+}

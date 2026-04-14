@@ -1,0 +1,49 @@
+Summary
+  Generated on: 4/14/2026 - 2:42:52 PM
+  Coverage date: 4/14/2026 - 2:42:31 PM - 4/14/2026 - 2:42:39 PM
+  Parser: MultiReport (3x Cobertura)
+  Assemblies: 2
+  Classes: 25
+  Files: 25
+  Line coverage: 57.3%
+  Covered lines: 1560
+  Uncovered lines: 1160
+  Coverable lines: 2720
+  Total lines: 4897
+  Branch coverage: 37.3% (588 of 1573)
+  Covered branches: 588
+  Total branches: 1573
+  Method coverage: 71.4% (188 of 263)
+  Full method coverage: 54.7% (144 of 263)
+  Covered methods: 188
+  Fully covered methods: 144
+  Total methods: 263
+
+QsoRipper.Cli                                               57.6%
+  QsoRipper.Cli.CliArgumentParser                           93.5%
+  QsoRipper.Cli.CliArguments                                 100%
+  QsoRipper.Cli.CliCommandMetadata                           100%
+  QsoRipper.Cli.CliEndpointValidator                         100%
+  QsoRipper.Cli.CliHelpText                                 46.8%
+  QsoRipper.Cli.EnumHelpers                                 31.8%
+  QsoRipper.Cli.JsonOutput                                   100%
+  QsoRipper.Cli.TimeParser                                  82.7%
+
+QsoRipper.Gui                                               57.2%
+  QsoRipper.Gui.Inspection.UxCaptureFixture                 90.9%
+  QsoRipper.Gui.Inspection.UxCaptureOptions                 76.1%
+  QsoRipper.Gui.Inspection.UxCaptureRunner                     0%
+  QsoRipper.Gui.Inspection.UxFixtureEngineClient            69.9%
+  QsoRipper.Gui.Inspection.UxInspectionOptions              74.3%
+  QsoRipper.Gui.Inspection.UxInspectionRunner                  0%
+  QsoRipper.Gui.Program                                        0%
+  QsoRipper.Gui.Services.EngineGrpcService                     0%
+  QsoRipper.Gui.Utilities.ProtoEnumDisplay                  86.8%
+  QsoRipper.Gui.Utilities.RecentQsoGridLayoutStore          73.6%
+  QsoRipper.Gui.Utilities.ResponsiveWindowLayout            82.3%
+  QsoRipper.Gui.ViewModels.MainWindowViewModel                 0%
+  QsoRipper.Gui.ViewModels.QrzLogbookStepViewModel             0%
+  QsoRipper.Gui.ViewModels.RecentQsoColumnOptionViewModel    100%
+  QsoRipper.Gui.ViewModels.RecentQsoItemViewModel           74.3%
+  QsoRipper.Gui.ViewModels.RecentQsoListViewModel           62.4%
+  QsoRipper.Gui.ViewModels.SettingsViewModel                   0%

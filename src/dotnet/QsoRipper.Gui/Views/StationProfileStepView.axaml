@@ -17,20 +17,28 @@
                    TextWrapping="Wrap" />
 
         <TextBlock Text="Profile Name (required):" FontWeight="SemiBold" />
-        <TextBox Text="{Binding ProfileName, Mode=TwoWay}"
-                 PlaceholderText="e.g. Home, Portable, Contest" />
+        <TextBox x:Name="WizardProfileNameBox"
+                 AutomationProperties.AutomationId="WizardProfileNameBox"
+                  Text="{Binding ProfileName, Mode=TwoWay}"
+                  PlaceholderText="e.g. Home, Portable, Contest" />
 
         <TextBlock Text="Station Callsign (required):" FontWeight="SemiBold" />
-        <TextBox Text="{Binding Callsign, Mode=TwoWay}"
-                 PlaceholderText="e.g. W1AW" />
+        <TextBox x:Name="WizardStationCallsignBox"
+                 AutomationProperties.AutomationId="WizardStationCallsignBox"
+                  Text="{Binding Callsign, Mode=TwoWay}"
+                  PlaceholderText="e.g. W1AW" />
 
         <TextBlock Text="Operator Callsign (required):" FontWeight="SemiBold" />
-        <TextBox Text="{Binding OperatorCallsign, Mode=TwoWay}"
-                 PlaceholderText="e.g. W1AW (or personal call if different)" />
+        <TextBox x:Name="WizardOperatorCallsignBox"
+                 AutomationProperties.AutomationId="WizardOperatorCallsignBox"
+                  Text="{Binding OperatorCallsign, Mode=TwoWay}"
+                  PlaceholderText="e.g. W1AW (or personal call if different)" />
 
         <TextBlock Text="Operator Name:" />
-        <TextBox Text="{Binding OperatorName, Mode=TwoWay}"
-                 PlaceholderText="e.g. John Smith" />
+        <TextBox x:Name="WizardOperatorNameBox"
+                 AutomationProperties.AutomationId="WizardOperatorNameBox"
+                  Text="{Binding OperatorName, Mode=TwoWay}"
+                  PlaceholderText="e.g. John Smith" />
       </StackPanel>
     </Border>
 
@@ -50,28 +58,28 @@
         <Grid ColumnDefinitions="*,12,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto">
           <TextBlock Grid.Row="0" Grid.Column="0" Text="Grid Square (required):" FontWeight="SemiBold" />
           <TextBlock Grid.Row="0" Grid.Column="2" Text="Country:" />
-          <TextBox Grid.Row="1" Grid.Column="0" Text="{Binding GridSquare, Mode=TwoWay}" PlaceholderText="e.g. FN31pr" />
-          <TextBox Grid.Row="1" Grid.Column="2" Text="{Binding Country, Mode=TwoWay}" PlaceholderText="e.g. United States" />
+          <TextBox x:Name="WizardGridSquareBox" AutomationProperties.AutomationId="WizardGridSquareBox" Grid.Row="1" Grid.Column="0" Text="{Binding GridSquare, Mode=TwoWay}" PlaceholderText="e.g. FN31pr" />
+          <TextBox x:Name="WizardCountryBox" AutomationProperties.AutomationId="WizardCountryBox" Grid.Row="1" Grid.Column="2" Text="{Binding Country, Mode=TwoWay}" PlaceholderText="e.g. United States" />
 
           <TextBlock Grid.Row="2" Grid.Column="0" Text="State:" Margin="0,6,0,0" />
           <TextBlock Grid.Row="2" Grid.Column="2" Text="County:" Margin="0,6,0,0" />
-          <TextBox Grid.Row="3" Grid.Column="0" Text="{Binding State, Mode=TwoWay}" PlaceholderText="e.g. CT" />
-          <TextBox Grid.Row="3" Grid.Column="2" Text="{Binding County, Mode=TwoWay}" PlaceholderText="e.g. Hartford" />
+          <TextBox x:Name="WizardStateBox" AutomationProperties.AutomationId="WizardStateBox" Grid.Row="3" Grid.Column="0" Text="{Binding State, Mode=TwoWay}" PlaceholderText="e.g. CT" />
+          <TextBox x:Name="WizardCountyBox" AutomationProperties.AutomationId="WizardCountyBox" Grid.Row="3" Grid.Column="2" Text="{Binding County, Mode=TwoWay}" PlaceholderText="e.g. Hartford" />
 
           <TextBlock Grid.Row="4" Grid.Column="0" Text="ARRL Section:" Margin="0,6,0,0" />
           <TextBlock Grid.Row="4" Grid.Column="2" Text="DXCC:" Margin="0,6,0,0" />
-          <TextBox Grid.Row="5" Grid.Column="0" Text="{Binding ArrlSection, Mode=TwoWay}" PlaceholderText="e.g. CT" />
-          <TextBox Grid.Row="5" Grid.Column="2" Text="{Binding Dxcc, Mode=TwoWay}" PlaceholderText="e.g. 291" />
+          <TextBox x:Name="WizardArrlSectionBox" AutomationProperties.AutomationId="WizardArrlSectionBox" Grid.Row="5" Grid.Column="0" Text="{Binding ArrlSection, Mode=TwoWay}" PlaceholderText="e.g. CT" />
+          <TextBox x:Name="WizardDxccBox" AutomationProperties.AutomationId="WizardDxccBox" Grid.Row="5" Grid.Column="2" Text="{Binding Dxcc, Mode=TwoWay}" PlaceholderText="e.g. 291" />
 
           <TextBlock Grid.Row="6" Grid.Column="0" Text="CQ Zone:" Margin="0,6,0,0" />
           <TextBlock Grid.Row="6" Grid.Column="2" Text="ITU Zone:" Margin="0,6,0,0" />
-          <TextBox Grid.Row="7" Grid.Column="0" Text="{Binding CqZone, Mode=TwoWay}" PlaceholderText="e.g. 5" />
-          <TextBox Grid.Row="7" Grid.Column="2" Text="{Binding ItuZone, Mode=TwoWay}" PlaceholderText="e.g. 8" />
+          <TextBox x:Name="WizardCqZoneBox" AutomationProperties.AutomationId="WizardCqZoneBox" Grid.Row="7" Grid.Column="0" Text="{Binding CqZone, Mode=TwoWay}" PlaceholderText="e.g. 5" />
+          <TextBox x:Name="WizardItuZoneBox" AutomationProperties.AutomationId="WizardItuZoneBox" Grid.Row="7" Grid.Column="2" Text="{Binding ItuZone, Mode=TwoWay}" PlaceholderText="e.g. 8" />
 
           <TextBlock Grid.Row="8" Grid.Column="0" Text="Latitude:" Margin="0,6,0,0" />
           <TextBlock Grid.Row="8" Grid.Column="2" Text="Longitude:" Margin="0,6,0,0" />
-          <TextBox Grid.Row="9" Grid.Column="0" Text="{Binding Latitude, Mode=TwoWay}" PlaceholderText="e.g. 41.76" />
-          <TextBox Grid.Row="9" Grid.Column="2" Text="{Binding Longitude, Mode=TwoWay}" PlaceholderText="e.g. -72.68" />
+          <TextBox x:Name="WizardLatitudeBox" AutomationProperties.AutomationId="WizardLatitudeBox" Grid.Row="9" Grid.Column="0" Text="{Binding Latitude, Mode=TwoWay}" PlaceholderText="e.g. 41.76" />
+          <TextBox x:Name="WizardLongitudeBox" AutomationProperties.AutomationId="WizardLongitudeBox" Grid.Row="9" Grid.Column="2" Text="{Binding Longitude, Mode=TwoWay}" PlaceholderText="e.g. -72.68" />
         </Grid>
       </StackPanel>
     </Border>

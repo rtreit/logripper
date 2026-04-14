@@ -4,6 +4,7 @@
         xmlns:v="using:QsoRipper.Gui.Views"
         x:Class="QsoRipper.Gui.Views.MainWindow"
         x:DataType="vm:MainWindowViewModel"
+        AutomationProperties.AutomationId="MainWindow"
         Title="QsoRipper" Width="1280" Height="760"
         MinWidth="1024" MinHeight="640"
         WindowStartupLocation="CenterScreen"
@@ -59,12 +60,18 @@
   </Window.Styles>
 
   <DockPanel>
-    <Menu DockPanel.Dock="Top">
-      <MenuItem x:Name="FileMenuItem" Header="_File">
-        <MenuItem Header="_Settings" InputGesture="Ctrl+OemComma"
-                  Command="{Binding OpenSettingsCommand}" />
-        <MenuItem Header="_Save Edits" InputGesture="Ctrl+S"
-                  Command="{Binding RecentQsos.SaveEditsCommand}" />
+      <Menu DockPanel.Dock="Top">
+        <MenuItem x:Name="FileMenuItem"
+                  AutomationProperties.AutomationId="FileMenuItem"
+                  Header="_File">
+          <MenuItem x:Name="SettingsMenuItem"
+                    AutomationProperties.AutomationId="SettingsMenuItem"
+                    Header="_Settings" InputGesture="Ctrl+OemComma"
+                    Command="{Binding OpenSettingsCommand}" />
+          <MenuItem x:Name="SaveEditsMenuItem"
+                    AutomationProperties.AutomationId="SaveEditsMenuItem"
+                    Header="_Save Edits" InputGesture="Ctrl+S"
+                    Command="{Binding RecentQsos.SaveEditsCommand}" />
         <Separator />
         <MenuItem Header="E_xit" InputGesture="Alt+X" Command="{Binding ExitCommand}" />
       </MenuItem>
@@ -126,6 +133,7 @@
                 VerticalAlignment="Center">
              <TextBox x:Name="RecentQsoSearchBox"
                       Grid.Column="0"
+                      AutomationProperties.AutomationId="RecentQsoSearchBox"
                       Height="30"
                       MinWidth="200"
                       MaxWidth="400"
@@ -158,7 +166,9 @@
                       Orientation="Horizontal"
                       Spacing="10"
                       VerticalAlignment="Center">
-            <Button Content="Setup"
+            <Button x:Name="SetupButton"
+                    AutomationProperties.AutomationId="SetupButton"
+                    Content="Setup"
                     Command="{Binding OpenWizardCommand}"
                     Classes="accent"
                     MinWidth="62"
@@ -166,7 +176,9 @@
                     IsVisible="{Binding IsSetupIncomplete}" />
             <TextBlock Classes="commandCaption"
                        Text="{Binding RecentQsos.RefreshIndicatorText}" />
-            <Button Content="⟳ Sync"
+            <Button x:Name="SyncNowButton"
+                    AutomationProperties.AutomationId="SyncNowButton"
+                    Content="⟳ Sync"
                     Command="{Binding SyncNowCommand}"
                     Height="28"
                     MinWidth="54"
@@ -180,11 +192,15 @@
                        VerticalAlignment="Center" />
             <TextBlock Classes="commandCaption"
                        Text="{Binding CurrentUtcDate}" />
-            <Button Content="Sort"
+            <Button x:Name="SortButton"
+                    AutomationProperties.AutomationId="SortButton"
+                    Content="Sort"
                     Command="{Binding ToggleSortChooserCommand}"
                     Height="28"
                     MinWidth="54" />
-            <Button Content="Cols"
+            <Button x:Name="ColumnsButton"
+                    AutomationProperties.AutomationId="ColumnsButton"
+                    Content="Cols"
                     Command="{Binding ToggleColumnChooserCommand}"
                     Height="28"
                     MinWidth="54" />
@@ -196,6 +212,7 @@
             <Grid Grid.Column="0">
               <DataGrid x:Name="RecentQsoGrid"
                          Margin="8,2,8,0"
+                         AutomationProperties.AutomationId="RecentQsoGrid"
                          RowHeight="{Binding RecentQsos.GridRowHeight}"
                          ColumnHeaderHeight="{Binding RecentQsos.GridHeaderHeight}"
                          FontSize="{Binding RecentQsos.GridFontSize}"
@@ -408,7 +425,9 @@
               </Border>
             </Grid>
 
-            <Border Grid.Column="1"
+            <Border x:Name="InspectorPanel"
+                    AutomationProperties.AutomationId="InspectorPanel"
+                    Grid.Column="1"
                     Width="320"
                     Padding="12,10"
                     BorderBrush="{DynamicResource SystemControlForegroundBaseMediumLowBrush}"
@@ -470,7 +489,9 @@
             </Border>
           </Grid>
 
-          <Border HorizontalAlignment="Right"
+          <Border x:Name="SortChooserPanel"
+                  AutomationProperties.AutomationId="SortChooserPanel"
+                  HorizontalAlignment="Right"
                   VerticalAlignment="Top"
                   Margin="0,8,14,0"
                   Padding="10,8"
@@ -515,7 +536,9 @@
             </StackPanel>
           </Border>
 
-          <Border HorizontalAlignment="Right"
+          <Border x:Name="ColumnChooserPanel"
+                  AutomationProperties.AutomationId="ColumnChooserPanel"
+                  HorizontalAlignment="Right"
                   VerticalAlignment="Top"
                   Margin="0,8,150,0"
                   Padding="10,8"
@@ -582,14 +605,18 @@
         </Border>
       </Grid>
 
-      <Border IsVisible="{Binding IsWizardOpen}"
+      <Border x:Name="SetupWizardOverlay"
+              AutomationProperties.AutomationId="SetupWizardOverlay"
+              IsVisible="{Binding IsWizardOpen}"
               Background="#80000000">
         <Border Background="{DynamicResource SystemControlBackgroundAltHighBrush}"
                 CornerRadius="8"
                 Margin="40,24"
                 BoxShadow="0 8 32 0 #40000000"
                 ClipToBounds="True">
-          <v:SetupWizardView DataContext="{Binding WizardViewModel}" />
+          <v:SetupWizardView x:Name="SetupWizardView"
+                             AutomationProperties.AutomationId="SetupWizardView"
+                             DataContext="{Binding WizardViewModel}" />
         </Border>
       </Border>
     </Panel>

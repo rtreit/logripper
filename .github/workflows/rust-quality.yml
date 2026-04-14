@@ -11,6 +11,12 @@ on:
       - "src/rust/**"
       - "proto/**"
   pull_request:
+    paths:
+      - ".github/workflows/rust-quality.yml"
+      - "rust-toolchain.toml"
+      - "src/c/**"
+      - "src/rust/**"
+      - "proto/**"
 
 permissions:
   contents: read

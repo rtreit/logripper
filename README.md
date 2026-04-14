@@ -87,6 +87,25 @@ sudo apt install dotnet-sdk-10.0
 
 The repository pins SDK `10.0.201` in `global.json`.
 
+**Node.js + npm** -- required for the repo-local Playwright tooling and for bootstrapping the local Terminalizer runtime used by terminal capture:
+
+```
+# Windows
+winget install OpenJS.NodeJS.LTS
+
+# Linux (Debian/Ubuntu)
+sudo apt install nodejs npm
+```
+
+Node 22 LTS is the safest default for local UI automation work. A newer globally installed Node is fine as long as `npm` is available; `capture-tui.ps1` bootstraps its own repo-local Node 22 runtime for Terminalizer.
+
+**PowerShell 7** -- required for the repo automation scripts under `scripts/`, including Avalonia and terminal capture:
+
+```powershell
+# Windows
+winget install Microsoft.PowerShell
+```
+
 **Protocol Buffers compiler** -- needed to generate gRPC code from proto files:
 
 ```
@@ -134,6 +153,47 @@ cargo test
 
 This compiles the C libraries via FFI, generates Rust types from the proto files, and builds the engine. All tests (unit + integration) run with `cargo test`.
 
+### UI inspection and automation setup
+
+The repo now includes three developer-facing UX inspection lanes:
+
+- **Web** screenshots and diffs with Playwright
+- **Avalonia desktop** deterministic capture plus Windows UI automation
+- **Terminal** workflow capture to GIF/transcript via a repo-local Terminalizer runtime (**Windows-only** today)
+
+One-time setup after cloning:
+
+```powershell
+npm install
+npx playwright install chromium
+```
+
+- `npm install` restores the root TypeScript and Playwright tooling used by `scripts\capture-web.ts` and `scripts\capture-web-diff.ts`.
+- `npx playwright install chromium` installs the browser binary used for web captures.
+- `scripts\capture-tui.ps1` is currently **Windows-only**. It does **not** require a global Terminalizer install; on first run it bootstraps a repo-local Node 22 + Terminalizer runtime under `tools\terminalizer-bootstrap\` and `tools\terminalizer-runtime\`.
+- `scripts\drive-avalonia.ps1` is **Windows-only** and needs an interactive desktop session because it uses Windows UI Automation APIs. It does not require WinAppDriver.
+
+Common entry points:
+
+```powershell
+# Web capture / diff
+npm run ux:capture:web -- --scenario debughost-home --launch-debughost
+npm run ux:diff:web -- --scenario debughost-home --launch-debughost
+
+# Deterministic Avalonia capture
+.\scripts\capture-avalonia.ps1 -Scenario main-window
+
+# Windows UI automation against the live Avalonia window
+.\scripts\drive-avalonia.ps1 -ActionScript .\scripts\automation\avalonia-main-window-smoke.json
+
+# Terminal workflow capture (Windows-only today)
+.\scripts\capture-tui.ps1 -Scenario cli-help
+```
+
+Artifacts are written under `artifacts\ux\current\`, `artifacts\ux\baseline\`, and `artifacts\ux\diff\`.
+
+For the full dependency matrix and per-lane setup notes, see `docs\development\ui-inspection.md`.
+
 **Runnable gRPC server host:**
 
 ```
@@ -175,6 +235,20 @@ If you want the engine to stay running in the background while you log QSOs from
 ```
 
 `start-qsoripper.ps1` builds `qsoripper-server`, imports `.env`, starts the engine in the background from the repository root, respects `QSORIPPER_CONFIG_PATH` and `QSORIPPER_SQLITE_PATH` unless you override them with parameters, and writes process state plus stdout/stderr logs under `artifacts\run\`.
+
+### Avalonia GUI automation
+
+For repeatable desktop UX inspection, the Avalonia GUI now supports a fixture-backed live inspection mode plus a Windows automation driver. The driver builds the GUI into a per-run output folder under `artifacts\ux\automation-bin\`, launches it with deterministic fixture data, performs scripted UI actions, and saves screenshots plus UI tree dumps under `artifacts\ux\current\`.
+
+The inspection harness supports `MainWindow`, `Settings`, and `Wizard` surfaces. Scenarios can select a surface with `inspectSurface` in the action JSON, or you can override it with `-Surface` on `drive-avalonia.ps1`.
+
+```powershell
+.\scripts\drive-avalonia.ps1 -ActionScript .\scripts\automation\avalonia-main-window-smoke.json
+.\scripts\drive-avalonia.ps1 -ActionScript .\scripts\automation\avalonia-settings-smoke.json
+.\scripts\drive-avalonia.ps1 -Fixture .\scripts\fixtures\ux-setup-wizard.fixture.json -ActionScript .\scripts\automation\avalonia-setup-wizard-smoke.json
+```
+
+Use `-KeepOpen` when you want the fixture-backed window to stay open after the scripted steps finish.
 
 ### Local engine configuration
 

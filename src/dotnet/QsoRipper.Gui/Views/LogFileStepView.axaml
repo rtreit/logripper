@@ -10,9 +10,12 @@
     <DockPanel>
       <Button DockPanel.Dock="Right" Content="Browse…"
               Margin="8,0,0,0"
-              x:Name="BrowseButton" />
-      <TextBox Text="{Binding LogFolder, Mode=TwoWay}"
-               PlaceholderText="e.g. C:\Users\you\QsoRipper" />
+              x:Name="BrowseButton"
+              AutomationProperties.AutomationId="BrowseButton" />
+      <TextBox x:Name="WizardLogFolderBox"
+               AutomationProperties.AutomationId="WizardLogFolderBox"
+                Text="{Binding LogFolder, Mode=TwoWay}"
+                PlaceholderText="e.g. C:\Users\you\QsoRipper" />
     </DockPanel>
 
     <StackPanel IsVisible="{Binding DirectoryMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
@@ -20,7 +23,9 @@
       <TextBlock Text="{Binding DirectoryMessage}"
                  TextWrapping="Wrap" FontSize="12"
                  Foreground="{Binding OfferCreateDirectory, Converter={x:Static v:LogFileStepView.DirectoryColor}}" />
-      <Button Content="Create Directory"
+      <Button x:Name="WizardCreateDirectoryButton"
+              AutomationProperties.AutomationId="WizardCreateDirectoryButton"
+              Content="Create Directory"
               Command="{Binding CreateDirectoryCommand}"
               IsVisible="{Binding OfferCreateDirectory}"
               Classes="accent" />
@@ -30,7 +35,9 @@
     <DockPanel>
       <TextBlock DockPanel.Dock="Right" Text=".db"
                  VerticalAlignment="Center" Opacity="0.5" Margin="4,0,0,0" />
-      <TextBox Text="{Binding LogFileName, Mode=TwoWay}"
+      <TextBox x:Name="WizardLogNameBox"
+               AutomationProperties.AutomationId="WizardLogNameBox"
+               Text="{Binding LogFileName, Mode=TwoWay}"
                PlaceholderText="qsoripper" />
     </DockPanel>
 

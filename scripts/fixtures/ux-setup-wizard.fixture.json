@@ -1,0 +1,13 @@
+{
+  "activeLogFilePath": "C:\\Users\\Public\\QsoRipper\\qsoripper.db",
+  "profileName": "",
+  "stationCallsign": "",
+  "operatorCallsign": "",
+  "operatorName": "",
+  "gridSquare": "",
+  "setupComplete": false,
+  "isFirstRun": true,
+  "autoSyncEnabled": true,
+  "hasQrzXmlPassword": false,
+  "hasQrzLogbookApiKey": false
+}

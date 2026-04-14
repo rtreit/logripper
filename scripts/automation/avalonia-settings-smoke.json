@@ -1,0 +1,98 @@
+{
+  "inspectSurface": "Settings",
+  "window": {
+    "title": "Settings",
+    "x": 120,
+    "y": 80,
+    "width": 640,
+    "height": 820
+  },
+  "actions": [
+    {
+      "type": "wait",
+      "milliseconds": 600
+    },
+    {
+      "type": "dump-tree",
+      "path": "settings-tree.json"
+    },
+    {
+      "type": "screenshot",
+      "path": "settings-start.png"
+    },
+    {
+      "type": "set-text",
+      "automationId": "SettingsCallsignBox",
+      "value": "W1AW"
+    },
+    {
+      "type": "set-text",
+      "automationId": "SettingsGridSquareBox",
+      "value": "FN31"
+    },
+    {
+      "type": "expand",
+      "automationId": "SettingsMoreStationFieldsExpander"
+    },
+    {
+      "type": "set-text",
+      "automationId": "SettingsDxccBox",
+      "value": "291"
+    },
+    {
+      "type": "set-text",
+      "automationId": "SettingsQrzXmlPasswordBox",
+      "value": "demo-password"
+    },
+    {
+      "type": "click",
+      "automationId": "SettingsTestQrzXmlButton"
+    },
+    {
+      "type": "wait",
+      "milliseconds": 250
+    },
+    {
+      "type": "set-text",
+      "automationId": "SettingsQrzLogbookApiKeyBox",
+      "value": "demo-api-key"
+    },
+    {
+      "type": "click",
+      "automationId": "SettingsTestLogbookButton"
+    },
+    {
+      "type": "wait",
+      "milliseconds": 250
+    },
+    {
+      "type": "toggle",
+      "automationId": "SettingsAutoSyncCheckBox"
+    },
+    {
+      "type": "wait",
+      "milliseconds": 150
+    },
+    {
+      "type": "select",
+      "automationId": "SettingsConflictPolicyComboBox",
+      "itemName": "Flag for Review"
+    },
+    {
+      "type": "wait",
+      "milliseconds": 150
+    },
+    {
+      "type": "screenshot",
+      "path": "settings-edited.png"
+    },
+    {
+      "type": "click",
+      "automationId": "SettingsSaveButton"
+    },
+    {
+      "type": "wait",
+      "milliseconds": 500
+    }
+  ]
+}

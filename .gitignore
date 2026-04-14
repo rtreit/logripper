@@ -21,6 +21,8 @@ bld/
 project.lock.json
 project.fragment.lock.json
 artifacts/
+tools/terminalizer-bootstrap/
+tools/terminalizer-runtime/
 
 # ASP.NET Scaffolding
 ScaffoldingReadMe.txt
@@ -51,6 +53,7 @@ nunit-*.xml
 .env
 .env.*
 !.env.example
+node_modules/
 
 # Local SQLite runtime files
 qsoripper.db*

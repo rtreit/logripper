@@ -3,7 +3,9 @@
              xmlns:vm="using:QsoRipper.Gui.ViewModels"
              xmlns:v="using:QsoRipper.Gui.Views"
              x:Class="QsoRipper.Gui.Views.SetupWizardView"
-             x:DataType="vm:SetupWizardViewModel">
+             x:Name="SetupWizardRoot"
+             x:DataType="vm:SetupWizardViewModel"
+             AutomationProperties.AutomationId="SetupWizardRoot">
 
   <DockPanel>
     <!-- Footer: step label + buttons -->
@@ -21,15 +23,23 @@
                     Orientation="Horizontal"
                     Spacing="8"
                     HorizontalAlignment="Right">
-          <Button Content="Cancel"
+          <Button x:Name="WizardCancelButton"
+                  AutomationProperties.AutomationId="WizardCancelButton"
+                  Content="Cancel"
                   Command="{Binding CancelCommand}" />
-          <Button Content="Back"
+          <Button x:Name="WizardBackButton"
+                  AutomationProperties.AutomationId="WizardBackButton"
+                  Content="Back"
                   Command="{Binding BackCommand}"
                   IsVisible="{Binding CanGoBack}" />
-          <Button Content="Skip"
+          <Button x:Name="WizardSkipButton"
+                  AutomationProperties.AutomationId="WizardSkipButton"
+                  Content="Skip"
                   Command="{Binding SkipCommand}"
                   IsVisible="{Binding CurrentStep.IsSkippable}" />
-          <Button Content="{Binding IsLastStep, Converter={x:Static v:SetupWizardView.NextOrSave}}"
+          <Button x:Name="WizardNextButton"
+                  AutomationProperties.AutomationId="WizardNextButton"
+                  Content="{Binding IsLastStep, Converter={x:Static v:SetupWizardView.NextOrSave}}"
                   Command="{Binding NextCommand}"
                   Classes="accent"
                   IsEnabled="{Binding !IsBusy}" />
@@ -74,7 +84,9 @@
                      Opacity="0.7" TextWrapping="Wrap" />
 
           <!-- Dynamic step content -->
-          <ContentControl Content="{Binding CurrentStep}">
+          <ContentControl x:Name="WizardStepContent"
+                          AutomationProperties.AutomationId="WizardStepContent"
+                          Content="{Binding CurrentStep}">
             <ContentControl.DataTemplates>
               <DataTemplate DataType="vm:LogFileStepViewModel">
                 <v:LogFileStepView />

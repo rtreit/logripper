@@ -94,7 +94,7 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
     /// <summary>
     /// Called after the main window has loaded. Checks first-run state.
     /// </summary>
-    public async Task CheckFirstRunAsync()
+    public async Task CheckFirstRunAsync(bool focusSearch = true)
     {
         try
         {
@@ -109,7 +109,7 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
             }
             else
             {
-                await ActivateDashboardAsync(focusSearch: true);
+                await ActivateDashboardAsync(focusSearch);
             }
         }
         catch (Grpc.Core.RpcException)

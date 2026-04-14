@@ -10,6 +10,11 @@ on:
       - "src/dotnet/**"
       - "proto/**"
   pull_request:
+    paths:
+      - ".github/workflows/dotnet-quality.yml"
+      - "global.json"
+      - "src/dotnet/**"
+      - "proto/**"
 
 permissions:
   contents: read
