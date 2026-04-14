@@ -5,7 +5,7 @@
       <DataCollector friendlyName="XPlat Code Coverage">
         <Configuration>
           <Format>cobertura</Format>
-          <Exclude>[*]QsoRipper.Domain.*,[*]QsoRipper.Services.*,[QsoRipper.DebugHost]*,[*]QsoRipper.Cli.Commands.*,[*]Program</Exclude>
+          <Exclude>[*]QsoRipper.Domain.*,[*]QsoRipper.Services.*,[QsoRipper.DebugHost]*,[*]QsoRipper.Cli.Commands.*,[*]Program,[*]QsoRipper.Gui.App,[*]QsoRipper.Gui.Views.*,[*]QsoRipper.Gui.ViewModels.LogFileStepViewModel,[*]QsoRipper.Gui.ViewModels.QrzStepViewModel,[*]QsoRipper.Gui.ViewModels.ReviewStepViewModel,[*]QsoRipper.Gui.ViewModels.SetupWizardViewModel,[*]QsoRipper.Gui.ViewModels.StationProfileStepViewModel,[*]QsoRipper.Gui.ViewModels.WizardStepViewModel</Exclude>
           <ExcludeByAttribute>GeneratedCodeAttribute,CompilerGeneratedAttribute</ExcludeByAttribute>
         </Configuration>
       </DataCollector>
