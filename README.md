@@ -160,6 +160,7 @@ The repo now includes three developer-facing UX inspection lanes:
 - **Web** screenshots and diffs with Playwright
 - **Avalonia desktop** deterministic capture plus Windows UI automation
 - **Terminal** workflow capture to GIF/transcript via a repo-local Terminalizer runtime (**Windows-only** today)
+- **Terminal/TUI live automation** through a repo-local PTY harness with JSON action scripts and screen snapshots
 
 One-time setup after cloning:
 
@@ -169,6 +170,7 @@ npx playwright install chromium
 ```
 
 - `npm install` restores the root TypeScript and Playwright tooling used by `scripts\capture-web.ts` and `scripts\capture-web-diff.ts`.
+- The same repo-local Node toolchain now also drives `scripts\drive-tui.ts`, browser-rendered terminal snapshots, and the sample terminal fixture used for TUI automation smoke coverage.
 - `npx playwright install chromium` installs the browser binary used for web captures.
 - `scripts\capture-tui.ps1` is currently **Windows-only**. It does **not** require a global Terminalizer install; on first run it bootstraps a repo-local Node 22 + Terminalizer runtime under `tools\terminalizer-bootstrap\` and `tools\terminalizer-runtime\`.
 - `scripts\drive-avalonia.ps1` is **Windows-only** and needs an interactive desktop session because it uses Windows UI Automation APIs. It does not require WinAppDriver.
@@ -185,6 +187,9 @@ npm run ux:diff:web -- --scenario debughost-home --launch-debughost
 
 # Windows UI automation against the live Avalonia window
 .\scripts\drive-avalonia.ps1 -ActionScript .\scripts\automation\avalonia-main-window-smoke.json
+
+# Cross-platform terminal/TUI automation against the sample fixture
+npm run ux:drive:tui -- --action-script .\scripts\automation\tui-sample-smoke.json
 
 # Terminal workflow capture (Windows-only today)
 .\scripts\capture-tui.ps1 -Scenario cli-help
@@ -249,6 +254,27 @@ The inspection harness supports `MainWindow`, `Settings`, and `Wizard` surfaces.
 ```
 
 Use `-KeepOpen` when you want the fixture-backed window to stay open after the scripted steps finish.
+
+### Terminal / TUI automation
+
+The repo also includes a first-class PTY-backed terminal automation lane for interactive text UIs. It complements `capture-tui.ps1`:
+
+- `scripts\drive-tui.ts` drives a live terminal session from a JSON action script.
+- It writes artifacts under `artifacts\ux\current\<scenario>\`.
+- Snapshot actions save:
+  - `*.screen.png` — rendered terminal image for the visible viewport
+  - `*.screen.txt` — visible viewport text
+  - `*.screen.json` — viewport metadata and lines
+  - `*.ansi.txt` — serialized ANSI screen content
+- Every run also writes `transcript.txt` plus `report.json`.
+
+Today's built-in fixture is `sample-tui`, a deterministic menu/filter/list/details demo used to validate the harness before a production TUI exists.
+
+```powershell
+npm run ux:drive:tui -- --action-script .\scripts\automation\tui-sample-smoke.json
+```
+
+Use `scripts\capture-tui.ps1` when you specifically want a rendered GIF. Use `scripts\drive-tui.ts` when you need repeatable interactive input, screen-state assertions, and step-by-step screen artifacts with rendered PNG snapshots.
 
 ### Local engine configuration
 

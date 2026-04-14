@@ -34,8 +34,9 @@ description: >-
 ### Terminal / TUI workflows
 
 - Script: `scripts/capture-tui.ps1` (Windows-only today)
+- Interactive script: `scripts/drive-tui.ts`
 - Today this targets scripted CLI/terminal workflows honestly; point it at a future TUI binary later
-- Best for terminal review artifacts, transcripts, and GIF capture through Terminalizer
+- Best for terminal review artifacts, rendered PNG snapshots, transcripts, GIF capture through Terminalizer, and PTY-driven screen-state automation
 
 ## Required Workflow
 
