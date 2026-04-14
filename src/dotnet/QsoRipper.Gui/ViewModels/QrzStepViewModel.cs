@@ -8,7 +8,7 @@ namespace QsoRipper.Gui.ViewModels;
 
 internal sealed partial class QrzStepViewModel : WizardStepViewModel
 {
-    private readonly EngineGrpcService _engine;
+    private readonly IEngineClient _engine;
 
     public override string Title => "QRZ (optional)";
     public override string Description =>
@@ -30,7 +30,7 @@ internal sealed partial class QrzStepViewModel : WizardStepViewModel
     [ObservableProperty]
     private bool _testSucceeded;
 
-    public QrzStepViewModel(EngineGrpcService engine)
+    public QrzStepViewModel(IEngineClient engine)
     {
         _engine = engine;
     }

@@ -2,8 +2,6 @@ using System;
 using Avalonia;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Markup.Xaml;
-using Grpc.Net.Client;
-using QsoRipper.Gui.Services;
 using QsoRipper.Gui.ViewModels;
 using QsoRipper.Gui.Views;
 
@@ -23,9 +21,7 @@ internal sealed partial class App : Application
             var endpoint = Environment.GetEnvironmentVariable("QSORIPPER_ENDPOINT")
                 ?? "http://127.0.0.1:50051";
 
-            var channel = GrpcChannel.ForAddress(endpoint);
-            var engineService = new EngineGrpcService(channel);
-            var mainVm = new MainWindowViewModel(engineService);
+            var mainVm = new MainWindowViewModel(endpoint);
 
             desktop.MainWindow = new MainWindow
             {

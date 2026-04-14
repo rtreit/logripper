@@ -1,7 +1,10 @@
 using System;
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
+using Grpc.Core;
 using Grpc.Net.Client;
+using QsoRipper.Domain;
 using QsoRipper.Services;
 
 namespace QsoRipper.Gui.Services;
@@ -9,15 +12,17 @@ namespace QsoRipper.Gui.Services;
 /// <summary>
 /// Thin wrapper over gRPC SetupService client for the GUI layer.
 /// </summary>
-internal sealed class EngineGrpcService : IDisposable
+internal sealed class EngineGrpcService : IEngineClient, IDisposable
 {
     private readonly GrpcChannel _channel;
     private readonly SetupService.SetupServiceClient _setupClient;
+    private readonly LogbookService.LogbookServiceClient _logbookClient;
 
     public EngineGrpcService(GrpcChannel channel)
     {
         _channel = channel;
         _setupClient = new SetupService.SetupServiceClient(channel);
+        _logbookClient = new LogbookService.LogbookServiceClient(channel);
     }
 
     public async Task<GetSetupWizardStateResponse> GetWizardStateAsync(CancellationToken ct = default)
@@ -58,6 +63,30 @@ internal sealed class EngineGrpcService : IDisposable
     {
         return await _setupClient.GetSetupStatusAsync(
             new GetSetupStatusRequest(), cancellationToken: ct);
+    }
+
+    public async Task<IReadOnlyList<QsoRecord>> ListRecentQsosAsync(int limit = 200, CancellationToken ct = default)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(limit);
+
+        var recentQsos = new List<QsoRecord>();
+        using var call = _logbookClient.ListQsos(
+            new ListQsosRequest
+            {
+                Limit = (uint)limit,
+                Sort = QsoSortOrder.NewestFirst
+            },
+            cancellationToken: ct);
+
+        await foreach (var response in call.ResponseStream.ReadAllAsync(ct))
+        {
+            if (response.Qso is not null)
+            {
+                recentQsos.Add(response.Qso);
+            }
+        }
+
+        return recentQsos;
     }
 
     public void Dispose()
