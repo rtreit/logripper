@@ -250,6 +250,6 @@ while ([DateTime]::UtcNow -lt $deadline) {
     Start-Sleep -Milliseconds 250
 }
 
-Stop-TrackedProcess -Pid $process.Id
+Stop-TrackedProcess -ProcessId $process.Id
 Remove-Item -LiteralPath $statePath -Force -ErrorAction SilentlyContinue
 throw "QsoRipper did not open $($probeTarget.Host):$($probeTarget.Port) within $StartupTimeoutSeconds seconds."
