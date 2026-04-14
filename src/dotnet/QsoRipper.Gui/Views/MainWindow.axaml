@@ -121,12 +121,14 @@
           </StackPanel>
 
           <Grid Grid.Column="1"
-                ColumnDefinitions="360,*"
+                ColumnDefinitions="Auto,*"
                 ColumnSpacing="8"
                 VerticalAlignment="Center">
             <TextBox x:Name="RecentQsoSearchBox"
                      Grid.Column="0"
                      Height="28"
+                     MinWidth="200"
+                     MaxWidth="400"
                      VerticalAlignment="Center"
                      PlaceholderText="Search callsign, grid, name, contest, note..."
                      Text="{Binding RecentQsos.SearchText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
@@ -163,11 +165,8 @@
                     Height="26"
                     IsVisible="{Binding IsSetupIncomplete}" />
             <TextBlock Classes="commandCaption"
-                       Text="{Binding RecentQsos.TopSyncIndicatorText}"
-                       ToolTip.Tip="{Binding RecentQsos.SyncSummaryText}" />
-            <TextBlock Classes="commandCaption"
                        Text="{Binding RecentQsos.RefreshIndicatorText}" />
-            <Button Content="{Binding SyncStatusText}"
+            <Button Content="⟳ Sync"
                     Command="{Binding SyncNowCommand}"
                     Height="26"
                     MinWidth="54"
