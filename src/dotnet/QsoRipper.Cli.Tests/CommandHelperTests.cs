@@ -12,7 +12,7 @@ public sealed class CommandHelperTests
     {
         var success = LogQsoCommand.TryBuildQso(
             "W1AW",
-            ["20m", "FT8", "--station", "k7abv", "--rst-sent", "59", "--rst-rcvd", "57", "--freq", "14074"],
+            ["20m", "FT8", "--station", "k7abv", "--rst-sent", "59", "--rst-rcvd", "57", "--freq", "14074", "--comment", "Strong copy", "--notes", "Worked on dipole"],
             out var qso,
             out _,
             out var error);
@@ -30,6 +30,8 @@ public sealed class CommandHelperTests
         Assert.Equal((uint)5, qso.RstReceived!.Readability);
         Assert.Equal((uint)7, qso.RstReceived.Strength);
         Assert.NotNull(qso.UtcTimestamp);
+        Assert.Equal("Strong copy", qso.Comment);
+        Assert.Equal("Worked on dipole", qso.Notes);
     }
 
     [Theory]
@@ -52,6 +54,8 @@ public sealed class CommandHelperTests
     [Theory]
     [InlineData("--station", "Missing value for --station.")]
     [InlineData("--freq", "Missing value for --freq.")]
+    [InlineData("--comment", "Missing value for --comment.")]
+    [InlineData("--notes", "Missing value for --notes.")]
     public void TryBuildQso_rejects_missing_option_values(string option, string expectedError)
     {
         var success = LogQsoCommand.TryBuildQso("W1AW", ["20m", "FT8", option], out _, out _, out var error);
@@ -138,7 +142,7 @@ public sealed class CommandHelperTests
     {
         var success = ListQsosCommand.TryParseArgs(["--callsign", "w1aw", "--band", "20m", "--mode", "ft8", "--after", "2026-04-10T00:00:00Z", "--before", "2026-04-11T00:00:00Z", "--limit", "5"],
             out var request,
-            out _,
+            out var displayOptions,
             out var error);
 
         Assert.True(success);
@@ -149,6 +153,34 @@ public sealed class CommandHelperTests
         Assert.Equal((uint)5, request.Limit);
         Assert.NotNull(request.After);
         Assert.NotNull(request.Before);
+        Assert.True(displayOptions.ShowComment);
+    }
+
+    [Fact]
+    public void FormatCommentPreview_prefers_comment_then_trims()
+    {
+        var qso = new QsoRecord
+        {
+            Comment = "This is a very long comment that should be trimmed before it reaches the default list output column.",
+            Notes = "backup"
+        };
+
+        var preview = ListQsosCommand.FormatCommentPreview(qso);
+
+        Assert.Equal("This is a very long comment that shou...", preview);
+    }
+
+    [Fact]
+    public void FormatCommentPreview_falls_back_to_notes_and_flattens_newlines()
+    {
+        var qso = new QsoRecord
+        {
+            Notes = "first line" + Environment.NewLine + "second line"
+        };
+
+        var preview = ListQsosCommand.FormatCommentPreview(qso);
+
+        Assert.Equal("first line second line", preview);
     }
 
     public static TheoryData<string[], string> InvalidListArgs { get; } =

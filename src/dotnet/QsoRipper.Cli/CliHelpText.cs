@@ -52,11 +52,13 @@ internal static class CliHelpText
                   --rst-sent <rst>     RST sent (e.g., 59, 599)
                   --rst-rcvd <rst>     RST received
                   --freq <khz>         Frequency in kHz (e.g., 14074)
+                  --comment <text>     Comment text
+                  --notes <text>       Notes text
                   --no-enrich          Skip automatic QRZ lookup enrichment
 
                 Examples:
                   log W1AW 20m FT8
-                  log W1AW 40m CW --station AE7XI --rst-sent 599 --freq 7030
+                  log W1AW 40m CW --station AE7XI --rst-sent 599 --freq 7030 --comment "Nice signal"
                   log K7ABV 20m SSB --at 30.minutes
                 """,
             "get" => """
@@ -77,7 +79,7 @@ internal static class CliHelpText
                   --limit <n>          Max results (default: 20)
                   --show-id            Include the QSO local ID column
                   --show-rst           Include RST sent/received columns
-                  --show-comment       Include comment/notes column
+                  --show-comment       Include comment/notes column (default)
                 """,
             "update" => """
                 Usage: update <local-id> [options]
