@@ -104,8 +104,8 @@
       <Grid RowDefinitions="Auto,* ,Auto"
             IsEnabled="{Binding !IsWizardOpen}">
         <Grid Grid.Row="0"
-              MinHeight="40"
-              Margin="10,6,10,8"
+              MinHeight="44"
+              Margin="10,6,10,6"
               ColumnDefinitions="Auto,*,Auto"
               ColumnSpacing="12">
           <StackPanel Grid.Column="0"
@@ -226,8 +226,8 @@
                                       Binding="{ReflectionBinding UtcDisplay, Mode=TwoWay}"
                                       SortMemberPath="UtcSortKey" />
                   <DataGridTextColumn Header="Call"
-                                      Width="92"
-                                      MinWidth="88"
+                                      Width="88"
+                                      MinWidth="80"
                                       Binding="{ReflectionBinding WorkedCallsign, Mode=TwoWay}"
                                       SortMemberPath="WorkedCallsign" />
                   <DataGridTextColumn Header="Band"
@@ -236,7 +236,7 @@
                                       Binding="{ReflectionBinding Band, Mode=TwoWay}"
                                       SortMemberPath="Band" />
                   <DataGridTextColumn Header="Mode"
-                                      Width="74"
+                                      Width="76"
                                       MinWidth="64"
                                       Binding="{ReflectionBinding Mode, Mode=TwoWay}"
                                       SortMemberPath="Mode" />
@@ -246,17 +246,17 @@
                                       Binding="{ReflectionBinding Frequency, Mode=TwoWay}"
                                       SortMemberPath="FrequencySortKey" />
                   <DataGridTextColumn Header="RST"
-                                      Width="96"
+                                      Width="88"
                                       MinWidth="64"
                                       Binding="{ReflectionBinding Rst, Mode=TwoWay}"
                                       SortMemberPath="Rst" />
                   <DataGridTextColumn Header="DXCC"
-                                      Width="72"
+                                      Width="76"
                                       MinWidth="64"
                                       Binding="{ReflectionBinding Dxcc, Mode=TwoWay}"
                                       SortMemberPath="DxccSortKey" />
                   <DataGridTemplateColumn Header="Country"
-                                          Width="120"
+                                          Width="108"
                                           MinWidth="96"
                                           SortMemberPath="Country">
                     <DataGridTemplateColumn.CellTemplate>
@@ -277,7 +277,7 @@
                     </DataGridTemplateColumn.CellEditingTemplate>
                   </DataGridTemplateColumn>
                   <DataGridTemplateColumn Header="Name"
-                                          Width="122"
+                                          Width="108"
                                           MinWidth="96"
                                           SortMemberPath="OperatorName">
                     <DataGridTemplateColumn.CellTemplate>
@@ -298,17 +298,17 @@
                     </DataGridTemplateColumn.CellEditingTemplate>
                   </DataGridTemplateColumn>
                   <DataGridTextColumn Header="Grid"
-                                      Width="72"
-                                      MinWidth="64"
+                                      Width="66"
+                                      MinWidth="60"
                                       Binding="{ReflectionBinding Grid, Mode=TwoWay}"
                                       SortMemberPath="Grid" />
                   <DataGridTextColumn Header="Exch"
-                                      Width="76"
-                                      MinWidth="72"
+                                      Width="70"
+                                      MinWidth="64"
                                       Binding="{ReflectionBinding Exchange, Mode=TwoWay}"
                                       SortMemberPath="Exchange" />
                   <DataGridTemplateColumn Header="Contest"
-                                          Width="130"
+                                          Width="98"
                                           MinWidth="80"
                                           SortMemberPath="Contest">
                     <DataGridTemplateColumn.CellTemplate>
@@ -329,14 +329,13 @@
                     </DataGridTemplateColumn.CellEditingTemplate>
                   </DataGridTemplateColumn>
                   <DataGridTextColumn Header="Station"
-                                      Width="92"
-                                      MinWidth="80"
+                                      Width="82"
+                                      MinWidth="72"
                                       Binding="{ReflectionBinding Station, Mode=TwoWay}"
                                       SortMemberPath="Station" />
                   <DataGridTemplateColumn Header="Note"
-                                          Width="2*"
+                                          Width="*"
                                           MinWidth="80"
-                                          MaxWidth="240"
                                           SortMemberPath="Note">
                     <DataGridTemplateColumn.CellTemplate>
                       <DataTemplate x:DataType="vm:RecentQsoItemViewModel">
@@ -362,13 +361,13 @@
                                       SortMemberPath="UtcEndSortKey"
                                       IsVisible="False" />
                   <DataGridTextColumn Header="CQ"
-                                      Width="50"
+                                      Width="64"
                                       MinWidth="64"
                                       Binding="{ReflectionBinding CqZone, Mode=TwoWay}"
                                       SortMemberPath="CqZone"
                                       IsVisible="False" />
                   <DataGridTextColumn Header="ITU"
-                                      Width="50"
+                                      Width="64"
                                       MinWidth="64"
                                       Binding="{ReflectionBinding ItuZone, Mode=TwoWay}"
                                       SortMemberPath="ItuZone"
