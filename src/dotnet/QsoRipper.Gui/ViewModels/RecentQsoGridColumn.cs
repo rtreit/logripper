@@ -1,6 +1,6 @@
 namespace QsoRipper.Gui.ViewModels;
 
-internal enum RecentQsoSortColumn
+internal enum RecentQsoGridColumn
 {
     Utc,
     Callsign,

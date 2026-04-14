@@ -1,4 +1,6 @@
 using System.Globalization;
+using System.IO;
+using System.Linq;
 using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Controls.ApplicationLifetimes;
@@ -27,6 +29,24 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
 
     [ObservableProperty]
     private bool _isSetupIncomplete;
+
+    [ObservableProperty]
+    private string _activeLogText = "Log: -";
+
+    [ObservableProperty]
+    private string _activeProfileText = "Profile: -";
+
+    [ObservableProperty]
+    private string _activeStationText = "Station: -";
+
+    [ObservableProperty]
+    private bool _isInspectorOpen;
+
+    [ObservableProperty]
+    private bool _isSortChooserOpen;
+
+    [ObservableProperty]
+    private bool _isColumnChooserOpen;
 
     [ObservableProperty]
     private string _currentUtcTime = string.Empty;
@@ -64,12 +84,11 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
         try
         {
             var state = await _engine.GetWizardStateAsync();
+            ApplySetupContext(state);
             if (state.Status.IsFirstRun || !state.Status.SetupComplete)
             {
                 IsSetupIncomplete = !state.Status.SetupComplete;
-                StatusMessage = IsSetupIncomplete
-                    ? "Setup incomplete - finish settings to start logging."
-                    : "Welcome to QsoRipper.";
+                StatusMessage = IsSetupIncomplete ? "Setup incomplete" : "Welcome";
                 await OpenWizardAsync();
             }
             else
@@ -80,7 +99,7 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
         }
         catch (Grpc.Core.RpcException)
         {
-            StatusMessage = "Cannot connect to engine at 127.0.0.1:50051. Is the engine running?";
+            StatusMessage = "Engine unavailable";
         }
     }
 
@@ -99,8 +118,42 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
     {
         if (!IsWizardOpen)
         {
+            CloseTransientPanels();
             SearchFocusRequested?.Invoke(this, EventArgs.Empty);
         }
+    }
+
+    [RelayCommand]
+    private void ToggleInspector()
+    {
+        IsInspectorOpen = !IsInspectorOpen;
+    }
+
+    [RelayCommand]
+    private void ToggleSortChooser()
+    {
+        IsSortChooserOpen = !IsSortChooserOpen;
+        if (IsSortChooserOpen)
+        {
+            IsColumnChooserOpen = false;
+        }
+    }
+
+    [RelayCommand]
+    private void ToggleColumnChooser()
+    {
+        IsColumnChooserOpen = !IsColumnChooserOpen;
+        if (IsColumnChooserOpen)
+        {
+            IsSortChooserOpen = false;
+        }
+    }
+
+    [RelayCommand]
+    private void CloseTransientPanels()
+    {
+        IsSortChooserOpen = false;
+        IsColumnChooserOpen = false;
     }
 
     [RelayCommand]
@@ -118,8 +171,8 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
         WizardViewModel = null;
         IsSetupIncomplete = !_setupCompleteBeforeWizard;
         StatusMessage = _setupCompleteBeforeWizard
-            ? "Ready - setup complete."
-            : "Setup incomplete - open Settings to finish.";
+            ? "Ready"
+            : "Setup incomplete";
 
         if (_setupCompleteBeforeWizard)
         {
@@ -133,8 +186,10 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
         WizardViewModel = null;
         IsSetupIncomplete = !setupComplete;
         StatusMessage = setupComplete
-            ? "Ready - setup complete."
-            : "Setup incomplete - open Settings to finish.";
+            ? "Ready"
+            : "Setup incomplete";
+
+        _ = RefreshSetupContextAsync();
 
         if (setupComplete)
         {
@@ -155,7 +210,7 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
 
     private async Task ActivateDashboardAsync(bool focusSearch)
     {
-        StatusMessage = "Ready - setup complete.";
+        StatusMessage = "Ready";
         await RecentQsos.RefreshAsync();
 
         if (focusSearch && !IsWizardOpen)
@@ -185,5 +240,52 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
         timer.Tick += UtcTimerOnTick;
         timer.Start();
         return timer;
+    }
+
+    private async Task RefreshSetupContextAsync()
+    {
+        try
+        {
+            ApplySetupContext(await _engine.GetWizardStateAsync());
+        }
+        catch (Grpc.Core.RpcException)
+        {
+            StatusMessage = "Engine unavailable";
+        }
+    }
+
+    private void ApplySetupContext(QsoRipper.Services.GetSetupWizardStateResponse state)
+    {
+        var activeProfile = state.StationProfiles.FirstOrDefault(profile => profile.IsActive)?.Profile
+            ?? state.Status.StationProfile;
+        ActiveLogText = BuildLogText(state.Status.LogFilePath);
+        ActiveProfileText = BuildProfileText(activeProfile);
+        ActiveStationText = BuildStationText(activeProfile);
+    }
+
+    private static string BuildLogText(string? logFilePath)
+    {
+        if (string.IsNullOrWhiteSpace(logFilePath))
+        {
+            return "Log: -";
+        }
+
+        return $"Log: {Path.GetFileNameWithoutExtension(logFilePath.Trim())}";
+    }
+
+    private static string BuildProfileText(QsoRipper.Domain.StationProfile? profile)
+    {
+        var profileName = profile?.ProfileName;
+        return string.IsNullOrWhiteSpace(profileName)
+            ? "Profile: Default"
+            : $"Profile: {profileName.Trim()}";
+    }
+
+    private static string BuildStationText(QsoRipper.Domain.StationProfile? profile)
+    {
+        var stationCallsign = profile?.StationCallsign;
+        return string.IsNullOrWhiteSpace(stationCallsign)
+            ? "Station: -"
+            : $"Station: {stationCallsign.Trim()}";
     }
 }

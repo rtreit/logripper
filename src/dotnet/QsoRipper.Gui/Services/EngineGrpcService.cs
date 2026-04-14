@@ -89,6 +89,22 @@ internal sealed class EngineGrpcService : IEngineClient, IDisposable
         return recentQsos;
     }
 
+    public async Task<UpdateQsoResponse> UpdateQsoAsync(
+        QsoRecord qso,
+        bool syncToQrz = false,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(qso);
+
+        return await _logbookClient.UpdateQsoAsync(
+            new UpdateQsoRequest
+            {
+                Qso = qso,
+                SyncToQrz = syncToQrz
+            },
+            cancellationToken: ct);
+    }
+
     public void Dispose()
     {
         _channel.Dispose();

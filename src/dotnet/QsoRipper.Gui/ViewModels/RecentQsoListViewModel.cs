@@ -1,5 +1,8 @@
+using System.Collections;
 using System.Collections.ObjectModel;
+using System.ComponentModel;
 using System.Linq;
+using Avalonia.Collections;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Grpc.Core;
@@ -10,18 +13,40 @@ namespace QsoRipper.Gui.ViewModels;
 internal sealed partial class RecentQsoListViewModel : ObservableObject
 {
     private const int DefaultLimit = 500;
+    private const double DefaultGridFontSize = 12;
+    private const double MinGridFontSize = 10;
+    private const double MaxGridFontSize = 18;
+    private const double GridFontSizeStep = 1;
 
     private readonly IEngineClient _engine;
     private readonly List<RecentQsoItemViewModel> _allItems = [];
+    private readonly ObservableCollection<RecentQsoItemViewModel> _viewItems = [];
+    private ParsedSearchQuery _parsedSearchQuery = ParsedSearchQuery.Empty;
+    private bool _suppressSortStateSync;
 
     public RecentQsoListViewModel(IEngineClient engine)
     {
         _engine = engine;
+        View = new DataGridCollectionView(_viewItems);
+        View.Filter = FilterVisibleItem;
+        View.SortDescriptions.CollectionChanged += OnSortDescriptionsChanged;
+        ColumnOptions = new ObservableCollection<RecentQsoColumnOptionViewModel>(CreateColumnOptions());
+        ApplyPersistedSort(RecentQsoSortColumn.Utc, ascending: false);
     }
 
-    public ObservableCollection<RecentQsoItemViewModel> VisibleItems { get; } = [];
+    public DataGridCollectionView View { get; }
 
-    public bool HasVisibleItems => VisibleItems.Count > 0;
+    public ObservableCollection<RecentQsoColumnOptionViewModel> ColumnOptions { get; }
+
+    public ObservableCollection<string> ActiveFilterTokens { get; } = [];
+
+    public IReadOnlyList<RecentQsoItemViewModel> VisibleItems => View.Cast<RecentQsoItemViewModel>().ToArray();
+
+    public bool HasVisibleItems => VisibleItemCount > 0;
+
+    public bool HasActiveFilterTokens => ActiveFilterTokens.Count > 0;
+
+    public bool HasPendingEdits => PendingEditCount > 0;
 
     public string EmptyStateMessage
     {
@@ -37,7 +62,7 @@ internal sealed partial class RecentQsoListViewModel : ObservableObject
                 return ErrorMessage;
             }
 
-            if (!string.IsNullOrWhiteSpace(SearchText))
+            if (_parsedSearchQuery.HasTokens)
             {
                 return "No recent QSOs match the current search.";
             }
@@ -46,42 +71,50 @@ internal sealed partial class RecentQsoListViewModel : ObservableObject
         }
     }
 
-    public string LastLoadedText => LastLoadedAtUtc is null
-        ? "Not loaded yet"
-        : $"Updated {LastLoadedAtUtc.Value:HH:mm:ss} UTC";
+    public string RefreshIndicatorText => IsSaving
+        ? "Saving"
+        : IsLoading
+            ? "Refreshing"
+        : LastLoadedAtUtc is null
+            ? "Not loaded"
+            : $"Loaded {LastLoadedAtUtc.Value:HH:mm:ss}";
 
-    public string SortStatusText => $"Sorted by {GetSortLabel(CurrentSortColumn)} ({(SortAscending ? "ascending" : "descending")})";
+    public string CountStatusText => $"{_allItems.Count:N0} QSOs";
 
-    public string UtcHeaderText => BuildHeaderText("UTC", RecentQsoSortColumn.Utc);
+    public string FilterStatusText => _parsedSearchQuery.HasTokens
+        ? $"{VisibleItemCount:N0} filtered"
+        : "No filter";
 
-    public string CallsignHeaderText => BuildHeaderText("Call", RecentQsoSortColumn.Callsign);
+    public string SortStatusText => $"Sort: {GetSortLabel(CurrentSortColumn)} {(SortAscending ? "asc" : "desc")}";
 
-    public string BandHeaderText => BuildHeaderText("Band", RecentQsoSortColumn.Band);
+    public string EditStatusText => IsSaving
+        ? "Saving edits"
+        : HasPendingEdits
+            ? $"{PendingEditCount:N0} unsaved"
+            : "No pending edits";
 
-    public string ModeHeaderText => BuildHeaderText("Mode", RecentQsoSortColumn.Mode);
+    public string GridZoomStatusText => $"Zoom {Math.Round((GridFontSize / DefaultGridFontSize) * 100):0}%";
 
-    public string CountryHeaderText => BuildHeaderText("Country", RecentQsoSortColumn.Country);
+    public double GridRowHeight => Math.Round(21 * (GridFontSize / DefaultGridFontSize));
 
-    public string NameHeaderText => BuildHeaderText("Name", RecentQsoSortColumn.Name);
+    public double GridHeaderHeight => Math.Round(23 * (GridFontSize / DefaultGridFontSize));
 
-    public string FrequencyHeaderText => BuildHeaderText("Freq", RecentQsoSortColumn.Frequency);
+    public string SyncSummaryText => BuildSyncSummaryText();
 
-    public string RstSentHeaderText => BuildHeaderText("S", RecentQsoSortColumn.RstSent);
-
-    public string RstReceivedHeaderText => BuildHeaderText("R", RecentQsoSortColumn.RstReceived);
-
-    public string GridHeaderText => BuildHeaderText("Grid", RecentQsoSortColumn.Grid);
-
-    public string CommentHeaderText => BuildHeaderText("Comment", RecentQsoSortColumn.Comment);
-
-    public string UtcEndHeaderText => BuildHeaderText("End", RecentQsoSortColumn.UtcEnd);
-
-    public string SyncHeaderText => BuildHeaderText("Sync", RecentQsoSortColumn.Sync);
+    public string TopSyncIndicatorText => BuildTopSyncIndicatorText();
 
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(RefreshCommand))]
     [NotifyPropertyChangedFor(nameof(EmptyStateMessage))]
+    [NotifyPropertyChangedFor(nameof(RefreshIndicatorText))]
     private bool _isLoading;
+
+    [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(RefreshCommand))]
+    [NotifyCanExecuteChangedFor(nameof(SaveEditsCommand))]
+    [NotifyPropertyChangedFor(nameof(EditStatusText))]
+    [NotifyPropertyChangedFor(nameof(RefreshIndicatorText))]
+    private bool _isSaving;
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(EmptyStateMessage))]
@@ -92,55 +125,47 @@ internal sealed partial class RecentQsoListViewModel : ObservableObject
     private bool _hasLoaded;
 
     [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(LastLoadedText))]
+    [NotifyPropertyChangedFor(nameof(RefreshIndicatorText))]
     private DateTimeOffset? _lastLoadedAtUtc;
 
     [ObservableProperty]
     private string _searchText = string.Empty;
 
     [ObservableProperty]
-    private string _summaryText = "Recent QSOs will appear here after setup completes.";
+    [NotifyPropertyChangedFor(nameof(HasVisibleItems))]
+    [NotifyPropertyChangedFor(nameof(EmptyStateMessage))]
+    [NotifyPropertyChangedFor(nameof(FilterStatusText))]
+    private int _visibleItemCount;
+
+    [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(RefreshCommand))]
+    [NotifyCanExecuteChangedFor(nameof(SaveEditsCommand))]
+    [NotifyPropertyChangedFor(nameof(HasPendingEdits))]
+    [NotifyPropertyChangedFor(nameof(EditStatusText))]
+    private int _pendingEditCount;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(GridZoomStatusText))]
+    [NotifyPropertyChangedFor(nameof(GridRowHeight))]
+    [NotifyPropertyChangedFor(nameof(GridHeaderHeight))]
+    private double _gridFontSize = DefaultGridFontSize;
 
     [ObservableProperty]
     private RecentQsoItemViewModel? _selectedQso;
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(SortStatusText))]
-    [NotifyPropertyChangedFor(nameof(UtcHeaderText))]
-    [NotifyPropertyChangedFor(nameof(CallsignHeaderText))]
-    [NotifyPropertyChangedFor(nameof(BandHeaderText))]
-    [NotifyPropertyChangedFor(nameof(ModeHeaderText))]
-    [NotifyPropertyChangedFor(nameof(CountryHeaderText))]
-    [NotifyPropertyChangedFor(nameof(NameHeaderText))]
-    [NotifyPropertyChangedFor(nameof(FrequencyHeaderText))]
-    [NotifyPropertyChangedFor(nameof(RstSentHeaderText))]
-    [NotifyPropertyChangedFor(nameof(RstReceivedHeaderText))]
-    [NotifyPropertyChangedFor(nameof(GridHeaderText))]
-    [NotifyPropertyChangedFor(nameof(CommentHeaderText))]
-    [NotifyPropertyChangedFor(nameof(UtcEndHeaderText))]
-    [NotifyPropertyChangedFor(nameof(SyncHeaderText))]
     private RecentQsoSortColumn _currentSortColumn = RecentQsoSortColumn.Utc;
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(SortStatusText))]
-    [NotifyPropertyChangedFor(nameof(UtcHeaderText))]
-    [NotifyPropertyChangedFor(nameof(CallsignHeaderText))]
-    [NotifyPropertyChangedFor(nameof(BandHeaderText))]
-    [NotifyPropertyChangedFor(nameof(ModeHeaderText))]
-    [NotifyPropertyChangedFor(nameof(CountryHeaderText))]
-    [NotifyPropertyChangedFor(nameof(NameHeaderText))]
-    [NotifyPropertyChangedFor(nameof(FrequencyHeaderText))]
-    [NotifyPropertyChangedFor(nameof(RstSentHeaderText))]
-    [NotifyPropertyChangedFor(nameof(RstReceivedHeaderText))]
-    [NotifyPropertyChangedFor(nameof(GridHeaderText))]
-    [NotifyPropertyChangedFor(nameof(CommentHeaderText))]
-    [NotifyPropertyChangedFor(nameof(UtcEndHeaderText))]
-    [NotifyPropertyChangedFor(nameof(SyncHeaderText))]
     private bool _sortAscending;
 
     partial void OnSearchTextChanged(string value)
     {
-        ApplyFilter();
+        _parsedSearchQuery = ParseSearchQuery(value);
+        UpdateFilterTokens();
+        RefreshView();
     }
 
     [RelayCommand(CanExecute = nameof(CanRefresh))]
@@ -154,12 +179,11 @@ internal sealed partial class RecentQsoListViewModel : ObservableObject
             var selectedLocalId = SelectedQso?.LocalId;
             var qsos = await _engine.ListRecentQsosAsync(DefaultLimit);
 
-            _allItems.Clear();
-            _allItems.AddRange(qsos.Select(RecentQsoItemViewModel.FromQso));
+            ReplaceItems(qsos.Select(RecentQsoItemViewModel.FromQso));
 
             HasLoaded = true;
             LastLoadedAtUtc = DateTimeOffset.UtcNow;
-            ApplyFilter(selectedLocalId);
+            RefreshView(selectedLocalId);
         }
         catch (RpcException ex)
         {
@@ -167,11 +191,12 @@ internal sealed partial class RecentQsoListViewModel : ObservableObject
             ErrorMessage = string.IsNullOrWhiteSpace(ex.Status.Detail)
                 ? $"Recent QSOs could not be loaded ({ex.StatusCode})."
                 : ex.Status.Detail;
-            ApplyFilter();
+            RefreshView();
         }
         finally
         {
             IsLoading = false;
+            NotifyStatusPropertiesChanged();
         }
     }
 
@@ -179,17 +204,7 @@ internal sealed partial class RecentQsoListViewModel : ObservableObject
     {
         ArgumentNullException.ThrowIfNull(item);
 
-        if (string.IsNullOrWhiteSpace(searchText))
-        {
-            return true;
-        }
-
-        var searchTokens = searchText
-            .Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .Select(static token => token.ToUpperInvariant())
-            .ToArray();
-
-        return searchTokens.All(token => item.SearchDocument.Contains(token, StringComparison.Ordinal));
+        return MatchesSearch(item, ParseSearchQuery(searchText));
     }
 
     [RelayCommand]
@@ -204,6 +219,93 @@ internal sealed partial class RecentQsoListViewModel : ObservableObject
         ApplySort(column);
     }
 
+    [RelayCommand(CanExecute = nameof(CanSaveEdits))]
+    internal async Task SaveEditsAsync()
+    {
+        if (!HasPendingEdits)
+        {
+            return;
+        }
+
+        IsSaving = true;
+        ErrorMessage = null;
+
+        try
+        {
+            var dirtyItems = _allItems.Where(item => item.IsDirty).ToArray();
+            foreach (var item in dirtyItems)
+            {
+                if (!item.TryBuildUpdatedQso(out var qso, out var validationError))
+                {
+                    SelectedQso = item;
+                    ErrorMessage = validationError;
+                    return;
+                }
+
+                var response = await _engine.UpdateQsoAsync(qso!);
+                if (!response.Success)
+                {
+                    SelectedQso = item;
+                    ErrorMessage = string.IsNullOrWhiteSpace(response.Error)
+                        ? $"Update failed for {item.WorkedCallsign}."
+                        : response.Error;
+                    return;
+                }
+
+                item.AcceptSavedChanges(qso!);
+            }
+
+            await RefreshAsync();
+        }
+        catch (RpcException ex)
+        {
+            ErrorMessage = string.IsNullOrWhiteSpace(ex.Status.Detail)
+                ? $"QSO edits could not be saved ({ex.StatusCode})."
+                : ex.Status.Detail;
+        }
+        finally
+        {
+            IsSaving = false;
+            UpdatePendingEditCount();
+            NotifyStatusPropertiesChanged();
+        }
+    }
+
+    [RelayCommand]
+    private void ZoomIn()
+    {
+        ZoomInGrid();
+    }
+
+    [RelayCommand]
+    private void ZoomOut()
+    {
+        ZoomOutGrid();
+    }
+
+    [RelayCommand]
+    private void ResetZoom()
+    {
+        ResetGridZoom();
+    }
+
+    internal void ApplyPersistedSort(RecentQsoSortColumn column, bool ascending)
+    {
+        CurrentSortColumn = column;
+        SortAscending = ascending;
+        ApplySortDescriptions(column, ascending);
+    }
+
+    internal void ApplyPersistedGridFontSize(double fontSize)
+    {
+        if (fontSize <= 0)
+        {
+            return;
+        }
+
+        GridFontSize = Math.Clamp(fontSize, MinGridFontSize, MaxGridFontSize);
+    }
+
     internal void ApplySort(RecentQsoSortColumn column)
     {
         if (CurrentSortColumn == column)
@@ -216,63 +318,80 @@ internal sealed partial class RecentQsoListViewModel : ObservableObject
             SortAscending = GetDefaultSortAscending(column);
         }
 
-        ApplyFilter();
+        ApplySortDescriptions(CurrentSortColumn, SortAscending);
+        RefreshView();
     }
 
     internal void ReverseCurrentSortDirection()
     {
         SortAscending = !SortAscending;
-        ApplyFilter();
+        ApplySortDescriptions(CurrentSortColumn, SortAscending);
+        RefreshView();
     }
 
-    private bool CanRefresh() => !IsLoading;
-
-    private void ApplyFilter(string? preferredLocalId = null)
+    internal void ZoomInGrid()
     {
-        var selectedLocalId = preferredLocalId ?? SelectedQso?.LocalId;
-        var filteredItems = SortItems(_allItems.Where(item => MatchesSearch(item, SearchText))).ToArray();
-
-        VisibleItems.Clear();
-        foreach (var item in filteredItems)
-        {
-            VisibleItems.Add(item);
-        }
-
-        SelectedQso = filteredItems.FirstOrDefault(item => string.Equals(item.LocalId, selectedLocalId, StringComparison.Ordinal))
-            ?? filteredItems.FirstOrDefault();
-
-        SummaryText = BuildSummaryText(filteredItems.Length);
-        OnPropertyChanged(nameof(HasVisibleItems));
-        OnPropertyChanged(nameof(EmptyStateMessage));
+        AdjustZoom(1);
     }
 
-    private string BuildHeaderText(string label, RecentQsoSortColumn column)
+    internal void ZoomOutGrid()
     {
-        return CurrentSortColumn == column
-            ? $"{label} {(SortAscending ? '\u2191' : '\u2193')}"
-            : label;
+        AdjustZoom(-1);
     }
 
-    private string BuildSummaryText(int filteredCount)
+    internal void ResetGridZoom()
     {
-        if (!HasLoaded)
+        GridFontSize = DefaultGridFontSize;
+    }
+
+    internal bool AdjustZoom(int direction)
+    {
+        var nextFontSize = Math.Clamp(
+            GridFontSize + (direction * GridFontSizeStep),
+            MinGridFontSize,
+            MaxGridFontSize);
+
+        if (Math.Abs(nextFontSize - GridFontSize) < 0.01)
         {
-            return "Recent QSOs will appear here after setup completes.";
+            return false;
         }
 
-        if (!string.IsNullOrWhiteSpace(ErrorMessage) && _allItems.Count == 0)
+        GridFontSize = nextFontSize;
+        return true;
+    }
+
+    internal void SetColumnVisibility(RecentQsoGridColumn column, bool isVisible)
+    {
+        var option = ColumnOptions.FirstOrDefault(item => item.Column == column);
+        if (option is not null)
         {
-            return "Recent QSOs unavailable";
+            option.IsVisible = isVisible;
+        }
+    }
+
+    private static bool MatchesSearch(RecentQsoItemViewModel item, ParsedSearchQuery query)
+    {
+        if (!query.HasTokens)
+        {
+            return true;
         }
 
-        if (_allItems.Count == 0)
-        {
-            return "No QSOs logged yet";
-        }
+        return query.FreeTextTokens.All(token => item.SearchDocument.Contains(token, StringComparison.Ordinal))
+            && query.FieldTokens.All(token => item.MatchesFieldToken(token.Key, token.Value));
+    }
 
-        return filteredCount == _allItems.Count
-            ? $"Showing {_allItems.Count} recent QSOs"
-            : $"Showing {filteredCount} of {_allItems.Count} recent QSOs";
+    private bool CanRefresh() => !IsLoading && !IsSaving && !HasPendingEdits;
+
+    private bool CanSaveEdits() => !IsLoading && !IsSaving && HasPendingEdits;
+
+    private bool FilterVisibleItem(object item) =>
+        item is RecentQsoItemViewModel recentQso && MatchesSearch(recentQso, _parsedSearchQuery);
+
+    private void RefreshView(string? preferredLocalId = null)
+    {
+        View.Refresh();
+        UpdateVisibleSelectionAndCounts(preferredLocalId);
+        NotifyStatusPropertiesChanged();
     }
 
     private static bool GetDefaultSortAscending(RecentQsoSortColumn column) => column switch
@@ -288,66 +407,357 @@ internal sealed partial class RecentQsoListViewModel : ObservableObject
         RecentQsoSortColumn.Callsign => "callsign",
         RecentQsoSortColumn.Band => "band",
         RecentQsoSortColumn.Mode => "mode",
+        RecentQsoSortColumn.Frequency => "frequency",
+        RecentQsoSortColumn.Rst => "RST",
+        RecentQsoSortColumn.Dxcc => "DXCC",
         RecentQsoSortColumn.Country => "country",
         RecentQsoSortColumn.Name => "name",
-        RecentQsoSortColumn.Frequency => "frequency",
-        RecentQsoSortColumn.RstSent => "RST sent",
-        RecentQsoSortColumn.RstReceived => "RST received",
         RecentQsoSortColumn.Grid => "grid",
-        RecentQsoSortColumn.Comment => "comment",
+        RecentQsoSortColumn.Exchange => "exchange",
+        RecentQsoSortColumn.Contest => "contest",
+        RecentQsoSortColumn.Station => "station",
+        RecentQsoSortColumn.Note => "note",
         RecentQsoSortColumn.UtcEnd => "end time",
+        RecentQsoSortColumn.CqZone => "CQ zone",
+        RecentQsoSortColumn.ItuZone => "ITU zone",
+        RecentQsoSortColumn.Qth => "QTH",
         RecentQsoSortColumn.Sync => "sync",
         _ => "recent QSOs"
     };
 
-    private IEnumerable<RecentQsoItemViewModel> SortItems(IEnumerable<RecentQsoItemViewModel> items)
+    private void ApplySortDescriptions(RecentQsoSortColumn column, bool ascending)
     {
-        var ordered = CurrentSortColumn switch
+        var primaryDirection = ascending ? ListSortDirection.Ascending : ListSortDirection.Descending;
+        _suppressSortStateSync = true;
+        try
         {
-            RecentQsoSortColumn.Utc => SortAscending
-                ? items.OrderBy(item => item.UtcSortKey)
-                : items.OrderByDescending(item => item.UtcSortKey),
-            RecentQsoSortColumn.Callsign => SortAscending
-                ? items.OrderBy(item => item.CallsignSortKey, StringComparer.Ordinal)
-                : items.OrderByDescending(item => item.CallsignSortKey, StringComparer.Ordinal),
-            RecentQsoSortColumn.Band => SortAscending
-                ? items.OrderBy(item => item.BandSortKey, StringComparer.Ordinal)
-                : items.OrderByDescending(item => item.BandSortKey, StringComparer.Ordinal),
-            RecentQsoSortColumn.Mode => SortAscending
-                ? items.OrderBy(item => item.ModeSortKey, StringComparer.Ordinal)
-                : items.OrderByDescending(item => item.ModeSortKey, StringComparer.Ordinal),
-            RecentQsoSortColumn.Country => SortAscending
-                ? items.OrderBy(item => item.CountrySortKey, StringComparer.Ordinal)
-                : items.OrderByDescending(item => item.CountrySortKey, StringComparer.Ordinal),
-            RecentQsoSortColumn.Name => SortAscending
-                ? items.OrderBy(item => item.NameSortKey, StringComparer.Ordinal)
-                : items.OrderByDescending(item => item.NameSortKey, StringComparer.Ordinal),
-            RecentQsoSortColumn.Frequency => SortAscending
-                ? items.OrderBy(item => item.FrequencySortKey)
-                : items.OrderByDescending(item => item.FrequencySortKey),
-            RecentQsoSortColumn.RstSent => SortAscending
-                ? items.OrderBy(item => item.RstSentSortKey, StringComparer.Ordinal)
-                : items.OrderByDescending(item => item.RstSentSortKey, StringComparer.Ordinal),
-            RecentQsoSortColumn.RstReceived => SortAscending
-                ? items.OrderBy(item => item.RstReceivedSortKey, StringComparer.Ordinal)
-                : items.OrderByDescending(item => item.RstReceivedSortKey, StringComparer.Ordinal),
-            RecentQsoSortColumn.Grid => SortAscending
-                ? items.OrderBy(item => item.GridSortKey, StringComparer.Ordinal)
-                : items.OrderByDescending(item => item.GridSortKey, StringComparer.Ordinal),
-            RecentQsoSortColumn.Comment => SortAscending
-                ? items.OrderBy(item => item.CommentSortKey, StringComparer.Ordinal)
-                : items.OrderByDescending(item => item.CommentSortKey, StringComparer.Ordinal),
-            RecentQsoSortColumn.UtcEnd => SortAscending
-                ? items.OrderBy(item => item.UtcEndSortKey)
-                : items.OrderByDescending(item => item.UtcEndSortKey),
-            RecentQsoSortColumn.Sync => SortAscending
-                ? items.OrderBy(item => item.SyncStatusSortKey, StringComparer.Ordinal)
-                : items.OrderByDescending(item => item.SyncStatusSortKey, StringComparer.Ordinal),
-            _ => items.OrderByDescending(item => item.UtcSortKey)
-        };
+            View.SortDescriptions.Clear();
+            View.SortDescriptions.Add(
+                new DataGridComparerSortDescription(
+                    new PropertyPathComparer(GetSortMemberPath(column)),
+                    primaryDirection));
 
-        return ordered
-            .ThenByDescending(item => item.UtcSortKey)
-            .ThenBy(item => item.CallsignSortKey, StringComparer.Ordinal);
+            if (column != RecentQsoSortColumn.Utc)
+            {
+                View.SortDescriptions.Add(
+                    new DataGridComparerSortDescription(
+                        new PropertyPathComparer(nameof(RecentQsoItemViewModel.UtcSortKey)),
+                        ListSortDirection.Descending));
+            }
+        }
+        finally
+        {
+            _suppressSortStateSync = false;
+        }
+    }
+
+    private void UpdateVisibleSelectionAndCounts(string? preferredLocalId = null)
+    {
+        var selectedLocalId = preferredLocalId ?? SelectedQso?.LocalId;
+        var visibleItems = VisibleItems;
+        VisibleItemCount = visibleItems.Count;
+        SelectedQso = visibleItems.FirstOrDefault(item => string.Equals(item.LocalId, selectedLocalId, StringComparison.Ordinal))
+            ?? (visibleItems.Count > 0 ? visibleItems[0] : null);
+    }
+
+    private void NotifyStatusPropertiesChanged()
+    {
+        OnPropertyChanged(nameof(CountStatusText));
+        OnPropertyChanged(nameof(FilterStatusText));
+        OnPropertyChanged(nameof(SortStatusText));
+        OnPropertyChanged(nameof(EditStatusText));
+        OnPropertyChanged(nameof(SyncSummaryText));
+        OnPropertyChanged(nameof(TopSyncIndicatorText));
+        OnPropertyChanged(nameof(RefreshIndicatorText));
+        OnPropertyChanged(nameof(HasActiveFilterTokens));
+    }
+
+    private void UpdateFilterTokens()
+    {
+        ActiveFilterTokens.Clear();
+        foreach (var token in _parsedSearchQuery.DisplayTokens)
+        {
+            ActiveFilterTokens.Add(token);
+        }
+
+        OnPropertyChanged(nameof(HasActiveFilterTokens));
+    }
+
+    private void OnSortDescriptionsChanged(object? sender, EventArgs e)
+    {
+        if (_suppressSortStateSync)
+        {
+            return;
+        }
+
+        SyncSortStateFromView();
+        NotifyStatusPropertiesChanged();
+    }
+
+    private void ReplaceItems(IEnumerable<RecentQsoItemViewModel> items)
+    {
+        foreach (var item in _allItems)
+        {
+            item.PropertyChanged -= OnItemPropertyChanged;
+        }
+
+        _allItems.Clear();
+        _allItems.AddRange(items);
+
+        _viewItems.Clear();
+        foreach (var item in _allItems)
+        {
+            item.PropertyChanged += OnItemPropertyChanged;
+            _viewItems.Add(item);
+        }
+
+        UpdatePendingEditCount();
+    }
+
+    private void OnItemPropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName != nameof(RecentQsoItemViewModel.IsDirty))
+        {
+            return;
+        }
+
+        UpdatePendingEditCount();
+        NotifyStatusPropertiesChanged();
+    }
+
+    private void UpdatePendingEditCount()
+    {
+        PendingEditCount = _allItems.Count(item => item.IsDirty);
+    }
+
+    private void SyncSortStateFromView()
+    {
+        if (View.SortDescriptions.Count == 0)
+        {
+            CurrentSortColumn = RecentQsoSortColumn.Utc;
+            SortAscending = false;
+            return;
+        }
+
+        var primarySort = View.SortDescriptions[0];
+        CurrentSortColumn = GetSortColumn(primarySort.PropertyPath);
+        SortAscending = primarySort.Direction == ListSortDirection.Ascending;
+    }
+
+    private string BuildSyncSummaryText()
+    {
+        if (_allItems.Count == 0)
+        {
+            return "Sync: idle";
+        }
+
+        var localOnly = _allItems.Count(item => string.Equals(item.SyncStatus, "Local", StringComparison.Ordinal));
+        var modified = _allItems.Count(item => string.Equals(item.SyncStatus, "Modified", StringComparison.Ordinal));
+        var conflict = _allItems.Count(item => string.Equals(item.SyncStatus, "Conflict", StringComparison.Ordinal));
+        var synced = _allItems.Count(item => string.Equals(item.SyncStatus, "Synced", StringComparison.Ordinal));
+
+        return $"Sync: {localOnly} local | {modified} modified | {conflict} conflict | {synced} synced";
+    }
+
+    private string BuildTopSyncIndicatorText()
+    {
+        if (_allItems.Count == 0)
+        {
+            return "Sync idle";
+        }
+
+        if (_allItems.Any(item => string.Equals(item.SyncStatus, "Conflict", StringComparison.Ordinal)))
+        {
+            return "Sync conflict";
+        }
+
+        if (_allItems.Any(item => string.Equals(item.SyncStatus, "Modified", StringComparison.Ordinal)))
+        {
+            return "Sync modified";
+        }
+
+        if (_allItems.Any(item => string.Equals(item.SyncStatus, "Local", StringComparison.Ordinal)))
+        {
+            return "Sync local";
+        }
+
+        return "Sync ready";
+    }
+
+    private static string GetSortMemberPath(RecentQsoSortColumn column) => column switch
+    {
+        RecentQsoSortColumn.Utc => nameof(RecentQsoItemViewModel.UtcSortKey),
+        RecentQsoSortColumn.Callsign => nameof(RecentQsoItemViewModel.WorkedCallsign),
+        RecentQsoSortColumn.Band => nameof(RecentQsoItemViewModel.Band),
+        RecentQsoSortColumn.Mode => nameof(RecentQsoItemViewModel.Mode),
+        RecentQsoSortColumn.Frequency => nameof(RecentQsoItemViewModel.FrequencySortKey),
+        RecentQsoSortColumn.Rst => nameof(RecentQsoItemViewModel.Rst),
+        RecentQsoSortColumn.Dxcc => nameof(RecentQsoItemViewModel.DxccSortKey),
+        RecentQsoSortColumn.Country => nameof(RecentQsoItemViewModel.Country),
+        RecentQsoSortColumn.Name => nameof(RecentQsoItemViewModel.OperatorName),
+        RecentQsoSortColumn.Grid => nameof(RecentQsoItemViewModel.Grid),
+        RecentQsoSortColumn.Exchange => nameof(RecentQsoItemViewModel.Exchange),
+        RecentQsoSortColumn.Contest => nameof(RecentQsoItemViewModel.Contest),
+        RecentQsoSortColumn.Station => nameof(RecentQsoItemViewModel.Station),
+        RecentQsoSortColumn.Note => nameof(RecentQsoItemViewModel.Note),
+        RecentQsoSortColumn.UtcEnd => nameof(RecentQsoItemViewModel.UtcEndSortKey),
+        RecentQsoSortColumn.CqZone => nameof(RecentQsoItemViewModel.CqZone),
+        RecentQsoSortColumn.ItuZone => nameof(RecentQsoItemViewModel.ItuZone),
+        RecentQsoSortColumn.Qth => nameof(RecentQsoItemViewModel.Qth),
+        RecentQsoSortColumn.Sync => nameof(RecentQsoItemViewModel.SyncStatus),
+        _ => nameof(RecentQsoItemViewModel.UtcSortKey)
+    };
+
+    private static RecentQsoSortColumn GetSortColumn(string memberPath) => memberPath switch
+    {
+        nameof(RecentQsoItemViewModel.UtcSortKey) => RecentQsoSortColumn.Utc,
+        nameof(RecentQsoItemViewModel.WorkedCallsign) => RecentQsoSortColumn.Callsign,
+        nameof(RecentQsoItemViewModel.Band) => RecentQsoSortColumn.Band,
+        nameof(RecentQsoItemViewModel.Mode) => RecentQsoSortColumn.Mode,
+        nameof(RecentQsoItemViewModel.FrequencySortKey) => RecentQsoSortColumn.Frequency,
+        nameof(RecentQsoItemViewModel.Rst) => RecentQsoSortColumn.Rst,
+        nameof(RecentQsoItemViewModel.DxccSortKey) => RecentQsoSortColumn.Dxcc,
+        nameof(RecentQsoItemViewModel.Country) => RecentQsoSortColumn.Country,
+        nameof(RecentQsoItemViewModel.OperatorName) => RecentQsoSortColumn.Name,
+        nameof(RecentQsoItemViewModel.Grid) => RecentQsoSortColumn.Grid,
+        nameof(RecentQsoItemViewModel.Exchange) => RecentQsoSortColumn.Exchange,
+        nameof(RecentQsoItemViewModel.Contest) => RecentQsoSortColumn.Contest,
+        nameof(RecentQsoItemViewModel.Station) => RecentQsoSortColumn.Station,
+        nameof(RecentQsoItemViewModel.Note) => RecentQsoSortColumn.Note,
+        nameof(RecentQsoItemViewModel.UtcEndSortKey) => RecentQsoSortColumn.UtcEnd,
+        nameof(RecentQsoItemViewModel.CqZone) => RecentQsoSortColumn.CqZone,
+        nameof(RecentQsoItemViewModel.ItuZone) => RecentQsoSortColumn.ItuZone,
+        nameof(RecentQsoItemViewModel.Qth) => RecentQsoSortColumn.Qth,
+        nameof(RecentQsoItemViewModel.SyncStatus) => RecentQsoSortColumn.Sync,
+        _ => RecentQsoSortColumn.Utc
+    };
+
+    private static ParsedSearchQuery ParseSearchQuery(string? searchText)
+    {
+        if (string.IsNullOrWhiteSpace(searchText))
+        {
+            return ParsedSearchQuery.Empty;
+        }
+
+        var freeTextTokens = new List<string>();
+        var fieldTokens = new List<SearchToken>();
+        var displayTokens = new List<string>();
+
+        foreach (var rawToken in searchText.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            var separatorIndex = rawToken.IndexOf(':', StringComparison.Ordinal);
+            if (separatorIndex > 0 && separatorIndex < rawToken.Length - 1)
+            {
+                var key = rawToken[..separatorIndex].Trim().ToUpperInvariant();
+                var value = rawToken[(separatorIndex + 1)..].Trim().ToUpperInvariant();
+                fieldTokens.Add(new SearchToken(key, value));
+                displayTokens.Add(rawToken.Trim());
+            }
+            else
+            {
+                freeTextTokens.Add(rawToken.ToUpperInvariant());
+                displayTokens.Add(rawToken.Trim());
+            }
+        }
+
+        return new ParsedSearchQuery(
+            freeTextTokens.ToArray(),
+            fieldTokens.ToArray(),
+            displayTokens.ToArray());
+    }
+
+    private static IEnumerable<RecentQsoColumnOptionViewModel> CreateColumnOptions()
+    {
+        yield return new RecentQsoColumnOptionViewModel(RecentQsoGridColumn.Utc, "UTC", true);
+        yield return new RecentQsoColumnOptionViewModel(RecentQsoGridColumn.Callsign, "Call", true);
+        yield return new RecentQsoColumnOptionViewModel(RecentQsoGridColumn.Band, "Band", true);
+        yield return new RecentQsoColumnOptionViewModel(RecentQsoGridColumn.Mode, "Mode", true);
+        yield return new RecentQsoColumnOptionViewModel(RecentQsoGridColumn.Frequency, "Freq", true);
+        yield return new RecentQsoColumnOptionViewModel(RecentQsoGridColumn.Rst, "RST", true);
+        yield return new RecentQsoColumnOptionViewModel(RecentQsoGridColumn.Dxcc, "DXCC", true);
+        yield return new RecentQsoColumnOptionViewModel(RecentQsoGridColumn.Country, "Country", true);
+        yield return new RecentQsoColumnOptionViewModel(RecentQsoGridColumn.Name, "Name", true);
+        yield return new RecentQsoColumnOptionViewModel(RecentQsoGridColumn.Grid, "Grid", true);
+        yield return new RecentQsoColumnOptionViewModel(RecentQsoGridColumn.Exchange, "Exch", true);
+        yield return new RecentQsoColumnOptionViewModel(RecentQsoGridColumn.Contest, "Contest", true);
+        yield return new RecentQsoColumnOptionViewModel(RecentQsoGridColumn.Station, "Station", true);
+        yield return new RecentQsoColumnOptionViewModel(RecentQsoGridColumn.Note, "Note", true);
+        yield return new RecentQsoColumnOptionViewModel(RecentQsoGridColumn.UtcEnd, "End", false);
+        yield return new RecentQsoColumnOptionViewModel(RecentQsoGridColumn.CqZone, "CQ", false);
+        yield return new RecentQsoColumnOptionViewModel(RecentQsoGridColumn.ItuZone, "ITU", false);
+        yield return new RecentQsoColumnOptionViewModel(RecentQsoGridColumn.Qth, "QTH", false);
+        yield return new RecentQsoColumnOptionViewModel(RecentQsoGridColumn.Sync, "Sync", false);
+    }
+
+    private readonly record struct SearchToken(string Key, string Value);
+
+    private sealed record ParsedSearchQuery(
+        string[] FreeTextTokens,
+        SearchToken[] FieldTokens,
+        string[] DisplayTokens)
+    {
+        public static readonly ParsedSearchQuery Empty = new([], [], []);
+
+        public bool HasTokens => FreeTextTokens.Length > 0 || FieldTokens.Length > 0;
+    }
+
+    private sealed class PropertyPathComparer(string propertyPath) : IComparer
+    {
+        public int Compare(object? x, object? y)
+        {
+            var left = GetComparableValue(x);
+            var right = GetComparableValue(y);
+
+            if (left is null && right is null)
+            {
+                return 0;
+            }
+
+            if (left is null)
+            {
+                return -1;
+            }
+
+            if (right is null)
+            {
+                return 1;
+            }
+
+            return left switch
+            {
+                string leftString when right is string rightString => StringComparer.OrdinalIgnoreCase.Compare(leftString, rightString),
+                IComparable comparable => comparable.CompareTo(right),
+                _ => StringComparer.OrdinalIgnoreCase.Compare(left.ToString(), right.ToString())
+            };
+        }
+
+        private object? GetComparableValue(object? candidate)
+        {
+            var item = candidate as RecentQsoItemViewModel;
+            return item switch
+            {
+                null => null,
+                _ when propertyPath == nameof(RecentQsoItemViewModel.UtcSortKey) => item.UtcSortKey,
+                _ when propertyPath == nameof(RecentQsoItemViewModel.WorkedCallsign) => item.WorkedCallsign,
+                _ when propertyPath == nameof(RecentQsoItemViewModel.Band) => item.Band,
+                _ when propertyPath == nameof(RecentQsoItemViewModel.Mode) => item.Mode,
+                _ when propertyPath == nameof(RecentQsoItemViewModel.FrequencySortKey) => item.FrequencySortKey,
+                _ when propertyPath == nameof(RecentQsoItemViewModel.Rst) => item.Rst,
+                _ when propertyPath == nameof(RecentQsoItemViewModel.DxccSortKey) => item.DxccSortKey,
+                _ when propertyPath == nameof(RecentQsoItemViewModel.Country) => item.Country,
+                _ when propertyPath == nameof(RecentQsoItemViewModel.OperatorName) => item.OperatorName,
+                _ when propertyPath == nameof(RecentQsoItemViewModel.Grid) => item.Grid,
+                _ when propertyPath == nameof(RecentQsoItemViewModel.Exchange) => item.Exchange,
+                _ when propertyPath == nameof(RecentQsoItemViewModel.Contest) => item.Contest,
+                _ when propertyPath == nameof(RecentQsoItemViewModel.Station) => item.Station,
+                _ when propertyPath == nameof(RecentQsoItemViewModel.Note) => item.Note,
+                _ when propertyPath == nameof(RecentQsoItemViewModel.UtcEndSortKey) => item.UtcEndSortKey,
+                _ when propertyPath == nameof(RecentQsoItemViewModel.CqZone) => item.CqZone,
+                _ when propertyPath == nameof(RecentQsoItemViewModel.ItuZone) => item.ItuZone,
+                _ when propertyPath == nameof(RecentQsoItemViewModel.Qth) => item.Qth,
+                _ when propertyPath == nameof(RecentQsoItemViewModel.SyncStatus) => item.SyncStatus,
+                _ => null
+            };
+        }
     }
 }

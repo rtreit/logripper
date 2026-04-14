@@ -26,4 +26,9 @@ internal interface IEngineClient
     Task<GetSetupStatusResponse> GetSetupStatusAsync(CancellationToken ct = default);
 
     Task<IReadOnlyList<QsoRecord>> ListRecentQsosAsync(int limit = 200, CancellationToken ct = default);
+
+    Task<UpdateQsoResponse> UpdateQsoAsync(
+        QsoRecord qso,
+        bool syncToQrz = false,
+        CancellationToken ct = default);
 }

@@ -13,511 +13,345 @@
     <KeyBinding Gesture="Ctrl+OemComma" Command="{Binding OpenWizardCommand}" />
     <KeyBinding Gesture="Alt+X" Command="{Binding ExitCommand}" />
     <KeyBinding Gesture="Ctrl+F" Command="{Binding FocusSearchCommand}" />
+    <KeyBinding Gesture="Ctrl+S" Command="{Binding RecentQsos.SaveEditsCommand}" />
     <KeyBinding Gesture="F5" Command="{Binding RecentQsos.RefreshCommand}" />
-    <KeyBinding Gesture="Ctrl+Shift+T"
-                Command="{Binding RecentQsos.SortByColumnCommand}"
-                CommandParameter="{x:Static vm:RecentQsoSortColumn.Utc}" />
-    <KeyBinding Gesture="Ctrl+Shift+C"
-                Command="{Binding RecentQsos.SortByColumnCommand}"
-                CommandParameter="{x:Static vm:RecentQsoSortColumn.Callsign}" />
-    <KeyBinding Gesture="Ctrl+Shift+B"
-                Command="{Binding RecentQsos.SortByColumnCommand}"
-                CommandParameter="{x:Static vm:RecentQsoSortColumn.Band}" />
-    <KeyBinding Gesture="Ctrl+Shift+M"
-                Command="{Binding RecentQsos.SortByColumnCommand}"
-                CommandParameter="{x:Static vm:RecentQsoSortColumn.Mode}" />
-    <KeyBinding Gesture="Ctrl+Shift+L"
-                Command="{Binding RecentQsos.SortByColumnCommand}"
-                CommandParameter="{x:Static vm:RecentQsoSortColumn.Country}" />
-    <KeyBinding Gesture="Ctrl+Shift+N"
-                Command="{Binding RecentQsos.SortByColumnCommand}"
-                CommandParameter="{x:Static vm:RecentQsoSortColumn.Name}" />
-    <KeyBinding Gesture="Ctrl+Shift+F"
-                Command="{Binding RecentQsos.SortByColumnCommand}"
-                CommandParameter="{x:Static vm:RecentQsoSortColumn.Frequency}" />
-    <KeyBinding Gesture="Ctrl+Shift+G"
-                Command="{Binding RecentQsos.SortByColumnCommand}"
-                CommandParameter="{x:Static vm:RecentQsoSortColumn.Grid}" />
-    <KeyBinding Gesture="Ctrl+Shift+E"
-                Command="{Binding RecentQsos.SortByColumnCommand}"
-                CommandParameter="{x:Static vm:RecentQsoSortColumn.UtcEnd}" />
-    <KeyBinding Gesture="Ctrl+Shift+S"
-                Command="{Binding RecentQsos.SortByColumnCommand}"
-                CommandParameter="{x:Static vm:RecentQsoSortColumn.Sync}" />
-    <KeyBinding Gesture="Ctrl+Shift+O"
-                Command="{Binding RecentQsos.SortByColumnCommand}"
-                CommandParameter="{x:Static vm:RecentQsoSortColumn.Comment}" />
-    <KeyBinding Gesture="Ctrl+Shift+D"
-                Command="{Binding RecentQsos.ReverseSortDirectionCommand}" />
+    <KeyBinding Gesture="Ctrl+Shift+S" Command="{Binding ToggleSortChooserCommand}" />
+    <KeyBinding Gesture="Ctrl+H" Command="{Binding ToggleColumnChooserCommand}" />
+    <KeyBinding Gesture="Alt+Enter" Command="{Binding ToggleInspectorCommand}" />
   </Window.KeyBindings>
 
   <Window.Styles>
-    <Style Selector="Border.qsoCell">
-      <Setter Property="BorderBrush"
-              Value="{DynamicResource SystemControlForegroundBaseLowBrush}" />
-      <Setter Property="BorderThickness"
-              Value="0,0,1,0" />
-      <Setter Property="Padding"
-              Value="0,0,5,0" />
+    <Style Selector="TextBlock.commandCaption">
+      <Setter Property="FontSize" Value="12" />
+      <Setter Property="TextTrimming" Value="CharacterEllipsis" />
+      <Setter Property="VerticalAlignment" Value="Center" />
     </Style>
 
-    <Style Selector="Border.qsoCellLast">
-      <Setter Property="Padding"
-              Value="0" />
+    <Style Selector="Border.filterToken">
+      <Setter Property="Padding" Value="6,1" />
+      <Setter Property="CornerRadius" Value="4" />
+      <Setter Property="Background" Value="{DynamicResource SystemControlBackgroundAltMediumLowBrush}" />
     </Style>
+
+    <Style Selector="DataGrid#RecentQsoGrid">
+      <Setter Property="CanUserReorderColumns" Value="True" />
+      <Setter Property="CanUserResizeColumns" Value="True" />
+      <Setter Property="CanUserSortColumns" Value="True" />
+      <Setter Property="HeadersVisibility" Value="Column" />
+      <Setter Property="GridLinesVisibility" Value="Horizontal" />
+      <Setter Property="FrozenColumnCount" Value="5" />
+      <Setter Property="BorderThickness" Value="0" />
+      <Setter Property="SelectionMode" Value="Extended" />
+      <Setter Property="IsReadOnly" Value="False" />
+    </Style>
+
+    <Style Selector="DataGrid#RecentQsoGrid DataGridColumnHeader">
+      <Setter Property="Padding" Value="4,1" />
+      <Setter Property="FontWeight" Value="SemiBold" />
+    </Style>
+
+    <Style Selector="DataGrid#RecentQsoGrid DataGridCell">
+      <Setter Property="Padding" Value="4,1" />
+      <Setter Property="BorderThickness" Value="0" />
+    </Style>
+
   </Window.Styles>
 
   <DockPanel>
-    <!-- Menu bar — always on top, never covered by overlay -->
     <Menu DockPanel.Dock="Top">
       <MenuItem x:Name="FileMenuItem" Header="_File">
         <MenuItem Header="_Settings" InputGesture="Ctrl+OemComma"
                   Command="{Binding OpenWizardCommand}" />
+        <MenuItem Header="_Save Edits" InputGesture="Ctrl+S"
+                  Command="{Binding RecentQsos.SaveEditsCommand}" />
         <Separator />
         <MenuItem Header="E_xit" InputGesture="Alt+X" Command="{Binding ExitCommand}" />
       </MenuItem>
       <MenuItem Header="_View">
-        <MenuItem Header="_Find Recent QSOs" InputGesture="Ctrl+F"
+        <MenuItem Header="_Find" InputGesture="Ctrl+F"
                   Command="{Binding FocusSearchCommand}" />
         <MenuItem Header="_Refresh Recent QSOs" InputGesture="F5"
                   Command="{Binding RecentQsos.RefreshCommand}" />
+        <MenuItem Header="Zoom _In" InputGesture="Ctrl++"
+                  Command="{Binding RecentQsos.ZoomInCommand}" />
+        <MenuItem Header="Zoom _Out" InputGesture="Ctrl+-"
+                  Command="{Binding RecentQsos.ZoomOutCommand}" />
+        <MenuItem Header="_Reset Zoom" InputGesture="Ctrl+0"
+                  Command="{Binding RecentQsos.ResetZoomCommand}" />
         <Separator />
-        <MenuItem Header="_Sort Recent QSOs">
-          <MenuItem Header="_Time" InputGesture="Ctrl+Shift+T"
-                    Command="{Binding RecentQsos.SortByColumnCommand}"
-                    CommandParameter="{x:Static vm:RecentQsoSortColumn.Utc}" />
-          <MenuItem Header="_Call" InputGesture="Ctrl+Shift+C"
-                    Command="{Binding RecentQsos.SortByColumnCommand}"
-                    CommandParameter="{x:Static vm:RecentQsoSortColumn.Callsign}" />
-          <MenuItem Header="_Band" InputGesture="Ctrl+Shift+B"
-                    Command="{Binding RecentQsos.SortByColumnCommand}"
-                    CommandParameter="{x:Static vm:RecentQsoSortColumn.Band}" />
-          <MenuItem Header="_Mode" InputGesture="Ctrl+Shift+M"
-                    Command="{Binding RecentQsos.SortByColumnCommand}"
-                    CommandParameter="{x:Static vm:RecentQsoSortColumn.Mode}" />
-          <MenuItem Header="_Country" InputGesture="Ctrl+Shift+L"
-                    Command="{Binding RecentQsos.SortByColumnCommand}"
-                    CommandParameter="{x:Static vm:RecentQsoSortColumn.Country}" />
-          <MenuItem Header="_Name" InputGesture="Ctrl+Shift+N"
-                    Command="{Binding RecentQsos.SortByColumnCommand}"
-                    CommandParameter="{x:Static vm:RecentQsoSortColumn.Name}" />
-          <MenuItem Header="_Frequency" InputGesture="Ctrl+Shift+F"
-                    Command="{Binding RecentQsos.SortByColumnCommand}"
-                    CommandParameter="{x:Static vm:RecentQsoSortColumn.Frequency}" />
-          <MenuItem Header="_Grid" InputGesture="Ctrl+Shift+G"
-                    Command="{Binding RecentQsos.SortByColumnCommand}"
-                    CommandParameter="{x:Static vm:RecentQsoSortColumn.Grid}" />
-          <MenuItem Header="_End Time" InputGesture="Ctrl+Shift+E"
-                    Command="{Binding RecentQsos.SortByColumnCommand}"
-                    CommandParameter="{x:Static vm:RecentQsoSortColumn.UtcEnd}" />
-          <MenuItem Header="_Sync" InputGesture="Ctrl+Shift+S"
-                    Command="{Binding RecentQsos.SortByColumnCommand}"
-                    CommandParameter="{x:Static vm:RecentQsoSortColumn.Sync}" />
-          <MenuItem Header="C_omment" InputGesture="Ctrl+Shift+O"
-                    Command="{Binding RecentQsos.SortByColumnCommand}"
-                    CommandParameter="{x:Static vm:RecentQsoSortColumn.Comment}" />
-          <Separator />
-          <MenuItem Header="_Reverse Direction" InputGesture="Ctrl+Shift+D"
-                    Command="{Binding RecentQsos.ReverseSortDirectionCommand}" />
-        </MenuItem>
+        <MenuItem Header="_Sort Columns..." InputGesture="Ctrl+Shift+S"
+                  Command="{Binding ToggleSortChooserCommand}" />
+        <MenuItem Header="_Choose Columns..." InputGesture="Ctrl+H"
+                  Command="{Binding ToggleColumnChooserCommand}" />
+        <MenuItem Header="_Inspector" InputGesture="Alt+Enter"
+                  Command="{Binding ToggleInspectorCommand}" />
       </MenuItem>
     </Menu>
 
-    <!-- Content area with optional wizard overlay -->
     <Panel>
-      <Grid Margin="24"
-            RowDefinitions="Auto,Auto,Auto,*"
-            RowSpacing="16"
+      <Grid RowDefinitions="Auto,* ,Auto"
             IsEnabled="{Binding !IsWizardOpen}">
-        <Grid Grid.Row="0" ColumnDefinitions="*,Auto" ColumnSpacing="16">
-          <Border Padding="20,18"
-                  CornerRadius="12"
-                  Background="{DynamicResource SystemControlBackgroundAltHighBrush}"
-                  BorderBrush="{DynamicResource SystemControlForegroundBaseMediumLowBrush}"
-                  BorderThickness="1">
-            <StackPanel Spacing="6">
-              <TextBlock Text="QsoRipper"
-                         FontSize="28"
-                         FontWeight="SemiBold" />
-              <TextBlock Text="{Binding StatusMessage}"
-                         FontSize="15"
-                         Opacity="0.72"
-                         TextWrapping="Wrap" />
-            </StackPanel>
-          </Border>
+        <Grid Grid.Row="0"
+              Height="34"
+              Margin="10,4,10,6"
+              ColumnDefinitions="Auto,*,Auto"
+              ColumnSpacing="12">
+          <StackPanel Grid.Column="0"
+                      Orientation="Horizontal"
+                      Spacing="10"
+                      VerticalAlignment="Center">
+            <TextBlock Text="QsoRipper"
+                       FontSize="13"
+                       FontWeight="SemiBold"
+                       VerticalAlignment="Center" />
+            <TextBlock Classes="commandCaption"
+                       Text="{Binding ActiveLogText}"
+                       ToolTip.Tip="{Binding ActiveLogText}" />
+            <TextBlock Classes="commandCaption"
+                       Text="{Binding ActiveProfileText}"
+                       ToolTip.Tip="{Binding ActiveProfileText}" />
+            <TextBlock Classes="commandCaption"
+                       Text="{Binding ActiveStationText}"
+                       ToolTip.Tip="{Binding ActiveStationText}" />
+          </StackPanel>
 
-          <Border Grid.Column="1"
-                  Padding="20,16"
-                  CornerRadius="12"
-                  Background="{DynamicResource SystemControlBackgroundAltHighBrush}"
-                  BorderBrush="{DynamicResource SystemControlForegroundBaseMediumLowBrush}"
-                  BorderThickness="1">
-            <StackPanel Spacing="2"
-                        HorizontalAlignment="Right">
-              <TextBlock Text="CURRENT UTC"
-                         FontSize="11"
-                         FontWeight="SemiBold"
-                         Opacity="0.62"
-                         HorizontalAlignment="Right" />
-              <TextBlock Text="{Binding CurrentUtcTime}"
-                         FontSize="30"
-                         FontWeight="Bold"
-                         FontFamily="Cascadia Mono, Consolas, monospace"
-                         HorizontalAlignment="Right" />
-              <TextBlock Text="{Binding CurrentUtcDate}"
-                         Opacity="0.72"
-                         HorizontalAlignment="Right" />
-            </StackPanel>
-          </Border>
-        </Grid>
-
-        <Border Grid.Row="1"
-                Padding="16,12"
-                CornerRadius="12"
-                Background="{DynamicResource SystemControlBackgroundAltHighBrush}"
-                BorderBrush="{DynamicResource SystemControlForegroundBaseMediumLowBrush}"
-                BorderThickness="1"
-                IsVisible="{Binding IsSetupIncomplete}">
-          <DockPanel LastChildFill="False">
-            <TextBlock Text="Setup incomplete - finish settings before you start logging."
-                       VerticalAlignment="Center"
-                       TextWrapping="Wrap" />
-            <Button DockPanel.Dock="Right"
-                    Content="Open Settings (Ctrl+,)"
-                    Command="{Binding OpenWizardCommand}"
-                    Classes="accent"
-                    Margin="12,0,0,0" />
-          </DockPanel>
-        </Border>
-
-        <Border Grid.Row="2"
-                Padding="16"
-                CornerRadius="12"
-                Background="{DynamicResource SystemControlBackgroundAltHighBrush}"
-                BorderBrush="{DynamicResource SystemControlForegroundBaseMediumLowBrush}"
-                BorderThickness="1">
-          <Grid ColumnDefinitions="*,Auto"
-                RowDefinitions="Auto,Auto,Auto"
-                ColumnSpacing="12"
-                RowSpacing="12">
-            <StackPanel Spacing="4">
-              <TextBlock Text="Recent QSOs"
-                         FontSize="18"
-                         FontWeight="SemiBold" />
-              <TextBlock Text="{Binding RecentQsos.SummaryText}"
-                          Opacity="0.68" />
-              <TextBlock Text="{Binding RecentQsos.SortStatusText}"
-                         FontSize="12"
-                         Opacity="0.62" />
-              <TextBlock Text="Sort: T time, C call, B band, M mode, L country, N name, F freq, G grid, E end, S sync, O comment, D reverse"
-                         FontSize="11"
-                         Opacity="0.52"
-                         TextWrapping="Wrap" />
-            </StackPanel>
-
-            <TextBlock Grid.Column="1"
-                       Text="{Binding RecentQsos.LastLoadedText}"
-                       VerticalAlignment="Center"
-                       Opacity="0.68"
-                       HorizontalAlignment="Right" />
-
+          <Grid Grid.Column="1"
+                ColumnDefinitions="360,*"
+                ColumnSpacing="8"
+                VerticalAlignment="Center">
             <TextBox x:Name="RecentQsoSearchBox"
-                     Grid.Row="1"
-                     PlaceholderText="Search callsign, band, mode, country, name, grid, reports, comment, contest, and sync"
-                     Text="{Binding RecentQsos.SearchText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
-                     MinWidth="420" />
+                     Grid.Column="0"
+                     Height="28"
+                     VerticalAlignment="Center"
+                     PlaceholderText="Search callsign, grid, name, contest, note..."
+                     Text="{Binding RecentQsos.SearchText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
 
-            <Button Grid.Row="1"
-                    Grid.Column="1"
-                    Content="Refresh (F5)"
-                    Command="{Binding RecentQsos.RefreshCommand}"
-                    Classes="accent"
-                    MinWidth="130" />
-
-            <TextBlock Grid.Row="2"
-                       Grid.ColumnSpan="2"
-                       Text="{Binding RecentQsos.ErrorMessage}"
-                       Foreground="IndianRed"
-                       TextWrapping="Wrap"
-                       IsVisible="{Binding RecentQsos.ErrorMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-          </Grid>
-        </Border>
-
-        <Border Grid.Row="3"
-                CornerRadius="12"
-                Background="{DynamicResource SystemControlBackgroundAltHighBrush}"
-                BorderBrush="{DynamicResource SystemControlForegroundBaseMediumLowBrush}"
-                BorderThickness="1"
-                ClipToBounds="True">
-          <Grid RowDefinitions="Auto,*">
-            <Border Padding="12,10"
-                    BorderThickness="0,0,0,1"
-                    BorderBrush="{DynamicResource SystemControlForegroundBaseMediumLowBrush}">
-              <Grid ColumnDefinitions="112,82,52,52,110,130,82,50,50,72,*,112,70"
-                    ColumnSpacing="0">
-                <Border Classes="qsoCell">
-                  <Button Content="{Binding RecentQsos.UtcHeaderText}"
-                          Command="{Binding RecentQsos.SortByColumnCommand}"
-                          CommandParameter="{x:Static vm:RecentQsoSortColumn.Utc}"
-                          Background="Transparent"
-                          BorderBrush="Transparent"
-                          BorderThickness="0"
-                          Padding="0"
-                          HorizontalContentAlignment="Left"
-                          FontWeight="SemiBold"
-                          ToolTip.Tip="Sort by UTC (Ctrl+Shift+T)" />
-                </Border>
-                <Border Grid.Column="1" Classes="qsoCell">
-                  <Button Content="{Binding RecentQsos.CallsignHeaderText}"
-                          Command="{Binding RecentQsos.SortByColumnCommand}"
-                          CommandParameter="{x:Static vm:RecentQsoSortColumn.Callsign}"
-                          Background="Transparent"
-                          BorderBrush="Transparent"
-                          BorderThickness="0"
-                          Padding="0"
-                          HorizontalContentAlignment="Left"
-                          FontWeight="SemiBold"
-                          ToolTip.Tip="Sort by call (Ctrl+Shift+C)" />
-                </Border>
-                <Border Grid.Column="2" Classes="qsoCell">
-                  <Button Content="{Binding RecentQsos.BandHeaderText}"
-                          Command="{Binding RecentQsos.SortByColumnCommand}"
-                          CommandParameter="{x:Static vm:RecentQsoSortColumn.Band}"
-                          Background="Transparent"
-                          BorderBrush="Transparent"
-                          BorderThickness="0"
-                          Padding="0"
-                          HorizontalContentAlignment="Left"
-                          FontWeight="SemiBold"
-                          ToolTip.Tip="Sort by band (Ctrl+Shift+B)" />
-                </Border>
-                <Border Grid.Column="3" Classes="qsoCell">
-                  <Button Content="{Binding RecentQsos.ModeHeaderText}"
-                          Command="{Binding RecentQsos.SortByColumnCommand}"
-                          CommandParameter="{x:Static vm:RecentQsoSortColumn.Mode}"
-                          Background="Transparent"
-                          BorderBrush="Transparent"
-                          BorderThickness="0"
-                          Padding="0"
-                          HorizontalContentAlignment="Left"
-                          FontWeight="SemiBold"
-                          ToolTip.Tip="Sort by mode (Ctrl+Shift+M)" />
-                </Border>
-                <Border Grid.Column="4" Classes="qsoCell">
-                  <Button Content="{Binding RecentQsos.CountryHeaderText}"
-                          Command="{Binding RecentQsos.SortByColumnCommand}"
-                          CommandParameter="{x:Static vm:RecentQsoSortColumn.Country}"
-                          Background="Transparent"
-                          BorderBrush="Transparent"
-                          BorderThickness="0"
-                          Padding="0"
-                          HorizontalContentAlignment="Left"
-                          FontWeight="SemiBold"
-                          ToolTip.Tip="Sort by country (Ctrl+Shift+L)" />
-                </Border>
-                <Border Grid.Column="5" Classes="qsoCell">
-                  <Button Content="{Binding RecentQsos.NameHeaderText}"
-                          Command="{Binding RecentQsos.SortByColumnCommand}"
-                          CommandParameter="{x:Static vm:RecentQsoSortColumn.Name}"
-                          Background="Transparent"
-                          BorderBrush="Transparent"
-                          BorderThickness="0"
-                          Padding="0"
-                          HorizontalContentAlignment="Left"
-                          FontWeight="SemiBold"
-                          ToolTip.Tip="Sort by name (Ctrl+Shift+N)" />
-                </Border>
-                <Border Grid.Column="6" Classes="qsoCell">
-                  <Button Content="{Binding RecentQsos.FrequencyHeaderText}"
-                          Command="{Binding RecentQsos.SortByColumnCommand}"
-                          CommandParameter="{x:Static vm:RecentQsoSortColumn.Frequency}"
-                          Background="Transparent"
-                          BorderBrush="Transparent"
-                          BorderThickness="0"
-                          Padding="0"
-                          HorizontalContentAlignment="Left"
-                          FontWeight="SemiBold"
-                          ToolTip.Tip="Sort by frequency (Ctrl+Shift+F)" />
-                </Border>
-                <Border Grid.Column="7" Classes="qsoCell">
-                  <Button Content="{Binding RecentQsos.RstSentHeaderText}"
-                          Command="{Binding RecentQsos.SortByColumnCommand}"
-                          CommandParameter="{x:Static vm:RecentQsoSortColumn.RstSent}"
-                          Background="Transparent"
-                          BorderBrush="Transparent"
-                          BorderThickness="0"
-                          Padding="0"
-                          HorizontalContentAlignment="Left"
-                          FontWeight="SemiBold"
-                          ToolTip.Tip="Sort by sent report" />
-                </Border>
-                <Border Grid.Column="8" Classes="qsoCell">
-                  <Button Content="{Binding RecentQsos.RstReceivedHeaderText}"
-                          Command="{Binding RecentQsos.SortByColumnCommand}"
-                          CommandParameter="{x:Static vm:RecentQsoSortColumn.RstReceived}"
-                          Background="Transparent"
-                          BorderBrush="Transparent"
-                          BorderThickness="0"
-                          Padding="0"
-                          HorizontalContentAlignment="Left"
-                          FontWeight="SemiBold"
-                          ToolTip.Tip="Sort by received report" />
-                </Border>
-                <Border Grid.Column="9" Classes="qsoCell">
-                  <Button Content="{Binding RecentQsos.GridHeaderText}"
-                          Command="{Binding RecentQsos.SortByColumnCommand}"
-                          CommandParameter="{x:Static vm:RecentQsoSortColumn.Grid}"
-                          Background="Transparent"
-                          BorderBrush="Transparent"
-                          BorderThickness="0"
-                          Padding="0"
-                          HorizontalContentAlignment="Left"
-                          FontWeight="SemiBold"
-                          ToolTip.Tip="Sort by grid (Ctrl+Shift+G)" />
-                </Border>
-                <Border Grid.Column="10" Classes="qsoCell">
-                  <Button Content="{Binding RecentQsos.CommentHeaderText}"
-                          Command="{Binding RecentQsos.SortByColumnCommand}"
-                          CommandParameter="{x:Static vm:RecentQsoSortColumn.Comment}"
-                          Background="Transparent"
-                          BorderBrush="Transparent"
-                          BorderThickness="0"
-                          Padding="0"
-                          HorizontalContentAlignment="Left"
-                          FontWeight="SemiBold"
-                          ToolTip.Tip="Sort by comment (Ctrl+Shift+O)" />
-                </Border>
-                <Border Grid.Column="11" Classes="qsoCell">
-                  <Button Content="{Binding RecentQsos.UtcEndHeaderText}"
-                          Command="{Binding RecentQsos.SortByColumnCommand}"
-                          CommandParameter="{x:Static vm:RecentQsoSortColumn.UtcEnd}"
-                          Background="Transparent"
-                          BorderBrush="Transparent"
-                          BorderThickness="0"
-                          Padding="0"
-                          HorizontalContentAlignment="Left"
-                          FontWeight="SemiBold"
-                          ToolTip.Tip="Sort by end time (Ctrl+Shift+E)" />
-                </Border>
-                <Border Grid.Column="12" Classes="qsoCellLast">
-                  <Button Content="{Binding RecentQsos.SyncHeaderText}"
-                          Command="{Binding RecentQsos.SortByColumnCommand}"
-                          CommandParameter="{x:Static vm:RecentQsoSortColumn.Sync}"
-                          Background="Transparent"
-                          BorderBrush="Transparent"
-                          BorderThickness="0"
-                          Padding="0"
-                          HorizontalContentAlignment="Left"
-                          FontWeight="SemiBold"
-                          ToolTip.Tip="Sort by sync (Ctrl+Shift+S)" />
-                </Border>
-              </Grid>
-            </Border>
-
-            <Grid Grid.Row="1">
-              <ListBox ItemsSource="{Binding RecentQsos.VisibleItems}"
-                       SelectedItem="{Binding RecentQsos.SelectedQso, Mode=TwoWay}"
-                       Classes="qsoList"
-                       BorderThickness="0"
-                       Background="Transparent"
-                       IsVisible="{Binding RecentQsos.HasVisibleItems}">
-                <ListBox.Styles>
-                  <Style Selector="ListBoxItem">
-                    <Setter Property="Padding" Value="0" />
-                    <Setter Property="Margin" Value="0" />
-                    <Setter Property="MinHeight" Value="0" />
-                    <Setter Property="HorizontalContentAlignment" Value="Stretch" />
-                  </Style>
-                </ListBox.Styles>
-                <ListBox.ItemTemplate>
-                  <DataTemplate x:DataType="vm:RecentQsoItemViewModel">
-                    <Border Padding="6,1"
-                            BorderThickness="0,0,0,1"
-                            BorderBrush="{DynamicResource SystemControlForegroundBaseLowBrush}">
-                      <Grid ColumnDefinitions="112,82,52,52,110,130,82,50,50,72,*,112,70"
-                            ColumnSpacing="0">
-                        <Border Classes="qsoCell">
-                          <TextBlock Text="{Binding UtcDisplay}"
-                                     FontFamily="Cascadia Mono, Consolas, monospace"
-                                     VerticalAlignment="Center"
-                                     FontSize="12" />
-                        </Border>
-                        <Border Grid.Column="1" Classes="qsoCell">
-                          <TextBlock Text="{Binding WorkedCallsign}"
-                                     FontWeight="SemiBold"
-                                     VerticalAlignment="Center"
-                                     FontSize="12"
-                                     TextTrimming="CharacterEllipsis" />
-                        </Border>
-                        <Border Grid.Column="2" Classes="qsoCell">
-                          <TextBlock Text="{Binding Band}"
-                                     VerticalAlignment="Center"
-                                     FontSize="12"
-                                     TextTrimming="CharacterEllipsis" />
-                        </Border>
-                        <Border Grid.Column="3" Classes="qsoCell">
-                          <TextBlock Text="{Binding Mode}"
-                                     VerticalAlignment="Center"
-                                     FontSize="12"
-                                     TextTrimming="CharacterEllipsis" />
-                        </Border>
-                        <Border Grid.Column="4" Classes="qsoCell">
-                          <TextBlock Text="{Binding Country}"
-                                     VerticalAlignment="Center"
-                                     FontSize="12"
-                                     TextTrimming="CharacterEllipsis" />
-                        </Border>
-                        <Border Grid.Column="5" Classes="qsoCell">
-                          <TextBlock Text="{Binding OperatorName}"
-                                     VerticalAlignment="Center"
-                                     FontSize="12"
-                                     TextTrimming="CharacterEllipsis" />
-                        </Border>
-                        <Border Grid.Column="6" Classes="qsoCell">
-                          <TextBlock Text="{Binding Frequency}"
-                                     VerticalAlignment="Center"
-                                     FontSize="12" />
-                        </Border>
-                        <Border Grid.Column="7" Classes="qsoCell">
-                          <TextBlock Text="{Binding RstSent}"
-                                     VerticalAlignment="Center"
-                                     FontSize="12" />
-                        </Border>
-                        <Border Grid.Column="8" Classes="qsoCell">
-                          <TextBlock Text="{Binding RstReceived}"
-                                     VerticalAlignment="Center"
-                                     FontSize="12" />
-                        </Border>
-                        <Border Grid.Column="9" Classes="qsoCell">
-                          <TextBlock Text="{Binding Grid}"
-                                     VerticalAlignment="Center"
-                                     FontSize="12"
-                                     TextTrimming="CharacterEllipsis" />
-                        </Border>
-                        <Border Grid.Column="10" Classes="qsoCell">
-                          <TextBlock Text="{Binding Comment}"
-                                     VerticalAlignment="Center"
-                                     FontSize="12"
-                                     TextWrapping="NoWrap"
-                                     TextTrimming="CharacterEllipsis" />
-                        </Border>
-                        <Border Grid.Column="11" Classes="qsoCell">
-                          <TextBlock Text="{Binding UtcEndDisplay}"
-                                     VerticalAlignment="Center"
-                                     FontSize="12"
-                                     FontFamily="Cascadia Mono, Consolas, monospace" />
-                        </Border>
-                        <Border Grid.Column="12" Classes="qsoCellLast">
-                          <TextBlock Text="{Binding SyncStatus}"
-                                     VerticalAlignment="Center"
-                                     FontSize="12"
-                                     TextTrimming="CharacterEllipsis" />
-                        </Border>
-                      </Grid>
+            <ScrollViewer Grid.Column="1"
+                          HorizontalScrollBarVisibility="Hidden"
+                          VerticalScrollBarVisibility="Disabled"
+                          IsVisible="{Binding RecentQsos.HasActiveFilterTokens}">
+              <ItemsControl ItemsSource="{Binding RecentQsos.ActiveFilterTokens}">
+                <ItemsControl.ItemsPanel>
+                  <ItemsPanelTemplate>
+                    <StackPanel Orientation="Horizontal" Spacing="6" />
+                  </ItemsPanelTemplate>
+                </ItemsControl.ItemsPanel>
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate x:DataType="x:String">
+                    <Border Classes="filterToken">
+                      <TextBlock Text="{Binding .}" FontSize="11.5" />
                     </Border>
                   </DataTemplate>
-                </ListBox.ItemTemplate>
-              </ListBox>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+            </ScrollViewer>
+          </Grid>
+
+          <StackPanel Grid.Column="2"
+                      Orientation="Horizontal"
+                      Spacing="10"
+                      VerticalAlignment="Center">
+            <Button Content="Setup"
+                    Command="{Binding OpenWizardCommand}"
+                    Classes="accent"
+                    MinWidth="62"
+                    Height="26"
+                    IsVisible="{Binding IsSetupIncomplete}" />
+            <TextBlock Classes="commandCaption"
+                       Text="{Binding RecentQsos.TopSyncIndicatorText}"
+                       ToolTip.Tip="{Binding RecentQsos.SyncSummaryText}" />
+            <TextBlock Classes="commandCaption"
+                       Text="{Binding RecentQsos.RefreshIndicatorText}" />
+            <TextBlock Classes="commandCaption"
+                       Text="UTC" />
+            <TextBlock Text="{Binding CurrentUtcTime}"
+                       FontFamily="Cascadia Mono, Consolas, monospace"
+                       FontSize="12.5"
+                       FontWeight="SemiBold"
+                       VerticalAlignment="Center" />
+            <TextBlock Classes="commandCaption"
+                       Text="{Binding CurrentUtcDate}" />
+            <Button Content="Sort"
+                    Command="{Binding ToggleSortChooserCommand}"
+                    Height="26"
+                    MinWidth="54" />
+            <Button Content="Cols"
+                    Command="{Binding ToggleColumnChooserCommand}"
+                    Height="26"
+                    MinWidth="54" />
+          </StackPanel>
+        </Grid>
+
+        <Panel Grid.Row="1">
+          <Grid ColumnDefinitions="*,Auto">
+            <Grid Grid.Column="0">
+              <DataGrid x:Name="RecentQsoGrid"
+                         Margin="8,0,8,0"
+                         RowHeight="{Binding RecentQsos.GridRowHeight}"
+                         ColumnHeaderHeight="{Binding RecentQsos.GridHeaderHeight}"
+                         FontSize="{Binding RecentQsos.GridFontSize}"
+                         ItemsSource="{Binding RecentQsos.View}"
+                         PointerWheelChanged="OnRecentQsoGridPointerWheelChanged"
+                         SelectedItem="{Binding RecentQsos.SelectedQso, Mode=TwoWay}">
+                <DataGrid.Columns>
+                  <DataGridTextColumn Header="UTC"
+                                      Width="104"
+                                      Binding="{ReflectionBinding UtcDisplay, Mode=TwoWay}"
+                                      SortMemberPath="UtcSortKey" />
+                  <DataGridTextColumn Header="Call"
+                                      Width="92"
+                                      Binding="{ReflectionBinding WorkedCallsign, Mode=TwoWay}"
+                                      SortMemberPath="WorkedCallsign" />
+                  <DataGridTextColumn Header="Band"
+                                      Width="56"
+                                      Binding="{ReflectionBinding Band, Mode=TwoWay}"
+                                      SortMemberPath="Band" />
+                  <DataGridTextColumn Header="Mode"
+                                      Width="64"
+                                      Binding="{ReflectionBinding Mode, Mode=TwoWay}"
+                                      SortMemberPath="Mode" />
+                  <DataGridTextColumn Header="Freq"
+                                      Width="82"
+                                      Binding="{ReflectionBinding Frequency, Mode=TwoWay}"
+                                      SortMemberPath="FrequencySortKey" />
+                  <DataGridTextColumn Header="RST"
+                                      Width="70"
+                                      Binding="{ReflectionBinding Rst, Mode=TwoWay}"
+                                      SortMemberPath="Rst" />
+                  <DataGridTextColumn Header="DXCC"
+                                      Width="58"
+                                      Binding="{ReflectionBinding Dxcc, Mode=TwoWay}"
+                                      SortMemberPath="DxccSortKey" />
+                  <DataGridTemplateColumn Header="Country"
+                                          Width="120"
+                                          SortMemberPath="Country">
+                    <DataGridTemplateColumn.CellTemplate>
+                      <DataTemplate x:DataType="vm:RecentQsoItemViewModel">
+                        <TextBlock Text="{Binding Country}"
+                                   TextWrapping="NoWrap"
+                                   TextTrimming="CharacterEllipsis"
+                                   ToolTip.Tip="{Binding Country}" />
+                      </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                    <DataGridTemplateColumn.CellEditingTemplate>
+                      <DataTemplate x:DataType="vm:RecentQsoItemViewModel">
+                        <TextBox Text="{Binding Country, Mode=TwoWay}"
+                                 BorderThickness="0"
+                                 Padding="0"
+                                 Background="Transparent" />
+                      </DataTemplate>
+                    </DataGridTemplateColumn.CellEditingTemplate>
+                  </DataGridTemplateColumn>
+                  <DataGridTemplateColumn Header="Name"
+                                          Width="122"
+                                          SortMemberPath="OperatorName">
+                    <DataGridTemplateColumn.CellTemplate>
+                      <DataTemplate x:DataType="vm:RecentQsoItemViewModel">
+                        <TextBlock Text="{Binding OperatorName}"
+                                   TextWrapping="NoWrap"
+                                   TextTrimming="CharacterEllipsis"
+                                   ToolTip.Tip="{Binding OperatorName}" />
+                      </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                    <DataGridTemplateColumn.CellEditingTemplate>
+                      <DataTemplate x:DataType="vm:RecentQsoItemViewModel">
+                        <TextBox Text="{Binding OperatorName, Mode=TwoWay}"
+                                 BorderThickness="0"
+                                 Padding="0"
+                                 Background="Transparent" />
+                      </DataTemplate>
+                    </DataGridTemplateColumn.CellEditingTemplate>
+                  </DataGridTemplateColumn>
+                  <DataGridTextColumn Header="Grid"
+                                      Width="72"
+                                      Binding="{ReflectionBinding Grid, Mode=TwoWay}"
+                                      SortMemberPath="Grid" />
+                  <DataGridTextColumn Header="Exch"
+                                      Width="76"
+                                      Binding="{ReflectionBinding Exchange, Mode=TwoWay}"
+                                      SortMemberPath="Exchange" />
+                  <DataGridTemplateColumn Header="Contest"
+                                          Width="92"
+                                          SortMemberPath="Contest">
+                    <DataGridTemplateColumn.CellTemplate>
+                      <DataTemplate x:DataType="vm:RecentQsoItemViewModel">
+                        <TextBlock Text="{Binding Contest}"
+                                   TextWrapping="NoWrap"
+                                   TextTrimming="CharacterEllipsis"
+                                   ToolTip.Tip="{Binding Contest}" />
+                      </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                    <DataGridTemplateColumn.CellEditingTemplate>
+                      <DataTemplate x:DataType="vm:RecentQsoItemViewModel">
+                        <TextBox Text="{Binding Contest, Mode=TwoWay}"
+                                 BorderThickness="0"
+                                 Padding="0"
+                                 Background="Transparent" />
+                      </DataTemplate>
+                    </DataGridTemplateColumn.CellEditingTemplate>
+                  </DataGridTemplateColumn>
+                  <DataGridTextColumn Header="Station"
+                                      Width="92"
+                                      Binding="{ReflectionBinding Station, Mode=TwoWay}"
+                                      SortMemberPath="Station" />
+                  <DataGridTemplateColumn Header="Note"
+                                          Width="2*"
+                                          MaxWidth="240"
+                                          SortMemberPath="Note">
+                    <DataGridTemplateColumn.CellTemplate>
+                      <DataTemplate x:DataType="vm:RecentQsoItemViewModel">
+                        <TextBlock Text="{Binding Note}"
+                                   TextWrapping="NoWrap"
+                                   TextTrimming="CharacterEllipsis"
+                                   ToolTip.Tip="{Binding Note}" />
+                      </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                    <DataGridTemplateColumn.CellEditingTemplate>
+                      <DataTemplate x:DataType="vm:RecentQsoItemViewModel">
+                        <TextBox Text="{Binding Note, Mode=TwoWay}"
+                                 BorderThickness="0"
+                                 Padding="0"
+                                 Background="Transparent" />
+                      </DataTemplate>
+                    </DataGridTemplateColumn.CellEditingTemplate>
+                  </DataGridTemplateColumn>
+                  <DataGridTextColumn Header="End"
+                                      Width="104"
+                                      Binding="{ReflectionBinding UtcEndDisplay, Mode=TwoWay}"
+                                      SortMemberPath="UtcEndSortKey"
+                                      IsVisible="False" />
+                  <DataGridTextColumn Header="CQ"
+                                      Width="50"
+                                      Binding="{ReflectionBinding CqZone, Mode=TwoWay}"
+                                      SortMemberPath="CqZone"
+                                      IsVisible="False" />
+                  <DataGridTextColumn Header="ITU"
+                                      Width="50"
+                                      Binding="{ReflectionBinding ItuZone, Mode=TwoWay}"
+                                      SortMemberPath="ItuZone"
+                                      IsVisible="False" />
+                  <DataGridTemplateColumn Header="QTH"
+                                          Width="120"
+                                          SortMemberPath="Qth"
+                                          IsVisible="False"
+                                          IsReadOnly="True">
+                    <DataGridTemplateColumn.CellTemplate>
+                      <DataTemplate x:DataType="vm:RecentQsoItemViewModel">
+                        <TextBlock Text="{Binding Qth}"
+                                   TextWrapping="NoWrap"
+                                   TextTrimming="CharacterEllipsis"
+                                   ToolTip.Tip="{Binding Qth}" />
+                      </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                  </DataGridTemplateColumn>
+                  <DataGridTextColumn Header="Sync"
+                                      Width="78"
+                                      Binding="{ReflectionBinding SyncStatus}"
+                                      SortMemberPath="SyncStatus"
+                                      IsReadOnly="True"
+                                      IsVisible="False" />
+                </DataGrid.Columns>
+              </DataGrid>
 
               <StackPanel HorizontalAlignment="Center"
                           VerticalAlignment="Center"
@@ -531,15 +365,190 @@
                            Opacity="0.72" />
               </StackPanel>
 
-              <ProgressBar IsIndeterminate="True"
-                           IsVisible="{Binding RecentQsos.IsLoading}"
-                           VerticalAlignment="Top" />
+              <Border HorizontalAlignment="Right"
+                      VerticalAlignment="Top"
+                      Background="{DynamicResource SystemControlBackgroundAltMediumLowBrush}"
+                      CornerRadius="4"
+                      Margin="0,8,12,0"
+                      Padding="8,4"
+                      IsVisible="{Binding RecentQsos.ErrorMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                <TextBlock Text="{Binding RecentQsos.ErrorMessage}"
+                           Foreground="IndianRed"
+                           FontSize="11.5"
+                           TextTrimming="CharacterEllipsis"
+                           MaxWidth="360" />
+              </Border>
             </Grid>
+
+            <Border Grid.Column="1"
+                    Width="320"
+                    Padding="12,10"
+                    BorderBrush="{DynamicResource SystemControlForegroundBaseMediumLowBrush}"
+                    BorderThickness="1,0,0,0"
+                    Background="{DynamicResource SystemControlBackgroundAltHighBrush}"
+                    IsVisible="{Binding IsInspectorOpen}">
+              <ScrollViewer>
+                <StackPanel Spacing="10"
+                            DataContext="{Binding RecentQsos.SelectedQso}">
+                  <TextBlock Text="Inspector"
+                             FontSize="13"
+                             FontWeight="SemiBold" />
+
+                  <StackPanel Spacing="6"
+                              IsVisible="{Binding .}">
+                    <Grid ColumnDefinitions="Auto,*"
+                          ColumnSpacing="10"
+                          RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto">
+                      <TextBlock Text="Call" Grid.Row="0" Opacity="0.68" />
+                      <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding WorkedCallsign}" />
+                      <TextBlock Text="UTC" Grid.Row="1" Opacity="0.68" />
+                      <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding UtcDisplay}" />
+                      <TextBlock Text="Band / Mode" Grid.Row="2" Opacity="0.68" />
+                      <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding Band}" />
+                      <TextBlock Grid.Row="2" Grid.Column="1" Margin="44,0,0,0" Text="{Binding Mode}" />
+                      <TextBlock Text="Freq / RST" Grid.Row="3" Opacity="0.68" />
+                      <TextBlock Grid.Row="3" Grid.Column="1" Text="{Binding Frequency}" />
+                      <TextBlock Grid.Row="3" Grid.Column="1" Margin="74,0,0,0" Text="{Binding Rst}" />
+                      <TextBlock Text="DXCC / Country" Grid.Row="4" Opacity="0.68" />
+                      <TextBlock Grid.Row="4" Grid.Column="1" Text="{Binding Dxcc}" />
+                      <TextBlock Grid.Row="4" Grid.Column="1" Margin="42,0,0,0" Text="{Binding Country}" />
+                      <TextBlock Text="Name" Grid.Row="5" Opacity="0.68" />
+                      <TextBlock Grid.Row="5" Grid.Column="1" Text="{Binding OperatorName}" TextWrapping="Wrap" />
+                      <TextBlock Text="Grid / QTH" Grid.Row="6" Opacity="0.68" />
+                      <TextBlock Grid.Row="6" Grid.Column="1" Text="{Binding Grid}" />
+                      <TextBlock Grid.Row="6" Grid.Column="1" Margin="52,0,0,0" Text="{Binding Qth}" TextWrapping="Wrap" />
+                      <TextBlock Text="Contest / Exch" Grid.Row="7" Opacity="0.68" />
+                      <TextBlock Grid.Row="7" Grid.Column="1" Text="{Binding Contest}" />
+                      <TextBlock Grid.Row="7" Grid.Column="1" Margin="92,0,0,0" Text="{Binding Exchange}" />
+                      <TextBlock Text="Station" Grid.Row="8" Opacity="0.68" />
+                      <TextBlock Grid.Row="8" Grid.Column="1" Text="{Binding Station}" />
+                      <TextBlock Text="Zones" Grid.Row="9" Opacity="0.68" />
+                      <TextBlock Grid.Row="9" Grid.Column="1" Text="{Binding CqZone}" />
+                      <TextBlock Grid.Row="9" Grid.Column="1" Margin="34,0,0,0" Text="{Binding ItuZone}" />
+                      <TextBlock Text="End" Grid.Row="10" Opacity="0.68" />
+                      <TextBlock Grid.Row="10" Grid.Column="1" Text="{Binding UtcEndDisplay}" />
+                      <TextBlock Text="Sync" Grid.Row="11" Opacity="0.68" />
+                      <TextBlock Grid.Row="11" Grid.Column="1" Text="{Binding SyncStatus}" />
+                      <TextBlock Text="Note" Grid.Row="12" Opacity="0.68" />
+                      <TextBlock Grid.Row="12" Grid.Column="1" Text="{Binding Note}" TextWrapping="Wrap" />
+                    </Grid>
+                  </StackPanel>
+
+                  <TextBlock Text="No QSO selected."
+                             Opacity="0.68"
+                             IsVisible="{Binding !.}" />
+                </StackPanel>
+              </ScrollViewer>
+            </Border>
+          </Grid>
+
+          <Border HorizontalAlignment="Right"
+                  VerticalAlignment="Top"
+                  Margin="0,8,14,0"
+                  Padding="10,8"
+                  CornerRadius="6"
+                  Background="{DynamicResource SystemControlBackgroundAltHighBrush}"
+                  BorderBrush="{DynamicResource SystemControlForegroundBaseMediumLowBrush}"
+                  BorderThickness="1"
+                  IsVisible="{Binding IsSortChooserOpen}">
+            <StackPanel Spacing="6">
+              <TextBlock Text="Sort recent QSOs"
+                         FontSize="12.5"
+                         FontWeight="SemiBold" />
+              <Button Content="UTC"
+                      Command="{Binding RecentQsos.SortByColumnCommand}"
+                      CommandParameter="{x:Static vm:RecentQsoSortColumn.Utc}" />
+              <Button Content="Call"
+                      Command="{Binding RecentQsos.SortByColumnCommand}"
+                      CommandParameter="{x:Static vm:RecentQsoSortColumn.Callsign}" />
+              <Button Content="Band"
+                      Command="{Binding RecentQsos.SortByColumnCommand}"
+                      CommandParameter="{x:Static vm:RecentQsoSortColumn.Band}" />
+              <Button Content="Mode"
+                      Command="{Binding RecentQsos.SortByColumnCommand}"
+                      CommandParameter="{x:Static vm:RecentQsoSortColumn.Mode}" />
+              <Button Content="Freq"
+                      Command="{Binding RecentQsos.SortByColumnCommand}"
+                      CommandParameter="{x:Static vm:RecentQsoSortColumn.Frequency}" />
+              <Button Content="DXCC"
+                      Command="{Binding RecentQsos.SortByColumnCommand}"
+                      CommandParameter="{x:Static vm:RecentQsoSortColumn.Dxcc}" />
+              <Button Content="Country"
+                      Command="{Binding RecentQsos.SortByColumnCommand}"
+                      CommandParameter="{x:Static vm:RecentQsoSortColumn.Country}" />
+              <Button Content="Contest"
+                      Command="{Binding RecentQsos.SortByColumnCommand}"
+                      CommandParameter="{x:Static vm:RecentQsoSortColumn.Contest}" />
+              <Button Content="Note"
+                      Command="{Binding RecentQsos.SortByColumnCommand}"
+                      CommandParameter="{x:Static vm:RecentQsoSortColumn.Note}" />
+              <Button Content="Reverse direction"
+                      Command="{Binding RecentQsos.ReverseSortDirectionCommand}" />
+            </StackPanel>
+          </Border>
+
+          <Border HorizontalAlignment="Right"
+                  VerticalAlignment="Top"
+                  Margin="0,8,150,0"
+                  Padding="10,8"
+                  CornerRadius="6"
+                  Background="{DynamicResource SystemControlBackgroundAltHighBrush}"
+                  BorderBrush="{DynamicResource SystemControlForegroundBaseMediumLowBrush}"
+                  BorderThickness="1"
+                  IsVisible="{Binding IsColumnChooserOpen}">
+            <StackPanel Spacing="4">
+              <TextBlock Text="Visible columns"
+                         FontSize="12.5"
+                         FontWeight="SemiBold" />
+              <ItemsControl ItemsSource="{Binding RecentQsos.ColumnOptions}">
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate x:DataType="vm:RecentQsoColumnOptionViewModel">
+                    <CheckBox Content="{Binding Label}"
+                              IsChecked="{Binding IsVisible, Mode=TwoWay}" />
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+            </StackPanel>
+          </Border>
+        </Panel>
+
+        <Border Grid.Row="2"
+                BorderBrush="{DynamicResource SystemControlForegroundBaseLowBrush}"
+                BorderThickness="1,0,0,0"
+                Padding="10,4">
+          <Grid ColumnDefinitions="*,Auto"
+                ColumnSpacing="12">
+            <StackPanel Orientation="Horizontal"
+                        Spacing="10"
+                        VerticalAlignment="Center">
+              <TextBlock Text="{Binding RecentQsos.CountStatusText}" FontSize="11.5" />
+              <TextBlock Text="|" Opacity="0.45" />
+              <TextBlock Text="{Binding RecentQsos.FilterStatusText}" FontSize="11.5" />
+              <TextBlock Text="|" Opacity="0.45" />
+              <TextBlock Text="{Binding RecentQsos.SortStatusText}" FontSize="11.5" />
+              <TextBlock Text="|" Opacity="0.45" />
+              <TextBlock Text="{Binding RecentQsos.EditStatusText}" FontSize="11.5" />
+              <TextBlock Text="|" Opacity="0.45" />
+              <TextBlock Text="{Binding RecentQsos.GridZoomStatusText}" FontSize="11.5" />
+              <TextBlock Text="|" Opacity="0.45" />
+              <TextBlock Text="{Binding ActiveStationText}" FontSize="11.5" />
+              <TextBlock Text="|" Opacity="0.45" />
+              <TextBlock Text="{Binding RecentQsos.SyncSummaryText}"
+                         FontSize="11.5"
+                         TextTrimming="CharacterEllipsis"
+                         MaxWidth="420" />
+            </StackPanel>
+
+            <TextBlock Grid.Column="1"
+                       Text="F2 Edit • Ctrl+S Save • Ctrl+A Select • Ctrl+Wheel Zoom • Alt+Enter Details"
+                       FontSize="11.5"
+                       Opacity="0.68"
+                       VerticalAlignment="Center"
+                       HorizontalAlignment="Right" />
           </Grid>
         </Border>
       </Grid>
 
-      <!-- Wizard overlay — covers content area only, not the menu bar -->
       <Border IsVisible="{Binding IsWizardOpen}"
               Background="#80000000">
         <Border Background="{DynamicResource SystemControlBackgroundAltHighBrush}"
