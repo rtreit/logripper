@@ -121,7 +121,7 @@ winget install Bufbuild.Buf
 .\build.ps1 check
 ```
 
-By default, `.\build.ps1` builds the Rust workspace in **Release** and publishes the Native AOT CLI to `artifacts\publish\QsoRipper.Cli\Release\`. Use `-Configuration Debug` to switch the Rust build and AOT publish output to `Debug`.
+By default, `.\build.ps1` builds the Rust workspace in **Release**, publishes the Native AOT CLI to `artifacts\publish\QsoRipper.Cli\Release\`, and publishes the desktop GUI to `artifacts\publish\QsoRipper.Gui\Release\`. Use `-Configuration Debug` to switch the Rust build and both .NET publish outputs to `Debug`.
 
 **Rust engine:**
 
