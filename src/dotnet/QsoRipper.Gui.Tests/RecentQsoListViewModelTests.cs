@@ -136,6 +136,35 @@ public class RecentQsoListViewModelTests
         Assert.NotEqual(firstAscending, viewModel.VisibleItems[0].Country);
     }
 
+    [Fact]
+    public void ZoomCommandsClampAndResetTheQsoListFontSize()
+    {
+        var viewModel = new RecentQsoListViewModel(new FakeEngineClient());
+
+        Assert.Equal(12, viewModel.ListFontSize);
+
+        for (var i = 0; i < 20; i++)
+        {
+            viewModel.ZoomInList();
+        }
+
+        Assert.Equal(20, viewModel.ListFontSize);
+        Assert.Contains("167%", viewModel.ZoomStatusText, StringComparison.Ordinal);
+
+        for (var i = 0; i < 20; i++)
+        {
+            viewModel.ZoomOutList();
+        }
+
+        Assert.Equal(10, viewModel.ListFontSize);
+        Assert.Contains("83%", viewModel.ZoomStatusText, StringComparison.Ordinal);
+
+        viewModel.ResetListZoom();
+
+        Assert.Equal(12, viewModel.ListFontSize);
+        Assert.Contains("100%", viewModel.ZoomStatusText, StringComparison.Ordinal);
+    }
+
     private static QsoRecord CreateQso(
         string localId,
         string workedCallsign,

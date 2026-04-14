@@ -10,6 +10,10 @@ namespace QsoRipper.Gui.ViewModels;
 internal sealed partial class RecentQsoListViewModel : ObservableObject
 {
     private const int DefaultLimit = 500;
+    private const double DefaultListFontSize = 12;
+    private const double MinListFontSize = 10;
+    private const double MaxListFontSize = 20;
+    private const double ListFontSizeStep = 1;
 
     private readonly IEngineClient _engine;
     private readonly List<RecentQsoItemViewModel> _allItems = [];
@@ -78,6 +82,8 @@ internal sealed partial class RecentQsoListViewModel : ObservableObject
 
     public string SyncHeaderText => BuildHeaderText("Sync", RecentQsoSortColumn.Sync);
 
+    public string ZoomStatusText => $"Zoom {Math.Round((ListFontSize / DefaultListFontSize) * 100):0}% - Ctrl++, Ctrl+-, Ctrl+0, or Ctrl+Wheel";
+
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(RefreshCommand))]
     [NotifyPropertyChangedFor(nameof(EmptyStateMessage))]
@@ -94,6 +100,10 @@ internal sealed partial class RecentQsoListViewModel : ObservableObject
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(LastLoadedText))]
     private DateTimeOffset? _lastLoadedAtUtc;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(ZoomStatusText))]
+    private double _listFontSize = DefaultListFontSize;
 
     [ObservableProperty]
     private string _searchText = string.Empty;
@@ -204,6 +214,24 @@ internal sealed partial class RecentQsoListViewModel : ObservableObject
         ApplySort(column);
     }
 
+    [RelayCommand]
+    private void ZoomIn()
+    {
+        ZoomInList();
+    }
+
+    [RelayCommand]
+    private void ZoomOut()
+    {
+        ZoomOutList();
+    }
+
+    [RelayCommand]
+    private void ResetZoom()
+    {
+        ResetListZoom();
+    }
+
     internal void ApplySort(RecentQsoSortColumn column)
     {
         if (CurrentSortColumn == column)
@@ -223,6 +251,34 @@ internal sealed partial class RecentQsoListViewModel : ObservableObject
     {
         SortAscending = !SortAscending;
         ApplyFilter();
+    }
+
+    internal void ZoomInList()
+    {
+        ApplyZoomStep(ListFontSizeStep);
+    }
+
+    internal void ZoomOutList()
+    {
+        ApplyZoomStep(-ListFontSizeStep);
+    }
+
+    internal void ResetListZoom()
+    {
+        ListFontSize = DefaultListFontSize;
+    }
+
+    internal bool AdjustZoom(int direction)
+    {
+        var normalizedDirection = Math.Sign(direction);
+        if (normalizedDirection == 0)
+        {
+            return false;
+        }
+
+        var previousFontSize = ListFontSize;
+        ApplyZoomStep(normalizedDirection * ListFontSizeStep);
+        return !double.Equals(previousFontSize, ListFontSize);
     }
 
     private bool CanRefresh() => !IsLoading;
@@ -273,6 +329,11 @@ internal sealed partial class RecentQsoListViewModel : ObservableObject
         return filteredCount == _allItems.Count
             ? $"Showing {_allItems.Count} recent QSOs"
             : $"Showing {filteredCount} of {_allItems.Count} recent QSOs";
+    }
+
+    private void ApplyZoomStep(double delta)
+    {
+        ListFontSize = Math.Clamp(ListFontSize + delta, MinListFontSize, MaxListFontSize);
     }
 
     private static bool GetDefaultSortAscending(RecentQsoSortColumn column) => column switch

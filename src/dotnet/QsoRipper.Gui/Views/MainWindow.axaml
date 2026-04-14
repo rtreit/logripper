@@ -14,6 +14,10 @@
     <KeyBinding Gesture="Alt+X" Command="{Binding ExitCommand}" />
     <KeyBinding Gesture="Ctrl+F" Command="{Binding FocusSearchCommand}" />
     <KeyBinding Gesture="F5" Command="{Binding RecentQsos.RefreshCommand}" />
+    <KeyBinding Gesture="Ctrl+Add" Command="{Binding RecentQsos.ZoomInCommand}" />
+    <KeyBinding Gesture="Ctrl+Subtract" Command="{Binding RecentQsos.ZoomOutCommand}" />
+    <KeyBinding Gesture="Ctrl+D0" Command="{Binding RecentQsos.ResetZoomCommand}" />
+    <KeyBinding Gesture="Ctrl+NumPad0" Command="{Binding RecentQsos.ResetZoomCommand}" />
     <KeyBinding Gesture="Ctrl+Shift+T"
                 Command="{Binding RecentQsos.SortByColumnCommand}"
                 CommandParameter="{x:Static vm:RecentQsoSortColumn.Utc}" />
@@ -81,6 +85,15 @@
                   Command="{Binding FocusSearchCommand}" />
         <MenuItem Header="_Refresh Recent QSOs" InputGesture="F5"
                   Command="{Binding RecentQsos.RefreshCommand}" />
+        <Separator />
+        <MenuItem Header="_Zoom Recent QSOs">
+          <MenuItem Header="Zoom _In  (Ctrl++)"
+                    Command="{Binding RecentQsos.ZoomInCommand}" />
+          <MenuItem Header="Zoom _Out  (Ctrl+-)"
+                    Command="{Binding RecentQsos.ZoomOutCommand}" />
+          <MenuItem Header="_Reset Zoom  (Ctrl+0)"
+                    Command="{Binding RecentQsos.ResetZoomCommand}" />
+        </MenuItem>
         <Separator />
         <MenuItem Header="_Sort Recent QSOs">
           <MenuItem Header="_Time" InputGesture="Ctrl+Shift+T"
@@ -213,6 +226,10 @@
                          FontSize="11"
                          Opacity="0.52"
                          TextWrapping="Wrap" />
+              <TextBlock Text="{Binding RecentQsos.ZoomStatusText}"
+                         FontSize="11"
+                         Opacity="0.52"
+                         TextWrapping="Wrap" />
             </StackPanel>
 
             <TextBlock Grid.Column="1"
@@ -248,6 +265,7 @@
                 Background="{DynamicResource SystemControlBackgroundAltHighBrush}"
                 BorderBrush="{DynamicResource SystemControlForegroundBaseMediumLowBrush}"
                 BorderThickness="1"
+                TextElement.FontSize="{Binding RecentQsos.ListFontSize}"
                 ClipToBounds="True">
           <Grid RowDefinitions="Auto,*">
             <Border Padding="12,10"
@@ -420,6 +438,7 @@
                        Classes="qsoList"
                        BorderThickness="0"
                        Background="Transparent"
+                       PointerWheelChanged="OnRecentQsoListPointerWheelChanged"
                        IsVisible="{Binding RecentQsos.HasVisibleItems}">
                 <ListBox.Styles>
                   <Style Selector="ListBoxItem">
@@ -439,78 +458,65 @@
                         <Border Classes="qsoCell">
                           <TextBlock Text="{Binding UtcDisplay}"
                                      FontFamily="Cascadia Mono, Consolas, monospace"
-                                     VerticalAlignment="Center"
-                                     FontSize="12" />
+                                     VerticalAlignment="Center" />
                         </Border>
                         <Border Grid.Column="1" Classes="qsoCell">
                           <TextBlock Text="{Binding WorkedCallsign}"
                                      FontWeight="SemiBold"
                                      VerticalAlignment="Center"
-                                     FontSize="12"
                                      TextTrimming="CharacterEllipsis" />
                         </Border>
                         <Border Grid.Column="2" Classes="qsoCell">
                           <TextBlock Text="{Binding Band}"
                                      VerticalAlignment="Center"
-                                     FontSize="12"
                                      TextTrimming="CharacterEllipsis" />
                         </Border>
                         <Border Grid.Column="3" Classes="qsoCell">
                           <TextBlock Text="{Binding Mode}"
                                      VerticalAlignment="Center"
-                                     FontSize="12"
                                      TextTrimming="CharacterEllipsis" />
                         </Border>
                         <Border Grid.Column="4" Classes="qsoCell">
                           <TextBlock Text="{Binding Country}"
                                      VerticalAlignment="Center"
-                                     FontSize="12"
                                      TextTrimming="CharacterEllipsis" />
                         </Border>
                         <Border Grid.Column="5" Classes="qsoCell">
                           <TextBlock Text="{Binding OperatorName}"
                                      VerticalAlignment="Center"
-                                     FontSize="12"
                                      TextTrimming="CharacterEllipsis" />
                         </Border>
                         <Border Grid.Column="6" Classes="qsoCell">
                           <TextBlock Text="{Binding Frequency}"
-                                     VerticalAlignment="Center"
-                                     FontSize="12" />
+                                     VerticalAlignment="Center" />
                         </Border>
                         <Border Grid.Column="7" Classes="qsoCell">
                           <TextBlock Text="{Binding RstSent}"
-                                     VerticalAlignment="Center"
-                                     FontSize="12" />
+                                     VerticalAlignment="Center" />
                         </Border>
                         <Border Grid.Column="8" Classes="qsoCell">
                           <TextBlock Text="{Binding RstReceived}"
-                                     VerticalAlignment="Center"
-                                     FontSize="12" />
+                                     VerticalAlignment="Center" />
                         </Border>
                         <Border Grid.Column="9" Classes="qsoCell">
                           <TextBlock Text="{Binding Grid}"
                                      VerticalAlignment="Center"
-                                     FontSize="12"
                                      TextTrimming="CharacterEllipsis" />
                         </Border>
                         <Border Grid.Column="10" Classes="qsoCell">
                           <TextBlock Text="{Binding Comment}"
                                      VerticalAlignment="Center"
-                                     FontSize="12"
                                      TextWrapping="NoWrap"
                                      TextTrimming="CharacterEllipsis" />
                         </Border>
                         <Border Grid.Column="11" Classes="qsoCell">
                           <TextBlock Text="{Binding UtcEndDisplay}"
                                      VerticalAlignment="Center"
-                                     FontSize="12"
                                      FontFamily="Cascadia Mono, Consolas, monospace" />
                         </Border>
                         <Border Grid.Column="12" Classes="qsoCellLast">
                           <TextBlock Text="{Binding SyncStatus}"
                                      VerticalAlignment="Center"
-                                     FontSize="12"
                                      TextTrimming="CharacterEllipsis" />
                         </Border>
                       </Grid>

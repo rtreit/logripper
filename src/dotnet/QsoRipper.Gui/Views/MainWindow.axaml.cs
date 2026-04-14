@@ -1,5 +1,6 @@
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Input;
 using Avalonia.Threading;
 using QsoRipper.Gui.Utilities;
 
@@ -36,6 +37,21 @@ internal sealed partial class MainWindow : Window
         if (DataContext is ViewModels.MainWindowViewModel vm)
         {
             await vm.CheckFirstRunAsync();
+        }
+    }
+
+    protected override void OnKeyDown(KeyEventArgs e)
+    {
+        base.OnKeyDown(e);
+
+        if (e.Handled || _viewModel?.IsWizardOpen != false || !e.KeyModifiers.HasFlag(KeyModifiers.Control))
+        {
+            return;
+        }
+
+        if (TryHandleRecentQsoZoomKey(e))
+        {
+            e.Handled = true;
         }
     }
 
@@ -111,6 +127,19 @@ internal sealed partial class MainWindow : Window
             DispatcherPriority.Input);
     }
 
+    private void OnRecentQsoListPointerWheelChanged(object? sender, PointerWheelEventArgs e)
+    {
+        if (_viewModel?.IsWizardOpen != false || !e.KeyModifiers.HasFlag(KeyModifiers.Control))
+        {
+            return;
+        }
+
+        if (_viewModel.RecentQsos.AdjustZoom(Math.Sign(e.Delta.Y)))
+        {
+            e.Handled = true;
+        }
+    }
+
     private void ClampToCurrentScreen()
     {
         var screen = Screens.ScreenFromWindow(this) ?? Screens.Primary;
@@ -132,5 +161,43 @@ internal sealed partial class MainWindow : Window
         Width = layout.Width;
         Height = layout.Height;
         Position = layout.Position;
+    }
+
+    private bool TryHandleRecentQsoZoomKey(KeyEventArgs e)
+    {
+        if (_viewModel is null)
+        {
+            return false;
+        }
+
+        switch (e.Key)
+        {
+            case Key.Add:
+            case Key.OemPlus:
+                _viewModel.RecentQsos.ZoomInList();
+                return true;
+            case Key.Subtract:
+            case Key.OemMinus:
+                _viewModel.RecentQsos.ZoomOutList();
+                return true;
+            case Key.D0:
+            case Key.NumPad0:
+                _viewModel.RecentQsos.ResetListZoom();
+                return true;
+        }
+
+        return e.KeySymbol switch
+        {
+            "+" or "=" => HandleZoomKey(_viewModel.RecentQsos.ZoomInList),
+            "-" or "_" => HandleZoomKey(_viewModel.RecentQsos.ZoomOutList),
+            "0" => HandleZoomKey(_viewModel.RecentQsos.ResetListZoom),
+            _ => false
+        };
+    }
+
+    private static bool HandleZoomKey(Action handler)
+    {
+        handler();
+        return true;
     }
 }
