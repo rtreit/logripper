@@ -17,7 +17,7 @@ use tokio::sync::{mpsc, watch};
 
 use app::App;
 use events::{spawn_clock_task, spawn_key_task, spawn_lookup_task, AppEvent};
-use form::{is_advanced_page2, Field, LogForm, BANDS, MODES};
+use form::{AdvancedTab, Field, LogForm, BANDS, MODES};
 
 /// Application entry point.
 #[tokio::main]
@@ -177,6 +177,10 @@ fn handle_event(
 }
 
 /// Handle a key event in the current view.
+#[expect(
+    clippy::too_many_lines,
+    reason = "top-level key dispatch; splitting would obscure the routing logic"
+)]
 fn handle_key(
     app: &mut App,
     key: crossterm::event::KeyEvent,
@@ -187,7 +191,8 @@ fn handle_key(
     use crossterm::event::{KeyCode, KeyModifiers};
 
     // Ctrl+Q quits from any state.
-    if matches!(key.code, KeyCode::Char('q' | 'Q')) && key.modifiers.contains(KeyModifiers::CONTROL) {
+    if matches!(key.code, KeyCode::Char('q' | 'Q')) && key.modifiers.contains(KeyModifiers::CONTROL)
+    {
         app.running = false;
         return;
     }
@@ -226,21 +231,18 @@ fn handle_key(
             app::View::Advanced => {
                 app.view = app::View::LogEntry;
                 app.form.focused = Field::Callsign;
+                app.form.field_selected = false;
             }
             app::View::LogEntry => {
                 app.view = app::View::Advanced;
-                app.form.focused = Field::TxPower;
+                app.form.advanced_tab = AdvancedTab::Main;
+                app.form.focused = Field::Callsign;
+                app.form.field_selected = true;
             }
             app::View::Help | app::View::ConfirmDeleteQso => {}
         },
         KeyCode::F(3) => {
-            if matches!(app.view, app::View::Advanced) {
-                app.form.focused = if is_advanced_page2(&app.form.focused) {
-                    Field::TxPower
-                } else {
-                    Field::PropMode
-                };
-            } else if !app.filtered_qsos().is_empty() {
+            if !app.filtered_qsos().is_empty() {
                 app.qso_list_focused = true;
                 app.qso_selected = Some(0);
             }
@@ -249,14 +251,24 @@ fn handle_key(
             app.search_focused = true;
             app.qso_list_focused = false;
         }
+        KeyCode::F(5) if matches!(app.view, app::View::Advanced) => {
+            app.form.next_advanced_tab();
+        }
+        KeyCode::F(6) if matches!(app.view, app::View::Advanced) => {
+            app.form.prev_advanced_tab();
+        }
         KeyCode::F(10) => spawn_log_qso(app, event_tx, endpoint),
         KeyCode::Enter if key.modifiers.contains(KeyModifiers::ALT) => {
             spawn_log_qso(app, event_tx, endpoint);
+        }
+        KeyCode::End => {
+            app.form.field_selected = false;
         }
         KeyCode::Esc => match app.view {
             app::View::Advanced => {
                 app.view = app::View::LogEntry;
                 app.form.focused = Field::Callsign;
+                app.form.field_selected = false;
             }
             app::View::LogEntry => {
                 app.form = LogForm::new();
@@ -268,7 +280,12 @@ fn handle_key(
         KeyCode::Right if app.form.is_cycle_field() => cycle_right(app),
         KeyCode::Backspace => {
             let focused = app.form.focused.clone();
-            if let Some(text) = app.form.current_field_text_mut() {
+            if app.form.field_selected {
+                if let Some(text) = app.form.current_field_text_mut() {
+                    text.clear();
+                }
+                app.form.field_selected = false;
+            } else if let Some(text) = app.form.current_field_text_mut() {
                 text.pop();
             }
             if focused == Field::Callsign {
@@ -422,6 +439,12 @@ fn handle_char_key(app: &mut App, c: char, lookup_tx: &watch::Sender<String>) {
         Field::Band => app.form.type_select_band(c),
         Field::Mode => app.form.type_select_mode(c),
         _ => {
+            if app.form.field_selected {
+                if let Some(text) = app.form.current_field_text_mut() {
+                    text.clear();
+                }
+                app.form.field_selected = false;
+            }
             if let Some(text) = app.form.current_field_text_mut() {
                 if focused == Field::Callsign {
                     text.push(c.to_ascii_uppercase());
@@ -456,6 +479,7 @@ fn jump_to_field(app: &mut App, ch: char) {
         app.view = app::View::LogEntry;
     }
     app.form.focused = target;
+    app.form.field_selected = true;
     app.qso_list_focused = false;
 }
 

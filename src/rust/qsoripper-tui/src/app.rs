@@ -64,8 +64,18 @@ impl RecentQso {
             || self.mode.to_lowercase().contains(lower)
             || self.rst_sent.to_lowercase().contains(lower)
             || self.rst_rcvd.to_lowercase().contains(lower)
-            || self.country.as_deref().unwrap_or("").to_lowercase().contains(lower)
-            || self.grid.as_deref().unwrap_or("").to_lowercase().contains(lower)
+            || self
+                .country
+                .as_deref()
+                .unwrap_or("")
+                .to_lowercase()
+                .contains(lower)
+            || self
+                .grid
+                .as_deref()
+                .unwrap_or("")
+                .to_lowercase()
+                .contains(lower)
             || self.utc.contains(lower)
     }
 }

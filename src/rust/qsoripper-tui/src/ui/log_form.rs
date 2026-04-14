@@ -65,16 +65,14 @@ pub(super) fn render(app: &App, frame: &mut Frame, area: Rect) {
 
 /// Render the callsign / band / mode row.
 fn render_callsign_row(frame: &mut Frame, area: Rect, form: &crate::form::LogForm) {
-    let cs_val = field_value(
-        &form.callsign,
-        form.focused == Field::Callsign,
-        CALLSIGN_WIDTH,
-    );
+    let cs_focused = form.focused == Field::Callsign;
+    let cs_selected = cs_focused && form.field_selected;
+    let cs_val = field_value(&form.callsign, cs_focused, cs_selected, CALLSIGN_WIDTH);
     let band_val = cycle_value(form.band_str(), form.focused == Field::Band);
     let mode_val = cycle_value(form.mode_str(), form.focused == Field::Mode);
     let mut spans: Vec<Span<'static>> = Vec::new();
     spans.extend(label_m("", 'C', "allsign "));
-    spans.push(styled_field(cs_val, form.focused == Field::Callsign));
+    spans.push(styled_field(cs_val, cs_focused, cs_selected));
     spans.push(Span::raw("  "));
     spans.extend(label_m("", 'B', "and "));
     spans.push(styled_cycle(band_val, form.focused == Field::Band));
@@ -86,14 +84,18 @@ fn render_callsign_row(frame: &mut Frame, area: Rect, form: &crate::form::LogFor
 
 /// Render the RST sent / RST received row.
 fn render_rst_row(frame: &mut Frame, area: Rect, form: &crate::form::LogForm) {
-    let sent_val = field_value(&form.rst_sent, form.focused == Field::RstSent, RST_WIDTH);
-    let rcvd_val = field_value(&form.rst_rcvd, form.focused == Field::RstRcvd, RST_WIDTH);
+    let sent_focused = form.focused == Field::RstSent;
+    let sent_selected = sent_focused && form.field_selected;
+    let rcvd_focused = form.focused == Field::RstRcvd;
+    let rcvd_selected = rcvd_focused && form.field_selected;
+    let sent_val = field_value(&form.rst_sent, sent_focused, sent_selected, RST_WIDTH);
+    let rcvd_val = field_value(&form.rst_rcvd, rcvd_focused, rcvd_selected, RST_WIDTH);
     let mut spans: Vec<Span<'static>> = Vec::new();
     spans.extend(label_m("RST ", 'S', "nt  "));
-    spans.push(styled_field(sent_val, form.focused == Field::RstSent));
+    spans.push(styled_field(sent_val, sent_focused, sent_selected));
     spans.push(Span::raw("   "));
     spans.extend(label_m("RST ", 'R', "cvd "));
-    spans.push(styled_field(rcvd_val, form.focused == Field::RstRcvd));
+    spans.push(styled_field(rcvd_val, rcvd_focused, rcvd_selected));
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
@@ -101,10 +103,12 @@ fn render_rst_row(frame: &mut Frame, area: Rect, form: &crate::form::LogForm) {
 fn render_comment_row(frame: &mut Frame, area: Rect, form: &crate::form::LogForm) {
     let label_len: usize = 9;
     let width = (area.width as usize).saturating_sub(label_len + 2).max(10);
-    let val = field_value(&form.comment, form.focused == Field::Comment, width);
+    let focused = form.focused == Field::Comment;
+    let selected = focused && form.field_selected;
+    let val = field_value(&form.comment, focused, selected, width);
     let mut spans: Vec<Span<'static>> = Vec::new();
     spans.extend(label_m("C", 'o', "mment  "));
-    spans.push(styled_field(val, form.focused == Field::Comment));
+    spans.push(styled_field(val, focused, selected));
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
@@ -112,31 +116,35 @@ fn render_comment_row(frame: &mut Frame, area: Rect, form: &crate::form::LogForm
 fn render_notes_row(frame: &mut Frame, area: Rect, form: &crate::form::LogForm) {
     let label_len: usize = 9;
     let width = (area.width as usize).saturating_sub(label_len + 2).max(10);
-    let val = field_value(&form.notes, form.focused == Field::Notes, width);
+    let focused = form.focused == Field::Notes;
+    let selected = focused && form.field_selected;
+    let val = field_value(&form.notes, focused, selected, width);
     let mut spans: Vec<Span<'static>> = Vec::new();
     spans.extend(label_m("", 'N', "otes    "));
-    spans.push(styled_field(val, form.focused == Field::Notes));
+    spans.push(styled_field(val, focused, selected));
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
 /// Render the frequency / date / time row.
 fn render_freq_row(frame: &mut Frame, area: Rect, form: &crate::form::LogForm) {
-    let freq_val = field_value(
-        &form.frequency_mhz,
-        form.focused == Field::FrequencyMhz,
-        FREQ_WIDTH,
-    );
-    let date_val = field_value(&form.date, form.focused == Field::Date, DATE_WIDTH);
-    let time_val = field_value(&form.time, form.focused == Field::Time, TIME_WIDTH);
+    let freq_focused = form.focused == Field::FrequencyMhz;
+    let freq_selected = freq_focused && form.field_selected;
+    let date_focused = form.focused == Field::Date;
+    let date_selected = date_focused && form.field_selected;
+    let time_focused = form.focused == Field::Time;
+    let time_selected = time_focused && form.field_selected;
+    let freq_val = field_value(&form.frequency_mhz, freq_focused, freq_selected, FREQ_WIDTH);
+    let date_val = field_value(&form.date, date_focused, date_selected, DATE_WIDTH);
+    let time_val = field_value(&form.time, time_focused, time_selected, TIME_WIDTH);
     let mut spans: Vec<Span<'static>> = Vec::new();
     spans.extend(label_m("", 'F', "req MHz "));
-    spans.push(styled_field(freq_val, form.focused == Field::FrequencyMhz));
+    spans.push(styled_field(freq_val, freq_focused, freq_selected));
     spans.push(Span::raw("  "));
     spans.extend(label_m("", 'D', "ate "));
-    spans.push(styled_field(date_val, form.focused == Field::Date));
+    spans.push(styled_field(date_val, date_focused, date_selected));
     spans.push(Span::raw("  "));
     spans.extend(label_m("", 'T', "ime "));
-    spans.push(styled_field(time_val, form.focused == Field::Time));
+    spans.push(styled_field(time_val, time_focused, time_selected));
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
@@ -174,9 +182,9 @@ fn render_hints_row(frame: &mut Frame, area: Rect) {
 
 /// Create three spans for a label with one underlined mnemonic character.
 ///
-/// Renders as `before` + underlined `mnemonic` + `after`, all in `DarkGray`.
+/// Renders as `before` + underlined `mnemonic` + `after`, all in Cyan.
 fn label_m(before: &'static str, mnemonic: char, after: &'static str) -> [Span<'static>; 3] {
-    let label_style = Style::default().fg(Color::DarkGray);
+    let label_style = Style::default().fg(Color::Cyan);
     [
         Span::styled(before, label_style),
         Span::styled(
@@ -189,18 +197,27 @@ fn label_m(before: &'static str, mnemonic: char, after: &'static str) -> [Span<'
 
 /// Format a text field value with a fixed display width.
 ///
-/// Shows the rightmost `width` characters when the content (plus cursor) exceeds `width`,
-/// giving a natural scroll-to-end effect during typing. Pads with spaces when shorter.
-fn field_value(text: &str, focused: bool, width: usize) -> String {
-    let mut s = text.to_string();
-    if focused {
-        s.push('|');
-    }
-    let len = s.chars().count();
-    if len > width {
-        s.chars().skip(len - width).collect()
+/// When `selected`, shows text padded to width without a cursor.
+/// When focused (not selected), appends `|` cursor and scrolls right when long.
+fn field_value(text: &str, focused: bool, selected: bool, width: usize) -> String {
+    if selected {
+        let len = text.chars().count();
+        if len >= width {
+            text.chars().take(width).collect()
+        } else {
+            format!("{text:<width$}")
+        }
     } else {
-        format!("{s:<width$}")
+        let mut s = text.to_string();
+        if focused {
+            s.push('|');
+        }
+        let len = s.chars().count();
+        if len > width {
+            s.chars().skip(len - width).collect()
+        } else {
+            format!("{s:<width$}")
+        }
     }
 }
 
@@ -214,8 +231,16 @@ fn cycle_value(text: &str, focused: bool) -> String {
 }
 
 /// Styled span for a text-input field value.
-fn styled_field(text: String, focused: bool) -> Span<'static> {
-    if focused {
+pub(super) fn styled_field(text: String, focused: bool, selected: bool) -> Span<'static> {
+    if selected {
+        Span::styled(
+            text,
+            Style::default()
+                .fg(Color::White)
+                .bg(Color::Blue)
+                .add_modifier(Modifier::BOLD),
+        )
+    } else if focused {
         Span::styled(
             text,
             Style::default()

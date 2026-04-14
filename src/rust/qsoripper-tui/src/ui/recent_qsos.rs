@@ -50,7 +50,10 @@ pub(super) fn render(app: &App, frame: &mut Frame, area: Rect) {
 
     let (search_area, table_area) = if show_search && inner.height > 2 {
         let split = Layout::vertical([Constraint::Length(1), Constraint::Fill(1)]).split(inner);
-        (split.first().copied(), split.get(1).copied().unwrap_or(inner))
+        (
+            split.first().copied(),
+            split.get(1).copied().unwrap_or(inner),
+        )
     } else {
         (None, inner)
     };
@@ -90,12 +93,7 @@ fn render_search_row(app: &App, frame: &mut Frame, area: Rect) {
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
-fn render_table(
-    app: &App,
-    filtered: &[&crate::app::RecentQso],
-    frame: &mut Frame,
-    area: Rect,
-) {
+fn render_table(app: &App, filtered: &[&crate::app::RecentQso], frame: &mut Frame, area: Rect) {
     let header_cells = [
         "UTC",
         "Callsign",

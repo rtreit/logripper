@@ -19,6 +19,51 @@ pub(crate) const BAND_DEFAULT_FREQS: &[f64] = &[
 /// Index of 20M in [`BANDS`] — used as the startup default.
 const DEFAULT_BAND_IDX: usize = 5;
 
+/// Tabs available in the Advanced view.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AdvancedTab {
+    Main,
+    Contest,
+    Technical,
+    Awards,
+}
+
+impl AdvancedTab {
+    pub(crate) const ALL: &'static [AdvancedTab] = &[
+        AdvancedTab::Main,
+        AdvancedTab::Contest,
+        AdvancedTab::Technical,
+        AdvancedTab::Awards,
+    ];
+
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            AdvancedTab::Main => "Main",
+            AdvancedTab::Contest => "Contest",
+            AdvancedTab::Technical => "Technical",
+            AdvancedTab::Awards => "Awards",
+        }
+    }
+
+    pub(crate) fn next(self) -> Self {
+        match self {
+            AdvancedTab::Main => AdvancedTab::Contest,
+            AdvancedTab::Contest => AdvancedTab::Technical,
+            AdvancedTab::Technical => AdvancedTab::Awards,
+            AdvancedTab::Awards => AdvancedTab::Main,
+        }
+    }
+
+    pub(crate) fn prev(self) -> Self {
+        match self {
+            AdvancedTab::Main => AdvancedTab::Awards,
+            AdvancedTab::Contest => AdvancedTab::Main,
+            AdvancedTab::Technical => AdvancedTab::Contest,
+            AdvancedTab::Awards => AdvancedTab::Technical,
+        }
+    }
+}
+
 /// Focusable fields in the QSO entry form.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Field {
@@ -61,7 +106,6 @@ pub(crate) enum Field {
     ExchangeSent,
     /// Exchange received.
     ExchangeRcvd,
-    // Advanced page 2
     /// Propagation mode (ADIF `PROP_MODE`).
     PropMode,
     /// Satellite name.
@@ -94,9 +138,24 @@ const FIELD_ORDER: &[Field] = &[
     Field::Qth,
 ];
 
-/// Navigation order for Tab/Shift-Tab in the advanced view (both pages combined).
-const ADVANCED_FIELD_ORDER: &[Field] = &[
-    // Page 1 — power, contest
+/// Fields for the Advanced "Main" tab — mirrors the basic form.
+const ADV_MAIN_FIELDS: &[Field] = &[
+    Field::Callsign,
+    Field::Band,
+    Field::Mode,
+    Field::RstSent,
+    Field::RstRcvd,
+    Field::FrequencyMhz,
+    Field::Date,
+    Field::Time,
+    Field::TimeOff,
+    Field::Qth,
+    Field::Comment,
+    Field::Notes,
+];
+
+/// Fields for the Advanced "Contest" tab.
+const ADV_CONTEST_FIELDS: &[Field] = &[
     Field::TxPower,
     Field::Submode,
     Field::ContestId,
@@ -104,10 +163,13 @@ const ADVANCED_FIELD_ORDER: &[Field] = &[
     Field::SerialRcvd,
     Field::ExchangeSent,
     Field::ExchangeRcvd,
-    // Page 2 — propagation, awards
-    Field::PropMode,
-    Field::SatName,
-    Field::SatMode,
+];
+
+/// Fields for the Advanced "Technical" tab.
+const ADV_TECHNICAL_FIELDS: &[Field] = &[Field::PropMode, Field::SatName, Field::SatMode];
+
+/// Fields for the Advanced "Awards" tab.
+const ADV_AWARDS_FIELDS: &[Field] = &[
     Field::Iota,
     Field::ArrlSection,
     Field::WorkedState,
@@ -119,6 +181,10 @@ const ADVANCED_FIELD_ORDER: &[Field] = &[
 pub(crate) struct LogForm {
     /// Currently focused field.
     pub(crate) focused: Field,
+    /// When `true`, the focused field's text is fully selected; typing replaces it.
+    pub(crate) field_selected: bool,
+    /// Active tab in the Advanced view.
+    pub(crate) advanced_tab: AdvancedTab,
     /// Worked callsign text.
     pub(crate) callsign: String,
     /// Index into [`BANDS`].
@@ -143,7 +209,7 @@ pub(crate) struct LogForm {
     pub(crate) comment: String,
     /// Operator notes.
     pub(crate) notes: String,
-    // Advanced fields — page 1
+    // Advanced — Contest tab
     /// Transmitter power (e.g., "100W", "5W").
     pub(crate) tx_power: String,
     /// Submode override supplied by operator (overrides mode-derived submode).
@@ -158,13 +224,14 @@ pub(crate) struct LogForm {
     pub(crate) exchange_sent: String,
     /// Full exchange received string.
     pub(crate) exchange_rcvd: String,
-    // Advanced fields — page 2
+    // Advanced — Technical tab
     /// Propagation mode (ADIF `PROP_MODE` value, e.g., "ES", "TEP", "SAT").
     pub(crate) prop_mode: String,
     /// Satellite name (e.g., "AO-7").
     pub(crate) sat_name: String,
     /// Satellite mode (e.g., "V/U").
     pub(crate) sat_mode: String,
+    // Advanced — Awards tab
     /// IOTA designator (e.g., "EU-005").
     pub(crate) iota: String,
     /// ARRL section abbreviation (e.g., "WWA", "ENY").
@@ -187,6 +254,8 @@ impl LogForm {
         let now = Utc::now();
         let mut form = Self {
             focused: Field::Callsign,
+            field_selected: false,
+            advanced_tab: AdvancedTab::Main,
             callsign: String::new(),
             band_idx: DEFAULT_BAND_IDX,
             mode_idx: 0,
@@ -218,7 +287,7 @@ impl LogForm {
         form
     }
 
-    /// Move focus to the next basic field, wrapping around.
+    /// Move focus to the next basic field, wrapping around, and select its text.
     pub(crate) fn next_field(&mut self) {
         let idx = FIELD_ORDER
             .iter()
@@ -228,9 +297,10 @@ impl LogForm {
             .get((idx + 1) % FIELD_ORDER.len())
             .cloned()
             .unwrap_or(Field::Callsign);
+        self.field_selected = true;
     }
 
-    /// Move focus to the previous basic field, wrapping around.
+    /// Move focus to the previous basic field, wrapping around, and select its text.
     pub(crate) fn prev_field(&mut self) {
         let idx = FIELD_ORDER
             .iter()
@@ -242,35 +312,63 @@ impl LogForm {
             idx - 1
         };
         self.focused = FIELD_ORDER.get(new_idx).cloned().unwrap_or(Field::Callsign);
+        self.field_selected = true;
     }
 
-    /// Move focus to the next advanced field, wrapping around.
+    /// Return the field list for the current advanced tab.
+    pub(crate) fn current_advanced_fields(&self) -> &'static [Field] {
+        match self.advanced_tab {
+            AdvancedTab::Main => ADV_MAIN_FIELDS,
+            AdvancedTab::Contest => ADV_CONTEST_FIELDS,
+            AdvancedTab::Technical => ADV_TECHNICAL_FIELDS,
+            AdvancedTab::Awards => ADV_AWARDS_FIELDS,
+        }
+    }
+
+    /// Move focus to the next field in the current advanced tab, and select its text.
     pub(crate) fn next_advanced_field(&mut self) {
-        let idx = ADVANCED_FIELD_ORDER
-            .iter()
-            .position(|f| f == &self.focused)
-            .unwrap_or(0);
-        self.focused = ADVANCED_FIELD_ORDER
-            .get((idx + 1) % ADVANCED_FIELD_ORDER.len())
+        let fields = self.current_advanced_fields();
+        let idx = fields.iter().position(|f| f == &self.focused).unwrap_or(0);
+        self.focused = fields
+            .get((idx + 1) % fields.len())
             .cloned()
-            .unwrap_or(Field::TxPower);
+            .unwrap_or(Field::Callsign);
+        self.field_selected = true;
     }
 
-    /// Move focus to the previous advanced field, wrapping around.
+    /// Move focus to the previous field in the current advanced tab, and select its text.
     pub(crate) fn prev_advanced_field(&mut self) {
-        let idx = ADVANCED_FIELD_ORDER
-            .iter()
-            .position(|f| f == &self.focused)
-            .unwrap_or(0);
+        let fields = self.current_advanced_fields();
+        let idx = fields.iter().position(|f| f == &self.focused).unwrap_or(0);
         let new_idx = if idx == 0 {
-            ADVANCED_FIELD_ORDER.len().saturating_sub(1)
+            fields.len().saturating_sub(1)
         } else {
             idx - 1
         };
-        self.focused = ADVANCED_FIELD_ORDER
-            .get(new_idx)
+        self.focused = fields.get(new_idx).cloned().unwrap_or(Field::Callsign);
+        self.field_selected = true;
+    }
+
+    /// Switch to the next advanced tab and focus its first field.
+    pub(crate) fn next_advanced_tab(&mut self) {
+        self.advanced_tab = self.advanced_tab.next();
+        self.focused = self
+            .current_advanced_fields()
+            .first()
             .cloned()
-            .unwrap_or(Field::TxPower);
+            .unwrap_or(Field::Callsign);
+        self.field_selected = true;
+    }
+
+    /// Switch to the previous advanced tab and focus its first field.
+    pub(crate) fn prev_advanced_tab(&mut self) {
+        self.advanced_tab = self.advanced_tab.prev();
+        self.focused = self
+            .current_advanced_fields()
+            .first()
+            .cloned()
+            .unwrap_or(Field::Callsign);
+        self.field_selected = true;
     }
 
     /// Update frequency and RST defaults after the band changes.
@@ -389,18 +487,4 @@ fn default_rst_for_mode(mode_idx: usize) -> &'static str {
         "SSB" | "AM" | "FM" => "59",
         _ => "599",
     }
-}
-
-/// Returns `true` if `field` belongs to the advanced form page 2 (propagation / awards).
-pub(crate) fn is_advanced_page2(field: &Field) -> bool {
-    matches!(
-        field,
-        Field::PropMode
-            | Field::SatName
-            | Field::SatMode
-            | Field::Iota
-            | Field::ArrlSection
-            | Field::WorkedState
-            | Field::WorkedCounty
-    )
 }
