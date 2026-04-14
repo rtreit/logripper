@@ -1,6 +1,8 @@
+using Google.Protobuf.WellKnownTypes;
 using Grpc.Net.Client;
 using QsoRipper.Domain;
 using QsoRipper.Services;
+using System.Globalization;
 
 namespace QsoRipper.Cli.Commands;
 
@@ -66,14 +68,14 @@ internal static class SpaceWeatherCommand
         };
     }
 
-    private static string FormatTimestamp(Google.Protobuf.WellKnownTypes.Timestamp? timestamp)
+    private static string FormatTimestamp(Timestamp? timestamp)
     {
         return timestamp is null ? "(unavailable)" : timestamp.ToDateTime().ToUniversalTime().ToString("u");
     }
 
     private static string FormatDouble(bool hasValue, double value)
     {
-        return hasValue ? value.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture) : "(unavailable)";
+        return hasValue ? value.ToString("0.##", CultureInfo.InvariantCulture) : "(unavailable)";
     }
 
     private static string FormatUInt32(bool hasValue, uint value, string? prefix = null)
@@ -83,7 +85,7 @@ internal static class SpaceWeatherCommand
             return "(unavailable)";
         }
 
-        return prefix is null ? value.ToString(System.Globalization.CultureInfo.InvariantCulture) : $"{prefix}{value}";
+        return prefix is null ? value.ToString(CultureInfo.InvariantCulture) : $"{prefix}{value}";
     }
 
     private static string FormatString(string? value)
