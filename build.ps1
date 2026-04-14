@@ -38,8 +38,11 @@ $DotnetCliProject = Join-Path $PSScriptRoot 'src' 'dotnet' 'QsoRipper.Cli' 'QsoR
 $DotnetGuiProject = Join-Path $PSScriptRoot 'src' 'dotnet' 'QsoRipper.Gui' 'QsoRipper.Gui.csproj'
 $DotnetCliPublishDir = Join-Path $PSScriptRoot 'artifacts' 'publish' | Join-Path -ChildPath 'QsoRipper.Cli' | Join-Path -ChildPath $Configuration
 $DotnetGuiPublishDir = Join-Path $PSScriptRoot 'artifacts' 'publish' | Join-Path -ChildPath 'QsoRipper.Gui' | Join-Path -ChildPath $Configuration
+$TuiPublishDir = Join-Path $PSScriptRoot 'artifacts' 'publish' | Join-Path -ChildPath 'qsoripper-tui' | Join-Path -ChildPath $Configuration
 $RustDir = Join-Path $PSScriptRoot 'src' 'rust'
 $IsReleaseBuild = $Configuration -eq 'Release'
+$RustTargetProfile = if ($IsReleaseBuild) { 'release' } else { 'debug' }
+$TuiBinary = if ($IsWindows) { 'qsoripper-tui.exe' } else { 'qsoripper-tui' }
 
 function Write-Step([string]$Message) {
     Write-Host "`n=== $Message ===" -ForegroundColor Cyan
@@ -61,6 +64,14 @@ function Build-Rust {
     }
 
     Invoke-Build "Building Rust ($Configuration)" cargo $arguments
+
+    $tuiSrc = Join-Path $PSScriptRoot 'src' 'rust' 'target' $RustTargetProfile $TuiBinary
+    if (Test-Path $tuiSrc) {
+        Write-Step "Publishing qsoripper-tui ($Configuration)"
+        $null = New-Item -ItemType Directory -Force -Path $TuiPublishDir
+        Copy-Item -Path $tuiSrc -Destination $TuiPublishDir -Force
+        Write-Host "  -> $TuiPublishDir"
+    }
 }
 
 function Build-Dotnet {
@@ -147,9 +158,9 @@ QsoRipper Build Script
 Usage: ./build.ps1 [command] [-Configuration Release|Debug]
 
 Commands:
-  build         Build Rust and publish the CLI and GUI apps (default: Release)
+  build         Build Rust (including qsoripper-tui) and publish the CLI and GUI apps (default: Release)
   check         Full CI-equivalent quality check
-  rust          Build Rust only
+  rust          Build Rust only (copies qsoripper-tui binary to artifacts)
   dotnet        Publish the CLI and GUI apps only
   check-rust    Rust quality: fmt, clippy, test, buf lint, cargo deny
   check-dotnet  .NET quality: format, build, test
