@@ -1,0 +1,146 @@
+{
+  "inspectSurface": "MainWindow",
+  "window": {
+    "title": "QsoRipper",
+    "x": 80,
+    "y": 80,
+    "width": 1280,
+    "height": 760
+  },
+  "actions": [
+    { "type": "wait", "milliseconds": 800 },
+    { "type": "dump-tree", "path": "inspect-tree-1280.json" },
+    { "type": "screenshot", "path": "inspect-1280x760.png" },
+
+    {
+      "comment": "Narrow Mode column to expose header clipping",
+      "type": "drag",
+      "name": "Mode",
+      "controlType": "HeaderItem",
+      "relativeX": 0.98,
+      "relativeY": 0.5,
+      "deltaX": -40,
+      "deltaY": 0
+    },
+    { "type": "wait", "milliseconds": 200 },
+    { "type": "screenshot", "path": "inspect-mode-col-narrow.png" },
+
+    {
+      "comment": "Narrow Band column",
+      "type": "drag",
+      "name": "Band",
+      "controlType": "HeaderItem",
+      "relativeX": 0.98,
+      "relativeY": 0.5,
+      "deltaX": -30,
+      "deltaY": 0
+    },
+    { "type": "wait", "milliseconds": 200 },
+    { "type": "screenshot", "path": "inspect-band-col-narrow.png" },
+
+    {
+      "comment": "Narrow UTC column to expose timestamp clipping",
+      "type": "drag",
+      "name": "UTC",
+      "controlType": "HeaderItem",
+      "relativeX": 0.98,
+      "relativeY": 0.5,
+      "deltaX": -40,
+      "deltaY": 0
+    },
+    { "type": "wait", "milliseconds": 200 },
+    { "type": "screenshot", "path": "inspect-utc-col-narrow.png" },
+    { "type": "dump-tree", "path": "inspect-tree-cols-narrow.json" },
+
+    {
+      "comment": "Resize window to minimum supported width (1024)",
+      "type": "resize-window",
+      "x": 80,
+      "y": 80,
+      "width": 1024,
+      "height": 640
+    },
+    { "type": "wait", "milliseconds": 400 },
+    { "type": "screenshot", "path": "inspect-1024x640-min.png" },
+    { "type": "dump-tree", "path": "inspect-tree-1024x640.json" },
+
+    {
+      "comment": "Very narrow window to stress toolbar and header overflow",
+      "type": "resize-window",
+      "x": 80,
+      "y": 80,
+      "width": 900,
+      "height": 600
+    },
+    { "type": "wait", "milliseconds": 400 },
+    { "type": "screenshot", "path": "inspect-900x600-narrow.png" },
+    { "type": "dump-tree", "path": "inspect-tree-900x600.json" },
+
+    {
+      "comment": "Very tall narrow window — column/header density stress",
+      "type": "resize-window",
+      "x": 80,
+      "y": 80,
+      "width": 800,
+      "height": 900
+    },
+    { "type": "wait", "milliseconds": 400 },
+    { "type": "screenshot", "path": "inspect-800x900-tall.png" },
+
+    {
+      "comment": "Wide short window — test horizontal overflow in toolbar",
+      "type": "resize-window",
+      "x": 80,
+      "y": 80,
+      "width": 1600,
+      "height": 500
+    },
+    { "type": "wait", "milliseconds": 400 },
+    { "type": "screenshot", "path": "inspect-1600x500-wide.png" },
+    { "type": "dump-tree", "path": "inspect-tree-1600x500.json" },
+
+    {
+      "comment": "Restore to normal size and widen UTC column to check improvement",
+      "type": "resize-window",
+      "x": 80,
+      "y": 80,
+      "width": 1280,
+      "height": 760
+    },
+    { "type": "wait", "milliseconds": 400 },
+    {
+      "type": "drag",
+      "name": "UTC",
+      "controlType": "HeaderItem",
+      "relativeX": 0.98,
+      "relativeY": 0.5,
+      "deltaX": 60,
+      "deltaY": 0
+    },
+    { "type": "wait", "milliseconds": 200 },
+    { "type": "screenshot", "path": "inspect-utc-col-wide.png" },
+
+    {
+      "comment": "Open column chooser panel at normal size",
+      "type": "click",
+      "automationId": "ColumnsButton"
+    },
+    { "type": "wait", "milliseconds": 300 },
+    { "type": "screenshot", "path": "inspect-column-chooser.png" },
+
+    {
+      "comment": "Open sort chooser panel",
+      "type": "click",
+      "automationId": "SortButton"
+    },
+    { "type": "wait", "milliseconds": 300 },
+    { "type": "screenshot", "path": "inspect-sort-chooser.png" },
+
+    {
+      "comment": "Final full dump at normal restored state",
+      "type": "dump-tree",
+      "path": "inspect-tree-final.json"
+    },
+    { "type": "screenshot", "path": "inspect-final.png" }
+  ]
+}
