@@ -271,6 +271,70 @@ internal sealed partial class RecentQsoListViewModel : ObservableObject
         }
     }
 
+    [ObservableProperty]
+    private bool _isDeletePending;
+
+    [ObservableProperty]
+    private string _deleteConfirmCallsign = string.Empty;
+
+    private string? _pendingDeleteLocalId;
+
+    internal void RequestDeleteSelectedQso()
+    {
+        var selected = SelectedQso;
+        if (selected is null || string.IsNullOrWhiteSpace(selected.LocalId))
+        {
+            return;
+        }
+
+        _pendingDeleteLocalId = selected.LocalId;
+        DeleteConfirmCallsign = selected.WorkedCallsign;
+        IsDeletePending = true;
+    }
+
+    [RelayCommand]
+    internal async Task ConfirmDeleteAsync()
+    {
+        if (_pendingDeleteLocalId is null)
+        {
+            return;
+        }
+
+        var localId = _pendingDeleteLocalId;
+        IsDeletePending = false;
+        _pendingDeleteLocalId = null;
+        DeleteConfirmCallsign = string.Empty;
+
+        try
+        {
+            var response = await _engine.DeleteQsoAsync(localId);
+            if (response.Success)
+            {
+                await RefreshAsync();
+            }
+            else
+            {
+                ErrorMessage = response.Error ?? "Delete failed.";
+                NotifyStatusPropertiesChanged();
+            }
+        }
+        catch (RpcException ex)
+        {
+            ErrorMessage = string.IsNullOrWhiteSpace(ex.Status.Detail)
+                ? $"Delete failed ({ex.StatusCode})."
+                : ex.Status.Detail;
+            NotifyStatusPropertiesChanged();
+        }
+    }
+
+    [RelayCommand]
+    private void CancelDelete()
+    {
+        IsDeletePending = false;
+        _pendingDeleteLocalId = null;
+        DeleteConfirmCallsign = string.Empty;
+    }
+
     [RelayCommand]
     private void ZoomIn()
     {

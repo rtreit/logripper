@@ -1,0 +1,43 @@
+{
+  "inspectSurface": "MainWindow",
+  "window": {
+    "title": "QsoRipper",
+    "x": 80,
+    "y": 80,
+    "width": 1280,
+    "height": 760
+  },
+  "actions": [
+    { "type": "wait", "milliseconds": 800 },
+    { "type": "screenshot", "path": "cell-select-before.png" },
+
+    {
+      "comment": "Click a cell in the Name column to select it",
+      "type": "click",
+      "name": "ARRL HQ",
+      "controlType": "Text"
+    },
+    { "type": "wait", "milliseconds": 400 },
+    { "type": "screenshot", "path": "cell-select-after.png" },
+
+    {
+      "comment": "Click a different cell in Country column",
+      "type": "click",
+      "name": "Canada",
+      "controlType": "Text"
+    },
+    { "type": "wait", "milliseconds": 400 },
+    { "type": "screenshot", "path": "cell-select-country.png" },
+
+    {
+      "comment": "Click a cell in UTC column",
+      "type": "click",
+      "name": "26-04-13 22:12",
+      "controlType": "Edit"
+    },
+    { "type": "wait", "milliseconds": 400 },
+    { "type": "screenshot", "path": "cell-select-utc.png" },
+
+    { "type": "dump-tree", "path": "cell-select-tree.json" }
+  ]
+}

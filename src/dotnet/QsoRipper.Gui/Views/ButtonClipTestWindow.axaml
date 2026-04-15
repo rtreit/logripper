@@ -1,0 +1,259 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="QsoRipper.Gui.Views.ButtonClipTestWindow"
+        Title="Button Clip Diagnostic"
+        Width="880" Height="820"
+        WindowStartupLocation="CenterScreen">
+
+  <Window.Styles>
+    <!-- Template-level ContentPresenter padding override -->
+    <Style Selector="Button.tpl-pad /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Padding" Value="10,2,10,2"/>
+    </Style>
+
+    <!-- Template-level ContentPresenter vertical alignment override -->
+    <Style Selector="Button.tpl-va /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="VerticalAlignment" Value="Center"/>
+    </Style>
+
+    <!-- Template-level combo: tighter pad + centered -->
+    <Style Selector="Button.tpl-combo /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Padding" Value="8,1,8,1"/>
+      <Setter Property="VerticalAlignment" Value="Center"/>
+    </Style>
+
+    <!-- Zero-pad template override -->
+    <Style Selector="Button.tpl-zero /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Padding" Value="0"/>
+    </Style>
+
+    <!-- Override with asymmetric bottom-heavy padding -->
+    <Style Selector="Button.tpl-bot /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Padding" Value="10,3,10,5"/>
+    </Style>
+
+    <!-- Row label style -->
+    <Style Selector="TextBlock.rowLabel">
+      <Setter Property="Width" Value="220"/>
+      <Setter Property="VerticalAlignment" Value="Center"/>
+      <Setter Property="FontSize" Value="11"/>
+      <Setter Property="FontFamily" Value="Cascadia Mono, Consolas, monospace"/>
+    </Style>
+  </Window.Styles>
+
+  <ScrollViewer Margin="12">
+    <StackPanel Spacing="6">
+      <TextBlock Text="Button Text Clipping Diagnostic"
+                 FontWeight="Bold" FontSize="15" Margin="0,0,0,2"/>
+      <TextBlock Text="Each row: ⟳ Sync (has descender y), Sort, Cols, gyjpq (all descenders)"
+                 FontSize="11" Opacity="0.7" Margin="0,0,0,8"/>
+
+      <!-- Row 1: Current config (the bug) -->
+      <StackPanel Orientation="Horizontal" Spacing="6">
+        <TextBlock Classes="rowLabel" Text="1. H=28 (CURRENT BUG)"/>
+        <Button Content="⟳ Sync" Height="28" MinWidth="54"/>
+        <Button Content="Sort" Height="28" MinWidth="54"/>
+        <Button Content="Cols" Height="28" MinWidth="54"/>
+        <Button Content="gyjpq" Height="28" MinWidth="54"/>
+      </StackPanel>
+
+      <!-- Row 2: No explicit Height -->
+      <StackPanel Orientation="Horizontal" Spacing="6">
+        <TextBlock Classes="rowLabel" Text="2. No Height (auto)"/>
+        <Button Content="⟳ Sync" MinWidth="54"/>
+        <Button Content="Sort" MinWidth="54"/>
+        <Button Content="Cols" MinWidth="54"/>
+        <Button Content="gyjpq" MinWidth="54"/>
+      </StackPanel>
+
+      <!-- Row 3: Height=30 -->
+      <StackPanel Orientation="Horizontal" Spacing="6">
+        <TextBlock Classes="rowLabel" Text="3. H=30"/>
+        <Button Content="⟳ Sync" Height="30" MinWidth="54"/>
+        <Button Content="Sort" Height="30" MinWidth="54"/>
+        <Button Content="Cols" Height="30" MinWidth="54"/>
+        <Button Content="gyjpq" Height="30" MinWidth="54"/>
+      </StackPanel>
+
+      <!-- Row 4: Height=32 -->
+      <StackPanel Orientation="Horizontal" Spacing="6">
+        <TextBlock Classes="rowLabel" Text="4. H=32"/>
+        <Button Content="⟳ Sync" Height="32" MinWidth="54"/>
+        <Button Content="Sort" Height="32" MinWidth="54"/>
+        <Button Content="Cols" Height="32" MinWidth="54"/>
+        <Button Content="gyjpq" Height="32" MinWidth="54"/>
+      </StackPanel>
+
+      <!-- Row 5: Height=36 -->
+      <StackPanel Orientation="Horizontal" Spacing="6">
+        <TextBlock Classes="rowLabel" Text="5. H=36"/>
+        <Button Content="⟳ Sync" Height="36" MinWidth="54"/>
+        <Button Content="Sort" Height="36" MinWidth="54"/>
+        <Button Content="Cols" Height="36" MinWidth="54"/>
+        <Button Content="gyjpq" Height="36" MinWidth="54"/>
+      </StackPanel>
+
+      <!-- Row 6: MinHeight=28 (no explicit Height) -->
+      <StackPanel Orientation="Horizontal" Spacing="6">
+        <TextBlock Classes="rowLabel" Text="6. MinH=28 no H"/>
+        <Button Content="⟳ Sync" MinHeight="28" MinWidth="54"/>
+        <Button Content="Sort" MinHeight="28" MinWidth="54"/>
+        <Button Content="Cols" MinHeight="28" MinWidth="54"/>
+        <Button Content="gyjpq" MinHeight="28" MinWidth="54"/>
+      </StackPanel>
+
+      <!-- Row 7: MinHeight=32 -->
+      <StackPanel Orientation="Horizontal" Spacing="6">
+        <TextBlock Classes="rowLabel" Text="7. MinH=32 no H"/>
+        <Button Content="⟳ Sync" MinHeight="32" MinWidth="54"/>
+        <Button Content="Sort" MinHeight="32" MinWidth="54"/>
+        <Button Content="Cols" MinHeight="32" MinWidth="54"/>
+        <Button Content="gyjpq" MinHeight="32" MinWidth="54"/>
+      </StackPanel>
+
+      <!-- Row 8: H=28 + symmetric Padding -->
+      <StackPanel Orientation="Horizontal" Spacing="6">
+        <TextBlock Classes="rowLabel" Text="8. H=28 Pad=10,5"/>
+        <Button Content="⟳ Sync" Height="28" MinWidth="54" Padding="10,5"/>
+        <Button Content="Sort" Height="28" MinWidth="54" Padding="10,5"/>
+        <Button Content="Cols" Height="28" MinWidth="54" Padding="10,5"/>
+        <Button Content="gyjpq" Height="28" MinWidth="54" Padding="10,5"/>
+      </StackPanel>
+
+      <!-- Row 9: H=28 + asymmetric bottom-heavy -->
+      <StackPanel Orientation="Horizontal" Spacing="6">
+        <TextBlock Classes="rowLabel" Text="9. H=28 Pad=10,3,10,7"/>
+        <Button Content="⟳ Sync" Height="28" MinWidth="54" Padding="10,3,10,7"/>
+        <Button Content="Sort" Height="28" MinWidth="54" Padding="10,3,10,7"/>
+        <Button Content="Cols" Height="28" MinWidth="54" Padding="10,3,10,7"/>
+        <Button Content="gyjpq" Height="28" MinWidth="54" Padding="10,3,10,7"/>
+      </StackPanel>
+
+      <!-- Row 10: H=28 + VCA=Center -->
+      <StackPanel Orientation="Horizontal" Spacing="6">
+        <TextBlock Classes="rowLabel" Text="10. H=28 VCA=Center"/>
+        <Button Content="⟳ Sync" Height="28" MinWidth="54" VerticalContentAlignment="Center"/>
+        <Button Content="Sort" Height="28" MinWidth="54" VerticalContentAlignment="Center"/>
+        <Button Content="Cols" Height="28" MinWidth="54" VerticalContentAlignment="Center"/>
+        <Button Content="gyjpq" Height="28" MinWidth="54" VerticalContentAlignment="Center"/>
+      </StackPanel>
+
+      <!-- Row 11: No H + VCA=Center -->
+      <StackPanel Orientation="Horizontal" Spacing="6">
+        <TextBlock Classes="rowLabel" Text="11. No H VCA=Center"/>
+        <Button Content="⟳ Sync" MinWidth="54" VerticalContentAlignment="Center"/>
+        <Button Content="Sort" MinWidth="54" VerticalContentAlignment="Center"/>
+        <Button Content="Cols" MinWidth="54" VerticalContentAlignment="Center"/>
+        <Button Content="gyjpq" MinWidth="54" VerticalContentAlignment="Center"/>
+      </StackPanel>
+
+      <!-- Row 12: H=28 with TextBlock child -->
+      <StackPanel Orientation="Horizontal" Spacing="6">
+        <TextBlock Classes="rowLabel" Text="12. H=28 TextBlock child"/>
+        <Button Height="28" MinWidth="54">
+          <TextBlock Text="⟳ Sync" VerticalAlignment="Center"/>
+        </Button>
+        <Button Height="28" MinWidth="54">
+          <TextBlock Text="Sort" VerticalAlignment="Center"/>
+        </Button>
+        <Button Height="28" MinWidth="54">
+          <TextBlock Text="Cols" VerticalAlignment="Center"/>
+        </Button>
+        <Button Height="28" MinWidth="54">
+          <TextBlock Text="gyjpq" VerticalAlignment="Center"/>
+        </Button>
+      </StackPanel>
+
+      <!-- Row 13: tpl-pad (template ContentPresenter pad) -->
+      <StackPanel Orientation="Horizontal" Spacing="6">
+        <TextBlock Classes="rowLabel" Text="13. tpl-pad CP=10,2"/>
+        <Button Content="⟳ Sync" Height="28" MinWidth="54" Classes="tpl-pad"/>
+        <Button Content="Sort" Height="28" MinWidth="54" Classes="tpl-pad"/>
+        <Button Content="Cols" Height="28" MinWidth="54" Classes="tpl-pad"/>
+        <Button Content="gyjpq" Height="28" MinWidth="54" Classes="tpl-pad"/>
+      </StackPanel>
+
+      <!-- Row 14: tpl-va (template ContentPresenter VA=Center) -->
+      <StackPanel Orientation="Horizontal" Spacing="6">
+        <TextBlock Classes="rowLabel" Text="14. tpl-va CP VA=Center"/>
+        <Button Content="⟳ Sync" Height="28" MinWidth="54" Classes="tpl-va"/>
+        <Button Content="Sort" Height="28" MinWidth="54" Classes="tpl-va"/>
+        <Button Content="Cols" Height="28" MinWidth="54" Classes="tpl-va"/>
+        <Button Content="gyjpq" Height="28" MinWidth="54" Classes="tpl-va"/>
+      </StackPanel>
+
+      <!-- Row 15: tpl-combo (pad + VA) -->
+      <StackPanel Orientation="Horizontal" Spacing="6">
+        <TextBlock Classes="rowLabel" Text="15. tpl-combo pad+VA"/>
+        <Button Content="⟳ Sync" Height="28" MinWidth="54" Classes="tpl-combo"/>
+        <Button Content="Sort" Height="28" MinWidth="54" Classes="tpl-combo"/>
+        <Button Content="Cols" Height="28" MinWidth="54" Classes="tpl-combo"/>
+        <Button Content="gyjpq" Height="28" MinWidth="54" Classes="tpl-combo"/>
+      </StackPanel>
+
+      <!-- Row 16: tpl-zero (zero ContentPresenter padding) -->
+      <StackPanel Orientation="Horizontal" Spacing="6">
+        <TextBlock Classes="rowLabel" Text="16. tpl-zero CP Pad=0"/>
+        <Button Content="⟳ Sync" Height="28" MinWidth="54" Classes="tpl-zero"/>
+        <Button Content="Sort" Height="28" MinWidth="54" Classes="tpl-zero"/>
+        <Button Content="Cols" Height="28" MinWidth="54" Classes="tpl-zero"/>
+        <Button Content="gyjpq" Height="28" MinWidth="54" Classes="tpl-zero"/>
+      </StackPanel>
+
+      <!-- Row 17: tpl-bot (bottom-heavy template pad) -->
+      <StackPanel Orientation="Horizontal" Spacing="6">
+        <TextBlock Classes="rowLabel" Text="17. tpl-bot CP=10,3,10,5"/>
+        <Button Content="⟳ Sync" Height="28" MinWidth="54" Classes="tpl-bot"/>
+        <Button Content="Sort" Height="28" MinWidth="54" Classes="tpl-bot"/>
+        <Button Content="Cols" Height="28" MinWidth="54" Classes="tpl-bot"/>
+        <Button Content="gyjpq" Height="28" MinWidth="54" Classes="tpl-bot"/>
+      </StackPanel>
+
+      <!-- Row 18: H=32 Pad=10,5 VCA=Center -->
+      <StackPanel Orientation="Horizontal" Spacing="6">
+        <TextBlock Classes="rowLabel" Text="18. H=32 Pad=10,5 VCA=C"/>
+        <Button Content="⟳ Sync" Height="32" MinWidth="54" Padding="10,5" VerticalContentAlignment="Center"/>
+        <Button Content="Sort" Height="32" MinWidth="54" Padding="10,5" VerticalContentAlignment="Center"/>
+        <Button Content="Cols" Height="32" MinWidth="54" Padding="10,5" VerticalContentAlignment="Center"/>
+        <Button Content="gyjpq" Height="32" MinWidth="54" Padding="10,5" VerticalContentAlignment="Center"/>
+      </StackPanel>
+
+      <!-- Row 19: UseLayoutRounding -->
+      <StackPanel Orientation="Horizontal" Spacing="6" UseLayoutRounding="True">
+        <TextBlock Classes="rowLabel" Text="19. H=28 LayoutRounding"/>
+        <Button Content="⟳ Sync" Height="28" MinWidth="54" UseLayoutRounding="True"/>
+        <Button Content="Sort" Height="28" MinWidth="54" UseLayoutRounding="True"/>
+        <Button Content="Cols" Height="28" MinWidth="54" UseLayoutRounding="True"/>
+        <Button Content="gyjpq" Height="28" MinWidth="54" UseLayoutRounding="True"/>
+      </StackPanel>
+
+      <!-- Row 20: H=28 Pad=11,5,11,5 (explicit symmetric Fluent) -->
+      <StackPanel Orientation="Horizontal" Spacing="6">
+        <TextBlock Classes="rowLabel" Text="20. H=28 Pad=11,5,11,5"/>
+        <Button Content="⟳ Sync" Height="28" MinWidth="54" Padding="11,5,11,5"/>
+        <Button Content="Sort" Height="28" MinWidth="54" Padding="11,5,11,5"/>
+        <Button Content="Cols" Height="28" MinWidth="54" Padding="11,5,11,5"/>
+        <Button Content="gyjpq" Height="28" MinWidth="54" Padding="11,5,11,5"/>
+      </StackPanel>
+
+      <!-- Row 21: H=28 Pad=11,4,11,6 (WinUI-like asymmetric) -->
+      <StackPanel Orientation="Horizontal" Spacing="6">
+        <TextBlock Classes="rowLabel" Text="21. H=28 Pad=11,4,11,6"/>
+        <Button Content="⟳ Sync" Height="28" MinWidth="54" Padding="11,4,11,6"/>
+        <Button Content="Sort" Height="28" MinWidth="54" Padding="11,4,11,6"/>
+        <Button Content="Cols" Height="28" MinWidth="54" Padding="11,4,11,6"/>
+        <Button Content="gyjpq" Height="28" MinWidth="54" Padding="11,4,11,6"/>
+      </StackPanel>
+
+      <!-- Row 22: H=28 + Pad=8,2 + tpl-va -->
+      <StackPanel Orientation="Horizontal" Spacing="6">
+        <TextBlock Classes="rowLabel" Text="22. H=28 Pad=8,2 tpl-va"/>
+        <Button Content="⟳ Sync" Height="28" MinWidth="54" Padding="8,2" Classes="tpl-va"/>
+        <Button Content="Sort" Height="28" MinWidth="54" Padding="8,2" Classes="tpl-va"/>
+        <Button Content="Cols" Height="28" MinWidth="54" Padding="8,2" Classes="tpl-va"/>
+        <Button Content="gyjpq" Height="28" MinWidth="54" Padding="8,2" Classes="tpl-va"/>
+      </StackPanel>
+
+    </StackPanel>
+  </ScrollViewer>
+</Window>
