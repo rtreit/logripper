@@ -97,6 +97,8 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
     /// </summary>
     public RecentQsoItemViewModel? InspectorQso => RecentQsos.SelectedQso;
 
+    public bool HasInspectorQso => InspectorQso is not null;
+
     public event EventHandler? SearchFocusRequested;
 
     public event EventHandler? GridFocusRequested;
@@ -225,6 +227,10 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
     private void ToggleInspector()
     {
         IsInspectorOpen = !IsInspectorOpen;
+        if (!IsInspectorOpen)
+        {
+            GridFocusRequested?.Invoke(this, EventArgs.Empty);
+        }
     }
 
     [RelayCommand]
@@ -279,6 +285,7 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
 
         IsCallsignCardOpen = false;
         CallsignCard = null;
+        GridFocusRequested?.Invoke(this, EventArgs.Empty);
     }
 
     private void OnCallsignCardCloseRequested(object? sender, EventArgs e)
@@ -292,6 +299,7 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
         IsSortChooserOpen = false;
         IsColumnChooserOpen = false;
         CloseCallsignCard();
+        GridFocusRequested?.Invoke(this, EventArgs.Empty);
     }
 
     [RelayCommand]
@@ -442,6 +450,7 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
         if (e.PropertyName == nameof(RecentQsoListViewModel.SelectedQso))
         {
             OnPropertyChanged(nameof(InspectorQso));
+            OnPropertyChanged(nameof(HasInspectorQso));
         }
     }
 
