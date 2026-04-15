@@ -4,7 +4,9 @@ package qsoripper.domain;
 
 option csharp_namespace = "QsoRipper.Domain";
 
+import "domain/callsign_ambiguity.proto";
 import "domain/geo_source.proto";
+import "domain/modifier_kind.proto";
 import "domain/qsl_preference.proto";
 import "google/protobuf/timestamp.proto";
 
@@ -78,4 +80,12 @@ message CallsignRecord {
   optional double gmt_offset = 98;  // Hours offset from GMT, may be fractional
   optional bool dst_observed = 99;
   optional uint32 profile_views = 100;
+
+  // --- Derived callsign components (parsed at lookup time, not stored as primary log data) ---
+  optional string base_callsign = 101;         // e.g. "AE7XI" from "AE7XI/P"
+  optional string modifier_text = 102;         // raw modifier token: "P", "M", "EA8", ...
+  optional ModifierKind modifier_kind = 103;
+  optional string prefix_override_callsign = 104;  // set when modifier_kind = PREFIX_OVERRIDE
+  optional string operating_entity_hint = 105;
+  optional CallsignAmbiguity callsign_ambiguity = 106;
 }

@@ -1,0 +1,13 @@
+syntax = "proto3";
+
+package qsoripper.domain;
+
+option csharp_namespace = "QsoRipper.Domain";
+
+// Indicates how unambiguously a slash-modified callsign was parsed.
+enum CallsignAmbiguity {
+  CALLSIGN_AMBIGUITY_UNSPECIFIED = 0;
+  CALLSIGN_AMBIGUITY_STANDARD = 1;
+  CALLSIGN_AMBIGUITY_AMBIGUOUS = 2;
+  CALLSIGN_AMBIGUITY_NON_STANDARD = 3;
+}
