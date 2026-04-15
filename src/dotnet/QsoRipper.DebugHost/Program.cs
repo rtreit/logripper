@@ -22,6 +22,7 @@ builder.Services.AddScoped<LogbookInteropWorkbenchService>();
 builder.Services.AddScoped<RuntimeConfigWorkbenchService>();
 builder.Services.AddScoped<SetupWorkbenchService>();
 builder.Services.AddScoped<StationProfileWorkbenchService>();
+builder.Services.AddScoped<RigControlWorkbenchService>();
 builder.Services.AddScoped<DebugCommandService>();
 
 var app = builder.Build();

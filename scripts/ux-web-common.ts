@@ -19,6 +19,7 @@ const scenarioRoutes: Record<string, string> = {
   'debughost-lookup-workbench': '/lookup-workbench',
   'debughost-storage-workbench': '/storage-workbench',
   'debughost-logbook-interop': '/logbook-interop',
+  'debughost-rig-control': '/rig-control',
   'debughost-qso-viewer': '/qso-viewer',
   'debughost-commands': '/commands'
 };

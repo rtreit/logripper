@@ -79,6 +79,11 @@ internal sealed class GrpcClientFactory : IDisposable
         return new StationProfileService.StationProfileServiceClient(GetOrCreateChannel());
     }
 
+    public RigControlService.RigControlServiceClient CreateRigControlClient()
+    {
+        return new RigControlService.RigControlServiceClient(GetOrCreateChannel());
+    }
+
     public void Dispose()
     {
         if (_disposed)
