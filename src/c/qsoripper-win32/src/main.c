@@ -1786,7 +1786,7 @@ static int PaintRecentQsos(HDC hdc, int y_start, int w, int bottom)
     if (g_state.search_focused)
         border_clr = CLR_MAGENTA;
     else if (g_state.qso_list_focused)
-        border_clr = CLR_YELLOW;
+        border_clr = CLR_GREEN;
 
     DrawBox(hdc, 4, y_start, w - 8, panel_h, border_clr);
 
@@ -2692,10 +2692,10 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         break;
 
     case WM_SYSKEYDOWN:
-        /* VK_MENU (Alt key itself), Space, F, H must reach DefWindowProc
-           so the menu bar and system menu activate correctly.
+        /* VK_MENU (Alt key itself), Space, F4, F, H must reach DefWindowProc
+           so the menu bar, Alt+F4 close, and system menu work correctly.
            NOTE: break exits to return 0 — must use explicit DefWindowProcW. */
-        if (wParam == VK_MENU || wParam == VK_SPACE ||
+        if (wParam == VK_MENU || wParam == VK_SPACE || wParam == VK_F4 ||
             wParam == 'F'     || wParam == 'H') {
             return DefWindowProcW(hwnd, msg, wParam, lParam);
         }
@@ -2704,8 +2704,9 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         return 0;
 
     case WM_SYSCHAR:
-        /* Let menu accelerator chars reach DefWindowProc */
-        if (wParam == 'f' || wParam == 'F' || wParam == 'h' || wParam == 'H') {
+        /* Let menu accelerator chars and system chars reach DefWindowProc */
+        if (wParam == 'f' || wParam == 'F' || wParam == 'h' || wParam == 'H' ||
+            wParam == ' ') {
             return DefWindowProcW(hwnd, msg, wParam, lParam);
         }
         return 0;
