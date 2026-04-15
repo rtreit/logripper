@@ -88,7 +88,7 @@ fn render_status_bar(app: &App, frame: &mut Frame, area: ratatui::layout::Rect) 
 mod tests {
     use ratatui::{backend::TestBackend, Terminal};
 
-    use crate::app::{App, CallsignInfo, RecentQso, SpaceWeatherInfo, View};
+    use crate::app::{App, CallsignInfo, RecentQso, RigInfo, RigStatus, SpaceWeatherInfo, View};
     use crate::form::AdvancedTab;
 
     fn make_terminal() -> Terminal<TestBackend> {
@@ -305,6 +305,62 @@ mod tests {
         let backend = TestBackend::new(40, 15);
         let mut terminal = Terminal::new(backend).unwrap();
         let app = make_app();
+        terminal.draw(|f| super::render_ui(&app, f)).unwrap();
+    }
+
+    #[test]
+    fn render_with_rig_connected() {
+        let mut terminal = make_terminal();
+        let mut app = make_app();
+        app.rig_info = Some(RigInfo {
+            frequency_display: "14.225 MHz".to_string(),
+            frequency_hz: 14_225_000,
+            band: Some("20M".to_string()),
+            mode: Some("SSB".to_string()),
+            submode: None,
+            status: RigStatus::Connected,
+            error_message: None,
+        });
+        terminal.draw(|f| super::render_ui(&app, f)).unwrap();
+    }
+
+    #[test]
+    fn render_with_rig_disconnected() {
+        let mut terminal = make_terminal();
+        let mut app = make_app();
+        app.rig_info = Some(RigInfo {
+            frequency_display: String::new(),
+            frequency_hz: 0,
+            band: None,
+            mode: None,
+            submode: None,
+            status: RigStatus::Disconnected,
+            error_message: None,
+        });
+        terminal.draw(|f| super::render_ui(&app, f)).unwrap();
+    }
+
+    #[test]
+    fn render_with_rig_error() {
+        let mut terminal = make_terminal();
+        let mut app = make_app();
+        app.rig_info = Some(RigInfo {
+            frequency_display: String::new(),
+            frequency_hz: 0,
+            band: None,
+            mode: None,
+            submode: None,
+            status: RigStatus::Error,
+            error_message: Some("connection refused".to_string()),
+        });
+        terminal.draw(|f| super::render_ui(&app, f)).unwrap();
+    }
+
+    #[test]
+    fn render_with_rig_disabled() {
+        let mut terminal = make_terminal();
+        let mut app = make_app();
+        app.rig_control_enabled = false;
         terminal.draw(|f| super::render_ui(&app, f)).unwrap();
     }
 }

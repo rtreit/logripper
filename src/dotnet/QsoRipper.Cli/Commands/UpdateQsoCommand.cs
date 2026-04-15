@@ -165,6 +165,19 @@ internal static class UpdateQsoCommand
                 case "--rst-rcvd":
                     error = "Missing value for --rst-rcvd.";
                     return false;
+                case "--at" when i < args.Length - 1:
+                    var ts = TimeParser.Parse(args[++i]);
+                    if (ts is null)
+                    {
+                        error = "Invalid --at value. Use relative (30.minutes, 2.hours) or absolute (2026-04-12T19:30:00Z).";
+                        return false;
+                    }
+
+                    qso.UtcTimestamp = ts;
+                    break;
+                case "--at":
+                    error = "Missing value for --at.";
+                    return false;
                 case "--enrich":
                     enrich = true;
                     break;

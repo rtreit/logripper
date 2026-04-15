@@ -52,6 +52,10 @@ pub(super) fn render(frame: &mut Frame, area: Rect) {
     lines.push(binding("F10 / Shift+Enter ", "Log the QSO"));
     lines.push(binding("F7               ", "Reset QSO start time to now"));
     lines.push(binding(
+        "F8               ",
+        "Toggle rig control (read freq/mode from radio)",
+    ));
+    lines.push(binding(
         "Esc              ",
         "Clear form (or close advanced view)",
     ));

@@ -112,6 +112,13 @@ internal sealed partial class MainWindow : Window
 
         if (e.Key == Key.Escape)
         {
+            if (_viewModel.IsCallsignCardOpen)
+            {
+                _viewModel.CloseCallsignCardCommand.Execute(null);
+                e.Handled = true;
+                return;
+            }
+
             if (_viewModel.IsColumnChooserOpen || _viewModel.IsSortChooserOpen)
             {
                 _viewModel.CloseTransientPanelsCommand.Execute(null);
@@ -159,6 +166,13 @@ internal sealed partial class MainWindow : Window
                 e.Handled = true;
                 return true;
             }
+        }
+
+        if (!isEditingTextBox && e.Key == Key.Delete)
+        {
+            _viewModel.RecentQsos.RequestDeleteSelectedQso();
+            e.Handled = true;
+            return true;
         }
 
         if (e.Key == Key.Enter && _recentQsoGrid.CommitEdit())

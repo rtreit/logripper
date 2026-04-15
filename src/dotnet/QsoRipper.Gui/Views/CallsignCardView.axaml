@@ -1,0 +1,241 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:QsoRipper.Gui.ViewModels"
+             x:Class="QsoRipper.Gui.Views.CallsignCardView"
+             x:DataType="vm:CallsignCardViewModel">
+
+  <UserControl.Styles>
+    <Style Selector="TextBlock.cardLabel">
+      <Setter Property="FontSize" Value="11" />
+      <Setter Property="Foreground" Value="#888888" />
+      <Setter Property="Margin" Value="0,0,12,0" />
+      <Setter Property="VerticalAlignment" Value="Center" />
+    </Style>
+    <Style Selector="TextBlock.cardValue">
+      <Setter Property="FontSize" Value="13" />
+      <Setter Property="Foreground" Value="White" />
+      <Setter Property="VerticalAlignment" Value="Center" />
+      <Setter Property="TextWrapping" Value="Wrap" />
+    </Style>
+    <Style Selector="TextBlock.sectionHeader">
+      <Setter Property="FontSize" Value="12" />
+      <Setter Property="FontWeight" Value="SemiBold" />
+      <Setter Property="Foreground" Value="#aaaacc" />
+      <Setter Property="Margin" Value="0,4,0,2" />
+    </Style>
+    <Style Selector="Border.sectionDivider">
+      <Setter Property="Height" Value="1" />
+      <Setter Property="Background" Value="#333355" />
+      <Setter Property="Margin" Value="0,4,0,4" />
+    </Style>
+    <Style Selector="TextBlock.qslYes">
+      <Setter Property="Foreground" Value="#44ff44" />
+    </Style>
+    <Style Selector="TextBlock.qslNo">
+      <Setter Property="Foreground" Value="#888888" />
+    </Style>
+    <Style Selector="TextBlock.qslUnknown">
+      <Setter Property="Foreground" Value="#ffaa00" />
+    </Style>
+  </UserControl.Styles>
+
+  <Border Background="#1a1a2e"
+          CornerRadius="12"
+          Padding="20"
+          MaxWidth="520"
+          MinWidth="420"
+          BoxShadow="0 8 32 0 #40000000">
+    <Panel>
+      <!-- Loading State -->
+      <StackPanel HorizontalAlignment="Center"
+                  VerticalAlignment="Center"
+                  Spacing="12"
+                  IsVisible="{Binding IsLoading}">
+        <TextBlock Text="Looking up callsign…"
+                   FontSize="14"
+                   Foreground="#888888"
+                   HorizontalAlignment="Center" />
+        <ProgressBar IsIndeterminate="True"
+                     Width="200"
+                     Height="4"
+                     Foreground="#00d4ff" />
+      </StackPanel>
+
+      <!-- Error State -->
+      <StackPanel HorizontalAlignment="Center"
+                  VerticalAlignment="Center"
+                  Spacing="12"
+                  IsVisible="{Binding IsError}">
+        <TextBlock Text="⚠"
+                   FontSize="36"
+                   HorizontalAlignment="Center"
+                   Foreground="#ff4444" />
+        <TextBlock Text="{Binding ErrorMessage}"
+                   FontSize="13"
+                   Foreground="#ff4444"
+                   TextWrapping="Wrap"
+                   TextAlignment="Center"
+                   MaxWidth="400"
+                   HorizontalAlignment="Center" />
+      </StackPanel>
+
+      <!-- Loaded Content -->
+      <ScrollViewer VerticalScrollBarVisibility="Auto"
+                    IsVisible="{Binding IsLoaded}">
+        <StackPanel Spacing="12">
+
+          <!-- Header: Callsign + Image -->
+          <Grid ColumnDefinitions="*,Auto">
+            <StackPanel Grid.Column="0" Spacing="2">
+              <TextBlock Text="{Binding Callsign}"
+                         FontSize="28"
+                         FontWeight="Bold"
+                         Foreground="#00d4ff" />
+              <TextBlock Text="{Binding FullName}"
+                         FontSize="16"
+                         Foreground="White" />
+              <StackPanel Orientation="Horizontal" Spacing="8">
+                <TextBlock Text="{Binding LicenseClass}"
+                           FontSize="12"
+                           Foreground="#888888"
+                           IsVisible="{Binding LicenseClass, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                <TextBlock Text="{Binding Nickname, StringFormat='({0})'}"
+                           FontSize="12"
+                           Foreground="#aaaaaa"
+                           IsVisible="{Binding HasNickname}" />
+              </StackPanel>
+              <TextBlock Text="{Binding LatencyText}"
+                         FontSize="10"
+                         Foreground="#666666"
+                         Margin="0,4,0,0"
+                         IsVisible="{Binding LatencyText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+            </StackPanel>
+            <Border Grid.Column="1"
+                    Width="120"
+                    Height="120"
+                    CornerRadius="8"
+                    ClipToBounds="True"
+                    Background="#222244"
+                    IsVisible="{Binding HasImage}">
+              <Image Source="{Binding ProfileImage}"
+                     Stretch="UniformToFill" />
+            </Border>
+            <!-- Placeholder when no image -->
+            <Border Grid.Column="1"
+                    Width="120"
+                    Height="120"
+                    CornerRadius="8"
+                    Background="#222244"
+                    IsVisible="{Binding !HasImage}">
+              <TextBlock Text="📻"
+                         FontSize="48"
+                         HorizontalAlignment="Center"
+                         VerticalAlignment="Center"
+                         Foreground="#444466" />
+            </Border>
+          </Grid>
+
+          <!-- Location Section -->
+          <Border Classes="sectionDivider" />
+          <TextBlock Classes="sectionHeader" Text="LOCATION" />
+          <Grid ColumnDefinitions="90,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto">
+            <TextBlock Classes="cardLabel" Grid.Row="0" Text="QTH" />
+            <TextBlock Classes="cardValue" Grid.Row="0" Grid.Column="1" Text="{Binding Address}" />
+            <TextBlock Classes="cardLabel" Grid.Row="1" Text="Country" />
+            <TextBlock Classes="cardValue" Grid.Row="1" Grid.Column="1" Text="{Binding Country}" />
+            <TextBlock Classes="cardLabel" Grid.Row="2" Text="Grid" />
+            <TextBlock Classes="cardValue" Grid.Row="2" Grid.Column="1" Text="{Binding Grid}" />
+            <TextBlock Classes="cardLabel" Grid.Row="3" Text="State" />
+            <TextBlock Classes="cardValue" Grid.Row="3" Grid.Column="1" Text="{Binding State}" />
+            <TextBlock Classes="cardLabel" Grid.Row="4" Text="County"
+                       IsVisible="{Binding HasCounty}" />
+            <TextBlock Classes="cardValue" Grid.Row="4" Grid.Column="1" Text="{Binding County}"
+                       IsVisible="{Binding HasCounty}" />
+            <TextBlock Classes="cardLabel" Grid.Row="5" Text="Time Zone"
+                       IsVisible="{Binding HasTimeZone}" />
+            <TextBlock Classes="cardValue" Grid.Row="5" Grid.Column="1" Text="{Binding TimeZone}"
+                       IsVisible="{Binding HasTimeZone}" />
+          </Grid>
+
+          <!-- Zones Section -->
+          <Border Classes="sectionDivider" />
+          <TextBlock Classes="sectionHeader" Text="DXCC / ZONES" />
+          <Grid ColumnDefinitions="90,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto">
+            <TextBlock Classes="cardLabel" Grid.Row="0" Text="DXCC" />
+            <TextBlock Classes="cardValue" Grid.Row="0" Grid.Column="1" Text="{Binding DxccCountry}" />
+            <TextBlock Classes="cardLabel" Grid.Row="1" Text="Continent" />
+            <TextBlock Classes="cardValue" Grid.Row="1" Grid.Column="1" Text="{Binding DxccContinent}" />
+            <TextBlock Classes="cardLabel" Grid.Row="2" Text="CQ Zone" />
+            <TextBlock Classes="cardValue" Grid.Row="2" Grid.Column="1" Text="{Binding CqZone}" />
+            <TextBlock Classes="cardLabel" Grid.Row="3" Text="ITU Zone" />
+            <TextBlock Classes="cardValue" Grid.Row="3" Grid.Column="1" Text="{Binding ItuZone}" />
+            <TextBlock Classes="cardLabel" Grid.Row="4" Text="IOTA"
+                       IsVisible="{Binding HasIota}" />
+            <TextBlock Classes="cardValue" Grid.Row="4" Grid.Column="1" Text="{Binding Iota}"
+                       IsVisible="{Binding HasIota}" />
+          </Grid>
+
+          <!-- QSL Section -->
+          <Border Classes="sectionDivider" />
+          <TextBlock Classes="sectionHeader" Text="QSL STATUS" />
+          <Grid ColumnDefinitions="90,*" RowDefinitions="Auto,Auto,Auto,Auto">
+            <TextBlock Classes="cardLabel" Grid.Row="0" Text="eQSL" />
+            <TextBlock Grid.Row="0" Grid.Column="1"
+                       Text="{Binding EqslStatus}"
+                       FontSize="13"
+                       VerticalAlignment="Center" />
+            <TextBlock Classes="cardLabel" Grid.Row="1" Text="LoTW" />
+            <TextBlock Grid.Row="1" Grid.Column="1"
+                       Text="{Binding LotwStatus}"
+                       FontSize="13"
+                       VerticalAlignment="Center" />
+            <TextBlock Classes="cardLabel" Grid.Row="2" Text="Paper QSL" />
+            <TextBlock Grid.Row="2" Grid.Column="1"
+                       Text="{Binding PaperQslStatus}"
+                       FontSize="13"
+                       VerticalAlignment="Center" />
+            <TextBlock Classes="cardLabel" Grid.Row="3" Text="QSL Mgr"
+                       IsVisible="{Binding HasQslManager}" />
+            <TextBlock Classes="cardValue" Grid.Row="3" Grid.Column="1" Text="{Binding QslManager}"
+                       IsVisible="{Binding HasQslManager}" />
+          </Grid>
+
+          <!-- Profile Section -->
+          <Border Classes="sectionDivider" />
+          <TextBlock Classes="sectionHeader" Text="PROFILE" />
+          <Grid ColumnDefinitions="90,*" RowDefinitions="Auto,Auto,Auto,Auto">
+            <TextBlock Classes="cardLabel" Grid.Row="0" Text="Aliases"
+                       IsVisible="{Binding HasAliases}" />
+            <TextBlock Classes="cardValue" Grid.Row="0" Grid.Column="1" Text="{Binding Aliases}"
+                       IsVisible="{Binding HasAliases}" />
+            <TextBlock Classes="cardLabel" Grid.Row="1" Text="Previous"
+                       IsVisible="{Binding HasPreviousCall}" />
+            <TextBlock Classes="cardValue" Grid.Row="1" Grid.Column="1" Text="{Binding PreviousCall}"
+                       IsVisible="{Binding HasPreviousCall}" />
+            <TextBlock Classes="cardLabel" Grid.Row="2" Text="Web"
+                       IsVisible="{Binding HasWebUrl}" />
+            <TextBlock Classes="cardValue" Grid.Row="2" Grid.Column="1" Text="{Binding WebUrl}"
+                       IsVisible="{Binding HasWebUrl}" />
+            <TextBlock Classes="cardLabel" Grid.Row="3" Text="Email"
+                       IsVisible="{Binding HasEmail}" />
+            <TextBlock Classes="cardValue" Grid.Row="3" Grid.Column="1" Text="{Binding Email}"
+                       IsVisible="{Binding HasEmail}" />
+          </Grid>
+
+        </StackPanel>
+      </ScrollViewer>
+
+      <!-- Close button -->
+      <Button HorizontalAlignment="Right"
+              VerticalAlignment="Top"
+              Margin="0,-8,-8,0"
+              Padding="8,4"
+              Background="Transparent"
+              Foreground="#888888"
+              FontSize="16"
+              Content="✕"
+              Command="{Binding CloseCommand}"
+              ToolTip.Tip="Close (Esc)" />
+    </Panel>
+  </Border>
+</UserControl>

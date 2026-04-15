@@ -101,6 +101,7 @@ internal static class CliHelpText
 
                 Update fields on an existing QSO.
 
+                  --at <time>          Change timestamp. Relative (30.minutes) or absolute.
                   --grid <grid>        Set grid square (e.g., CN87)
                   --country <name>     Set country
                   --state <abbr>       Set state (e.g., WA)
@@ -114,6 +115,7 @@ internal static class CliHelpText
 
                 Examples:
                   update abc123 --grid CN87 --freq 14074
+                  update abc123 --at "2026-04-12T01:51:00Z"
                   update abc123 --enrich
                 """,
             "delete" => """

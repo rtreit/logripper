@@ -361,7 +361,42 @@ public sealed class CommandHelperTests
         Assert.Equal(9u, qso.RstReceived.Tone);
     }
 
+    [Fact]
+    public void TryApplyUpdates_sets_timestamp_with_at_flag()
+    {
+        var qso = new QsoRecord { WorkedCallsign = "W1AW", Band = Band._20M, Mode = Mode.Cw };
+        var enrich = false;
+
+        var success = UpdateQsoCommand.TryApplyUpdates(
+            ["--at", "2026-04-12T01:51:00Z"],
+            qso,
+            ref enrich,
+            out var error);
+
+        Assert.True(success);
+        Assert.Null(error);
+        Assert.NotNull(qso.UtcTimestamp);
+        Assert.Equal(2026, qso.UtcTimestamp.ToDateTime().Year);
+        Assert.Equal(4, qso.UtcTimestamp.ToDateTime().Month);
+        Assert.Equal(12, qso.UtcTimestamp.ToDateTime().Day);
+        Assert.Equal(1, qso.UtcTimestamp.ToDateTime().Hour);
+        Assert.Equal(51, qso.UtcTimestamp.ToDateTime().Minute);
+    }
+
+    [Fact]
+    public void TryApplyUpdates_rejects_invalid_at_value()
+    {
+        var qso = new QsoRecord { WorkedCallsign = "W1AW" };
+        var enrich = false;
+
+        var success = UpdateQsoCommand.TryApplyUpdates(["--at", "not-a-time"], qso, ref enrich, out var error);
+
+        Assert.False(success);
+        Assert.Contains("Invalid --at value", error, StringComparison.Ordinal);
+    }
+
     [Theory]
+    [InlineData("--at", "Missing value for --at.")]
     [InlineData("--grid", "Missing value for --grid.")]
     [InlineData("--country", "Missing value for --country.")]
     [InlineData("--state", "Missing value for --state.")]

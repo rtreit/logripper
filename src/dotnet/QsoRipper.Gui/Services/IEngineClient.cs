@@ -39,4 +39,8 @@ internal interface IEngineClient
     Task<SyncWithQrzResponse> SyncWithQrzAsync(CancellationToken ct = default);
 
     Task<GetSyncStatusResponse> GetSyncStatusAsync(CancellationToken ct = default);
+
+    Task<LookupResponse> LookupCallsignAsync(string callsign, CancellationToken ct = default);
+
+    Task<DeleteQsoResponse> DeleteQsoAsync(string localId, bool deleteFromQrz = false, CancellationToken ct = default);
 }

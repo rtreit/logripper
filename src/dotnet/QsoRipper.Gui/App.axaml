@@ -1,9 +1,24 @@
 <Application xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              x:Class="QsoRipper.Gui.App"
-             RequestedThemeVariant="Default">
+             RequestedThemeVariant="Dark">
   <Application.Styles>
     <FluentTheme />
     <StyleInclude Source="avares://Avalonia.Controls.DataGrid/Themes/Fluent.xaml" />
   </Application.Styles>
+  <Application.Resources>
+    <ResourceDictionary>
+      <ResourceDictionary.ThemeDictionaries>
+        <ResourceDictionary x:Key="Dark">
+          <!-- Accent color: QsoRipper cyan -->
+          <Color x:Key="SystemAccentColor">#0096D6</Color>
+          <Color x:Key="SystemAccentColorDark1">#0078AB</Color>
+          <Color x:Key="SystemAccentColorDark2">#005A80</Color>
+          <Color x:Key="SystemAccentColorLight1">#33AADD</Color>
+          <Color x:Key="SystemAccentColorLight2">#66C0E8</Color>
+          <Color x:Key="SystemAccentColorLight3">#99D6F2</Color>
+        </ResourceDictionary>
+      </ResourceDictionary.ThemeDictionaries>
+    </ResourceDictionary>
+  </Application.Resources>
 </Application>

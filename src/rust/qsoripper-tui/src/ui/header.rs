@@ -14,14 +14,16 @@ use crate::app::App;
 pub(super) fn render(app: &App, frame: &mut Frame, area: Rect) {
     let cols = Layout::horizontal([
         Constraint::Fill(1),
+        Constraint::Length(32),
         Constraint::Length(36),
         Constraint::Length(28),
     ])
     .split(area);
 
     let title_area = cols.first().copied().unwrap_or(area);
-    let sw_area = cols.get(1).copied().unwrap_or(area);
-    let clock_area = cols.get(2).copied().unwrap_or(area);
+    let rig_area = cols.get(1).copied().unwrap_or(area);
+    let sw_area = cols.get(2).copied().unwrap_or(area);
+    let clock_area = cols.get(3).copied().unwrap_or(area);
 
     // Title
     let title_block = Block::default()
@@ -44,6 +46,18 @@ pub(super) fn render(app: &App, frame: &mut Frame, area: Rect) {
             .block(title_block)
             .alignment(Alignment::Left),
         title_area,
+    );
+
+    // Rig control
+    let rig_block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan));
+    let rig_line = rig_status_line(app);
+    frame.render_widget(
+        Paragraph::new(rig_line)
+            .block(rig_block)
+            .alignment(Alignment::Left),
+        rig_area,
     );
 
     // Space weather
@@ -118,5 +132,77 @@ fn space_weather_line(app: &App) -> Line<'static> {
         Span::styled(solar_str, Style::default().fg(Color::Cyan)),
         Span::raw("  "),
         Span::styled(spots_str, Style::default().fg(Color::Yellow)),
+    ])
+}
+
+/// Build the rig control status line for the header.
+fn rig_status_line(app: &App) -> Line<'static> {
+    use crate::app::RigStatus;
+
+    if !app.rig_control_enabled {
+        return Line::from(Span::styled(
+            " Rig: OFF",
+            Style::default().fg(Color::DarkGray),
+        ));
+    }
+
+    let Some(ref rig) = app.rig_info else {
+        return Line::from(Span::styled(
+            " Rig: waiting…",
+            Style::default().fg(Color::DarkGray),
+        ));
+    };
+
+    let (status_label, status_color) = match rig.status {
+        RigStatus::Connected => ("●", Color::Green),
+        RigStatus::Disconnected => ("○", Color::Yellow),
+        RigStatus::Error => ("✖", Color::Red),
+        RigStatus::Disabled => ("–", Color::DarkGray),
+    };
+
+    if rig.status != RigStatus::Connected {
+        let label = match rig.status {
+            RigStatus::Disconnected => "disconnected",
+            RigStatus::Error => rig.error_message.as_deref().unwrap_or("error"),
+            RigStatus::Disabled => "disabled",
+            RigStatus::Connected => unreachable!(),
+        };
+        return Line::from(vec![
+            Span::raw(" "),
+            Span::styled(
+                status_label.to_string(),
+                Style::default()
+                    .fg(status_color)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(" "),
+            Span::styled(label.to_string(), Style::default().fg(status_color)),
+        ]);
+    }
+
+    let freq = &rig.frequency_display;
+    let mode = rig
+        .mode
+        .as_deref()
+        .or(rig.submode.as_deref())
+        .unwrap_or("?");
+
+    Line::from(vec![
+        Span::raw(" "),
+        Span::styled(
+            status_label.to_string(),
+            Style::default()
+                .fg(status_color)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(" "),
+        Span::styled(
+            freq.clone(),
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(" "),
+        Span::styled(mode.to_string(), Style::default().fg(Color::Cyan)),
     ])
 }

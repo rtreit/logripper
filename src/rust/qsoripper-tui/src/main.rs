@@ -16,7 +16,7 @@ use ratatui::{backend::CrosstermBackend, Terminal};
 use tokio::sync::{mpsc, watch};
 
 use app::App;
-use events::{spawn_clock_task, spawn_key_task, spawn_lookup_task, AppEvent};
+use events::{spawn_clock_task, spawn_key_task, spawn_lookup_task, spawn_rig_poll_task, AppEvent};
 use form::{AdvancedTab, Field, LogForm, BANDS, MODES};
 
 /// Application entry point.
@@ -61,12 +61,14 @@ async fn run<B: ratatui::backend::Backend>(
 ) -> anyhow::Result<()> {
     let (event_tx, mut event_rx) = mpsc::unbounded_channel::<AppEvent>();
     let (lookup_tx, lookup_rx) = watch::channel(String::new());
+    let (rig_enabled_tx, rig_enabled_rx) = watch::channel(true);
 
     let mut app = App::new(endpoint);
 
     spawn_key_task(event_tx.clone());
     spawn_clock_task(event_tx.clone());
     spawn_lookup_task(lookup_rx, event_tx.clone(), app.endpoint.clone());
+    spawn_rig_poll_task(rig_enabled_rx, event_tx.clone(), app.endpoint.clone());
 
     // Prefetch space weather and recent QSOs on startup.
     {
@@ -85,7 +87,7 @@ async fn run<B: ratatui::backend::Backend>(
         let ep = app.endpoint.clone();
         tokio::spawn(async move {
             if let Ok(ch) = grpc::create_channel(&ep).await {
-                if let Ok(qsos) = grpc::list_recent_qsos(ch, 20).await {
+                if let Ok(qsos) = grpc::list_recent_qsos(ch, 0).await {
                     let _ = tx.send(AppEvent::RecentQsos(qsos));
                 }
             }
@@ -97,7 +99,14 @@ async fn run<B: ratatui::backend::Backend>(
     while app.running {
         if let Some(event) = event_rx.recv().await {
             let endpoint = app.endpoint.clone();
-            handle_event(&mut app, event, &event_tx, &lookup_tx, &endpoint);
+            handle_event(
+                &mut app,
+                event,
+                &event_tx,
+                &lookup_tx,
+                &rig_enabled_tx,
+                &endpoint,
+            );
             app.expire_status();
             terminal.draw(|f| ui::render_ui(&app, f))?;
         }
@@ -112,10 +121,11 @@ fn handle_event(
     event: AppEvent,
     event_tx: &mpsc::UnboundedSender<AppEvent>,
     lookup_tx: &watch::Sender<String>,
+    rig_enabled_tx: &watch::Sender<bool>,
     endpoint: &str,
 ) {
     match event {
-        AppEvent::Key(key) => handle_key(app, key, event_tx, lookup_tx, endpoint),
+        AppEvent::Key(key) => handle_key(app, key, event_tx, lookup_tx, rig_enabled_tx, endpoint),
         AppEvent::Tick => {
             app.utc_now = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
             app.tick_debounce();
@@ -137,6 +147,9 @@ fn handle_event(
         }
         AppEvent::SpaceWeather(sw) => {
             app.space_weather = sw;
+        }
+        AppEvent::RigSnapshot(rig) => {
+            apply_rig_snapshot(app, rig);
         }
         AppEvent::QsoLogged(local_id) => {
             app.set_status(format!("QSO logged: {local_id}"));
@@ -196,10 +209,12 @@ fn handle_event(
                 }
             }
             // Enrich QSOs that have no operator name from the lookup cache.
+            // Cap to the first 50 to avoid flooding the engine with lookups.
             let unnamed: Vec<(String, String)> = app
                 .recent_qsos
                 .iter()
                 .filter(|q| q.name.is_none())
+                .take(50)
                 .map(|q| (q.local_id.clone(), q.callsign.clone()))
                 .collect();
             if !unnamed.is_empty() {
@@ -224,6 +239,7 @@ fn handle_key(
     key: crossterm::event::KeyEvent,
     event_tx: &mpsc::UnboundedSender<AppEvent>,
     lookup_tx: &watch::Sender<String>,
+    rig_enabled_tx: &watch::Sender<bool>,
     endpoint: &str,
 ) {
     use crossterm::event::{KeyCode, KeyModifiers};
@@ -232,6 +248,18 @@ fn handle_key(
     if matches!(key.code, KeyCode::Char('q' | 'Q')) && key.modifiers.contains(KeyModifiers::CONTROL)
     {
         app.running = false;
+        return;
+    }
+
+    // F8 toggles rig control from any state.
+    if matches!(key.code, KeyCode::F(8)) {
+        app.toggle_rig_control();
+        let _ = rig_enabled_tx.send(app.rig_control_enabled);
+        if app.rig_control_enabled {
+            app.set_status("Rig control enabled");
+        } else {
+            app.set_status("Rig control disabled");
+        }
         return;
     }
 
@@ -506,27 +534,51 @@ fn handle_char_key(app: &mut App, c: char, lookup_tx: &watch::Sender<String>) {
     }
 }
 
+fn digit_to_tab(ch: char) -> Option<AdvancedTab> {
+    match ch {
+        '1' => Some(AdvancedTab::Main),
+        '2' => Some(AdvancedTab::Contest),
+        '3' => Some(AdvancedTab::Technical),
+        '4' => Some(AdvancedTab::Awards),
+        _ => None,
+    }
+}
+
+fn switch_to_tab(app: &mut App, tab: AdvancedTab) {
+    app.view = app::View::Advanced;
+    app.form.advanced_tab = tab;
+    app.form.focused = tab.first_field();
+    app.form.field_selected = true;
+    app.qso_list_focused = false;
+}
+
 /// Jump form focus to the field bound to `ch` (Alt+key mapping).
 fn jump_to_field(app: &mut App, ch: char) {
-    let target = match ch.to_ascii_lowercase() {
-        'c' => Field::Callsign,
-        'b' => Field::Band,
-        'm' => Field::Mode,
-        's' => Field::RstSent,
-        'r' => Field::RstRcvd,
-        'o' => Field::Comment,
-        'n' => Field::Notes,
-        'f' => Field::FrequencyMhz,
-        'd' => Field::Date,
-        't' => Field::Time,
-        'e' => Field::TimeOff,
-        'q' => Field::Qth,
-        'a' => Field::WorkedName,
+    if let Some(tab) = digit_to_tab(ch) {
+        switch_to_tab(app, tab);
+        return;
+    }
+    let (target, tab) = match ch.to_ascii_lowercase() {
+        'c' => (Field::Callsign, None),
+        'b' => (Field::Band, None),
+        'm' => (Field::Mode, None),
+        's' => (Field::RstSent, None),
+        'r' => (Field::RstRcvd, None),
+        'o' => (Field::Comment, None),
+        'n' => (Field::Notes, None),
+        'f' => (Field::FrequencyMhz, None),
+        'd' => (Field::Date, None),
+        't' => (Field::Time, None),
+        'e' => (Field::TimeOff, None),
+        'q' => (Field::Qth, None),
+        'a' => (Field::WorkedName, Some(AdvancedTab::Main)),
+        'k' => (Field::Skcc, Some(AdvancedTab::Awards)),
+        'w' => (Field::TxPower, Some(AdvancedTab::Contest)),
+        'p' => (Field::PropMode, Some(AdvancedTab::Technical)),
         _ => return,
     };
-    if !matches!(app.view, app::View::Advanced) && matches!(target, Field::WorkedName) {
-        app.view = app::View::Advanced;
-        app.form.advanced_tab = AdvancedTab::Main;
+    if let Some(tab) = tab {
+        switch_to_tab(app, tab);
     }
     app.form.focused = target;
     app.form.field_selected = true;
@@ -697,11 +749,72 @@ fn refresh_recent_qsos(event_tx: &mpsc::UnboundedSender<AppEvent>, endpoint: &st
     let ep = endpoint.to_string();
     tokio::spawn(async move {
         if let Ok(ch) = grpc::create_channel(&ep).await {
-            if let Ok(qsos) = grpc::list_recent_qsos(ch, 20).await {
+            if let Ok(qsos) = grpc::list_recent_qsos(ch, 0).await {
                 let _ = tx.send(AppEvent::RecentQsos(qsos));
             }
         }
     });
+}
+
+/// Apply a rig snapshot to app state, with conservative form auto-population.
+///
+/// Only auto-populates form fields when:
+/// - Rig status is `Connected`
+/// - Not editing an existing QSO
+/// - The operator hasn't manually entered the field
+fn apply_rig_snapshot(app: &mut App, rig: Option<app::RigInfo>) {
+    use crate::app::RigStatus;
+
+    let Some(ref info) = rig else {
+        app.rig_info = rig;
+        return;
+    };
+
+    let should_populate = info.status == RigStatus::Connected
+        && app.rig_control_enabled
+        && app.editing_local_id.is_none();
+
+    if should_populate {
+        // Auto-set band if the form callsign is empty (not mid-entry).
+        let rig_band = info.band.as_deref().unwrap_or("");
+
+        if !rig_band.is_empty() && app.form.callsign.is_empty() {
+            if let Some(idx) = BANDS.iter().position(|&b| b == rig_band) {
+                if idx != app.form.band_idx {
+                    app.form.band_idx = idx;
+                }
+            }
+        }
+
+        // Auto-set mode if callsign is empty.
+        if let Some(ref rig_mode) = info.mode {
+            if app.form.callsign.is_empty() {
+                if let Some(idx) = MODES.iter().position(|&m| m == rig_mode.as_str()) {
+                    app.form.mode_idx = idx;
+                }
+            }
+        }
+
+        // Always track frequency from the VFO when callsign is empty, or when the
+        // current frequency field still matches what we last set from the rig.
+        if info.frequency_hz > 0 {
+            #[expect(
+                clippy::cast_precision_loss,
+                reason = "ham radio frequencies are well within f64 mantissa range"
+            )]
+            let new_freq = format!("{:.3}", info.frequency_hz as f64 / 1_000_000.0);
+            if app.form.callsign.is_empty() || app.form.frequency_mhz.is_empty() {
+                app.form.frequency_mhz = new_freq;
+            }
+        }
+
+        // Update RST defaults based on mode when callsign is empty.
+        if app.form.callsign.is_empty() {
+            app.form.on_mode_change();
+        }
+    }
+
+    app.rig_info = rig;
 }
 
 #[cfg(test)]
@@ -744,6 +857,10 @@ mod tests {
 
     fn make_watch() -> (watch::Sender<String>, watch::Receiver<String>) {
         watch::channel(String::new())
+    }
+
+    fn make_rig_watch() -> (watch::Sender<bool>, watch::Receiver<bool>) {
+        watch::channel(true)
     }
 
     fn make_qso(id: &str, callsign: &str) -> RecentQso {
@@ -876,6 +993,77 @@ mod tests {
         let original_focused = app.form.focused.clone();
         jump_to_field(&mut app, 'z');
         assert_eq!(app.form.focused, original_focused);
+    }
+
+    #[test]
+    fn jump_to_tab_1_switches_to_main() {
+        let mut app = make_app();
+        jump_to_field(&mut app, '1');
+        assert!(matches!(app.view, View::Advanced));
+        assert_eq!(app.form.advanced_tab, AdvancedTab::Main);
+        assert_eq!(app.form.focused, Field::Callsign);
+        assert!(app.form.field_selected);
+        assert!(!app.qso_list_focused);
+    }
+
+    #[test]
+    fn jump_to_tab_2_switches_to_contest() {
+        let mut app = make_app();
+        jump_to_field(&mut app, '2');
+        assert!(matches!(app.view, View::Advanced));
+        assert_eq!(app.form.advanced_tab, AdvancedTab::Contest);
+        assert_eq!(app.form.focused, Field::TxPower);
+        assert!(app.form.field_selected);
+    }
+
+    #[test]
+    fn jump_to_tab_3_switches_to_technical() {
+        let mut app = make_app();
+        jump_to_field(&mut app, '3');
+        assert!(matches!(app.view, View::Advanced));
+        assert_eq!(app.form.advanced_tab, AdvancedTab::Technical);
+        assert_eq!(app.form.focused, Field::PropMode);
+        assert!(app.form.field_selected);
+    }
+
+    #[test]
+    fn jump_to_tab_4_switches_to_awards() {
+        let mut app = make_app();
+        jump_to_field(&mut app, '4');
+        assert!(matches!(app.view, View::Advanced));
+        assert_eq!(app.form.advanced_tab, AdvancedTab::Awards);
+        assert_eq!(app.form.focused, Field::Iota);
+        assert!(app.form.field_selected);
+    }
+
+    #[test]
+    fn jump_to_field_skcc_opens_awards_tab() {
+        let mut app = make_app();
+        jump_to_field(&mut app, 'k');
+        assert!(matches!(app.view, View::Advanced));
+        assert_eq!(app.form.advanced_tab, AdvancedTab::Awards);
+        assert_eq!(app.form.focused, Field::Skcc);
+        assert!(app.form.field_selected);
+    }
+
+    #[test]
+    fn jump_to_field_tx_power_opens_contest_tab() {
+        let mut app = make_app();
+        jump_to_field(&mut app, 'w');
+        assert!(matches!(app.view, View::Advanced));
+        assert_eq!(app.form.advanced_tab, AdvancedTab::Contest);
+        assert_eq!(app.form.focused, Field::TxPower);
+        assert!(app.form.field_selected);
+    }
+
+    #[test]
+    fn jump_to_field_prop_mode_opens_technical_tab() {
+        let mut app = make_app();
+        jump_to_field(&mut app, 'p');
+        assert!(matches!(app.view, View::Advanced));
+        assert_eq!(app.form.advanced_tab, AdvancedTab::Technical);
+        assert_eq!(app.form.focused, Field::PropMode);
+        assert!(app.form.field_selected);
     }
 
     #[test]
@@ -1194,6 +1382,7 @@ mod tests {
     async fn handle_event_tick_updates_utc() {
         let (tx, _rx) = mpsc::unbounded_channel::<AppEvent>();
         let (lookup_tx, _lookup_rx) = make_watch();
+        let (rig_tx, _rig_rx) = make_rig_watch();
         let mut app = make_app();
         let original_utc = app.utc_now.clone();
         handle_event(
@@ -1201,6 +1390,7 @@ mod tests {
             AppEvent::Tick,
             &tx,
             &lookup_tx,
+            &rig_tx,
             "http://localhost:50051",
         );
         assert_ne!(app.utc_now, "");
@@ -1212,6 +1402,7 @@ mod tests {
         use crate::app::SpaceWeatherInfo;
         let (tx, _rx) = mpsc::unbounded_channel::<AppEvent>();
         let (lookup_tx, _lookup_rx) = make_watch();
+        let (rig_tx, _rig_rx) = make_rig_watch();
         let mut app = make_app();
         let sw = SpaceWeatherInfo {
             k_index: Some(2.0),
@@ -1223,6 +1414,7 @@ mod tests {
             AppEvent::SpaceWeather(Some(sw)),
             &tx,
             &lookup_tx,
+            &rig_tx,
             "",
         );
         assert!(app.space_weather.is_some());
@@ -1233,6 +1425,7 @@ mod tests {
         use crate::app::CallsignInfo;
         let (tx, _rx) = mpsc::unbounded_channel::<AppEvent>();
         let (lookup_tx, _lookup_rx) = make_watch();
+        let (rig_tx, _rig_rx) = make_rig_watch();
         let mut app = make_app();
         let info = CallsignInfo {
             callsign: "K7ABC".to_string(),
@@ -1248,6 +1441,7 @@ mod tests {
             AppEvent::LookupResult(Some(info)),
             &tx,
             &lookup_tx,
+            &rig_tx,
             "",
         );
         assert_eq!(app.form.qth, "Seattle");
@@ -1259,6 +1453,7 @@ mod tests {
         use crate::app::CallsignInfo;
         let (tx, _rx) = mpsc::unbounded_channel::<AppEvent>();
         let (lookup_tx, _lookup_rx) = make_watch();
+        let (rig_tx, _rig_rx) = make_rig_watch();
         let mut app = make_app();
         app.form.qth = "Portland".to_string();
         let info = CallsignInfo {
@@ -1275,6 +1470,7 @@ mod tests {
             AppEvent::LookupResult(Some(info)),
             &tx,
             &lookup_tx,
+            &rig_tx,
             "",
         );
         assert_eq!(app.form.qth, "Portland");
@@ -1284,8 +1480,16 @@ mod tests {
     async fn handle_event_lookup_result_none_clears_result() {
         let (tx, _rx) = mpsc::unbounded_channel::<AppEvent>();
         let (lookup_tx, _lookup_rx) = make_watch();
+        let (rig_tx, _rig_rx) = make_rig_watch();
         let mut app = make_app();
-        handle_event(&mut app, AppEvent::LookupResult(None), &tx, &lookup_tx, "");
+        handle_event(
+            &mut app,
+            AppEvent::LookupResult(None),
+            &tx,
+            &lookup_tx,
+            &rig_tx,
+            "",
+        );
         assert!(app.lookup_result.is_none());
     }
 
@@ -1293,12 +1497,14 @@ mod tests {
     async fn handle_event_qso_log_failed_sets_error() {
         let (tx, _rx) = mpsc::unbounded_channel::<AppEvent>();
         let (lookup_tx, _lookup_rx) = make_watch();
+        let (rig_tx, _rig_rx) = make_rig_watch();
         let mut app = make_app();
         handle_event(
             &mut app,
             AppEvent::QsoLogFailed("timeout".to_string()),
             &tx,
             &lookup_tx,
+            &rig_tx,
             "",
         );
         let msg = app.status_message.as_ref().unwrap();
@@ -1310,12 +1516,14 @@ mod tests {
     async fn handle_event_qso_update_failed_sets_error() {
         let (tx, _rx) = mpsc::unbounded_channel::<AppEvent>();
         let (lookup_tx, _lookup_rx) = make_watch();
+        let (rig_tx, _rig_rx) = make_rig_watch();
         let mut app = make_app();
         handle_event(
             &mut app,
             AppEvent::QsoUpdateFailed("server error".to_string()),
             &tx,
             &lookup_tx,
+            &rig_tx,
             "",
         );
         let msg = app.status_message.as_ref().unwrap();
@@ -1326,12 +1534,14 @@ mod tests {
     async fn handle_event_qso_delete_failed_sets_error() {
         let (tx, _rx) = mpsc::unbounded_channel::<AppEvent>();
         let (lookup_tx, _lookup_rx) = make_watch();
+        let (rig_tx, _rig_rx) = make_rig_watch();
         let mut app = make_app();
         handle_event(
             &mut app,
             AppEvent::QsoDeleteFailed("not found".to_string()),
             &tx,
             &lookup_tx,
+            &rig_tx,
             "",
         );
         let msg = app.status_message.as_ref().unwrap();
@@ -1344,6 +1554,7 @@ mod tests {
     async fn handle_event_qso_logged_resets_form() {
         let (tx, _rx) = mpsc::unbounded_channel::<AppEvent>();
         let (lookup_tx, _lookup_rx) = make_watch();
+        let (rig_tx, _rig_rx) = make_rig_watch();
         let mut app = make_app();
         app.form.callsign = "K7ABC".to_string();
         handle_event(
@@ -1351,6 +1562,7 @@ mod tests {
             AppEvent::QsoLogged("local-id-1".to_string()),
             &tx,
             &lookup_tx,
+            &rig_tx,
             "",
         );
         assert!(app.form.callsign.is_empty());
@@ -1362,6 +1574,7 @@ mod tests {
     async fn handle_event_qso_updated_clears_editing_id() {
         let (tx, _rx) = mpsc::unbounded_channel::<AppEvent>();
         let (lookup_tx, _lookup_rx) = make_watch();
+        let (rig_tx, _rig_rx) = make_rig_watch();
         let mut app = make_app();
         app.editing_local_id = Some("q1".to_string());
         handle_event(
@@ -1369,6 +1582,7 @@ mod tests {
             AppEvent::QsoUpdated("K7ABC".to_string()),
             &tx,
             &lookup_tx,
+            &rig_tx,
             "",
         );
         assert!(app.editing_local_id.is_none());
@@ -1379,6 +1593,7 @@ mod tests {
     async fn handle_event_qso_deleted_clears_state() {
         let (tx, _rx) = mpsc::unbounded_channel::<AppEvent>();
         let (lookup_tx, _lookup_rx) = make_watch();
+        let (rig_tx, _rig_rx) = make_rig_watch();
         let mut app = make_app();
         app.delete_candidate_id = Some("q1".to_string());
         app.view = View::ConfirmDeleteQso;
@@ -1387,6 +1602,7 @@ mod tests {
             AppEvent::QsoDeleted("q1".to_string()),
             &tx,
             &lookup_tx,
+            &rig_tx,
             "",
         );
         assert!(app.delete_candidate_id.is_none());
@@ -1398,10 +1614,18 @@ mod tests {
     async fn handle_event_recent_qsos_clamps_selection() {
         let (tx, _rx) = mpsc::unbounded_channel::<AppEvent>();
         let (lookup_tx, _lookup_rx) = make_watch();
+        let (rig_tx, _rig_rx) = make_rig_watch();
         let mut app = make_app();
         app.qso_selected = Some(5);
         let qsos = vec![make_qso("1", "K7ABC"), make_qso("2", "W1XYZ")];
-        handle_event(&mut app, AppEvent::RecentQsos(qsos), &tx, &lookup_tx, "");
+        handle_event(
+            &mut app,
+            AppEvent::RecentQsos(qsos),
+            &tx,
+            &lookup_tx,
+            &rig_tx,
+            "",
+        );
         assert_eq!(app.qso_selected, Some(1));
     }
 
@@ -1409,9 +1633,17 @@ mod tests {
     async fn handle_event_recent_qsos_selection_cleared_when_empty() {
         let (tx, _rx) = mpsc::unbounded_channel::<AppEvent>();
         let (lookup_tx, _lookup_rx) = make_watch();
+        let (rig_tx, _rig_rx) = make_rig_watch();
         let mut app = make_app();
         app.qso_selected = Some(2);
-        handle_event(&mut app, AppEvent::RecentQsos(vec![]), &tx, &lookup_tx, "");
+        handle_event(
+            &mut app,
+            AppEvent::RecentQsos(vec![]),
+            &tx,
+            &lookup_tx,
+            &rig_tx,
+            "",
+        );
         assert!(app.qso_selected.is_none());
     }
 
@@ -1419,6 +1651,7 @@ mod tests {
     async fn handle_event_qso_name_enriched_updates_name() {
         let (tx, _rx) = mpsc::unbounded_channel::<AppEvent>();
         let (lookup_tx, _lookup_rx) = make_watch();
+        let (rig_tx, _rig_rx) = make_rig_watch();
         let mut app = make_app();
         app.recent_qsos.push(make_qso("q1", "K7ABC"));
         handle_event(
@@ -1429,6 +1662,7 @@ mod tests {
             },
             &tx,
             &lookup_tx,
+            &rig_tx,
             "",
         );
         assert_eq!(app.recent_qsos[0].name, Some("John Smith".to_string()));
@@ -1438,12 +1672,14 @@ mod tests {
     async fn handle_key_ctrl_q_stops_app() {
         let (tx, _rx) = mpsc::unbounded_channel::<AppEvent>();
         let (lookup_tx, _lookup_rx) = make_watch();
+        let (rig_tx, _rig_rx) = make_rig_watch();
         let mut app = make_app();
         handle_key(
             &mut app,
             make_key_with_mod(KeyCode::Char('q'), KeyModifiers::CONTROL),
             &tx,
             &lookup_tx,
+            &rig_tx,
             "",
         );
         assert!(!app.running);
@@ -1453,8 +1689,16 @@ mod tests {
     async fn handle_key_f1_shows_help() {
         let (tx, _rx) = mpsc::unbounded_channel::<AppEvent>();
         let (lookup_tx, _lookup_rx) = make_watch();
+        let (rig_tx, _rig_rx) = make_rig_watch();
         let mut app = make_app();
-        handle_key(&mut app, make_key(KeyCode::F(1)), &tx, &lookup_tx, "");
+        handle_key(
+            &mut app,
+            make_key(KeyCode::F(1)),
+            &tx,
+            &lookup_tx,
+            &rig_tx,
+            "",
+        );
         assert!(matches!(app.view, View::Help));
     }
 
@@ -1462,9 +1706,17 @@ mod tests {
     async fn handle_key_any_in_help_returns_to_log_entry() {
         let (tx, _rx) = mpsc::unbounded_channel::<AppEvent>();
         let (lookup_tx, _lookup_rx) = make_watch();
+        let (rig_tx, _rig_rx) = make_rig_watch();
         let mut app = make_app();
         app.view = View::Help;
-        handle_key(&mut app, make_key(KeyCode::Char('x')), &tx, &lookup_tx, "");
+        handle_key(
+            &mut app,
+            make_key(KeyCode::Char('x')),
+            &tx,
+            &lookup_tx,
+            &rig_tx,
+            "",
+        );
         assert!(matches!(app.view, View::LogEntry));
     }
 
@@ -1472,10 +1724,25 @@ mod tests {
     async fn handle_key_f2_toggles_advanced_view() {
         let (tx, _rx) = mpsc::unbounded_channel::<AppEvent>();
         let (lookup_tx, _lookup_rx) = make_watch();
+        let (rig_tx, _rig_rx) = make_rig_watch();
         let mut app = make_app();
-        handle_key(&mut app, make_key(KeyCode::F(2)), &tx, &lookup_tx, "");
+        handle_key(
+            &mut app,
+            make_key(KeyCode::F(2)),
+            &tx,
+            &lookup_tx,
+            &rig_tx,
+            "",
+        );
         assert!(matches!(app.view, View::Advanced));
-        handle_key(&mut app, make_key(KeyCode::F(2)), &tx, &lookup_tx, "");
+        handle_key(
+            &mut app,
+            make_key(KeyCode::F(2)),
+            &tx,
+            &lookup_tx,
+            &rig_tx,
+            "",
+        );
         assert!(matches!(app.view, View::LogEntry));
     }
 
@@ -1483,9 +1750,17 @@ mod tests {
     async fn handle_key_f3_focuses_qso_list() {
         let (tx, _rx) = mpsc::unbounded_channel::<AppEvent>();
         let (lookup_tx, _lookup_rx) = make_watch();
+        let (rig_tx, _rig_rx) = make_rig_watch();
         let mut app = make_app();
         app.recent_qsos.push(make_qso("1", "K7ABC"));
-        handle_key(&mut app, make_key(KeyCode::F(3)), &tx, &lookup_tx, "");
+        handle_key(
+            &mut app,
+            make_key(KeyCode::F(3)),
+            &tx,
+            &lookup_tx,
+            &rig_tx,
+            "",
+        );
         assert!(app.qso_list_focused);
         assert_eq!(app.qso_selected, Some(0));
     }
@@ -1494,8 +1769,16 @@ mod tests {
     async fn handle_key_f4_focuses_search() {
         let (tx, _rx) = mpsc::unbounded_channel::<AppEvent>();
         let (lookup_tx, _lookup_rx) = make_watch();
+        let (rig_tx, _rig_rx) = make_rig_watch();
         let mut app = make_app();
-        handle_key(&mut app, make_key(KeyCode::F(4)), &tx, &lookup_tx, "");
+        handle_key(
+            &mut app,
+            make_key(KeyCode::F(4)),
+            &tx,
+            &lookup_tx,
+            &rig_tx,
+            "",
+        );
         assert!(app.search_focused);
         assert!(!app.qso_list_focused);
     }
@@ -1504,8 +1787,16 @@ mod tests {
     async fn handle_key_f7_resets_qso_start_time() {
         let (tx, _rx) = mpsc::unbounded_channel::<AppEvent>();
         let (lookup_tx, _lookup_rx) = make_watch();
+        let (rig_tx, _rig_rx) = make_rig_watch();
         let mut app = make_app();
-        handle_key(&mut app, make_key(KeyCode::F(7)), &tx, &lookup_tx, "");
+        handle_key(
+            &mut app,
+            make_key(KeyCode::F(7)),
+            &tx,
+            &lookup_tx,
+            &rig_tx,
+            "",
+        );
         assert!(app.qso_timer_active);
         assert!(app.status_message.is_some());
     }
@@ -1514,9 +1805,17 @@ mod tests {
     async fn handle_key_esc_clears_form_in_log_entry() {
         let (tx, _rx) = mpsc::unbounded_channel::<AppEvent>();
         let (lookup_tx, _lookup_rx) = make_watch();
+        let (rig_tx, _rig_rx) = make_rig_watch();
         let mut app = make_app();
         app.form.callsign = "K7ABC".to_string();
-        handle_key(&mut app, make_key(KeyCode::Esc), &tx, &lookup_tx, "");
+        handle_key(
+            &mut app,
+            make_key(KeyCode::Esc),
+            &tx,
+            &lookup_tx,
+            &rig_tx,
+            "",
+        );
         assert!(app.form.callsign.is_empty());
     }
 
@@ -1524,9 +1823,17 @@ mod tests {
     async fn handle_key_esc_in_advanced_returns_to_log_entry() {
         let (tx, _rx) = mpsc::unbounded_channel::<AppEvent>();
         let (lookup_tx, _lookup_rx) = make_watch();
+        let (rig_tx, _rig_rx) = make_rig_watch();
         let mut app = make_app();
         app.view = View::Advanced;
-        handle_key(&mut app, make_key(KeyCode::Esc), &tx, &lookup_tx, "");
+        handle_key(
+            &mut app,
+            make_key(KeyCode::Esc),
+            &tx,
+            &lookup_tx,
+            &rig_tx,
+            "",
+        );
         assert!(matches!(app.view, View::LogEntry));
     }
 
@@ -1534,9 +1841,17 @@ mod tests {
     async fn handle_key_end_deselects_field() {
         let (tx, _rx) = mpsc::unbounded_channel::<AppEvent>();
         let (lookup_tx, _lookup_rx) = make_watch();
+        let (rig_tx, _rig_rx) = make_rig_watch();
         let mut app = make_app();
         app.form.field_selected = true;
-        handle_key(&mut app, make_key(KeyCode::End), &tx, &lookup_tx, "");
+        handle_key(
+            &mut app,
+            make_key(KeyCode::End),
+            &tx,
+            &lookup_tx,
+            &rig_tx,
+            "",
+        );
         assert!(!app.form.field_selected);
     }
 
@@ -1544,8 +1859,16 @@ mod tests {
     async fn handle_key_tab_advances_field() {
         let (tx, _rx) = mpsc::unbounded_channel::<AppEvent>();
         let (lookup_tx, _lookup_rx) = make_watch();
+        let (rig_tx, _rig_rx) = make_rig_watch();
         let mut app = make_app();
-        handle_key(&mut app, make_key(KeyCode::Tab), &tx, &lookup_tx, "");
+        handle_key(
+            &mut app,
+            make_key(KeyCode::Tab),
+            &tx,
+            &lookup_tx,
+            &rig_tx,
+            "",
+        );
         assert_eq!(app.form.focused, Field::Band);
     }
 
@@ -1553,8 +1876,16 @@ mod tests {
     async fn handle_key_backtab_goes_to_prev_field() {
         let (tx, _rx) = mpsc::unbounded_channel::<AppEvent>();
         let (lookup_tx, _lookup_rx) = make_watch();
+        let (rig_tx, _rig_rx) = make_rig_watch();
         let mut app = make_app();
-        handle_key(&mut app, make_key(KeyCode::BackTab), &tx, &lookup_tx, "");
+        handle_key(
+            &mut app,
+            make_key(KeyCode::BackTab),
+            &tx,
+            &lookup_tx,
+            &rig_tx,
+            "",
+        );
         assert_ne!(app.form.focused, Field::Callsign);
     }
 
@@ -1562,10 +1893,18 @@ mod tests {
     async fn handle_key_left_cycles_band() {
         let (tx, _rx) = mpsc::unbounded_channel::<AppEvent>();
         let (lookup_tx, _lookup_rx) = make_watch();
+        let (rig_tx, _rig_rx) = make_rig_watch();
         let mut app = make_app();
         app.form.focused = Field::Band;
         let before = app.form.band_idx;
-        handle_key(&mut app, make_key(KeyCode::Left), &tx, &lookup_tx, "");
+        handle_key(
+            &mut app,
+            make_key(KeyCode::Left),
+            &tx,
+            &lookup_tx,
+            &rig_tx,
+            "",
+        );
         assert_ne!(app.form.band_idx, before);
     }
 
@@ -1573,10 +1912,18 @@ mod tests {
     async fn handle_key_right_cycles_band() {
         let (tx, _rx) = mpsc::unbounded_channel::<AppEvent>();
         let (lookup_tx, _lookup_rx) = make_watch();
+        let (rig_tx, _rig_rx) = make_rig_watch();
         let mut app = make_app();
         app.form.focused = Field::Band;
         let before = app.form.band_idx;
-        handle_key(&mut app, make_key(KeyCode::Right), &tx, &lookup_tx, "");
+        handle_key(
+            &mut app,
+            make_key(KeyCode::Right),
+            &tx,
+            &lookup_tx,
+            &rig_tx,
+            "",
+        );
         assert_ne!(app.form.band_idx, before);
     }
 
@@ -1584,9 +1931,17 @@ mod tests {
     async fn handle_key_char_appends_to_callsign_uppercase() {
         let (tx, _rx) = mpsc::unbounded_channel::<AppEvent>();
         let (lookup_tx, _lookup_rx) = make_watch();
+        let (rig_tx, _rig_rx) = make_rig_watch();
         let mut app = make_app();
         app.form.focused = Field::Callsign;
-        handle_key(&mut app, make_key(KeyCode::Char('k')), &tx, &lookup_tx, "");
+        handle_key(
+            &mut app,
+            make_key(KeyCode::Char('k')),
+            &tx,
+            &lookup_tx,
+            &rig_tx,
+            "",
+        );
         assert_eq!(app.form.callsign, "K");
     }
 
@@ -1594,9 +1949,17 @@ mod tests {
     async fn handle_key_char_appends_to_comment_lowercase() {
         let (tx, _rx) = mpsc::unbounded_channel::<AppEvent>();
         let (lookup_tx, _lookup_rx) = make_watch();
+        let (rig_tx, _rig_rx) = make_rig_watch();
         let mut app = make_app();
         app.form.focused = Field::Comment;
-        handle_key(&mut app, make_key(KeyCode::Char('x')), &tx, &lookup_tx, "");
+        handle_key(
+            &mut app,
+            make_key(KeyCode::Char('x')),
+            &tx,
+            &lookup_tx,
+            &rig_tx,
+            "",
+        );
         assert_eq!(app.form.comment, "x");
     }
 
@@ -1604,11 +1967,19 @@ mod tests {
     async fn handle_key_char_with_field_selected_clears_first() {
         let (tx, _rx) = mpsc::unbounded_channel::<AppEvent>();
         let (lookup_tx, _lookup_rx) = make_watch();
+        let (rig_tx, _rig_rx) = make_rig_watch();
         let mut app = make_app();
         app.form.focused = Field::Comment;
         app.form.comment = "old".to_string();
         app.form.field_selected = true;
-        handle_key(&mut app, make_key(KeyCode::Char('x')), &tx, &lookup_tx, "");
+        handle_key(
+            &mut app,
+            make_key(KeyCode::Char('x')),
+            &tx,
+            &lookup_tx,
+            &rig_tx,
+            "",
+        );
         assert_eq!(app.form.comment, "x");
     }
 
@@ -1616,10 +1987,18 @@ mod tests {
     async fn handle_key_backspace_pops_callsign_char() {
         let (tx, _rx) = mpsc::unbounded_channel::<AppEvent>();
         let (lookup_tx, _lookup_rx) = make_watch();
+        let (rig_tx, _rig_rx) = make_rig_watch();
         let mut app = make_app();
         app.form.focused = Field::Callsign;
         app.form.callsign = "K7A".to_string();
-        handle_key(&mut app, make_key(KeyCode::Backspace), &tx, &lookup_tx, "");
+        handle_key(
+            &mut app,
+            make_key(KeyCode::Backspace),
+            &tx,
+            &lookup_tx,
+            &rig_tx,
+            "",
+        );
         assert_eq!(app.form.callsign, "K7");
     }
 
@@ -1627,11 +2006,19 @@ mod tests {
     async fn handle_key_backspace_with_field_selected_clears_field() {
         let (tx, _rx) = mpsc::unbounded_channel::<AppEvent>();
         let (lookup_tx, _lookup_rx) = make_watch();
+        let (rig_tx, _rig_rx) = make_rig_watch();
         let mut app = make_app();
         app.form.focused = Field::Comment;
         app.form.comment = "hello".to_string();
         app.form.field_selected = true;
-        handle_key(&mut app, make_key(KeyCode::Backspace), &tx, &lookup_tx, "");
+        handle_key(
+            &mut app,
+            make_key(KeyCode::Backspace),
+            &tx,
+            &lookup_tx,
+            &rig_tx,
+            "",
+        );
         assert!(app.form.comment.is_empty());
         assert!(!app.form.field_selected);
     }
@@ -1640,12 +2027,14 @@ mod tests {
     async fn handle_key_alt_char_jumps_to_field() {
         let (tx, _rx) = mpsc::unbounded_channel::<AppEvent>();
         let (lookup_tx, _lookup_rx) = make_watch();
+        let (rig_tx, _rig_rx) = make_rig_watch();
         let mut app = make_app();
         handle_key(
             &mut app,
             make_key_with_mod(KeyCode::Char('f'), KeyModifiers::ALT),
             &tx,
             &lookup_tx,
+            &rig_tx,
             "",
         );
         assert_eq!(app.form.focused, Field::FrequencyMhz);
@@ -1655,10 +2044,18 @@ mod tests {
     async fn handle_key_confirm_delete_n_cancels() {
         let (tx, _rx) = mpsc::unbounded_channel::<AppEvent>();
         let (lookup_tx, _lookup_rx) = make_watch();
+        let (rig_tx, _rig_rx) = make_rig_watch();
         let mut app = make_app();
         app.view = View::ConfirmDeleteQso;
         app.delete_candidate_id = Some("q1".to_string());
-        handle_key(&mut app, make_key(KeyCode::Char('n')), &tx, &lookup_tx, "");
+        handle_key(
+            &mut app,
+            make_key(KeyCode::Char('n')),
+            &tx,
+            &lookup_tx,
+            &rig_tx,
+            "",
+        );
         assert!(app.delete_candidate_id.is_none());
         assert!(matches!(app.view, View::LogEntry));
     }
@@ -1667,11 +2064,19 @@ mod tests {
     async fn handle_key_f5_in_advanced_switches_tab() {
         let (tx, _rx) = mpsc::unbounded_channel::<AppEvent>();
         let (lookup_tx, _lookup_rx) = make_watch();
+        let (rig_tx, _rig_rx) = make_rig_watch();
         let mut app = make_app();
         app.view = View::Advanced;
         use crate::form::AdvancedTab;
         assert_eq!(app.form.advanced_tab, AdvancedTab::Main);
-        handle_key(&mut app, make_key(KeyCode::F(5)), &tx, &lookup_tx, "");
+        handle_key(
+            &mut app,
+            make_key(KeyCode::F(5)),
+            &tx,
+            &lookup_tx,
+            &rig_tx,
+            "",
+        );
         assert_eq!(app.form.advanced_tab, AdvancedTab::Contest);
     }
 
@@ -1679,9 +2084,17 @@ mod tests {
     async fn handle_key_f6_in_advanced_switches_tab_back() {
         let (tx, _rx) = mpsc::unbounded_channel::<AppEvent>();
         let (lookup_tx, _lookup_rx) = make_watch();
+        let (rig_tx, _rig_rx) = make_rig_watch();
         let mut app = make_app();
         app.view = View::Advanced;
-        handle_key(&mut app, make_key(KeyCode::F(6)), &tx, &lookup_tx, "");
+        handle_key(
+            &mut app,
+            make_key(KeyCode::F(6)),
+            &tx,
+            &lookup_tx,
+            &rig_tx,
+            "",
+        );
         use crate::form::AdvancedTab;
         assert_eq!(app.form.advanced_tab, AdvancedTab::Awards);
     }
@@ -1690,9 +2103,17 @@ mod tests {
     async fn handle_key_search_focused_routes_to_search_handler() {
         let (tx, _rx) = mpsc::unbounded_channel::<AppEvent>();
         let (lookup_tx, _lookup_rx) = make_watch();
+        let (rig_tx, _rig_rx) = make_rig_watch();
         let mut app = make_app();
         app.search_focused = true;
-        handle_key(&mut app, make_key(KeyCode::Esc), &tx, &lookup_tx, "");
+        handle_key(
+            &mut app,
+            make_key(KeyCode::Esc),
+            &tx,
+            &lookup_tx,
+            &rig_tx,
+            "",
+        );
         assert!(!app.search_focused);
     }
 
@@ -1700,10 +2121,161 @@ mod tests {
     async fn handle_key_qso_list_focused_routes_to_list_handler() {
         let (tx, _rx) = mpsc::unbounded_channel::<AppEvent>();
         let (lookup_tx, _lookup_rx) = make_watch();
+        let (rig_tx, _rig_rx) = make_rig_watch();
         let mut app = make_app();
         app.qso_list_focused = true;
         app.qso_selected = Some(0);
-        handle_key(&mut app, make_key(KeyCode::Esc), &tx, &lookup_tx, "");
+        handle_key(
+            &mut app,
+            make_key(KeyCode::Esc),
+            &tx,
+            &lookup_tx,
+            &rig_tx,
+            "",
+        );
         assert!(!app.qso_list_focused);
+    }
+
+    #[tokio::test]
+    async fn handle_key_f8_toggles_rig_control() {
+        let (tx, _rx) = mpsc::unbounded_channel::<AppEvent>();
+        let (lookup_tx, _lookup_rx) = make_watch();
+        let (rig_tx, _rig_rx) = make_rig_watch();
+        let mut app = make_app();
+        assert!(app.rig_control_enabled);
+        handle_key(
+            &mut app,
+            make_key(KeyCode::F(8)),
+            &tx,
+            &lookup_tx,
+            &rig_tx,
+            "",
+        );
+        assert!(!app.rig_control_enabled);
+        assert!(app.rig_info.is_none());
+        handle_key(
+            &mut app,
+            make_key(KeyCode::F(8)),
+            &tx,
+            &lookup_tx,
+            &rig_tx,
+            "",
+        );
+        assert!(app.rig_control_enabled);
+    }
+
+    #[tokio::test]
+    async fn handle_key_f8_works_from_help_view() {
+        let (tx, _rx) = mpsc::unbounded_channel::<AppEvent>();
+        let (lookup_tx, _lookup_rx) = make_watch();
+        let (rig_tx, _rig_rx) = make_rig_watch();
+        let mut app = make_app();
+        app.view = View::Help;
+        handle_key(
+            &mut app,
+            make_key(KeyCode::F(8)),
+            &tx,
+            &lookup_tx,
+            &rig_tx,
+            "",
+        );
+        assert!(!app.rig_control_enabled);
+    }
+
+    #[test]
+    fn apply_rig_snapshot_connected_sets_form_fields() {
+        use crate::app::{RigInfo, RigStatus};
+        let mut app = make_app();
+        let rig = Some(RigInfo {
+            frequency_display: "14.225 MHz".to_string(),
+            frequency_hz: 14_225_000,
+            band: Some("20M".to_string()),
+            mode: Some("SSB".to_string()),
+            submode: None,
+            status: RigStatus::Connected,
+            error_message: None,
+        });
+        apply_rig_snapshot(&mut app, rig);
+        assert!(app.rig_info.is_some());
+        assert_eq!(app.form.frequency_mhz, "14.225");
+        assert_eq!(BANDS[app.form.band_idx], "20M");
+        assert_eq!(MODES[app.form.mode_idx], "SSB");
+    }
+
+    #[test]
+    fn apply_rig_snapshot_does_not_overwrite_during_edit() {
+        use crate::app::{RigInfo, RigStatus};
+        let mut app = make_app();
+        app.editing_local_id = Some("qso-123".to_string());
+        app.form.band_idx = 3; // 40M
+        let rig = Some(RigInfo {
+            frequency_display: "14.225 MHz".to_string(),
+            frequency_hz: 14_225_000,
+            band: Some("20M".to_string()),
+            mode: Some("SSB".to_string()),
+            submode: None,
+            status: RigStatus::Connected,
+            error_message: None,
+        });
+        apply_rig_snapshot(&mut app, rig);
+        assert_eq!(app.form.band_idx, 3); // unchanged
+    }
+
+    #[test]
+    fn apply_rig_snapshot_skips_when_callsign_entered() {
+        use crate::app::{RigInfo, RigStatus};
+        let mut app = make_app();
+        app.form.callsign = "K7ABC".to_string();
+        app.form.band_idx = 3; // 40M
+        let rig = Some(RigInfo {
+            frequency_display: "7.150 MHz".to_string(),
+            frequency_hz: 7_150_000,
+            band: Some("40M".to_string()),
+            mode: Some("CW".to_string()),
+            submode: None,
+            status: RigStatus::Connected,
+            error_message: None,
+        });
+        apply_rig_snapshot(&mut app, rig);
+        // Band and mode should NOT change when callsign is entered
+        assert_eq!(app.form.band_idx, 3);
+    }
+
+    #[test]
+    fn apply_rig_snapshot_error_status_does_not_populate() {
+        use crate::app::{RigInfo, RigStatus};
+        let mut app = make_app();
+        let original_band = app.form.band_idx;
+        let rig = Some(RigInfo {
+            frequency_display: "14.225 MHz".to_string(),
+            frequency_hz: 14_225_000,
+            band: Some("20M".to_string()),
+            mode: Some("SSB".to_string()),
+            submode: None,
+            status: RigStatus::Error,
+            error_message: Some("connection refused".to_string()),
+        });
+        apply_rig_snapshot(&mut app, rig);
+        assert_eq!(app.form.band_idx, original_band); // unchanged
+        assert!(app.rig_info.is_some()); // but header still shows status
+    }
+
+    #[test]
+    fn apply_rig_snapshot_disabled_when_rig_off() {
+        use crate::app::{RigInfo, RigStatus};
+        let mut app = make_app();
+        app.rig_control_enabled = false;
+        let original_freq = app.form.frequency_mhz.clone();
+        let rig = Some(RigInfo {
+            frequency_display: "14.225 MHz".to_string(),
+            frequency_hz: 14_225_000,
+            band: Some("20M".to_string()),
+            mode: Some("SSB".to_string()),
+            submode: None,
+            status: RigStatus::Connected,
+            error_message: None,
+        });
+        apply_rig_snapshot(&mut app, rig);
+        assert_eq!(app.form.frequency_mhz, original_freq); // unchanged
     }
 }

@@ -4,6 +4,33 @@ use std::time::Instant;
 
 use crate::form::LogForm;
 
+/// Rig connection status mirroring the proto `RigConnectionStatus` enum.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RigStatus {
+    Connected,
+    Disconnected,
+    Error,
+    Disabled,
+}
+
+/// Display-ready rig control snapshot for the TUI.
+pub(crate) struct RigInfo {
+    /// Formatted frequency string (e.g., `"14.225 MHz"`).
+    pub(crate) frequency_display: String,
+    /// Frequency in Hz (for form auto-population).
+    pub(crate) frequency_hz: u64,
+    /// Band name string (ADIF, e.g., `"20M"`).
+    pub(crate) band: Option<String>,
+    /// Mode name string (ADIF, e.g., `"SSB"`).
+    pub(crate) mode: Option<String>,
+    /// Optional submode from the rig.
+    pub(crate) submode: Option<String>,
+    /// Connection status.
+    pub(crate) status: RigStatus,
+    /// Error message from the rig provider, if any.
+    pub(crate) error_message: Option<String>,
+}
+
 /// Top-level view the TUI is currently showing.
 pub(crate) enum View {
     /// QSO entry form — the primary screen.
@@ -126,6 +153,10 @@ pub(crate) struct App {
     pub(crate) recent_qsos: Vec<RecentQso>,
     /// Current space weather snapshot.
     pub(crate) space_weather: Option<SpaceWeatherInfo>,
+    /// Current rig control snapshot.
+    pub(crate) rig_info: Option<RigInfo>,
+    /// Whether rig control polling is enabled (default: `true`).
+    pub(crate) rig_control_enabled: bool,
     /// Transient status bar message.
     pub(crate) status_message: Option<StatusMessage>,
     /// Whether keyboard focus is on the recent QSOs list panel.
@@ -168,6 +199,8 @@ impl App {
             lookup_result: None,
             recent_qsos: Vec::new(),
             space_weather: None,
+            rig_info: None,
+            rig_control_enabled: true,
             status_message: None,
             qso_list_focused: false,
             qso_selected: None,
@@ -276,6 +309,14 @@ impl App {
         });
     }
 
+    /// Toggle rig control on or off. Clears the cached snapshot when disabling.
+    pub(crate) fn toggle_rig_control(&mut self) {
+        self.rig_control_enabled = !self.rig_control_enabled;
+        if !self.rig_control_enabled {
+            self.rig_info = None;
+        }
+    }
+
     /// Clear the status message if it has been visible for more than 3 seconds.
     pub(crate) fn expire_status(&mut self) {
         if let Some(msg) = &self.status_message {
@@ -320,6 +361,8 @@ mod tests {
         assert!(!app.qso_timer_active);
         assert!(app.status_message.is_none());
         assert!(app.lookup_result.is_none());
+        assert!(app.rig_control_enabled);
+        assert!(app.rig_info.is_none());
     }
 
     #[test]
@@ -553,5 +596,31 @@ mod tests {
             name: None,
         };
         assert!(!qso.matches_search("united"));
+    }
+
+    #[test]
+    fn toggle_rig_control_disables_and_clears() {
+        let mut app = App::new("http://localhost:50051".to_string());
+        app.rig_info = Some(RigInfo {
+            frequency_display: "14.225 MHz".to_string(),
+            frequency_hz: 14_225_000,
+            band: Some("20M".to_string()),
+            mode: Some("SSB".to_string()),
+            submode: None,
+            status: RigStatus::Connected,
+            error_message: None,
+        });
+        assert!(app.rig_control_enabled);
+        app.toggle_rig_control();
+        assert!(!app.rig_control_enabled);
+        assert!(app.rig_info.is_none());
+    }
+
+    #[test]
+    fn toggle_rig_control_re_enables() {
+        let mut app = App::new("http://localhost:50051".to_string());
+        app.rig_control_enabled = false;
+        app.toggle_rig_control();
+        assert!(app.rig_control_enabled);
     }
 }

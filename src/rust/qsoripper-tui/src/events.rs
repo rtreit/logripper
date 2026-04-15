@@ -5,7 +5,7 @@ use std::time::Duration;
 use tokio::sync::{mpsc, watch};
 use tokio::time;
 
-use crate::app::{CallsignInfo, RecentQso, SpaceWeatherInfo};
+use crate::app::{CallsignInfo, RecentQso, RigInfo, SpaceWeatherInfo};
 use crate::grpc;
 
 /// Events produced by background tasks and forwarded to the main event loop.
@@ -18,6 +18,8 @@ pub(crate) enum AppEvent {
     LookupResult(Option<CallsignInfo>),
     /// Current space weather snapshot; `None` if unavailable.
     SpaceWeather(Option<SpaceWeatherInfo>),
+    /// Current rig control snapshot; `None` if unavailable.
+    RigSnapshot(Option<RigInfo>),
     /// A QSO was successfully logged; value is the assigned local ID.
     QsoLogged(String),
     /// A QSO log attempt failed; value is the human-readable error message.
@@ -111,6 +113,37 @@ pub(crate) fn spawn_lookup_task(
                 Err(_) => None,
             };
             if event_tx.send(AppEvent::LookupResult(result)).is_err() {
+                break;
+            }
+        }
+    });
+}
+
+/// Spawn a rig control polling task that fetches rig snapshots every second.
+///
+/// The poll is gated by `enabled_rx`: when the value is `false`, the task pauses
+/// polling and sends `None` snapshots. This avoids leaking multiple poll loops on toggle.
+pub(crate) fn spawn_rig_poll_task(
+    mut enabled_rx: watch::Receiver<bool>,
+    event_tx: mpsc::UnboundedSender<AppEvent>,
+    endpoint: String,
+) {
+    tokio::spawn(async move {
+        let mut interval = time::interval(Duration::from_secs(1));
+        loop {
+            interval.tick().await;
+            if event_tx.is_closed() {
+                break;
+            }
+            let enabled = *enabled_rx.borrow_and_update();
+            if !enabled {
+                continue;
+            }
+            let result = match grpc::create_channel(&endpoint).await {
+                Ok(ch) => grpc::get_rig_snapshot(ch).await.ok().flatten(),
+                Err(_) => None,
+            };
+            if event_tx.send(AppEvent::RigSnapshot(result)).is_err() {
                 break;
             }
         }

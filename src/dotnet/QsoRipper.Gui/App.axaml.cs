@@ -22,7 +22,9 @@ internal sealed partial class App : Application
             if (Program.CaptureOptions is { } captureOptions)
             {
                 RequestedThemeVariant = captureOptions.ThemeVariant;
-                desktop.MainWindow = UxCaptureRunner.CreateWindow(desktop, captureOptions);
+                desktop.MainWindow = captureOptions.Scenario.StartsWith("diag-", StringComparison.Ordinal)
+                    ? Views.ButtonClipTestWindow.CreateForCapture(desktop, captureOptions)
+                    : UxCaptureRunner.CreateWindow(desktop, captureOptions);
             }
             else if (Program.InspectionOptions is { } inspectionOptions)
             {

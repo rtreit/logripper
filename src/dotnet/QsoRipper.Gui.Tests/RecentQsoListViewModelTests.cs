@@ -412,5 +412,11 @@ public class RecentQsoListViewModelTests
 
         public Task<GetSyncStatusResponse> GetSyncStatusAsync(CancellationToken ct = default) =>
             Task.FromResult(new GetSyncStatusResponse());
+
+        public Task<LookupResponse> LookupCallsignAsync(string callsign, CancellationToken ct = default) =>
+            throw new NotImplementedException();
+
+        public Task<DeleteQsoResponse> DeleteQsoAsync(string localId, bool deleteFromQrz = false, CancellationToken ct = default) =>
+            throw new NotImplementedException();
     }
 }
