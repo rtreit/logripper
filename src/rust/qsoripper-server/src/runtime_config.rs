@@ -1382,6 +1382,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn runtime_manager_preserves_config_file_sqlite_path_when_cli_only_selects_backend() {
+        let sqlite_path = unique_sqlite_path();
+        let mut config_values = BTreeMap::new();
+        config_values.insert(STORAGE_BACKEND_ENV_VAR.to_string(), "sqlite".to_string());
+        config_values.insert(SQLITE_PATH_ENV_VAR.to_string(), sqlite_path.clone());
+
+        // CLI says --storage sqlite but does NOT pass --sqlite-path.
+        let mut cli_overrides = BTreeMap::new();
+        cli_overrides.insert(STORAGE_BACKEND_ENV_VAR.to_string(), "sqlite".to_string());
+
+        let manager = RuntimeConfigManager::new_with_config_file_values_and_cli_storage_overrides(
+            config_values,
+            &cli_overrides,
+        )
+        .expect("manager");
+
+        let snapshot = manager.snapshot().await;
+        assert_eq!("sqlite", snapshot.active_storage_backend);
+        assert_eq!(
+            sqlite_path,
+            snapshot
+                .values
+                .iter()
+                .find(|value| value.key == SQLITE_PATH_ENV_VAR)
+                .expect("sqlite path value")
+                .display_value
+        );
+    }
+
+    #[tokio::test]
     async fn runtime_manager_applies_station_profile_overrides() {
         let manager = RuntimeConfigManager::new(BTreeMap::new()).expect("manager");
 
