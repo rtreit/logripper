@@ -20,5 +20,9 @@ internal enum RecentQsoSortColumn
     CqZone,
     ItuZone,
     Qth,
-    Sync
+    Sync,
+    RstSent,
+    RstReceived,
+    State,
+    County
 }

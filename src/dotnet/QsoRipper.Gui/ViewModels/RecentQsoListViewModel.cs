@@ -473,6 +473,8 @@ internal sealed partial class RecentQsoListViewModel : ObservableObject
         RecentQsoSortColumn.Mode => "mode",
         RecentQsoSortColumn.Frequency => "frequency",
         RecentQsoSortColumn.Rst => "RST",
+        RecentQsoSortColumn.RstSent => "RST sent",
+        RecentQsoSortColumn.RstReceived => "RST rcvd",
         RecentQsoSortColumn.Dxcc => "DXCC",
         RecentQsoSortColumn.Country => "country",
         RecentQsoSortColumn.Name => "name",
@@ -485,6 +487,8 @@ internal sealed partial class RecentQsoListViewModel : ObservableObject
         RecentQsoSortColumn.CqZone => "CQ zone",
         RecentQsoSortColumn.ItuZone => "ITU zone",
         RecentQsoSortColumn.Qth => "QTH",
+        RecentQsoSortColumn.State => "state",
+        RecentQsoSortColumn.County => "county",
         RecentQsoSortColumn.Sync => "sync",
         _ => "recent QSOs"
     };
@@ -656,6 +660,8 @@ internal sealed partial class RecentQsoListViewModel : ObservableObject
         RecentQsoSortColumn.Mode => nameof(RecentQsoItemViewModel.Mode),
         RecentQsoSortColumn.Frequency => nameof(RecentQsoItemViewModel.FrequencySortKey),
         RecentQsoSortColumn.Rst => nameof(RecentQsoItemViewModel.Rst),
+        RecentQsoSortColumn.RstSent => nameof(RecentQsoItemViewModel.RstSent),
+        RecentQsoSortColumn.RstReceived => nameof(RecentQsoItemViewModel.RstReceived),
         RecentQsoSortColumn.Dxcc => nameof(RecentQsoItemViewModel.DxccSortKey),
         RecentQsoSortColumn.Country => nameof(RecentQsoItemViewModel.Country),
         RecentQsoSortColumn.Name => nameof(RecentQsoItemViewModel.OperatorName),
@@ -668,6 +674,8 @@ internal sealed partial class RecentQsoListViewModel : ObservableObject
         RecentQsoSortColumn.CqZone => nameof(RecentQsoItemViewModel.CqZone),
         RecentQsoSortColumn.ItuZone => nameof(RecentQsoItemViewModel.ItuZone),
         RecentQsoSortColumn.Qth => nameof(RecentQsoItemViewModel.Qth),
+        RecentQsoSortColumn.State => nameof(RecentQsoItemViewModel.State),
+        RecentQsoSortColumn.County => nameof(RecentQsoItemViewModel.County),
         RecentQsoSortColumn.Sync => nameof(RecentQsoItemViewModel.SyncStatus),
         _ => nameof(RecentQsoItemViewModel.UtcSortKey)
     };
@@ -680,6 +688,8 @@ internal sealed partial class RecentQsoListViewModel : ObservableObject
         nameof(RecentQsoItemViewModel.Mode) => RecentQsoSortColumn.Mode,
         nameof(RecentQsoItemViewModel.FrequencySortKey) => RecentQsoSortColumn.Frequency,
         nameof(RecentQsoItemViewModel.Rst) => RecentQsoSortColumn.Rst,
+        nameof(RecentQsoItemViewModel.RstSent) => RecentQsoSortColumn.RstSent,
+        nameof(RecentQsoItemViewModel.RstReceived) => RecentQsoSortColumn.RstReceived,
         nameof(RecentQsoItemViewModel.DxccSortKey) => RecentQsoSortColumn.Dxcc,
         nameof(RecentQsoItemViewModel.Country) => RecentQsoSortColumn.Country,
         nameof(RecentQsoItemViewModel.OperatorName) => RecentQsoSortColumn.Name,
@@ -692,6 +702,8 @@ internal sealed partial class RecentQsoListViewModel : ObservableObject
         nameof(RecentQsoItemViewModel.CqZone) => RecentQsoSortColumn.CqZone,
         nameof(RecentQsoItemViewModel.ItuZone) => RecentQsoSortColumn.ItuZone,
         nameof(RecentQsoItemViewModel.Qth) => RecentQsoSortColumn.Qth,
+        nameof(RecentQsoItemViewModel.State) => RecentQsoSortColumn.State,
+        nameof(RecentQsoItemViewModel.County) => RecentQsoSortColumn.County,
         nameof(RecentQsoItemViewModel.SyncStatus) => RecentQsoSortColumn.Sync,
         _ => RecentQsoSortColumn.Utc
     };
@@ -737,7 +749,8 @@ internal sealed partial class RecentQsoListViewModel : ObservableObject
         yield return new RecentQsoColumnOptionViewModel(RecentQsoGridColumn.Band, "Band", true);
         yield return new RecentQsoColumnOptionViewModel(RecentQsoGridColumn.Mode, "Mode", true);
         yield return new RecentQsoColumnOptionViewModel(RecentQsoGridColumn.Frequency, "Freq", true);
-        yield return new RecentQsoColumnOptionViewModel(RecentQsoGridColumn.Rst, "RST", true);
+        yield return new RecentQsoColumnOptionViewModel(RecentQsoGridColumn.RstSent, "S", true);
+        yield return new RecentQsoColumnOptionViewModel(RecentQsoGridColumn.RstReceived, "R", true);
         yield return new RecentQsoColumnOptionViewModel(RecentQsoGridColumn.Dxcc, "DXCC", true);
         yield return new RecentQsoColumnOptionViewModel(RecentQsoGridColumn.Country, "Country", true);
         yield return new RecentQsoColumnOptionViewModel(RecentQsoGridColumn.Name, "Name", true);
@@ -749,8 +762,10 @@ internal sealed partial class RecentQsoListViewModel : ObservableObject
         yield return new RecentQsoColumnOptionViewModel(RecentQsoGridColumn.UtcEnd, "End", false);
         yield return new RecentQsoColumnOptionViewModel(RecentQsoGridColumn.CqZone, "CQ", false);
         yield return new RecentQsoColumnOptionViewModel(RecentQsoGridColumn.ItuZone, "ITU", false);
-        yield return new RecentQsoColumnOptionViewModel(RecentQsoGridColumn.Qth, "QTH", false);
+        yield return new RecentQsoColumnOptionViewModel(RecentQsoGridColumn.State, "State", false);
+        yield return new RecentQsoColumnOptionViewModel(RecentQsoGridColumn.County, "County", false);
         yield return new RecentQsoColumnOptionViewModel(RecentQsoGridColumn.Sync, "Sync", false);
+        yield return new RecentQsoColumnOptionViewModel(RecentQsoGridColumn.Continent, "Cont", false);
     }
 
     private readonly record struct SearchToken(string Key, string Value);
@@ -807,6 +822,8 @@ internal sealed partial class RecentQsoListViewModel : ObservableObject
                 _ when propertyPath == nameof(RecentQsoItemViewModel.Mode) => item.Mode,
                 _ when propertyPath == nameof(RecentQsoItemViewModel.FrequencySortKey) => item.FrequencySortKey,
                 _ when propertyPath == nameof(RecentQsoItemViewModel.Rst) => item.Rst,
+                _ when propertyPath == nameof(RecentQsoItemViewModel.RstSent) => item.RstSent,
+                _ when propertyPath == nameof(RecentQsoItemViewModel.RstReceived) => item.RstReceived,
                 _ when propertyPath == nameof(RecentQsoItemViewModel.DxccSortKey) => item.DxccSortKey,
                 _ when propertyPath == nameof(RecentQsoItemViewModel.Country) => item.Country,
                 _ when propertyPath == nameof(RecentQsoItemViewModel.OperatorName) => item.OperatorName,
@@ -819,6 +836,8 @@ internal sealed partial class RecentQsoListViewModel : ObservableObject
                 _ when propertyPath == nameof(RecentQsoItemViewModel.CqZone) => item.CqZone,
                 _ when propertyPath == nameof(RecentQsoItemViewModel.ItuZone) => item.ItuZone,
                 _ when propertyPath == nameof(RecentQsoItemViewModel.Qth) => item.Qth,
+                _ when propertyPath == nameof(RecentQsoItemViewModel.State) => item.State,
+                _ when propertyPath == nameof(RecentQsoItemViewModel.County) => item.County,
                 _ when propertyPath == nameof(RecentQsoItemViewModel.SyncStatus) => item.SyncStatus,
                 _ => null
             };

@@ -75,6 +75,7 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
 
         _engine = new EngineGrpcService(GrpcChannel.ForAddress(endpoint));
         RecentQsos = new RecentQsoListViewModel(_engine);
+        RecentQsos.PropertyChanged += OnRecentQsosPropertyChanged;
         UpdateUtcClock();
         _utcTimer = CreateUtcTimer();
     }
@@ -83,13 +84,24 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
     {
         _engine = engine;
         RecentQsos = new RecentQsoListViewModel(engine);
+        RecentQsos.PropertyChanged += OnRecentQsosPropertyChanged;
         UpdateUtcClock();
         _utcTimer = CreateUtcTimer();
     }
 
     public RecentQsoListViewModel RecentQsos { get; }
 
+    /// <summary>
+    /// Proxy for <see cref="RecentQsoListViewModel.SelectedQso"/> so the Inspector
+    /// panel can bind via a single-level property path from the window DataContext.
+    /// </summary>
+    public RecentQsoItemViewModel? InspectorQso => RecentQsos.SelectedQso;
+
+    public bool HasInspectorQso => InspectorQso is not null;
+
     public event EventHandler? SearchFocusRequested;
+
+    public event EventHandler? GridFocusRequested;
 
     /// <summary>
     /// Raised when the user requests the Settings dialog. The View subscribes to
@@ -100,7 +112,7 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
     /// <summary>
     /// Called after the main window has loaded. Checks first-run state.
     /// </summary>
-    public async Task CheckFirstRunAsync(bool focusSearch = true)
+    public async Task CheckFirstRunAsync(bool focusSearch = false)
     {
         try
         {
@@ -215,6 +227,10 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
     private void ToggleInspector()
     {
         IsInspectorOpen = !IsInspectorOpen;
+        if (!IsInspectorOpen)
+        {
+            GridFocusRequested?.Invoke(this, EventArgs.Empty);
+        }
     }
 
     [RelayCommand]
@@ -240,6 +256,12 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
     [RelayCommand]
     private void OpenCallsignCard()
     {
+        if (IsCallsignCardOpen)
+        {
+            CloseCallsignCard();
+            return;
+        }
+
         var selectedQso = RecentQsos.SelectedQso;
         if (selectedQso is null || string.IsNullOrWhiteSpace(selectedQso.WorkedCallsign))
         {
@@ -263,6 +285,7 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
 
         IsCallsignCardOpen = false;
         CallsignCard = null;
+        GridFocusRequested?.Invoke(this, EventArgs.Empty);
     }
 
     private void OnCallsignCardCloseRequested(object? sender, EventArgs e)
@@ -276,6 +299,7 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
         IsSortChooserOpen = false;
         IsColumnChooserOpen = false;
         CloseCallsignCard();
+        GridFocusRequested?.Invoke(this, EventArgs.Empty);
     }
 
     [RelayCommand]
@@ -336,9 +360,18 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
         await RecentQsos.RefreshAsync();
         await RefreshSyncStatusAsync();
 
-        if (focusSearch && !IsWizardOpen)
+        if (IsWizardOpen)
+        {
+            return;
+        }
+
+        if (focusSearch)
         {
             SearchFocusRequested?.Invoke(this, EventArgs.Empty);
+        }
+        else
+        {
+            GridFocusRequested?.Invoke(this, EventArgs.Empty);
         }
     }
 
@@ -410,6 +443,15 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
         return string.IsNullOrWhiteSpace(stationCallsign)
             ? "Station: -"
             : $"Station: {stationCallsign.Trim()}";
+    }
+
+    private void OnRecentQsosPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(RecentQsoListViewModel.SelectedQso))
+        {
+            OnPropertyChanged(nameof(InspectorQso));
+            OnPropertyChanged(nameof(HasInspectorQso));
+        }
     }
 
     private async Task RefreshSyncStatusAsync()

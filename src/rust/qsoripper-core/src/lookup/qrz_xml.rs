@@ -645,6 +645,8 @@ struct QrzCallsign {
     iota: Option<String>,
     #[serde(rename = "land")]
     dxcc_country_name: Option<String>,
+    #[serde(rename = "continent")]
+    continent: Option<String>,
     #[serde(rename = "born")]
     birth_year: Option<String>,
     #[serde(rename = "serial")]
@@ -680,7 +682,7 @@ fn map_callsign_record(queried_callsign: &str, qrz: &QrzCallsign) -> CallsignRec
         .as_deref()
         .map_or_else(|| queried_callsign.to_string(), normalize_callsign);
 
-    CallsignRecord {
+    let mut record = CallsignRecord {
         callsign,
         cross_ref,
         aliases: parse_aliases(qrz.aliases.as_deref()),
@@ -717,7 +719,7 @@ fn map_callsign_record(queried_callsign: &str, qrz: &QrzCallsign) -> CallsignRec
         itu_zone: parse_u32(qrz.itu_zone.as_deref()),
         iota: optional_string(qrz.iota.as_deref()),
         dxcc_country_name: optional_string(qrz.dxcc_country_name.as_deref()),
-        dxcc_continent: None,
+        dxcc_continent: optional_string(qrz.continent.as_deref()),
         birth_year: parse_u32(qrz.birth_year.as_deref()),
         qrz_serial: parse_u64(qrz.qrz_serial.as_deref()),
         last_modified: parse_datetime_timestamp(qrz.last_modified.as_deref()),
@@ -729,7 +731,13 @@ fn map_callsign_record(queried_callsign: &str, qrz: &QrzCallsign) -> CallsignRec
         gmt_offset: parse_gmt_offset(qrz.gmt_offset.as_deref()),
         dst_observed: parse_yes_no(qrz.dst_observed.as_deref()),
         profile_views: parse_u32(qrz.profile_views.as_deref()),
-    }
+    };
+
+    // Derive missing continent, CQ zone, and ITU zone from the DXCC entity
+    // table when QRZ omits them (common for US callsigns and others).
+    crate::adif::enrich_callsign_record_from_dxcc(&mut record);
+
+    record
 }
 
 fn required_value<F>(name: &'static str, get_value: &mut F) -> Result<String, QrzXmlConfigError>
@@ -1204,6 +1212,8 @@ mod tests {
     <mqsl>0</mqsl>
     <cqzone>5</cqzone>
     <ituzone>8</ituzone>
+    <land>United States</land>
+    <continent>NA</continent>
     <serial>1234</serial>
     <moddate>2025-01-01 12:34:56</moddate>
     <bio>2048/2024-06-10</bio>
@@ -1304,6 +1314,54 @@ mod tests {
         assert_eq!(mapped.paper_qsl, QslPreference::No as i32);
         assert_eq!(mapped.profile_views, Some(77));
         assert_eq!(mapped.bio_length, Some(2048));
+        assert_eq!(mapped.cq_zone, Some(5));
+        assert_eq!(mapped.itu_zone, Some(8));
+        assert_eq!(mapped.dxcc_country_name.as_deref(), Some("United States"));
+        assert_eq!(mapped.dxcc_continent.as_deref(), Some("NA"));
+    }
+
+    #[test]
+    fn dxcc_fallback_fills_missing_continent_and_zones() {
+        // Simulates a QRZ response that omits <cqzone>, <ituzone>, and <continent>
+        // (common for US callsigns like AE7XI).
+        let xml_without_zones = r#"
+<?xml version="1.0"?>
+<QRZDatabase version="1.34">
+  <Session>
+    <Key>session-key</Key>
+  </Session>
+  <Callsign>
+    <call>AE7XI</call>
+    <dxcc>291</dxcc>
+    <fname>MIKE A</fname>
+    <name>TREIT, JR</name>
+    <country>United States</country>
+    <land>United States</land>
+    <grid>CN87xr</grid>
+  </Callsign>
+</QRZDatabase>
+"#;
+        let parsed: QrzDatabase = quick_xml::de::from_str(xml_without_zones).expect("parse");
+        let callsign = parsed.callsign.as_ref().expect("callsign node");
+        let mapped = map_callsign_record("AE7XI", callsign);
+
+        // DXCC 291 (USA) = NA, CQ 5, ITU 6 from the embedded DXCC entity table.
+        assert_eq!(mapped.dxcc_continent.as_deref(), Some("NA"));
+        assert_eq!(mapped.cq_zone, Some(5));
+        assert_eq!(mapped.itu_zone, Some(6));
+    }
+
+    #[test]
+    fn dxcc_fallback_preserves_qrz_provided_values() {
+        // When QRZ provides all fields, the fallback must not overwrite them.
+        let parsed: QrzDatabase = quick_xml::de::from_str(FOUND_XML).expect("parse");
+        let callsign = parsed.callsign.as_ref().expect("callsign node");
+        let mapped = map_callsign_record("W1AW", callsign);
+
+        // QRZ provided cqzone=5, ituzone=8, continent=NA — these must be preserved.
+        assert_eq!(mapped.cq_zone, Some(5));
+        assert_eq!(mapped.itu_zone, Some(8));
+        assert_eq!(mapped.dxcc_continent.as_deref(), Some("NA"));
     }
 
     #[test]

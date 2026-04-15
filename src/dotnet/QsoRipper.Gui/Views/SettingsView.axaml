@@ -7,9 +7,10 @@
         x:DataType="vm:SettingsViewModel"
         AutomationProperties.AutomationId="SettingsWindow"
         Title="Settings"
-        Width="560" Height="780"
+        Width="560"
+        SizeToContent="Height"
         MinWidth="480" MinHeight="520"
-        MaxHeight="900"
+        MaxHeight="1080"
         WindowStartupLocation="CenterOwner"
         CanResize="True">
 

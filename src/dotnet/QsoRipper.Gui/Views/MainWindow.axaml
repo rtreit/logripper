@@ -324,11 +324,18 @@
                       </DataTemplate>
                     </DataGridTemplateColumn.CellEditingTemplate>
                   </DataGridTemplateColumn>
-                  <DataGridTextColumn Header="RST"
-                                      Width="88"
-                                      MinWidth="64"
-                                      Binding="{ReflectionBinding Rst, Mode=TwoWay}"
-                                      SortMemberPath="Rst" />
+                  <DataGridTextColumn Header="S"
+                                      Width="48"
+                                      MinWidth="40"
+                                      Binding="{ReflectionBinding RstSent}"
+                                      SortMemberPath="RstSent"
+                                      IsReadOnly="True" />
+                  <DataGridTextColumn Header="R"
+                                      Width="48"
+                                      MinWidth="40"
+                                      Binding="{ReflectionBinding RstReceived}"
+                                      SortMemberPath="RstReceived"
+                                      IsReadOnly="True" />
                   <DataGridTextColumn Header="DXCC"
                                       Width="76"
                                       MinWidth="64"
@@ -455,27 +462,32 @@
                                       Binding="{ReflectionBinding ItuZone, Mode=TwoWay}"
                                       SortMemberPath="ItuZone"
                                       IsVisible="False" />
-                  <DataGridTemplateColumn Header="QTH"
-                                          Width="120"
-                                          MinWidth="96"
-                                          SortMemberPath="Qth"
-                                          IsVisible="False"
-                                          IsReadOnly="True">
-                    <DataGridTemplateColumn.CellTemplate>
-                      <DataTemplate x:DataType="vm:RecentQsoItemViewModel">
-                        <TextBlock Text="{Binding Qth}"
-                                   TextWrapping="NoWrap"
-                                   TextTrimming="CharacterEllipsis"
-                                   VerticalAlignment="Center"
-                                   ToolTip.Tip="{Binding Qth}" />
-                      </DataTemplate>
-                    </DataGridTemplateColumn.CellTemplate>
-                  </DataGridTemplateColumn>
+                  <DataGridTextColumn Header="State"
+                                      Width="56"
+                                      MinWidth="48"
+                                      Binding="{ReflectionBinding State}"
+                                      SortMemberPath="State"
+                                      IsReadOnly="True"
+                                      IsVisible="False" />
+                  <DataGridTextColumn Header="County"
+                                      Width="80"
+                                      MinWidth="64"
+                                      Binding="{ReflectionBinding County}"
+                                      SortMemberPath="County"
+                                      IsReadOnly="True"
+                                      IsVisible="False" />
                   <DataGridTextColumn Header="Sync"
                                       Width="78"
                                       MinWidth="72"
                                       Binding="{ReflectionBinding SyncStatus}"
                                       SortMemberPath="SyncStatus"
+                                      IsReadOnly="True"
+                                      IsVisible="False" />
+                  <DataGridTextColumn Header="Cont"
+                                      Width="56"
+                                      MinWidth="48"
+                                      Binding="{ReflectionBinding Continent}"
+                                      SortMemberPath="Continent"
                                       IsReadOnly="True"
                                       IsVisible="False" />
                 </DataGrid.Columns>
@@ -518,55 +530,54 @@
                     Background="{DynamicResource SystemControlBackgroundAltHighBrush}"
                     IsVisible="{Binding IsInspectorOpen}">
               <ScrollViewer>
-                <StackPanel Spacing="10"
-                            DataContext="{Binding RecentQsos.SelectedQso}">
+                <StackPanel Spacing="10">
                   <TextBlock Text="Inspector"
                              FontSize="13"
                              FontWeight="SemiBold" />
 
                   <StackPanel Spacing="6"
-                              IsVisible="{Binding .}">
+                              IsVisible="{Binding HasInspectorQso}">
                     <Grid ColumnDefinitions="Auto,*"
                           ColumnSpacing="10"
                           RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto">
                       <TextBlock Text="Call" Grid.Row="0" Opacity="0.68" />
-                      <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding WorkedCallsign}" />
+                      <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding InspectorQso.WorkedCallsign}" />
                       <TextBlock Text="UTC" Grid.Row="1" Opacity="0.68" />
-                      <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding UtcDisplay}" />
+                      <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding InspectorQso.UtcDisplay}" />
                       <TextBlock Text="Band / Mode" Grid.Row="2" Opacity="0.68" />
-                      <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding Band}" />
-                      <TextBlock Grid.Row="2" Grid.Column="1" Margin="44,0,0,0" Text="{Binding Mode}" />
+                      <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding InspectorQso.Band}" />
+                      <TextBlock Grid.Row="2" Grid.Column="1" Margin="44,0,0,0" Text="{Binding InspectorQso.Mode}" />
                       <TextBlock Text="Freq / RST" Grid.Row="3" Opacity="0.68" />
-                      <TextBlock Grid.Row="3" Grid.Column="1" Text="{Binding Frequency}" />
-                      <TextBlock Grid.Row="3" Grid.Column="1" Margin="74,0,0,0" Text="{Binding Rst}" />
+                      <TextBlock Grid.Row="3" Grid.Column="1" Text="{Binding InspectorQso.Frequency}" />
+                      <TextBlock Grid.Row="3" Grid.Column="1" Margin="74,0,0,0" Text="{Binding InspectorQso.Rst}" />
                       <TextBlock Text="DXCC / Country" Grid.Row="4" Opacity="0.68" />
-                      <TextBlock Grid.Row="4" Grid.Column="1" Text="{Binding Dxcc}" />
-                      <TextBlock Grid.Row="4" Grid.Column="1" Margin="42,0,0,0" Text="{Binding Country}" />
+                      <TextBlock Grid.Row="4" Grid.Column="1" Text="{Binding InspectorQso.Dxcc}" />
+                      <TextBlock Grid.Row="4" Grid.Column="1" Margin="42,0,0,0" Text="{Binding InspectorQso.Country}" />
                       <TextBlock Text="Name" Grid.Row="5" Opacity="0.68" />
-                      <TextBlock Grid.Row="5" Grid.Column="1" Text="{Binding OperatorName}" TextWrapping="Wrap" />
+                      <TextBlock Grid.Row="5" Grid.Column="1" Text="{Binding InspectorQso.OperatorName}" TextWrapping="Wrap" />
                       <TextBlock Text="Grid / QTH" Grid.Row="6" Opacity="0.68" />
-                      <TextBlock Grid.Row="6" Grid.Column="1" Text="{Binding Grid}" />
-                      <TextBlock Grid.Row="6" Grid.Column="1" Margin="52,0,0,0" Text="{Binding Qth}" TextWrapping="Wrap" />
+                      <TextBlock Grid.Row="6" Grid.Column="1" Text="{Binding InspectorQso.Grid}" />
+                      <TextBlock Grid.Row="6" Grid.Column="1" Margin="52,0,0,0" Text="{Binding InspectorQso.Qth}" TextWrapping="Wrap" />
                       <TextBlock Text="Contest / Exch" Grid.Row="7" Opacity="0.68" />
-                      <TextBlock Grid.Row="7" Grid.Column="1" Text="{Binding Contest}" />
-                      <TextBlock Grid.Row="7" Grid.Column="1" Margin="92,0,0,0" Text="{Binding Exchange}" />
+                      <TextBlock Grid.Row="7" Grid.Column="1" Text="{Binding InspectorQso.Contest}" />
+                      <TextBlock Grid.Row="7" Grid.Column="1" Margin="92,0,0,0" Text="{Binding InspectorQso.Exchange}" />
                       <TextBlock Text="Station" Grid.Row="8" Opacity="0.68" />
-                      <TextBlock Grid.Row="8" Grid.Column="1" Text="{Binding Station}" />
+                      <TextBlock Grid.Row="8" Grid.Column="1" Text="{Binding InspectorQso.Station}" />
                       <TextBlock Text="Zones" Grid.Row="9" Opacity="0.68" />
-                      <TextBlock Grid.Row="9" Grid.Column="1" Text="{Binding CqZone}" />
-                      <TextBlock Grid.Row="9" Grid.Column="1" Margin="34,0,0,0" Text="{Binding ItuZone}" />
+                      <TextBlock Grid.Row="9" Grid.Column="1" Text="{Binding InspectorQso.CqZone}" />
+                      <TextBlock Grid.Row="9" Grid.Column="1" Margin="34,0,0,0" Text="{Binding InspectorQso.ItuZone}" />
                       <TextBlock Text="End" Grid.Row="10" Opacity="0.68" />
-                      <TextBlock Grid.Row="10" Grid.Column="1" Text="{Binding UtcEndDisplay}" />
+                      <TextBlock Grid.Row="10" Grid.Column="1" Text="{Binding InspectorQso.UtcEndDisplay}" />
                       <TextBlock Text="Sync" Grid.Row="11" Opacity="0.68" />
-                      <TextBlock Grid.Row="11" Grid.Column="1" Text="{Binding SyncStatus}" />
+                      <TextBlock Grid.Row="11" Grid.Column="1" Text="{Binding InspectorQso.SyncStatus}" />
                       <TextBlock Text="Note" Grid.Row="12" Opacity="0.68" />
-                      <TextBlock Grid.Row="12" Grid.Column="1" Text="{Binding Note}" TextWrapping="Wrap" />
+                      <TextBlock Grid.Row="12" Grid.Column="1" Text="{Binding InspectorQso.Note}" TextWrapping="Wrap" />
                     </Grid>
                   </StackPanel>
 
                   <TextBlock Text="No QSO selected."
                              Opacity="0.68"
-                             IsVisible="{Binding !.}" />
+                             IsVisible="{Binding !HasInspectorQso}" />
                 </StackPanel>
               </ScrollViewer>
             </Border>

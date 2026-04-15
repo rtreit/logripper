@@ -63,6 +63,7 @@ internal sealed partial class MainWindow : Window
         if (_viewModel is not null)
         {
             _viewModel.SearchFocusRequested -= OnSearchFocusRequested;
+            _viewModel.GridFocusRequested -= OnGridFocusRequested;
             _viewModel.SettingsRequested -= OnSettingsRequested;
             UnsubscribeColumnOptions(_viewModel.RecentQsos);
             _viewModel = null;
@@ -251,6 +252,7 @@ internal sealed partial class MainWindow : Window
         if (_viewModel is not null)
         {
             _viewModel.SearchFocusRequested -= OnSearchFocusRequested;
+            _viewModel.GridFocusRequested -= OnGridFocusRequested;
             _viewModel.SettingsRequested -= OnSettingsRequested;
             UnsubscribeColumnOptions(_viewModel.RecentQsos);
         }
@@ -259,6 +261,7 @@ internal sealed partial class MainWindow : Window
         if (_viewModel is not null)
         {
             _viewModel.SearchFocusRequested += OnSearchFocusRequested;
+            _viewModel.GridFocusRequested += OnGridFocusRequested;
             _viewModel.SettingsRequested += OnSettingsRequested;
             SubscribeColumnOptions(_viewModel.RecentQsos);
             ApplyDefaultColumnVisibility();
@@ -272,6 +275,11 @@ internal sealed partial class MainWindow : Window
     private void OnSearchFocusRequested(object? sender, EventArgs e)
     {
         FocusRecentQsoSearchBox();
+    }
+
+    private void OnGridFocusRequested(object? sender, EventArgs e)
+    {
+        _recentQsoGrid?.Focus();
     }
 
     private async void OnSettingsRequested(object? sender, EventArgs e)
@@ -386,7 +394,7 @@ internal sealed partial class MainWindow : Window
 
     private void BuildColumnMap()
     {
-        if (_recentQsoGrid is null || _recentQsoGrid.Columns.Count < 19)
+        if (_recentQsoGrid is null || _recentQsoGrid.Columns.Count < 22)
         {
             return;
         }
@@ -398,20 +406,23 @@ internal sealed partial class MainWindow : Window
             [RecentQsoGridColumn.Band] = _recentQsoGrid.Columns[2],
             [RecentQsoGridColumn.Mode] = _recentQsoGrid.Columns[3],
             [RecentQsoGridColumn.Frequency] = _recentQsoGrid.Columns[4],
-            [RecentQsoGridColumn.Rst] = _recentQsoGrid.Columns[5],
-            [RecentQsoGridColumn.Dxcc] = _recentQsoGrid.Columns[6],
-            [RecentQsoGridColumn.Country] = _recentQsoGrid.Columns[7],
-            [RecentQsoGridColumn.Name] = _recentQsoGrid.Columns[8],
-            [RecentQsoGridColumn.Grid] = _recentQsoGrid.Columns[9],
-            [RecentQsoGridColumn.Exchange] = _recentQsoGrid.Columns[10],
-            [RecentQsoGridColumn.Contest] = _recentQsoGrid.Columns[11],
-            [RecentQsoGridColumn.Station] = _recentQsoGrid.Columns[12],
-            [RecentQsoGridColumn.Note] = _recentQsoGrid.Columns[13],
-            [RecentQsoGridColumn.UtcEnd] = _recentQsoGrid.Columns[14],
-            [RecentQsoGridColumn.CqZone] = _recentQsoGrid.Columns[15],
-            [RecentQsoGridColumn.ItuZone] = _recentQsoGrid.Columns[16],
-            [RecentQsoGridColumn.Qth] = _recentQsoGrid.Columns[17],
-            [RecentQsoGridColumn.Sync] = _recentQsoGrid.Columns[18]
+            [RecentQsoGridColumn.RstSent] = _recentQsoGrid.Columns[5],
+            [RecentQsoGridColumn.RstReceived] = _recentQsoGrid.Columns[6],
+            [RecentQsoGridColumn.Dxcc] = _recentQsoGrid.Columns[7],
+            [RecentQsoGridColumn.Country] = _recentQsoGrid.Columns[8],
+            [RecentQsoGridColumn.Name] = _recentQsoGrid.Columns[9],
+            [RecentQsoGridColumn.Grid] = _recentQsoGrid.Columns[10],
+            [RecentQsoGridColumn.Exchange] = _recentQsoGrid.Columns[11],
+            [RecentQsoGridColumn.Contest] = _recentQsoGrid.Columns[12],
+            [RecentQsoGridColumn.Station] = _recentQsoGrid.Columns[13],
+            [RecentQsoGridColumn.Note] = _recentQsoGrid.Columns[14],
+            [RecentQsoGridColumn.UtcEnd] = _recentQsoGrid.Columns[15],
+            [RecentQsoGridColumn.CqZone] = _recentQsoGrid.Columns[16],
+            [RecentQsoGridColumn.ItuZone] = _recentQsoGrid.Columns[17],
+            [RecentQsoGridColumn.State] = _recentQsoGrid.Columns[18],
+            [RecentQsoGridColumn.County] = _recentQsoGrid.Columns[19],
+            [RecentQsoGridColumn.Sync] = _recentQsoGrid.Columns[20],
+            [RecentQsoGridColumn.Continent] = _recentQsoGrid.Columns[21]
         };
     }
 

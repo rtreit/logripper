@@ -3,6 +3,8 @@
 pub mod mapper;
 mod normalize;
 
+pub(crate) use normalize::enrich_callsign_record_from_dxcc;
+
 use crate::proto::qsoripper::domain::QsoRecord;
 use difa::RecordStream;
 use futures::StreamExt;

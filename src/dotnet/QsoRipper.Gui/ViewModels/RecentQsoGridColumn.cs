@@ -20,5 +20,10 @@ internal enum RecentQsoGridColumn
     CqZone,
     ItuZone,
     Qth,
-    Sync
+    Sync,
+    Continent,
+    RstSent,
+    RstReceived,
+    State,
+    County
 }
