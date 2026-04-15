@@ -1013,6 +1013,16 @@ static void RefreshQsoList(void)
 
 /* ── CLI integration: Lookup callsign ──────────────────────────────────── */
 
+static void ClearLookupDisplay(void)
+{
+    g_state.has_lookup = 0;
+    g_state.lookup_name[0] = 0;
+    g_state.lookup_qth[0] = 0;
+    g_state.lookup_grid[0] = 0;
+    g_state.lookup_country[0] = 0;
+    g_state.lookup_cq_zone = 0;
+}
+
 static void LookupCallsign(const char *call)
 {
     if (!call || call[0] == 0) {
@@ -1024,13 +1034,6 @@ static void LookupCallsign(const char *call)
     _snprintf(cmd, sizeof(cmd), "lookup %s --json", call);
     char *result = RunQrCommand(cmd);
     if (!result) return;
-
-    g_state.has_lookup = 0;
-    g_state.lookup_name[0] = 0;
-    g_state.lookup_qth[0] = 0;
-    g_state.lookup_grid[0] = 0;
-    g_state.lookup_country[0] = 0;
-    g_state.lookup_cq_zone = 0;
 
     /* The lookup JSON is nested: { "result": { "record": { ... } } }
        Navigate to the record object. */
@@ -2528,6 +2531,7 @@ static void OnKeyDown(HWND hwnd, WPARAM vk, LPARAM lp)
 
             /* Trigger lookup debounce if callsign changed */
             if (f == FIELD_CALLSIGN) {
+                ClearLookupDisplay();
                 g_state.last_callsign_change = GetTickCount64();
             }
         }
@@ -2600,6 +2604,7 @@ static void OnChar(HWND hwnd, WPARAM ch)
 
     /* Callsign lookup debounce */
     if (g_state.focused_field == FIELD_CALLSIGN) {
+        ClearLookupDisplay();
         g_state.last_callsign_change = GetTickCount64();
     }
 
