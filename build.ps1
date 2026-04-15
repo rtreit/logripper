@@ -23,7 +23,7 @@
 
 param(
     [Parameter(Position = 0)]
-    [ValidateSet('build', 'check', 'rust', 'dotnet', 'check-rust', 'check-dotnet', 'proto', 'help')]
+    [ValidateSet('build', 'check', 'rust', 'dotnet', 'win32', 'check-rust', 'check-dotnet', 'proto', 'help')]
     [string]$Command = 'build',
 
     [ValidateSet('Release', 'Debug')]
@@ -56,6 +56,10 @@ function Invoke-Build([string]$Step, [string]$Command, [string[]]$Arguments) {
         exit $LASTEXITCODE
     }
 }
+
+$Win32SourceDir = Join-Path $PSScriptRoot 'src' 'c' 'qsoripper-win32'
+$Win32Source = Join-Path $Win32SourceDir 'src' 'main.c'
+$Win32PublishDir = Join-Path $PSScriptRoot 'artifacts' 'publish' | Join-Path -ChildPath 'qsoripper-win32' | Join-Path -ChildPath $Configuration
 
 function Build-Rust {
     $arguments = @('build', '--manifest-path', $RustManifest)
@@ -164,9 +168,56 @@ function Build-Dotnet {
     )
 }
 
+function Build-Win32 {
+    if (-not (Test-Path $Win32Source)) {
+        Write-Step 'Win32 GUI'
+        Write-Host 'Win32 source not found, skipping.' -ForegroundColor Yellow
+        return
+    }
+
+    $vcvars = Find-VcVarsAll
+    if (-not $vcvars) {
+        Write-Step 'Win32 GUI'
+        Write-Host 'MSVC toolchain not found, skipping Win32 build. Install the C++ Desktop workload.' -ForegroundColor Yellow
+        return
+    }
+
+    Write-Step "Building qsoripper-win32 ($Configuration)"
+    $null = New-Item -ItemType Directory -Force -Path $Win32PublishDir
+    $optFlags = if ($IsReleaseBuild) { '/O2' } else { '/Od /Zi' }
+    $exe = Join-Path $Win32PublishDir 'qsoripper-win32.exe'
+
+    $arch = if ([System.Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture -eq 'Arm64') { 'arm64' } else { 'amd64' }
+    $buildScript = Join-Path $Win32PublishDir '_build.cmd'
+    @"
+@echo off
+call "$vcvars" $arch >nul 2>&1
+cl /W4 /WX $optFlags /DUNICODE /D_UNICODE "$Win32Source" /Fe:"$exe" /link user32.lib gdi32.lib shell32.lib comctl32.lib
+"@ | Set-Content -LiteralPath $buildScript -Encoding ASCII
+
+    Push-Location $Win32PublishDir
+    try {
+        cmd /c $buildScript
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "FAILED: Building qsoripper-win32 ($Configuration)" -ForegroundColor Red
+            exit $LASTEXITCODE
+        }
+    }
+    finally {
+        Pop-Location
+    }
+
+    # Clean intermediate files
+    Remove-Item (Join-Path $Win32PublishDir '*.obj') -Force -ErrorAction SilentlyContinue
+    Remove-Item $buildScript -Force -ErrorAction SilentlyContinue
+
+    Write-Host "  -> $Win32PublishDir"
+}
+
 function Build-All {
     Build-Rust
     Build-Dotnet
+    Build-Win32
 }
 
 function Check-Proto {
@@ -226,10 +277,11 @@ QsoRipper Build Script
 Usage: ./build.ps1 [command] [-Configuration Release|Debug]
 
 Commands:
-  build         Build Rust (including qsoripper-tui) and publish the CLI and GUI apps (default: Release)
+  build         Build Rust, .NET, and Win32 apps (default: Release)
   check         Full CI-equivalent quality check
   rust          Build Rust only (copies qsoripper-tui binary to artifacts)
   dotnet        Publish the CLI and GUI apps only
+  win32         Build the Win32 C GUI app only
   check-rust    Rust quality: fmt, clippy, test, buf lint, cargo deny
   check-dotnet  .NET quality: format, build, test
   proto         Run buf lint
@@ -249,6 +301,7 @@ switch ($Command) {
     'check'        { Check-All }
     'rust'         { Build-Rust }
     'dotnet'       { Build-Dotnet }
+    'win32'        { Build-Win32 }
     'check-rust'   { Check-Rust }
     'check-dotnet' { Check-Dotnet }
     'proto'        { Check-Proto }
