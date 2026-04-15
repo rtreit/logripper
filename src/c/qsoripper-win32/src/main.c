@@ -2145,6 +2145,7 @@ static void TypeSelectMode(char c)
         int idx = (g_state.mode_idx + 1 + attempt) % NUM_MODES;
         if (toupper((unsigned char)MODES[idx][0]) == c) {
             g_state.mode_idx = idx;
+            ApplyModeDefaults();
             return;
         }
     }
