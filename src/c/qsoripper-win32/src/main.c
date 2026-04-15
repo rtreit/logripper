@@ -1745,7 +1745,7 @@ static int PaintLookup(HDC hdc, int y_start, int w)
         char line[128];
 
         SelectObject(hdc, g_state.hFontBold);
-        DrawText_A(hdc, pad + cw, y, CLR_WHITE, g_state.lookup_name);
+        DrawText_A(hdc, pad + cw, y, CLR_TEXT, g_state.lookup_name);
         SelectObject(hdc, g_state.hFont);
         y += ch + 2;
 
