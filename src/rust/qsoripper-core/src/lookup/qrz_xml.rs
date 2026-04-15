@@ -733,8 +733,12 @@ fn map_callsign_record(queried_callsign: &str, qrz: &QrzCallsign) -> CallsignRec
         profile_views: parse_u32(qrz.profile_views.as_deref()),
     };
 
-    // Derive missing continent, CQ zone, and ITU zone from the DXCC entity
-    // table when QRZ omits them (common for US callsigns and others).
+    // Derive missing CQ zone from location data (state, lat/lon, grid square)
+    // for multi-zone countries like the USA, Canada, and Australia.
+    crate::adif::enrich_zones_from_location(&mut record);
+
+    // Fill remaining gaps (continent, country name, ITU zone, CQ zone for
+    // entities without location-based rules) from the DXCC entity table.
     crate::adif::enrich_callsign_record_from_dxcc(&mut record);
 
     record
@@ -1345,9 +1349,11 @@ mod tests {
         let callsign = parsed.callsign.as_ref().expect("callsign node");
         let mapped = map_callsign_record("AE7XI", callsign);
 
-        // DXCC 291 (USA) = NA, CQ 5, ITU 6 from the embedded DXCC entity table.
+        // CN87xr is in western Washington → CQ zone 3 via grid-square derivation.
+        // Before location-based enrichment this would have fallen through to the
+        // DXCC-291 default of zone 5.
         assert_eq!(mapped.dxcc_continent.as_deref(), Some("NA"));
-        assert_eq!(mapped.cq_zone, Some(5));
+        assert_eq!(mapped.cq_zone, Some(3));
         assert_eq!(mapped.itu_zone, Some(6));
     }
 
@@ -1613,5 +1619,69 @@ mod tests {
     fn env_lock() -> &'static StdMutex<()> {
         static ENV_LOCK: OnceLock<StdMutex<()>> = OnceLock::new();
         ENV_LOCK.get_or_init(|| StdMutex::new(()))
+    }
+
+    // ── Zone-from-location integration tests ────────────────────────────
+
+    #[test]
+    fn map_callsign_record_derives_zone_3_for_wa_state() {
+        use crate::proto::qsoripper::domain::CallsignRecord;
+
+        let mut record = CallsignRecord {
+            dxcc_entity_id: 291,
+            state: Some("WA".to_owned()),
+            ..CallsignRecord::default()
+        };
+
+        // Simulate the enrichment cascade used in map_callsign_record.
+        crate::adif::enrich_zones_from_location(&mut record);
+        crate::adif::enrich_callsign_record_from_dxcc(&mut record);
+
+        assert_eq!(
+            record.cq_zone,
+            Some(3),
+            "WA should be CQ zone 3, not the DXCC-291 default of 5"
+        );
+    }
+
+    #[test]
+    fn map_callsign_record_preserves_existing_cq_zone() {
+        use crate::proto::qsoripper::domain::CallsignRecord;
+
+        let mut record = CallsignRecord {
+            dxcc_entity_id: 291,
+            state: Some("WA".to_owned()),
+            cq_zone: Some(42),
+            ..CallsignRecord::default()
+        };
+
+        crate::adif::enrich_zones_from_location(&mut record);
+        crate::adif::enrich_callsign_record_from_dxcc(&mut record);
+
+        assert_eq!(
+            record.cq_zone,
+            Some(42),
+            "pre-existing zone must be preserved"
+        );
+    }
+
+    #[test]
+    fn map_callsign_record_derives_zone_from_grid_when_no_state() {
+        use crate::proto::qsoripper::domain::CallsignRecord;
+
+        let mut record = CallsignRecord {
+            dxcc_entity_id: 291,
+            grid_square: Some("CN87".to_owned()),
+            ..CallsignRecord::default()
+        };
+
+        crate::adif::enrich_zones_from_location(&mut record);
+        crate::adif::enrich_callsign_record_from_dxcc(&mut record);
+
+        assert_eq!(
+            record.cq_zone,
+            Some(3),
+            "CN87 grid is in western US → zone 3"
+        );
     }
 }

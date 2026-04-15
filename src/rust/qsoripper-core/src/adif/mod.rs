@@ -1,9 +1,12 @@
 //! ADIF adapter: parses and serializes ADIF at the engine boundary.
 
+mod maidenhead;
 pub mod mapper;
 mod normalize;
+mod zone_lookup;
 
 pub(crate) use normalize::enrich_callsign_record_from_dxcc;
+pub(crate) use zone_lookup::enrich_zones_from_location;
 
 use crate::proto::qsoripper::domain::QsoRecord;
 use difa::RecordStream;
