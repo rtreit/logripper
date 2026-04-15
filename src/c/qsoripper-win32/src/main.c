@@ -2693,10 +2693,11 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
 
     case WM_SYSKEYDOWN:
         /* VK_MENU (Alt key itself), Space, F, H must reach DefWindowProc
-           so the menu bar and system menu activate correctly. */
+           so the menu bar and system menu activate correctly.
+           NOTE: break exits to return 0 — must use explicit DefWindowProcW. */
         if (wParam == VK_MENU || wParam == VK_SPACE ||
             wParam == 'F'     || wParam == 'H') {
-            break;
+            return DefWindowProcW(hwnd, msg, wParam, lParam);
         }
         /* Handle our custom Alt+key field-navigation shortcuts */
         OnKeyDown(hwnd, wParam, lParam);
@@ -2705,7 +2706,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
     case WM_SYSCHAR:
         /* Let menu accelerator chars reach DefWindowProc */
         if (wParam == 'f' || wParam == 'F' || wParam == 'h' || wParam == 'H') {
-            break;
+            return DefWindowProcW(hwnd, msg, wParam, lParam);
         }
         return 0;
 
