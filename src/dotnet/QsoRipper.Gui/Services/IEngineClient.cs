@@ -43,4 +43,12 @@ internal interface IEngineClient
     Task<LookupResponse> LookupCallsignAsync(string callsign, CancellationToken ct = default);
 
     Task<DeleteQsoResponse> DeleteQsoAsync(string localId, bool deleteFromQrz = false, CancellationToken ct = default);
+
+    Task<LogQsoResponse> LogQsoAsync(QsoRecord qso, bool syncToQrz = false, CancellationToken ct = default);
+
+    Task<GetRigSnapshotResponse> GetRigSnapshotAsync(CancellationToken ct = default);
+
+    Task<GetRigStatusResponse> GetRigStatusAsync(CancellationToken ct = default);
+
+    Task<GetCurrentSpaceWeatherResponse> GetCurrentSpaceWeatherAsync(CancellationToken ct = default);
 }

@@ -24,6 +24,7 @@ internal sealed class RecentQsoItemViewModel : ObservableObject, IEditableObject
 
     private QsoRecord _sourceQso = new();
     private EditableQsoState? _editSnapshot;
+    private string _displayTimestampFormat = TimestampFormatOption.Default.FormatString;
     private string _utcDisplay = "-";
     private string _workedCallsign = "-";
     private string _band = "-";
@@ -257,11 +258,18 @@ internal sealed class RecentQsoItemViewModel : ObservableObject, IEditableObject
             ? timestamp
             : DateTimeOffset.MinValue;
 
-    public static RecentQsoItemViewModel FromQso(QsoRecord qso)
+    public static RecentQsoItemViewModel FromQso(QsoRecord qso) => FromQso(qso, null);
+
+    public static RecentQsoItemViewModel FromQso(QsoRecord qso, string? timestampFormat)
     {
         ArgumentNullException.ThrowIfNull(qso);
 
         var item = new RecentQsoItemViewModel();
+        if (timestampFormat is not null)
+        {
+            item._displayTimestampFormat = timestampFormat;
+        }
+
         item.LoadSourceQso(qso);
         return item;
     }
@@ -286,6 +294,25 @@ internal sealed class RecentQsoItemViewModel : ObservableObject, IEditableObject
     public void EndEdit()
     {
         _editSnapshot = null;
+        RecomputeDirty();
+    }
+
+    /// <summary>
+    /// Updates the display timestamp format and re-formats the UTC columns.
+    /// Called by the parent list view model when the user cycles the format.
+    /// </summary>
+    public void UpdateTimestampFormat(string format)
+    {
+        if (string.Equals(_displayTimestampFormat, format, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _displayTimestampFormat = format;
+
+        // Re-format timestamps from the source QSO (not from the display string).
+        UtcDisplay = FormatTimestamp(_sourceQso.UtcTimestamp, _displayTimestampFormat);
+        UtcEndDisplay = FormatTimestamp(_sourceQso.UtcEndTimestamp, _displayTimestampFormat);
         RecomputeDirty();
     }
 
@@ -343,7 +370,7 @@ internal sealed class RecentQsoItemViewModel : ObservableObject, IEditableObject
         qso = null;
 
         var updated = _sourceQso.Clone();
-        var sourceState = EditableQsoState.FromQso(_sourceQso);
+        var sourceState = EditableQsoState.FromQso(_sourceQso, _displayTimestampFormat);
 
         if (!TryParseTimestamp(UtcDisplay, required: true, out var utcTimestamp))
         {
@@ -431,7 +458,7 @@ internal sealed class RecentQsoItemViewModel : ObservableObject, IEditableObject
     {
         _sourceQso = qso.Clone();
         _editSnapshot = null;
-        ApplyState(EditableQsoState.FromQso(_sourceQso));
+        ApplyState(EditableQsoState.FromQso(_sourceQso, _displayTimestampFormat));
         Qth = BuildQth(_sourceQso);
         SyncStatus = BuildSyncStatus(_sourceQso.SyncStatus);
         Continent = NoteOrNull(_sourceQso.WorkedContinent) ?? "-";
@@ -485,7 +512,7 @@ internal sealed class RecentQsoItemViewModel : ObservableObject, IEditableObject
 
     private void RecomputeDirty()
     {
-        IsDirty = CaptureState() != EditableQsoState.FromQso(_sourceQso);
+        IsDirty = CaptureState() != EditableQsoState.FromQso(_sourceQso, _displayTimestampFormat);
     }
 
     private bool TryApplyFrequency(QsoRecord updated, out string? error)
@@ -642,8 +669,8 @@ internal sealed class RecentQsoItemViewModel : ObservableObject, IEditableObject
         updated.Comment = comment;
     }
 
-    private static EditableQsoState EditableQsoStateFromQso(QsoRecord qso) => new(
-        FormatTimestamp(qso.UtcTimestamp),
+    private static EditableQsoState EditableQsoStateFromQso(QsoRecord qso, string format) => new(
+        FormatTimestamp(qso.UtcTimestamp, format),
         DisplayOrDash(qso.WorkedCallsign),
         ProtoEnumDisplay.ForBand(qso.Band),
         ProtoEnumDisplay.ForMode(qso.Mode),
@@ -658,7 +685,7 @@ internal sealed class RecentQsoItemViewModel : ObservableObject, IEditableObject
         DisplayOrDash(qso.StationCallsign),
         BuildNote(qso),
         NoteOrNull(qso.Comment) ?? "-",
-        FormatTimestamp(qso.UtcEndTimestamp),
+        FormatTimestamp(qso.UtcEndTimestamp, format),
         BuildOptionalNumber(qso.WorkedCqZone),
         BuildOptionalNumber(qso.WorkedItuZone));
 
@@ -909,11 +936,11 @@ internal sealed class RecentQsoItemViewModel : ObservableObject, IEditableObject
         return null;
     }
 
-    private static string FormatTimestamp(Timestamp? timestamp)
+    private static string FormatTimestamp(Timestamp? timestamp, string format)
     {
         return timestamp is null
             ? "-"
-            : timestamp.ToDateTimeOffset().ToUniversalTime().ToString("yy-MM-dd HH:mm", CultureInfo.InvariantCulture);
+            : timestamp.ToDateTimeOffset().ToUniversalTime().ToString(format, CultureInfo.InvariantCulture);
     }
 
     private readonly record struct EditableQsoState(
@@ -936,6 +963,6 @@ internal sealed class RecentQsoItemViewModel : ObservableObject, IEditableObject
         string CqZone,
         string ItuZone)
     {
-        public static EditableQsoState FromQso(QsoRecord qso) => EditableQsoStateFromQso(qso);
+        public static EditableQsoState FromQso(QsoRecord qso, string format) => EditableQsoStateFromQso(qso, format);
     }
 }

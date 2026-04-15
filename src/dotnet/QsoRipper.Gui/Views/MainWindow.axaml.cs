@@ -6,6 +6,7 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Threading;
+using Avalonia.VisualTree;
 using QsoRipper.Gui.Utilities;
 using QsoRipper.Gui.ViewModels;
 
@@ -62,9 +63,11 @@ internal sealed partial class MainWindow : Window
 
         if (_viewModel is not null)
         {
+            _viewModel.PropertyChanged -= OnViewModelPropertyChanged;
             _viewModel.SearchFocusRequested -= OnSearchFocusRequested;
             _viewModel.GridFocusRequested -= OnGridFocusRequested;
             _viewModel.SettingsRequested -= OnSettingsRequested;
+            _viewModel.LoggerFocusRequested -= OnLoggerFocusRequested;
             UnsubscribeColumnOptions(_viewModel.RecentQsos);
             _viewModel = null;
         }
@@ -82,6 +85,13 @@ internal sealed partial class MainWindow : Window
         if (_viewModel is null || _viewModel.IsWizardOpen)
         {
             base.OnKeyDown(e);
+            return;
+        }
+
+        // Sort/column chooser keys take priority so digit and arrow keys
+        // aren't swallowed by the grid or other handlers.
+        if (TryHandleChooserKey(e))
+        {
             return;
         }
 
@@ -113,16 +123,16 @@ internal sealed partial class MainWindow : Window
 
         if (e.Key == Key.Escape)
         {
-            if (_viewModel.IsCallsignCardOpen)
+            if (_viewModel.IsHelpOpen)
             {
-                _viewModel.CloseCallsignCardCommand.Execute(null);
+                _viewModel.ToggleHelpCommand.Execute(null);
                 e.Handled = true;
                 return;
             }
 
-            if (_viewModel.IsColumnChooserOpen || _viewModel.IsSortChooserOpen)
+            if (_viewModel.IsCallsignCardOpen)
             {
-                _viewModel.CloseTransientPanelsCommand.Execute(null);
+                _viewModel.CloseCallsignCardCommand.Execute(null);
                 e.Handled = true;
                 return;
             }
@@ -170,6 +180,13 @@ internal sealed partial class MainWindow : Window
         }
 
         if (!isEditingTextBox && e.Key == Key.Delete)
+        {
+            _viewModel.RecentQsos.RequestDeleteSelectedQso();
+            e.Handled = true;
+            return true;
+        }
+
+        if (!isEditingTextBox && modifiers.HasFlag(KeyModifiers.Control) && e.Key == Key.D)
         {
             _viewModel.RecentQsos.RequestDeleteSelectedQso();
             e.Handled = true;
@@ -251,18 +268,22 @@ internal sealed partial class MainWindow : Window
     {
         if (_viewModel is not null)
         {
+            _viewModel.PropertyChanged -= OnViewModelPropertyChanged;
             _viewModel.SearchFocusRequested -= OnSearchFocusRequested;
             _viewModel.GridFocusRequested -= OnGridFocusRequested;
             _viewModel.SettingsRequested -= OnSettingsRequested;
+            _viewModel.LoggerFocusRequested -= OnLoggerFocusRequested;
             UnsubscribeColumnOptions(_viewModel.RecentQsos);
         }
 
         _viewModel = DataContext as MainWindowViewModel;
         if (_viewModel is not null)
         {
+            _viewModel.PropertyChanged += OnViewModelPropertyChanged;
             _viewModel.SearchFocusRequested += OnSearchFocusRequested;
             _viewModel.GridFocusRequested += OnGridFocusRequested;
             _viewModel.SettingsRequested += OnSettingsRequested;
+            _viewModel.LoggerFocusRequested += OnLoggerFocusRequested;
             SubscribeColumnOptions(_viewModel.RecentQsos);
             ApplyDefaultColumnVisibility();
             if (!IsInspectionMode)
@@ -285,6 +306,19 @@ internal sealed partial class MainWindow : Window
     private async void OnSettingsRequested(object? sender, EventArgs e)
     {
         await ShowSettingsDialogAsync();
+    }
+
+    private void OnLoggerFocusRequested(object? sender, EventArgs e)
+    {
+        var loggerBox = this.FindControl<TextBox>("LoggerCallsignBox");
+        if (loggerBox is not null)
+        {
+            Dispatcher.UIThread.Post(() =>
+            {
+                loggerBox.Focus();
+                loggerBox.SelectAll();
+            }, DispatcherPriority.Input);
+        }
     }
 
     private void FocusRecentQsoSearchBox()
@@ -546,5 +580,161 @@ internal sealed partial class MainWindow : Window
         handler();
         e.Handled = true;
         return true;
+    }
+
+    /// <summary>
+    /// Handles keyboard input when the sort chooser or column chooser is open.
+    /// </summary>
+    private bool TryHandleChooserKey(KeyEventArgs e)
+    {
+        if (_viewModel!.IsSortChooserOpen)
+        {
+            return HandleSortChooserKey(e);
+        }
+
+        if (_viewModel!.IsColumnChooserOpen)
+        {
+            return HandleColumnChooserKey(e);
+        }
+
+        return false;
+    }
+
+    private bool HandleSortChooserKey(KeyEventArgs e)
+    {
+        if (e.Key == Key.Escape)
+        {
+            CloseSortChooser();
+            e.Handled = true;
+            return true;
+        }
+
+        // Digit shortcuts: 1-9 select a sort column, 0 reverses direction.
+        RecentQsoSortColumn? column = e.Key switch
+        {
+            Key.D1 or Key.NumPad1 => RecentQsoSortColumn.Utc,
+            Key.D2 or Key.NumPad2 => RecentQsoSortColumn.Callsign,
+            Key.D3 or Key.NumPad3 => RecentQsoSortColumn.Band,
+            Key.D4 or Key.NumPad4 => RecentQsoSortColumn.Mode,
+            Key.D5 or Key.NumPad5 => RecentQsoSortColumn.Frequency,
+            Key.D6 or Key.NumPad6 => RecentQsoSortColumn.Dxcc,
+            Key.D7 or Key.NumPad7 => RecentQsoSortColumn.Country,
+            Key.D8 or Key.NumPad8 => RecentQsoSortColumn.Contest,
+            Key.D9 or Key.NumPad9 => RecentQsoSortColumn.Note,
+            _ => null
+        };
+
+        if (column is not null)
+        {
+            _viewModel!.RecentQsos.ApplySort(column.Value);
+            CloseSortChooser();
+            e.Handled = true;
+            return true;
+        }
+
+        if (e.Key is Key.D0 or Key.NumPad0)
+        {
+            _viewModel!.RecentQsos.ReverseCurrentSortDirection();
+            CloseSortChooser();
+            e.Handled = true;
+            return true;
+        }
+
+        // Arrow keys navigate between sort buttons.
+        if (e.Key is Key.Up or Key.Down)
+        {
+            NavigateFocusInPanel<Button>("SortChooserPanel", e.Key == Key.Down);
+            e.Handled = true;
+            return true;
+        }
+
+        return false;
+    }
+
+    private bool HandleColumnChooserKey(KeyEventArgs e)
+    {
+        if (e.Key == Key.Escape)
+        {
+            CloseColumnChooser();
+            e.Handled = true;
+            return true;
+        }
+
+        if (e.Key is Key.Up or Key.Down)
+        {
+            NavigateFocusInPanel<CheckBox>("ColumnChooserPanel", e.Key == Key.Down);
+            e.Handled = true;
+            return true;
+        }
+
+        return false;
+    }
+
+    private void CloseSortChooser()
+    {
+        _viewModel!.IsSortChooserOpen = false;
+        _recentQsoGrid?.Focus();
+    }
+
+    private void CloseColumnChooser()
+    {
+        _viewModel!.IsColumnChooserOpen = false;
+        _recentQsoGrid?.Focus();
+    }
+
+    private void NavigateFocusInPanel<T>(string panelName, bool forward) where T : Control
+    {
+        var panel = this.FindControl<Border>(panelName);
+        if (panel is null)
+        {
+            return;
+        }
+
+        var items = panel.GetVisualDescendants().OfType<T>().ToList();
+        if (items.Count == 0)
+        {
+            return;
+        }
+
+        var focusedIndex = items.FindIndex(item => item.IsFocused);
+        int nextIndex;
+
+        if (forward)
+        {
+            nextIndex = focusedIndex < items.Count - 1 ? focusedIndex + 1 : 0;
+        }
+        else
+        {
+            nextIndex = focusedIndex > 0 ? focusedIndex - 1 : items.Count - 1;
+        }
+
+        items[nextIndex].Focus();
+        items[nextIndex].BringIntoView();
+    }
+
+    private void OnViewModelPropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(MainWindowViewModel.IsSortChooserOpen)
+            && _viewModel?.IsSortChooserOpen == true)
+        {
+            FocusFirstInPanel<Button>("SortChooserPanel");
+        }
+        else if (e.PropertyName == nameof(MainWindowViewModel.IsColumnChooserOpen)
+            && _viewModel?.IsColumnChooserOpen == true)
+        {
+            FocusFirstInPanel<CheckBox>("ColumnChooserPanel");
+        }
+    }
+
+    private void FocusFirstInPanel<T>(string panelName) where T : Control
+    {
+        Dispatcher.UIThread.Post(
+            () =>
+            {
+                var panel = this.FindControl<Border>(panelName);
+                var first = panel?.GetVisualDescendants().OfType<T>().FirstOrDefault();
+                first?.Focus();
+            },
+            DispatcherPriority.Loaded);
     }
 }

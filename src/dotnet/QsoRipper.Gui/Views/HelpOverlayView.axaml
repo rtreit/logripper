@@ -1,0 +1,46 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:QsoRipper.Gui.ViewModels"
+             x:Class="QsoRipper.Gui.Views.HelpOverlayView"
+             x:DataType="vm:HelpOverlayViewModel">
+
+  <Border Background="#E0202020" CornerRadius="8" Padding="24" MaxWidth="640" MaxHeight="520"
+          HorizontalAlignment="Center" VerticalAlignment="Center"
+          BorderBrush="#60FFFFFF" BorderThickness="1">
+    <DockPanel>
+      <TextBlock DockPanel.Dock="Top" Text="Keyboard Shortcuts"
+                 FontSize="18" FontWeight="Bold" Foreground="White"
+                 Margin="0,0,0,16" HorizontalAlignment="Center" />
+
+      <TextBlock DockPanel.Dock="Bottom" Text="Press F1 or Esc to close"
+                 FontSize="11" Foreground="#80FFFFFF"
+                 Margin="0,12,0,0" HorizontalAlignment="Center" />
+
+      <ScrollViewer VerticalScrollBarVisibility="Auto">
+        <ItemsControl ItemsSource="{Binding Groups}">
+          <ItemsControl.ItemTemplate>
+            <DataTemplate x:DataType="vm:HelpOverlayViewModel+ShortcutGroup">
+              <StackPanel Margin="0,0,0,12">
+                <TextBlock Text="{Binding Title}" FontWeight="SemiBold"
+                           FontSize="13" Foreground="#FFB0B0B0" Margin="0,0,0,4" />
+                <ItemsControl ItemsSource="{Binding Entries}">
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="vm:HelpOverlayViewModel+ShortcutEntry">
+                      <Grid ColumnDefinitions="140,*" Margin="8,1,0,1">
+                        <TextBlock Grid.Column="0" Text="{Binding Key}"
+                                   FontFamily="Consolas,Courier New,monospace"
+                                   FontSize="12" Foreground="#FFE0E0E0" />
+                        <TextBlock Grid.Column="1" Text="{Binding Description}"
+                                   FontSize="12" Foreground="#FFA0A0A0" />
+                      </Grid>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+              </StackPanel>
+            </DataTemplate>
+          </ItemsControl.ItemTemplate>
+        </ItemsControl>
+      </ScrollViewer>
+    </DockPanel>
+  </Border>
+</UserControl>

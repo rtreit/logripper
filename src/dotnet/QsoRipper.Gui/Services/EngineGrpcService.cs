@@ -18,6 +18,8 @@ internal sealed class EngineGrpcService : IEngineClient, IDisposable
     private readonly SetupService.SetupServiceClient _setupClient;
     private readonly LogbookService.LogbookServiceClient _logbookClient;
     private readonly LookupService.LookupServiceClient _lookupClient;
+    private readonly RigControlService.RigControlServiceClient _rigClient;
+    private readonly SpaceWeatherService.SpaceWeatherServiceClient _spaceWeatherClient;
 
     public EngineGrpcService(GrpcChannel channel)
     {
@@ -25,6 +27,8 @@ internal sealed class EngineGrpcService : IEngineClient, IDisposable
         _setupClient = new SetupService.SetupServiceClient(channel);
         _logbookClient = new LogbookService.LogbookServiceClient(channel);
         _lookupClient = new LookupService.LookupServiceClient(channel);
+        _rigClient = new RigControlService.RigControlServiceClient(channel);
+        _spaceWeatherClient = new SpaceWeatherService.SpaceWeatherServiceClient(channel);
     }
 
     public async Task<GetSetupWizardStateResponse> GetWizardStateAsync(CancellationToken ct = default)
@@ -163,6 +167,40 @@ internal sealed class EngineGrpcService : IEngineClient, IDisposable
                 DeleteFromQrz = deleteFromQrz
             },
             cancellationToken: ct);
+    }
+
+    public async Task<LogQsoResponse> LogQsoAsync(
+        QsoRecord qso,
+        bool syncToQrz = false,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(qso);
+
+        return await _logbookClient.LogQsoAsync(
+            new LogQsoRequest
+            {
+                Qso = qso,
+                SyncToQrz = syncToQrz,
+            },
+            cancellationToken: ct);
+    }
+
+    public async Task<GetRigSnapshotResponse> GetRigSnapshotAsync(CancellationToken ct = default)
+    {
+        return await _rigClient.GetRigSnapshotAsync(
+            new GetRigSnapshotRequest(), cancellationToken: ct);
+    }
+
+    public async Task<GetRigStatusResponse> GetRigStatusAsync(CancellationToken ct = default)
+    {
+        return await _rigClient.GetRigStatusAsync(
+            new GetRigStatusRequest(), cancellationToken: ct);
+    }
+
+    public async Task<GetCurrentSpaceWeatherResponse> GetCurrentSpaceWeatherAsync(CancellationToken ct = default)
+    {
+        return await _spaceWeatherClient.GetCurrentSpaceWeatherAsync(
+            new GetCurrentSpaceWeatherRequest(), cancellationToken: ct);
     }
 
     public void Dispose()

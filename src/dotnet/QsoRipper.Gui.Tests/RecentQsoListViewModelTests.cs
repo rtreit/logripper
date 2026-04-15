@@ -418,5 +418,17 @@ public class RecentQsoListViewModelTests
 
         public Task<DeleteQsoResponse> DeleteQsoAsync(string localId, bool deleteFromQrz = false, CancellationToken ct = default) =>
             throw new NotImplementedException();
+
+        public Task<LogQsoResponse> LogQsoAsync(QsoRecord qso, bool syncToQrz = false, CancellationToken ct = default) =>
+            throw new NotImplementedException();
+
+        public Task<GetRigSnapshotResponse> GetRigSnapshotAsync(CancellationToken ct = default) =>
+            throw new NotImplementedException();
+
+        public Task<GetRigStatusResponse> GetRigStatusAsync(CancellationToken ct = default) =>
+            throw new NotImplementedException();
+
+        public Task<GetCurrentSpaceWeatherResponse> GetCurrentSpaceWeatherAsync(CancellationToken ct = default) =>
+            throw new NotImplementedException();
     }
 }
