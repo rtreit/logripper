@@ -247,6 +247,114 @@ internal static class LogQsoCommand
                 case "--notes":
                     error = "Missing value for --notes.";
                     return false;
+                case "--name" when i < args.Length - 1:
+                    qso.WorkedOperatorName = args[++i];
+                    break;
+                case "--name":
+                    error = "Missing value for --name.";
+                    return false;
+                case "--time-off" when i < args.Length - 1:
+                    var endTs = TimeParser.Parse(args[++i]);
+                    if (endTs is null)
+                    {
+                        error = "Invalid --time-off value. Use relative (30.minutes, 2.hours) or absolute (2026-04-12T19:30:00Z).";
+                        return false;
+                    }
+                    qso.UtcEndTimestamp = endTs;
+                    break;
+                case "--time-off":
+                    error = "Missing value for --time-off.";
+                    return false;
+                case "--tx-power" when i < args.Length - 1:
+                    qso.TxPower = args[++i];
+                    break;
+                case "--tx-power":
+                    error = "Missing value for --tx-power.";
+                    return false;
+                case "--submode" when i < args.Length - 1:
+                    qso.Submode = args[++i];
+                    break;
+                case "--submode":
+                    error = "Missing value for --submode.";
+                    return false;
+                case "--contest-id" when i < args.Length - 1:
+                    qso.ContestId = args[++i];
+                    break;
+                case "--contest-id":
+                    error = "Missing value for --contest-id.";
+                    return false;
+                case "--serial-sent" when i < args.Length - 1:
+                    qso.SerialSent = args[++i];
+                    break;
+                case "--serial-sent":
+                    error = "Missing value for --serial-sent.";
+                    return false;
+                case "--serial-rcvd" when i < args.Length - 1:
+                    qso.SerialReceived = args[++i];
+                    break;
+                case "--serial-rcvd":
+                    error = "Missing value for --serial-rcvd.";
+                    return false;
+                case "--exchange-sent" when i < args.Length - 1:
+                    qso.ExchangeSent = args[++i];
+                    break;
+                case "--exchange-sent":
+                    error = "Missing value for --exchange-sent.";
+                    return false;
+                case "--exchange-rcvd" when i < args.Length - 1:
+                    qso.ExchangeReceived = args[++i];
+                    break;
+                case "--exchange-rcvd":
+                    error = "Missing value for --exchange-rcvd.";
+                    return false;
+                case "--prop-mode" when i < args.Length - 1:
+                    qso.PropMode = args[++i];
+                    break;
+                case "--prop-mode":
+                    error = "Missing value for --prop-mode.";
+                    return false;
+                case "--sat-name" when i < args.Length - 1:
+                    qso.SatName = args[++i];
+                    break;
+                case "--sat-name":
+                    error = "Missing value for --sat-name.";
+                    return false;
+                case "--sat-mode" when i < args.Length - 1:
+                    qso.SatMode = args[++i];
+                    break;
+                case "--sat-mode":
+                    error = "Missing value for --sat-mode.";
+                    return false;
+                case "--iota" when i < args.Length - 1:
+                    qso.WorkedIota = args[++i];
+                    break;
+                case "--iota":
+                    error = "Missing value for --iota.";
+                    return false;
+                case "--arrl-section" when i < args.Length - 1:
+                    qso.WorkedArrlSection = args[++i];
+                    break;
+                case "--arrl-section":
+                    error = "Missing value for --arrl-section.";
+                    return false;
+                case "--state" when i < args.Length - 1:
+                    qso.WorkedState = args[++i].ToUpperInvariant();
+                    break;
+                case "--state":
+                    error = "Missing value for --state.";
+                    return false;
+                case "--worked-county" when i < args.Length - 1:
+                    qso.WorkedCounty = args[++i];
+                    break;
+                case "--worked-county":
+                    error = "Missing value for --worked-county.";
+                    return false;
+                case "--skcc" when i < args.Length - 1:
+                    qso.Skcc = args[++i];
+                    break;
+                case "--skcc":
+                    error = "Missing value for --skcc.";
+                    return false;
                 case "--no-enrich":
                     noEnrich = true;
                     break;

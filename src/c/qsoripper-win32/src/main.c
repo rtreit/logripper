@@ -81,6 +81,7 @@ enum Field {
     FIELD_EXCHANGE_SENT, FIELD_EXCHANGE_RCVD,
     FIELD_PROP_MODE, FIELD_SAT_NAME, FIELD_SAT_MODE,
     FIELD_IOTA, FIELD_ARRL_SECTION, FIELD_WORKED_STATE, FIELD_WORKED_COUNTY,
+    FIELD_SKCC,
     FIELD_COUNT
 };
 
@@ -95,7 +96,7 @@ static const char *FIELD_LABELS[] = {
     "Serial Sent", "Serial Rcvd",
     "Exch Sent", "Exch Rcvd",
     "Prop Mode", "Sat Name", "Sat Mode",
-    "IOTA", "ARRL Sect", "State", "County"
+    "IOTA", "ARRL Sect", "State", "County", "SKCC"
 };
 
 static const int FIELD_MAX_LEN[] = {
@@ -109,7 +110,7 @@ static const int FIELD_MAX_LEN[] = {
     14, 14,             /* serial_sent, serial_rcvd */
     60, 60,             /* exchange_sent, exchange_rcvd */
     14, 30, 14,         /* prop_mode, sat_name, sat_mode */
-    14, 14, 14, 30      /* iota, arrl_section, worked_state, worked_county */
+    14, 14, 14, 30, 16  /* iota, arrl_section, worked_state, worked_county, skcc */
 };
 
 /* ── Recent QSO record ─────────────────────────────────────────────────── */
@@ -174,6 +175,7 @@ typedef struct {
     char arrl_section[16];
     char worked_state[16];
     char worked_county[32];
+    char skcc[16];
 
     /* Cursor positions per field */
     int cursor_pos[FIELD_COUNT];
@@ -416,7 +418,7 @@ static char *RunQrCommand(const char *args)
         return NULL;
     SetHandleInformation(hReadPipe, HANDLE_FLAG_INHERIT, 0);
 
-    char cmdline[2048];
+    char cmdline[8192];
     _snprintf(cmdline, sizeof(cmdline), "\"%s\" %s", g_cli_path, args);
 
     STARTUPINFOA si = {0};
@@ -491,6 +493,7 @@ static char *FieldBuffer(enum Field f)
     case FIELD_ARRL_SECTION:  return g_state.arrl_section;
     case FIELD_WORKED_STATE:  return g_state.worked_state;
     case FIELD_WORKED_COUNTY: return g_state.worked_county;
+    case FIELD_SKCC:          return g_state.skcc;
     default: return NULL; /* band/mode are cycle selectors, FIELD_COUNT sentinel */
     }
 }
@@ -554,6 +557,47 @@ static void DrawHLine(HDC hdc, int x1, int x2, int y, COLORREF clr)
     LineTo(hdc, x2, y);
     SelectObject(hdc, old);
     DeleteObject(pen);
+}
+
+static char FieldHotkey(enum Field f)
+{
+    switch (f) {
+    case FIELD_CALLSIGN:      return 'C';
+    case FIELD_BAND:          return 'B';
+    case FIELD_MODE:          return 'M';
+    case FIELD_RST_SENT:      return 'S';
+    case FIELD_RST_RCVD:      return 'R';
+    case FIELD_COMMENT:       return 'O';
+    case FIELD_NOTES:         return 'N';
+    case FIELD_FREQ:          return 'F';
+    case FIELD_DATE:          return 'D';
+    case FIELD_TIME:          return 'T';
+    case FIELD_WORKED_NAME:   return 'A';
+    case FIELD_TIME_OFF:      return 'I';
+    case FIELD_QTH:           return 'Q';
+    case FIELD_TX_POWER:      return 'W';
+    case FIELD_SUBMODE:       return 'U';
+    case FIELD_SERIAL_SENT:   return 'E';
+    case FIELD_PROP_MODE:     return 'P';
+    case FIELD_SKCC:          return 'K';
+    default:                  return 0;
+    }
+}
+
+static void DrawLabelWithHotkey(HDC hdc, int x, int y, COLORREF fg,
+                                const char *label, char hotkey, int cw, int ch)
+{
+    DrawText_A(hdc, x, y, fg, label);
+    if (!hotkey) return;
+    hotkey = (char)toupper((unsigned char)hotkey);
+    int len = (int)strlen(label);
+    for (int i = 0; i < len; i++) {
+        if (toupper((unsigned char)label[i]) == hotkey) {
+            DrawHLine(hdc, x + i * cw, x + (i + 1) * cw,
+                      y + ch, fg);
+            return;
+        }
+    }
 }
 
 /* Draw a chip-style label: colored background with text */
@@ -719,6 +763,7 @@ static void ClearForm(void)
     g_state.arrl_section[0] = 0;
     g_state.worked_state[0] = 0;
     g_state.worked_county[0] = 0;
+    g_state.skcc[0] = 0;
 }
 
 static void SetStatus(const char *msg, int is_error)
@@ -730,6 +775,16 @@ static void SetStatus(const char *msg, int is_error)
 
 /* ── CLI integration: Log QSO ──────────────────────────────────────────── */
 
+static void AppendArg(char *cmd, size_t cmd_sz, const char *flag, const char *val)
+{
+    if (!val || !val[0]) return;
+    safe_strcat(cmd, cmd_sz, " ");
+    safe_strcat(cmd, cmd_sz, flag);
+    safe_strcat(cmd, cmd_sz, " \"");
+    safe_strcat(cmd, cmd_sz, val);
+    safe_strcat(cmd, cmd_sz, "\"");
+}
+
 static void LogQso(void)
 {
     if (g_state.callsign[0] == 0) {
@@ -737,33 +792,64 @@ static void LogQso(void)
         return;
     }
 
-    char cmd[1024];
+    char cmd[4096];
     int is_update = g_state.editing_local_id[0] != 0;
 
     if (is_update) {
         _snprintf(cmd, sizeof(cmd),
-                  "update %s --band %s --mode %s --freq %s "
-                  "--rst-sent %s --rst-rcvd %s --comment \"%s\" --json",
+                  "update %s --band %s --mode %s --at \"%s %s\" "
+                  "--rst-sent %s --rst-rcvd %s",
                   g_state.editing_local_id,
                   BANDS[g_state.band_idx],
                   MODES[g_state.mode_idx],
-                  g_state.freq_mhz,
+                  g_state.date, g_state.time_str,
                   g_state.rst_sent,
-                  g_state.rst_rcvd,
-                  g_state.comment);
+                  g_state.rst_rcvd);
     } else {
         _snprintf(cmd, sizeof(cmd),
-                  "log %s %s %s --freq %s --at \"%s %s\" "
-                  "--rst-sent %s --rst-rcvd %s --comment \"%s\" --json",
+                  "log %s %s %s --at \"%s %s\" --rst-sent %s --rst-rcvd %s",
                   g_state.callsign,
                   BANDS[g_state.band_idx],
                   MODES[g_state.mode_idx],
-                  g_state.freq_mhz,
-                  g_state.date,
-                  g_state.time_str,
+                  g_state.date, g_state.time_str,
                   g_state.rst_sent,
-                  g_state.rst_rcvd,
-                  g_state.comment);
+                  g_state.rst_rcvd);
+    }
+
+    if (g_state.freq_mhz[0]) {
+        unsigned long long freq_khz =
+            (unsigned long long)(atof(g_state.freq_mhz) * 1000.0 + 0.5);
+        if (freq_khz > 0) {
+            char freq_arg[32];
+            _snprintf(freq_arg, sizeof(freq_arg), " --freq %llu", freq_khz);
+            safe_strcat(cmd, sizeof(cmd), freq_arg);
+        }
+    }
+
+    AppendArg(cmd, sizeof(cmd), "--comment", g_state.comment);
+    AppendArg(cmd, sizeof(cmd), "--notes", g_state.notes);
+    AppendArg(cmd, sizeof(cmd), "--name", g_state.worked_name);
+    AppendArg(cmd, sizeof(cmd), "--tx-power", g_state.tx_power);
+    AppendArg(cmd, sizeof(cmd), "--submode", g_state.submode);
+    AppendArg(cmd, sizeof(cmd), "--contest-id", g_state.contest_id);
+    AppendArg(cmd, sizeof(cmd), "--serial-sent", g_state.serial_sent);
+    AppendArg(cmd, sizeof(cmd), "--serial-rcvd", g_state.serial_rcvd);
+    AppendArg(cmd, sizeof(cmd), "--exchange-sent", g_state.exchange_sent);
+    AppendArg(cmd, sizeof(cmd), "--exchange-rcvd", g_state.exchange_rcvd);
+    AppendArg(cmd, sizeof(cmd), "--prop-mode", g_state.prop_mode);
+    AppendArg(cmd, sizeof(cmd), "--sat-name", g_state.sat_name);
+    AppendArg(cmd, sizeof(cmd), "--sat-mode", g_state.sat_mode);
+    AppendArg(cmd, sizeof(cmd), "--iota", g_state.iota);
+    AppendArg(cmd, sizeof(cmd), "--arrl-section", g_state.arrl_section);
+    AppendArg(cmd, sizeof(cmd), "--state", g_state.worked_state);
+    AppendArg(cmd, sizeof(cmd), "--worked-county", g_state.worked_county);
+    AppendArg(cmd, sizeof(cmd), "--skcc", g_state.skcc);
+
+    if (g_state.time_off[0] && g_state.date[0]) {
+        char time_off_str[64];
+        _snprintf(time_off_str, sizeof(time_off_str), "%s %s",
+                  g_state.date, g_state.time_off);
+        AppendArg(cmd, sizeof(cmd), "--time-off", time_off_str);
     }
 
     char *result = RunQrCommand(cmd);
@@ -974,49 +1060,172 @@ static void LoadSelectedQso(void)
         return;
 
     RecentQso *q = &g_state.recent_qsos[g_state.qso_selected];
-    safe_strcpy(g_state.callsign, sizeof(g_state.callsign), q->callsign);
-    safe_strcpy(g_state.rst_sent, sizeof(g_state.rst_sent), q->rst_sent);
-    safe_strcpy(g_state.rst_rcvd, sizeof(g_state.rst_rcvd), q->rst_rcvd);
+    if (q->local_id[0] == 0) {
+        SetStatus("No QSO ID for selection", 1);
+        return;
+    }
+
+    char cmd[128];
+    _snprintf(cmd, sizeof(cmd), "get %s --json", q->local_id);
+    char *result = RunQrCommand(cmd);
+    if (!result) {
+        SetStatus("Failed to load QSO data", 1);
+        return;
+    }
+
+    ClearForm();
+
+    char *v;
+
+    v = json_get_string(result, "workedCallsign");
+    if (!v) v = json_get_string(result, "callsign");
+    if (v) { safe_strcpy(g_state.callsign, sizeof(g_state.callsign), v); free(v); }
+
+    v = json_get_string(result, "band");
+    if (v) {
+        const char *disp = v;
+        if (strncmp(disp, "BAND_", 5) == 0) disp += 5;
+        for (int i = 0; i < NUM_BANDS; i++) {
+            if (_stricmp(BANDS[i], disp) == 0) { g_state.band_idx = i; break; }
+        }
+        free(v);
+    }
+
+    v = json_get_string(result, "mode");
+    if (v) {
+        const char *disp = v;
+        if (strncmp(disp, "MODE_", 5) == 0) disp += 5;
+        for (int i = 0; i < NUM_MODES; i++) {
+            if (_stricmp(MODES[i], disp) == 0) { g_state.mode_idx = i; break; }
+        }
+        free(v);
+    }
+
+    v = json_get_string(result, "frequencyKhz");
+    if (v) {
+        double khz = atof(v);
+        if (khz > 0)
+            _snprintf(g_state.freq_mhz, sizeof(g_state.freq_mhz), "%.3f", khz / 1000.0);
+        free(v);
+    } else {
+        _snprintf(g_state.freq_mhz, sizeof(g_state.freq_mhz),
+                  "%.3f", BAND_DEFAULT_FREQS[g_state.band_idx]);
+    }
+
+    v = json_get_string(result, "utcTimestamp");
+    if (v && strlen(v) >= 16) {
+        char date_buf[12];
+        memcpy(date_buf, v, 10); date_buf[10] = 0;
+        safe_strcpy(g_state.date, sizeof(g_state.date), date_buf);
+        char time_buf[8];
+        memcpy(time_buf, v + 11, 5); time_buf[5] = 0;
+        safe_strcpy(g_state.time_str, sizeof(g_state.time_str), time_buf);
+    }
+    if (v) free(v);
+
+    v = json_get_string(result, "utcEndTimestamp");
+    if (v && strlen(v) >= 16) {
+        char time_buf[8];
+        memcpy(time_buf, v + 11, 5); time_buf[5] = 0;
+        safe_strcpy(g_state.time_off, sizeof(g_state.time_off), time_buf);
+    }
+    if (v) free(v);
+
+    {
+        int r = json_get_int(result, "readability", 0);
+        int s = json_get_int(result, "strength", 0);
+        int t = json_get_int(result, "tone", 0);
+        if (r > 0) {
+            if (t > 0) _snprintf(g_state.rst_sent, sizeof(g_state.rst_sent), "%d%d%d", r, s, t);
+            else       _snprintf(g_state.rst_sent, sizeof(g_state.rst_sent), "%d%d", r, s);
+        } else {
+            safe_strcpy(g_state.rst_sent, sizeof(g_state.rst_sent), "59");
+        }
+    }
+
+    {
+        const char *rcvd_pos = strstr(result, "rstReceived");
+        if (rcvd_pos) {
+            int r = json_get_int(rcvd_pos, "readability", 0);
+            int s = json_get_int(rcvd_pos, "strength", 0);
+            int t = json_get_int(rcvd_pos, "tone", 0);
+            if (r > 0) {
+                if (t > 0) _snprintf(g_state.rst_rcvd, sizeof(g_state.rst_rcvd), "%d%d%d", r, s, t);
+                else       _snprintf(g_state.rst_rcvd, sizeof(g_state.rst_rcvd), "%d%d", r, s);
+            } else {
+                safe_strcpy(g_state.rst_rcvd, sizeof(g_state.rst_rcvd), "59");
+            }
+        } else {
+            safe_strcpy(g_state.rst_rcvd, sizeof(g_state.rst_rcvd), "59");
+        }
+    }
+
+    v = json_get_string(result, "comment");
+    if (v) { safe_strcpy(g_state.comment, sizeof(g_state.comment), v); free(v); }
+
+    v = json_get_string(result, "notes");
+    if (v) { safe_strcpy(g_state.notes, sizeof(g_state.notes), v); free(v); }
+
+    v = json_get_string(result, "workedOperatorName");
+    if (v) { safe_strcpy(g_state.worked_name, sizeof(g_state.worked_name), v); free(v); }
+
+    v = json_get_string(result, "txPower");
+    if (v) { safe_strcpy(g_state.tx_power, sizeof(g_state.tx_power), v); free(v); }
+
+    v = json_get_string(result, "submode");
+    if (v) { safe_strcpy(g_state.submode, sizeof(g_state.submode), v); free(v); }
+
+    v = json_get_string(result, "contestId");
+    if (v) { safe_strcpy(g_state.contest_id, sizeof(g_state.contest_id), v); free(v); }
+
+    v = json_get_string(result, "serialSent");
+    if (v) { safe_strcpy(g_state.serial_sent, sizeof(g_state.serial_sent), v); free(v); }
+
+    v = json_get_string(result, "serialReceived");
+    if (v) { safe_strcpy(g_state.serial_rcvd, sizeof(g_state.serial_rcvd), v); free(v); }
+
+    v = json_get_string(result, "exchangeSent");
+    if (v) { safe_strcpy(g_state.exchange_sent, sizeof(g_state.exchange_sent), v); free(v); }
+
+    v = json_get_string(result, "exchangeReceived");
+    if (v) { safe_strcpy(g_state.exchange_rcvd, sizeof(g_state.exchange_rcvd), v); free(v); }
+
+    v = json_get_string(result, "propMode");
+    if (v) { safe_strcpy(g_state.prop_mode, sizeof(g_state.prop_mode), v); free(v); }
+
+    v = json_get_string(result, "satName");
+    if (v) { safe_strcpy(g_state.sat_name, sizeof(g_state.sat_name), v); free(v); }
+
+    v = json_get_string(result, "satMode");
+    if (v) { safe_strcpy(g_state.sat_mode, sizeof(g_state.sat_mode), v); free(v); }
+
+    v = json_get_string(result, "workedIota");
+    if (v) { safe_strcpy(g_state.iota, sizeof(g_state.iota), v); free(v); }
+
+    v = json_get_string(result, "workedArrlSection");
+    if (v) { safe_strcpy(g_state.arrl_section, sizeof(g_state.arrl_section), v); free(v); }
+
+    v = json_get_string(result, "workedState");
+    if (v) { safe_strcpy(g_state.worked_state, sizeof(g_state.worked_state), v); free(v); }
+
+    v = json_get_string(result, "workedCounty");
+    if (v) { safe_strcpy(g_state.worked_county, sizeof(g_state.worked_county), v); free(v); }
+
+    v = json_get_string(result, "skcc");
+    if (v) { safe_strcpy(g_state.skcc, sizeof(g_state.skcc), v); free(v); }
+
     safe_strcpy(g_state.editing_local_id, sizeof(g_state.editing_local_id), q->local_id);
 
-    /* Set band index */
-    for (int i = 0; i < NUM_BANDS; i++) {
-        if (_stricmp(BANDS[i], q->band) == 0) {
-            g_state.band_idx = i;
-            break;
-        }
-    }
-    /* Set mode index */
-    for (int i = 0; i < NUM_MODES; i++) {
-        if (_stricmp(MODES[i], q->mode) == 0) {
-            g_state.mode_idx = i;
-            break;
-        }
-    }
-
-    _snprintf(g_state.freq_mhz, sizeof(g_state.freq_mhz),
-              "%.3f", BAND_DEFAULT_FREQS[g_state.band_idx]);
-
-    /* Parse UTC for date/time */
-    if (strlen(q->utc) >= 10) {
-        safe_strcpy(g_state.date, sizeof(g_state.date), q->utc);
-        g_state.date[10] = 0;
-    }
-    if (strlen(q->utc) >= 16) {
-        safe_strcpy(g_state.time_str, sizeof(g_state.time_str), q->utc + 11);
-        g_state.time_str[5] = 0;
-    }
-
-    /* Update cursor positions */
     g_state.cursor_pos[FIELD_CALLSIGN] = (int)strlen(g_state.callsign);
     g_state.cursor_pos[FIELD_RST_SENT] = (int)strlen(g_state.rst_sent);
     g_state.cursor_pos[FIELD_RST_RCVD] = (int)strlen(g_state.rst_rcvd);
-    g_state.cursor_pos[FIELD_FREQ] = (int)strlen(g_state.freq_mhz);
-    g_state.cursor_pos[FIELD_DATE] = (int)strlen(g_state.date);
-    g_state.cursor_pos[FIELD_TIME] = (int)strlen(g_state.time_str);
+    g_state.cursor_pos[FIELD_FREQ]     = (int)strlen(g_state.freq_mhz);
+    g_state.cursor_pos[FIELD_DATE]     = (int)strlen(g_state.date);
+    g_state.cursor_pos[FIELD_TIME]     = (int)strlen(g_state.time_str);
 
     g_state.qso_list_focused = 0;
     g_state.focused_field = FIELD_CALLSIGN;
+    free(result);
 
     SetStatus("QSO loaded for editing", 0);
 }
@@ -1152,7 +1361,7 @@ static int PaintLogForm(HDC hdc, int y_start, int w)
 
     /* Row 1: Callsign, Band, Mode */
     {
-        DrawText_A(hdc, pad, y + 3, CLR_LABEL, "Callsign");
+        DrawLabelWithHotkey(hdc, pad, y + 3, CLR_LABEL, "Callsign", FieldHotkey(FIELD_CALLSIGN), cw, ch);
         int fw = 14 * cw + 6, fh = ch + 4;
         DrawField(hdc, pad + label_w, y, 14,
                   g_state.callsign, g_state.cursor_pos[FIELD_CALLSIGN],
@@ -1160,7 +1369,7 @@ static int PaintLogForm(HDC hdc, int y_start, int w)
         SetRect(&g_state.field_rects[FIELD_CALLSIGN], pad + label_w, y, pad + label_w + fw, y + fh);
 
         int bx = pad + label_w + 14 * cw + 16;
-        DrawText_A(hdc, bx, y + 3, CLR_LABEL, "Band");
+        DrawLabelWithHotkey(hdc, bx, y + 3, CLR_LABEL, "Band", FieldHotkey(FIELD_BAND), cw, ch);
         int bfw = 8 * cw + 6;
         DrawCycleField(hdc, bx + 5 * cw, y, 8,
                        BANDS[g_state.band_idx],
@@ -1168,7 +1377,7 @@ static int PaintLogForm(HDC hdc, int y_start, int w)
         SetRect(&g_state.field_rects[FIELD_BAND], bx + 5 * cw, y, bx + 5 * cw + bfw, y + fh);
 
         int mx = bx + 5 * cw + 8 * cw + 16;
-        DrawText_A(hdc, mx, y + 3, CLR_LABEL, "Mode");
+        DrawLabelWithHotkey(hdc, mx, y + 3, CLR_LABEL, "Mode", FieldHotkey(FIELD_MODE), cw, ch);
         DrawCycleField(hdc, mx + 5 * cw, y, 8,
                        MODES[g_state.mode_idx],
                        focused_form && g_state.focused_field == FIELD_MODE, cw, ch);
@@ -1178,13 +1387,13 @@ static int PaintLogForm(HDC hdc, int y_start, int w)
 
     /* Row 2: RST Sent, RST Rcvd */
     {
-        DrawText_A(hdc, pad, y + 3, CLR_LABEL, "RST Sent");
+        DrawLabelWithHotkey(hdc, pad, y + 3, CLR_LABEL, "RST Sent", FieldHotkey(FIELD_RST_SENT), cw, ch);
         DrawField(hdc, pad + label_w, y, 6,
                   g_state.rst_sent, g_state.cursor_pos[FIELD_RST_SENT],
                   focused_form && g_state.focused_field == FIELD_RST_SENT, cw, ch);
 
         int rx = pad + label_w + 6 * cw + 16;
-        DrawText_A(hdc, rx, y + 3, CLR_LABEL, "RST Rcvd");
+        DrawLabelWithHotkey(hdc, rx, y + 3, CLR_LABEL, "RST Rcvd", FieldHotkey(FIELD_RST_RCVD), cw, ch);
         DrawField(hdc, rx + 10 * cw, y, 6,
                   g_state.rst_rcvd, g_state.cursor_pos[FIELD_RST_RCVD],
                   focused_form && g_state.focused_field == FIELD_RST_RCVD, cw, ch);
@@ -1196,7 +1405,7 @@ static int PaintLogForm(HDC hdc, int y_start, int w)
         int field_chars = (w - pad * 2 - label_w - 12) / cw;
         if (field_chars > 60) field_chars = 60;
         if (field_chars < 10) field_chars = 10;
-        DrawText_A(hdc, pad, y + 3, CLR_LABEL, "Comment");
+        DrawLabelWithHotkey(hdc, pad, y + 3, CLR_LABEL, "Comment", FieldHotkey(FIELD_COMMENT), cw, ch);
         DrawField(hdc, pad + label_w, y, field_chars,
                   g_state.comment, g_state.cursor_pos[FIELD_COMMENT],
                   focused_form && g_state.focused_field == FIELD_COMMENT, cw, ch);
@@ -1208,7 +1417,7 @@ static int PaintLogForm(HDC hdc, int y_start, int w)
         int field_chars = (w - pad * 2 - label_w - 12) / cw;
         if (field_chars > 60) field_chars = 60;
         if (field_chars < 10) field_chars = 10;
-        DrawText_A(hdc, pad, y + 3, CLR_LABEL, "Notes");
+        DrawLabelWithHotkey(hdc, pad, y + 3, CLR_LABEL, "Notes", FieldHotkey(FIELD_NOTES), cw, ch);
         DrawField(hdc, pad + label_w, y, field_chars,
                   g_state.notes, g_state.cursor_pos[FIELD_NOTES],
                   focused_form && g_state.focused_field == FIELD_NOTES, cw, ch);
@@ -1217,19 +1426,19 @@ static int PaintLogForm(HDC hdc, int y_start, int w)
 
     /* Row 5: Freq, Date, Time */
     {
-        DrawText_A(hdc, pad, y + 3, CLR_LABEL, "Freq MHz");
+        DrawLabelWithHotkey(hdc, pad, y + 3, CLR_LABEL, "Freq MHz", FieldHotkey(FIELD_FREQ), cw, ch);
         DrawField(hdc, pad + label_w, y, 10,
                   g_state.freq_mhz, g_state.cursor_pos[FIELD_FREQ],
                   focused_form && g_state.focused_field == FIELD_FREQ, cw, ch);
 
         int dx = pad + label_w + 10 * cw + 16;
-        DrawText_A(hdc, dx, y + 3, CLR_LABEL, "Date");
+        DrawLabelWithHotkey(hdc, dx, y + 3, CLR_LABEL, "Date", FieldHotkey(FIELD_DATE), cw, ch);
         DrawField(hdc, dx + 5 * cw, y, 12,
                   g_state.date, g_state.cursor_pos[FIELD_DATE],
                   focused_form && g_state.focused_field == FIELD_DATE, cw, ch);
 
         int tx = dx + 5 * cw + 12 * cw + 16;
-        DrawText_A(hdc, tx, y + 3, CLR_LABEL, "Time");
+        DrawLabelWithHotkey(hdc, tx, y + 3, CLR_LABEL, "Time", FieldHotkey(FIELD_TIME), cw, ch);
         DrawField(hdc, tx + 5 * cw, y, 6,
                   g_state.time_str, g_state.cursor_pos[FIELD_TIME],
                   focused_form && g_state.focused_field == FIELD_TIME, cw, ch);
@@ -1298,7 +1507,8 @@ static const enum Field ADV_TAB_TECHNICAL[] = {
 };
 
 static const enum Field ADV_TAB_AWARDS[] = {
-    FIELD_IOTA, FIELD_ARRL_SECTION, FIELD_WORKED_STATE, FIELD_WORKED_COUNTY
+    FIELD_IOTA, FIELD_ARRL_SECTION, FIELD_WORKED_STATE, FIELD_WORKED_COUNTY,
+    FIELD_SKCC
 };
 
 static const enum Field *ADV_TABS[] = {
@@ -1407,7 +1617,8 @@ static int PaintAdvancedForm(HDC hdc, int y_start, int w)
             int full_w = (f1 == FIELD_COMMENT || f1 == FIELD_NOTES);
 
             /* First field */
-            DrawText_A(hdc, pad, y + 3, CLR_CYAN, FIELD_LABELS[f1]);
+            DrawLabelWithHotkey(hdc, pad, y + 3, CLR_CYAN, FIELD_LABELS[f1],
+                                FieldHotkey(f1), cw, ch);
             if (f1 == FIELD_BAND) {
                 DrawCycleField(hdc, pad + label_w, y, 8,
                                BANDS[g_state.band_idx],
@@ -1436,8 +1647,8 @@ static int PaintAdvancedForm(HDC hdc, int y_start, int w)
                 enum Field f2 = fields[i];
                 if (f2 != FIELD_COMMENT && f2 != FIELD_NOTES) {
                     int col2_x = pad + col_w + 8;
-                    DrawText_A(hdc, col2_x, y + 3, CLR_CYAN,
-                               FIELD_LABELS[f2]);
+                    DrawLabelWithHotkey(hdc, col2_x, y + 3, CLR_CYAN,
+                                       FIELD_LABELS[f2], FieldHotkey(f2), cw, ch);
                     if (f2 == FIELD_BAND) {
                         DrawCycleField(hdc, col2_x + label_w, y, 8,
                                        BANDS[g_state.band_idx],
@@ -1567,7 +1778,7 @@ static int PaintRecentQsos(HDC hdc, int y_start, int w, int bottom)
         DrawText_A_BG(hdc, pad, y_start, border_clr, CLR_BG, title);
     }
 
-    int y = y_start + 4;
+    int y = y_start + ch + 4;
 
     /* Search bar (if search focused) */
     if (g_state.search_focused) {
@@ -2046,6 +2257,14 @@ static void OnKeyDown(HWND hwnd, WPARAM vk, LPARAM lp)
         case 'F': target = FIELD_FREQ; break;
         case 'D': target = FIELD_DATE; break;
         case 'T': target = FIELD_TIME; break;
+        case 'A': target = FIELD_WORKED_NAME; break;
+        case 'I': target = FIELD_TIME_OFF; break;
+        case 'Q': target = FIELD_QTH; break;
+        case 'W': target = FIELD_TX_POWER; break;
+        case 'U': target = FIELD_SUBMODE; break;
+        case 'E': target = FIELD_SERIAL_SENT; break;
+        case 'P': target = FIELD_PROP_MODE; break;
+        case 'K': target = FIELD_SKCC; break;
         }
         if (target != FIELD_COUNT) {
             g_state.focused_field = target;

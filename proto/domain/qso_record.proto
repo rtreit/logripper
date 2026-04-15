@@ -58,6 +58,7 @@ message QsoRecord {
   optional string worked_iota = 48;
   optional string worked_continent = 49;  // 2-letter
   optional string worked_arrl_section = 58;
+  optional string skcc = 59;  // SKCC membership number of worked station
 
   // --- Contest fields ---
   optional string contest_id = 50;

@@ -840,9 +840,11 @@ impl ServerOptions {
         let mut config_path = std::env::var(CONFIG_PATH_ENV_VAR)
             .map(PathBuf::from)
             .unwrap_or(default_config_path()?);
+        #[cfg(test)]
         let mut storage_backend = parse_storage_backend(
             &std::env::var("QSORIPPER_STORAGE_BACKEND").unwrap_or_else(|_| "memory".to_string()),
         )?;
+        #[cfg(test)]
         let mut sqlite_path = PathBuf::from(
             std::env::var("QSORIPPER_SQLITE_PATH").unwrap_or_else(|_| "qsoripper.db".to_string()),
         );
@@ -861,22 +863,30 @@ impl ServerOptions {
                 }
                 "--storage" => {
                     let value = args.next().ok_or("Missing value for --storage")?;
-                    storage_backend = parse_storage_backend(&value)?;
+                    let backend = parse_storage_backend(&value)?;
                     storage_cli_overrides.insert(
                         runtime_config::STORAGE_BACKEND_ENV_VAR.to_string(),
-                        match storage_backend {
+                        match backend {
                             StorageBackendKind::Memory => "memory".to_string(),
                             StorageBackendKind::Sqlite => "sqlite".to_string(),
                         },
                     );
+                    #[cfg(test)]
+                    {
+                        storage_backend = backend;
+                    }
                 }
                 "--sqlite-path" => {
                     let value = args.next().ok_or("Missing value for --sqlite-path")?;
-                    sqlite_path = PathBuf::from(value);
+                    let path = PathBuf::from(value);
                     storage_cli_overrides.insert(
                         runtime_config::SQLITE_PATH_ENV_VAR.to_string(),
-                        sqlite_path.display().to_string(),
+                        path.display().to_string(),
                     );
+                    #[cfg(test)]
+                    {
+                        sqlite_path = path;
+                    }
                 }
                 "--help" | "-h" => {
                     print_help();
@@ -884,16 +894,6 @@ impl ServerOptions {
                 }
                 _ => return Err(format!("Unknown argument: {arg}").into()),
             }
-        }
-
-        if storage_backend == StorageBackendKind::Sqlite
-            && storage_cli_overrides.contains_key(runtime_config::STORAGE_BACKEND_ENV_VAR)
-            && !storage_cli_overrides.contains_key(runtime_config::SQLITE_PATH_ENV_VAR)
-        {
-            storage_cli_overrides.insert(
-                runtime_config::SQLITE_PATH_ENV_VAR.to_string(),
-                sqlite_path.display().to_string(),
-            );
         }
 
         Ok(Self {
@@ -1622,7 +1622,7 @@ mod tests {
     }
 
     #[test]
-    fn server_options_emit_default_sqlite_path_when_cli_selects_sqlite_without_path() {
+    fn server_options_do_not_override_sqlite_path_when_cli_selects_sqlite_without_path() {
         let (_process_state_lock, _process_state) = capture_clean_process_state();
 
         let options =
@@ -1637,8 +1637,11 @@ mod tests {
                 .get(STORAGE_BACKEND_ENV_VAR)
                 .map(String::as_str)
         );
+        // When --sqlite-path is not explicitly passed, the CLI must NOT inject a
+        // default path override so that config-file values (e.g. setup wizard
+        // log_file_path) are not silently overwritten.
         assert_eq!(
-            Some("qsoripper.db"),
+            None,
             options
                 .runtime_config_cli_storage_overrides()
                 .get(SQLITE_PATH_ENV_VAR)

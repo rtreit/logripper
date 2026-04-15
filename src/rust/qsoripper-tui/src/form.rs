@@ -62,6 +62,31 @@ impl AdvancedTab {
             AdvancedTab::Awards => AdvancedTab::Technical,
         }
     }
+
+    /// Return the static slice of fields belonging to this tab.
+    pub(crate) fn fields(self) -> &'static [Field] {
+        match self {
+            AdvancedTab::Main => ADV_MAIN_FIELDS,
+            AdvancedTab::Contest => ADV_CONTEST_FIELDS,
+            AdvancedTab::Technical => ADV_TECHNICAL_FIELDS,
+            AdvancedTab::Awards => ADV_AWARDS_FIELDS,
+        }
+    }
+
+    /// Return the digit character used as an Alt+digit shortcut for this tab.
+    pub(crate) fn shortcut_digit(self) -> char {
+        match self {
+            AdvancedTab::Main => '1',
+            AdvancedTab::Contest => '2',
+            AdvancedTab::Technical => '3',
+            AdvancedTab::Awards => '4',
+        }
+    }
+
+    /// Return the first field of this tab — the focus target when switching to it.
+    pub(crate) fn first_field(self) -> Field {
+        self.fields().first().cloned().unwrap_or(Field::Callsign)
+    }
 }
 
 /// Focusable fields in the QSO entry form.
@@ -122,6 +147,8 @@ pub(crate) enum Field {
     WorkedCounty,
     /// Worked operator name.
     WorkedName,
+    /// SKCC membership number of the worked station.
+    Skcc,
 }
 
 /// Primary navigation order for Tab/Shift-Tab in the log entry view.
@@ -177,6 +204,7 @@ const ADV_AWARDS_FIELDS: &[Field] = &[
     Field::ArrlSection,
     Field::WorkedState,
     Field::WorkedCounty,
+    Field::Skcc,
 ];
 
 /// State of the QSO entry form (basic + advanced fields).
@@ -245,6 +273,8 @@ pub(crate) struct LogForm {
     pub(crate) worked_county: String,
     /// Worked operator name (from lookup or manual entry).
     pub(crate) worked_name: String,
+    /// SKCC membership number of the worked station.
+    pub(crate) skcc: String,
 }
 
 impl Default for LogForm {
@@ -288,6 +318,7 @@ impl LogForm {
             worked_state: String::new(),
             worked_county: String::new(),
             worked_name: String::new(),
+            skcc: String::new(),
         };
         form.on_band_change();
         form
@@ -424,6 +455,7 @@ impl LogForm {
             Field::WorkedState => Some(&mut self.worked_state),
             Field::WorkedCounty => Some(&mut self.worked_county),
             Field::WorkedName => Some(&mut self.worked_name),
+            Field::Skcc => Some(&mut self.skcc),
             Field::Band | Field::Mode => None,
         }
     }
@@ -739,6 +771,7 @@ mod tests {
                 Field::WorkedName,
                 Box::new(|f: &LogForm| f.worked_name.as_str()),
             ),
+            (Field::Skcc, Box::new(|f: &LogForm| f.skcc.as_str())),
         ];
         for (field, _getter) in &fields_and_setters {
             let mut form = LogForm::new();
@@ -806,6 +839,30 @@ mod tests {
         let original = form.mode_idx;
         form.type_select_mode('z');
         assert_eq!(form.mode_idx, original);
+    }
+
+    #[test]
+    fn advanced_tab_shortcut_digits() {
+        assert_eq!(AdvancedTab::Main.shortcut_digit(), '1');
+        assert_eq!(AdvancedTab::Contest.shortcut_digit(), '2');
+        assert_eq!(AdvancedTab::Technical.shortcut_digit(), '3');
+        assert_eq!(AdvancedTab::Awards.shortcut_digit(), '4');
+    }
+
+    #[test]
+    fn advanced_tab_first_fields() {
+        assert_eq!(AdvancedTab::Main.first_field(), Field::Callsign);
+        assert_eq!(AdvancedTab::Contest.first_field(), Field::TxPower);
+        assert_eq!(AdvancedTab::Technical.first_field(), Field::PropMode);
+        assert_eq!(AdvancedTab::Awards.first_field(), Field::Iota);
+    }
+
+    #[test]
+    fn advanced_tab_fields_consistent_with_adv_slices() {
+        assert_eq!(AdvancedTab::Main.fields(), ADV_MAIN_FIELDS);
+        assert_eq!(AdvancedTab::Contest.fields(), ADV_CONTEST_FIELDS);
+        assert_eq!(AdvancedTab::Technical.fields(), ADV_TECHNICAL_FIELDS);
+        assert_eq!(AdvancedTab::Awards.fields(), ADV_AWARDS_FIELDS);
     }
 
     #[test]
@@ -911,5 +968,21 @@ mod tests {
         let fields = form.current_advanced_fields();
         assert!(fields.contains(&Field::Iota));
         assert!(fields.contains(&Field::ArrlSection));
+        assert!(fields.contains(&Field::Skcc));
+    }
+
+    #[test]
+    fn skcc_field_text_mut_returns_buffer() {
+        let mut form = LogForm::new();
+        form.focused = Field::Skcc;
+        let buf = form.current_field_text_mut().unwrap();
+        buf.push_str("12345T");
+        assert_eq!(form.skcc, "12345T");
+    }
+
+    #[test]
+    fn skcc_initialises_empty() {
+        let form = LogForm::new();
+        assert!(form.skcc.is_empty());
     }
 }
