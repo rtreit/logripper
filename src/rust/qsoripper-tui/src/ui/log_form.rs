@@ -106,9 +106,9 @@ fn render_rst_row(frame: &mut Frame, area: Rect, form: &crate::form::LogForm) {
     let sent_val = field_value(&form.rst_sent, sent_focused, sent_selected, RST_WIDTH);
     let rcvd_val = field_value(&form.rst_rcvd, rcvd_focused, rcvd_selected, RST_WIDTH);
     let mut spans: Vec<Span<'static>> = Vec::new();
-    spans.extend(label_m("RST ", 'S', "nt  "));
+    spans.extend(label_m("RST ", 'S', "nt "));
     spans.push(styled_field(sent_val, sent_focused, sent_selected));
-    spans.push(Span::raw("   "));
+    spans.push(Span::raw(" "));
     spans.extend(label_m("RST ", 'R', "cvd "));
     spans.push(styled_field(rcvd_val, rcvd_focused, rcvd_selected));
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
