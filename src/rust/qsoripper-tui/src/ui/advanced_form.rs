@@ -375,6 +375,7 @@ fn render_awards_tab(frame: &mut Frame, area: Rect, form: &crate::form::LogForm,
         Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Length(1),
+        Constraint::Length(1),
         Constraint::Fill(1),
     ])
     .split(area);
@@ -419,6 +420,18 @@ fn render_awards_tab(frame: &mut Frame, area: Rect, form: &crate::form::LogForm,
                 Span::raw("   "),
                 label("County   "),
                 styled_field(cv, cf, cs),
+            ])),
+            row,
+        );
+    }
+    if let Some(row) = rows.get(3).copied() {
+        let focused = form.focused == Field::Skcc;
+        let selected = focused && form.field_selected;
+        let val = adv_field(&form.skcc, focused, selected, short);
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![
+                label("SKCC     "),
+                styled_field(val, focused, selected),
             ])),
             row,
         );

@@ -122,6 +122,8 @@ pub(crate) enum Field {
     WorkedCounty,
     /// Worked operator name.
     WorkedName,
+    /// SKCC membership number of the worked station.
+    Skcc,
 }
 
 /// Primary navigation order for Tab/Shift-Tab in the log entry view.
@@ -177,6 +179,7 @@ const ADV_AWARDS_FIELDS: &[Field] = &[
     Field::ArrlSection,
     Field::WorkedState,
     Field::WorkedCounty,
+    Field::Skcc,
 ];
 
 /// State of the QSO entry form (basic + advanced fields).
@@ -245,6 +248,8 @@ pub(crate) struct LogForm {
     pub(crate) worked_county: String,
     /// Worked operator name (from lookup or manual entry).
     pub(crate) worked_name: String,
+    /// SKCC membership number of the worked station.
+    pub(crate) skcc: String,
 }
 
 impl Default for LogForm {
@@ -288,6 +293,7 @@ impl LogForm {
             worked_state: String::new(),
             worked_county: String::new(),
             worked_name: String::new(),
+            skcc: String::new(),
         };
         form.on_band_change();
         form
@@ -424,6 +430,7 @@ impl LogForm {
             Field::WorkedState => Some(&mut self.worked_state),
             Field::WorkedCounty => Some(&mut self.worked_county),
             Field::WorkedName => Some(&mut self.worked_name),
+            Field::Skcc => Some(&mut self.skcc),
             Field::Band | Field::Mode => None,
         }
     }
@@ -739,6 +746,7 @@ mod tests {
                 Field::WorkedName,
                 Box::new(|f: &LogForm| f.worked_name.as_str()),
             ),
+            (Field::Skcc, Box::new(|f: &LogForm| f.skcc.as_str())),
         ];
         for (field, _getter) in &fields_and_setters {
             let mut form = LogForm::new();
@@ -911,5 +919,21 @@ mod tests {
         let fields = form.current_advanced_fields();
         assert!(fields.contains(&Field::Iota));
         assert!(fields.contains(&Field::ArrlSection));
+        assert!(fields.contains(&Field::Skcc));
+    }
+
+    #[test]
+    fn skcc_field_text_mut_returns_buffer() {
+        let mut form = LogForm::new();
+        form.focused = Field::Skcc;
+        let buf = form.current_field_text_mut().unwrap();
+        buf.push_str("12345T");
+        assert_eq!(form.skcc, "12345T");
+    }
+
+    #[test]
+    fn skcc_initialises_empty() {
+        let form = LogForm::new();
+        assert!(form.skcc.is_empty());
     }
 }

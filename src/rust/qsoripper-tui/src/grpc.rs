@@ -79,6 +79,7 @@ pub(crate) async fn log_qso(
         worked_cq_zone,
         worked_dxcc,
         worked_operator_name: opt_string(&form.worked_name),
+        skcc: opt_string(&form.skcc),
         ..Default::default()
     };
 
@@ -281,6 +282,7 @@ pub(crate) async fn update_qso(
         worked_cq_zone,
         worked_dxcc,
         worked_operator_name: opt_string(&form.worked_name),
+        skcc: opt_string(&form.skcc),
         ..Default::default()
     };
 

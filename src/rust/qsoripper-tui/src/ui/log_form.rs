@@ -35,12 +35,13 @@ pub(super) fn render(app: &App, frame: &mut Frame, area: Rect) {
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
-    if inner.height < 8 {
+    if inner.height < 9 {
         return;
     }
 
     let layout = Layout::vertical([
-        Constraint::Length(1), // callsign / band / mode
+        Constraint::Length(1), // callsign
+        Constraint::Length(1), // band / mode
         Constraint::Length(1), // rst sent / rst rcvd
         Constraint::Length(1), // comment
         Constraint::Length(1), // notes
@@ -52,16 +53,18 @@ pub(super) fn render(app: &App, frame: &mut Frame, area: Rect) {
     .split(inner);
 
     let cs_area = layout.first().copied().unwrap_or(inner);
-    let rst_area = layout.get(1).copied().unwrap_or(inner);
-    let comment_area = layout.get(2).copied().unwrap_or(inner);
-    let notes_area = layout.get(3).copied().unwrap_or(inner);
-    let freq_area = layout.get(4).copied().unwrap_or(inner);
-    let duration_area = layout.get(5).copied().unwrap_or(inner);
-    let hints_area = layout.get(7).copied().unwrap_or(inner);
+    let band_mode_area = layout.get(1).copied().unwrap_or(inner);
+    let rst_area = layout.get(2).copied().unwrap_or(inner);
+    let comment_area = layout.get(3).copied().unwrap_or(inner);
+    let notes_area = layout.get(4).copied().unwrap_or(inner);
+    let freq_area = layout.get(5).copied().unwrap_or(inner);
+    let duration_area = layout.get(6).copied().unwrap_or(inner);
+    let hints_area = layout.get(8).copied().unwrap_or(inner);
 
     let form = &app.form;
 
     render_callsign_row(frame, cs_area, form);
+    render_band_mode_row(frame, band_mode_area, form);
     render_rst_row(frame, rst_area, form);
     render_comment_row(frame, comment_area, form);
     render_notes_row(frame, notes_area, form);
@@ -70,17 +73,22 @@ pub(super) fn render(app: &App, frame: &mut Frame, area: Rect) {
     render_hints_row(frame, hints_area);
 }
 
-/// Render the callsign / band / mode row.
+/// Render the callsign row.
 fn render_callsign_row(frame: &mut Frame, area: Rect, form: &crate::form::LogForm) {
     let cs_focused = form.focused == Field::Callsign;
     let cs_selected = cs_focused && form.field_selected;
     let cs_val = field_value(&form.callsign, cs_focused, cs_selected, CALLSIGN_WIDTH);
-    let band_val = cycle_value(form.band_str(), form.focused == Field::Band);
-    let mode_val = cycle_value(form.mode_str(), form.focused == Field::Mode);
     let mut spans: Vec<Span<'static>> = Vec::new();
     spans.extend(label_m("", 'C', "allsign "));
     spans.push(styled_field(cs_val, cs_focused, cs_selected));
-    spans.push(Span::raw("  "));
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
+}
+
+/// Render the band / mode row.
+fn render_band_mode_row(frame: &mut Frame, area: Rect, form: &crate::form::LogForm) {
+    let band_val = cycle_value(form.band_str(), form.focused == Field::Band);
+    let mode_val = cycle_value(form.mode_str(), form.focused == Field::Mode);
+    let mut spans: Vec<Span<'static>> = Vec::new();
     spans.extend(label_m("", 'B', "and "));
     spans.push(styled_cycle(band_val, form.focused == Field::Band));
     spans.push(Span::raw("  "));
