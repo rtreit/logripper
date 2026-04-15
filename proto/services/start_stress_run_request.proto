@@ -1,0 +1,12 @@
+syntax = "proto3";
+
+package qsoripper.services;
+
+option csharp_namespace = "QsoRipper.Services";
+
+import "services/stress_run_configuration.proto";
+
+message StartStressRunRequest {
+  string profile_name = 1;
+  StressRunConfiguration configuration = 2;
+}

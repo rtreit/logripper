@@ -34,8 +34,8 @@ These instructions govern Rust work in QsoRipper, especially under `src/rust/`, 
   - `cargo test --manifest-path src/rust/Cargo.toml`
   - `cargo clippy --manifest-path src/rust/Cargo.toml --all-targets -- -D warnings`
 - For new Rust behavior and substantial Rust changes, also run the coverage gate locally:
-  - `cargo llvm-cov --manifest-path src/rust/Cargo.toml --all --lcov --output-path rust-coverage.lcov`
-  - `cargo llvm-cov report --manifest-path src/rust/Cargo.toml --summary-only`
+  - `cargo llvm-cov --manifest-path src/rust/Cargo.toml --workspace --exclude qsoripper-stress --exclude qsoripper-stress-tui --lcov --output-path rust-coverage.lcov`
+  - `cargo llvm-cov report --manifest-path src/rust/Cargo.toml --workspace --exclude qsoripper-stress --exclude qsoripper-stress-tui --summary-only`
 - Keep Rust line coverage at or above the current CI threshold (80%) and do not push Rust changes that already fail formatting, lint, test, coverage, `buf lint`, or `cargo deny` gates that apply to the change.
 - Rust formatting rules live in `src/rust/rustfmt.toml`; prefer changing that file over arguing style ad hoc.
 - Workspace lint policy lives in `src/rust/Cargo.toml`; keep shared Clippy and rustc lint defaults centralized there.

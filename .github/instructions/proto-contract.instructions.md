@@ -44,7 +44,7 @@ These instructions govern schema and gRPC contract work in `proto/` and any Rust
   - `dotnet build src/dotnet/QsoRipper.slnx`
 - For changes that affect generated .NET message surfaces or Debug Host inspection workflows, also keep the Debug Host sample-catalog tests green so new contracts remain visible in `/protobuf-lab`.
 - If the contract change introduces or changes runtime behavior in Rust or .NET, add coverage for the affected paths and rerun the relevant local quality gates before pushing:
-  - Rust: `cargo llvm-cov --manifest-path src/rust/Cargo.toml --all --lcov --output-path rust-coverage.lcov`
+  - Rust: `cargo llvm-cov --manifest-path src/rust/Cargo.toml --workspace --exclude qsoripper-stress --exclude qsoripper-stress-tui --lcov --output-path rust-coverage.lcov`
   - .NET: `dotnet test src/dotnet/QsoRipper.slnx --collect:"XPlat Code Coverage" --settings src/dotnet/CodeCoverage.runsettings --results-directory coverage`
 - Do not push proto/service changes that you already know will fail the corresponding quality or coverage gates in CI.
 - If the change affects runtime behavior, also smoke-test the live server with:

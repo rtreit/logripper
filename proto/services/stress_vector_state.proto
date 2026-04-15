@@ -1,0 +1,13 @@
+syntax = "proto3";
+
+package qsoripper.services;
+
+option csharp_namespace = "QsoRipper.Services";
+
+enum StressVectorState {
+  STRESS_VECTOR_STATE_UNSPECIFIED = 0;
+  STRESS_VECTOR_STATE_IDLE = 1;
+  STRESS_VECTOR_STATE_RUNNING = 2;
+  STRESS_VECTOR_STATE_COMPLETED = 3;
+  STRESS_VECTOR_STATE_FAILED = 4;
+}

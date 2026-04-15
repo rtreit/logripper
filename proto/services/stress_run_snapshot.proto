@@ -1,0 +1,29 @@
+syntax = "proto3";
+
+package qsoripper.services;
+
+option csharp_namespace = "QsoRipper.Services";
+
+import "google/protobuf/timestamp.proto";
+import "services/stress_log_entry.proto";
+import "services/stress_process_metrics.proto";
+import "services/stress_run_configuration.proto";
+import "services/stress_run_state.proto";
+import "services/stress_vector_status.proto";
+
+message StressRunSnapshot {
+  string run_id = 1;
+  StressRunState state = 2;
+  string active_profile_name = 3;
+  StressRunConfiguration configuration = 4;
+  optional google.protobuf.Timestamp started_at_utc = 5;
+  optional google.protobuf.Timestamp ended_at_utc = 6;
+  uint64 total_operations = 7;
+  double operations_per_second = 8;
+  uint64 error_count = 9;
+  uint64 internal_error_count = 10;
+  repeated StressVectorStatus vector_statuses = 11;
+  repeated StressProcessMetrics processes = 12;
+  repeated StressLogEntry recent_events = 13;
+  string status_message = 14;
+}

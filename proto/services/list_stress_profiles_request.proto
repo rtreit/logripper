@@ -1,0 +1,8 @@
+syntax = "proto3";
+
+package qsoripper.services;
+
+option csharp_namespace = "QsoRipper.Services";
+
+message ListStressProfilesRequest {
+}

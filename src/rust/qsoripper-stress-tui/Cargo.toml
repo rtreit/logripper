@@ -1,0 +1,18 @@
+[package]
+name = "qsoripper-stress-tui"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+crossterm = "0.28"
+qsoripper-core = { path = "../qsoripper-core", version = "0.1.0" }
+ratatui = "0.29"
+tokio = { workspace = true, features = ["process", "time"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
+tonic = { workspace = true }
+
+[lints]
+workspace = true

@@ -1,0 +1,22 @@
+[package]
+name = "qsoripper-stress"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+chrono = "0.4"
+difa = "0.1"
+prost-types = { workspace = true }
+qsoripper-core = { path = "../qsoripper-core", version = "0.1.0" }
+sysinfo = "0.33"
+tokio = { workspace = true, features = ["process", "signal", "time"] }
+tokio-stream = { version = "0.1", features = ["net", "sync"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+tonic = { workspace = true }
+uuid = { workspace = true }
+
+[lints]
+workspace = true

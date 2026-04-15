@@ -1,0 +1,9 @@
+syntax = "proto3";
+
+package qsoripper.services;
+
+option csharp_namespace = "QsoRipper.Services";
+
+message StopStressRunRequest {
+  bool force = 1;
+}

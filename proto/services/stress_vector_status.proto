@@ -1,0 +1,21 @@
+syntax = "proto3";
+
+package qsoripper.services;
+
+option csharp_namespace = "QsoRipper.Services";
+
+import "google/protobuf/timestamp.proto";
+import "services/stress_vector_state.proto";
+
+message StressVectorStatus {
+  string vector_id = 1;
+  string display_name = 2;
+  StressVectorState state = 3;
+  uint64 total_operations = 4;
+  double operations_per_second = 5;
+  uint64 error_count = 6;
+  uint64 internal_error_count = 7;
+  optional string last_error_message = 8;
+  optional string last_sample_input = 9;
+  google.protobuf.Timestamp last_activity_utc = 10;
+}

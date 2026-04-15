@@ -241,6 +241,41 @@ If you want the engine to stay running in the background while you log QSOs from
 
 `start-qsoripper.ps1` builds `qsoripper-server`, imports `.env`, starts the engine in the background from the repository root, respects `QSORIPPER_CONFIG_PATH` and `QSORIPPER_SQLITE_PATH` unless you override them with parameters, and writes process state plus stdout/stderr logs under `artifacts\run\`.
 
+**Stress host and dashboard:**
+
+```powershell
+cd src\rust
+cargo run -p qsoripper-stress
+```
+
+In a second terminal:
+
+```powershell
+cd src\rust
+cargo run -p qsoripper-stress-tui
+```
+
+The stress host listens on `127.0.0.1:50061` by default and exposes a developer-only gRPC control surface for starting, stopping, and monitoring long-haul stress runs. The TUI connects to that endpoint, renders per-vector activity, shows rolling calls-per-second plus process CPU and memory, and keeps a bounded recent-event log with representative sample inputs from the active vectors.
+
+Built-in stress profiles use a dedicated engine endpoint at `127.0.0.1:55051`. When the harness auto-starts that engine it points it at a separate stress-owned SQLite file under `artifacts\stress\storage\`. Stress runs do not reuse or mutate your normal logbook.
+
+Each stress run writes a persistent event log under `artifacts\stress\logs\stress-run-<run-id>.log`. The dashboard shows a bounded in-memory event pane, but the file is the durable place to check overnight panic, crash, and notable internal-failure details.
+
+When the dashboard targets a local loopback endpoint and no stress host is running yet, it auto-starts a local `qsoripper-stress` instance before entering the UI. Remote endpoints still need an already-running host.
+
+Use `cargo run -p qsoripper-stress -- --help` and `cargo run -p qsoripper-stress-tui -- --help` for alternate endpoints. The dashboard keymap is:
+
+| Key | Action |
+|---|---|
+| `s` | Start the selected profile |
+| `x` | Stop the active run |
+| `r` | Restart the selected profile |
+| `p` | Cycle between built-in profiles |
+| `tab` | Switch focus between vectors and events |
+| `up` / `down` | Move the current selection |
+| `esc` | Clear the current error banner |
+| `q` | Quit the dashboard |
+
 ### Avalonia GUI automation
 
 For repeatable desktop UX inspection, the Avalonia GUI now supports a fixture-backed live inspection mode plus a Windows automation driver. The driver builds the GUI into a per-run output folder under `artifacts\ux\automation-bin\`, launches it with deterministic fixture data, performs scripted UI actions, and saves screenshots plus UI tree dumps under `artifacts\ux\current\`.

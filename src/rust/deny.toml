@@ -87,7 +87,27 @@ reason = "Legacy transitive requirement from tonic 0.12/socket2 0.5 and ring on 
 [[bans.skip]]
 name = "windows-sys"
 version = "=0.59.0"
-reason = "Required by rustix 0.38 via crossterm on Linux; newer crates use windows-sys 0.61.x."
+reason = "Required by rustix 0.38 via crossterm (qsoripper-tui, qsoripper-stress-tui); newer crates use windows-sys 0.61.x."
+
+[[bans.skip]]
+name = "windows-result"
+version = "=0.1.2"
+reason = "sysinfo 0.33 via qsoripper-stress uses windows 0.57 which requires windows-result 0.1.2; other crates resolve windows-result 0.4.x via newer windows-core."
+
+[[bans.skip]]
+name = "windows-core"
+version = "=0.57.0"
+reason = "sysinfo 0.33 via qsoripper-stress uses windows 0.57 which requires windows-core 0.57; other crates resolve windows-core 0.62.x."
+
+[[bans.skip]]
+name = "windows-implement"
+version = "=0.57.0"
+reason = "sysinfo 0.33 via qsoripper-stress uses windows 0.57 which requires windows-implement 0.57; other crates resolve windows-implement 0.60.x."
+
+[[bans.skip]]
+name = "windows-interface"
+version = "=0.57.0"
+reason = "sysinfo 0.33 via qsoripper-stress uses windows 0.57 which requires windows-interface 0.57; other crates resolve windows-interface 0.59.x."
 
 [sources]
 unknown-registry = "deny"

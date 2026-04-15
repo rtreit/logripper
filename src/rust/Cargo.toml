@@ -5,6 +5,8 @@ members = [
     "qsoripper-server",
     "qsoripper-storage-memory",
     "qsoripper-storage-sqlite",
+    "qsoripper-stress",
+    "qsoripper-stress-tui",
     "qsoripper-tui",
 ]
 

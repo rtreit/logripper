@@ -1,0 +1,16 @@
+syntax = "proto3";
+
+package qsoripper.services;
+
+option csharp_namespace = "QsoRipper.Services";
+
+message StressRunConfiguration {
+  string engine_endpoint = 1;
+  uint32 duration_seconds = 2;
+  uint32 grpc_parallelism = 3;
+  uint32 metrics_interval_ms = 4;
+  uint32 recent_event_limit = 5;
+  bool include_core_vectors = 6;
+  bool include_grpc_vectors = 7;
+  bool auto_start_engine = 8;
+}
