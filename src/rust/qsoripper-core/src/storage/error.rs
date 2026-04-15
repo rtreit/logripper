@@ -40,3 +40,44 @@ impl StorageError {
         Self::Backend(message.into())
     }
 }
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::panic)]
+mod tests {
+    use super::StorageError;
+
+    #[test]
+    fn duplicate_creates_error_with_entity_and_key() {
+        let err = StorageError::duplicate("QSO", "abc-123");
+        match err {
+            StorageError::Duplicate { entity, key } => {
+                assert_eq!(entity, "QSO");
+                assert_eq!(key, "abc-123");
+            }
+            _ => panic!("expected Duplicate variant"),
+        }
+    }
+
+    #[test]
+    fn duplicate_display_contains_entity_and_key() {
+        let err = StorageError::duplicate("Station", "K7ABC");
+        let display = err.to_string();
+        assert!(display.contains("Station"));
+        assert!(display.contains("K7ABC"));
+    }
+
+    #[test]
+    fn backend_creates_error_with_message() {
+        let err = StorageError::backend("disk full");
+        match err {
+            StorageError::Backend(msg) => assert_eq!(msg, "disk full"),
+            _ => panic!("expected Backend variant"),
+        }
+    }
+
+    #[test]
+    fn backend_display_contains_message() {
+        let err = StorageError::backend("connection lost");
+        assert!(err.to_string().contains("connection lost"));
+    }
+}

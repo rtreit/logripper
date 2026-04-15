@@ -5,6 +5,10 @@ all-features = true
 [advisories]
 db-urls = ["https://github.com/rustsec/advisory-db"]
 
+[[advisories.ignore]]
+id = "RUSTSEC-2024-0436"
+reason = "paste is unmaintained but no safe upgrade exists for ratatui 0.29; low risk proc-macro crate"
+
 [licenses]
 allow = [
   "MIT",
@@ -16,6 +20,8 @@ allow = [
   # webpki-roots certificate bundle data
   "CDLA-Permissive-2.0",
   "Unicode-3.0",
+  # foldhash (via hashbrown 0.15 via lru via ratatui)
+  "Zlib",
 ]
 confidence-threshold = 0.8
 
@@ -34,9 +40,29 @@ version = "=0.12.3"
 reason = "Pulled by the tonic 0.12 transport stack via indexmap 1.x while the rest of the graph is already on indexmap 2.x."
 
 [[bans.skip]]
+name = "hashbrown"
+version = "=0.15.5"
+reason = "Required by lru via ratatui while the rest of the graph uses hashbrown 0.17.x via indexmap 2.x."
+
+[[bans.skip]]
 name = "indexmap"
 version = "=1.9.3"
 reason = "Pulled by the tonic 0.12 transport stack while newer dependencies resolve indexmap 2.x."
+
+[[bans.skip]]
+name = "itertools"
+version = "=0.13.0"
+reason = "Required by ratatui and unicode-truncate while prost-build/prost-derive use itertools 0.14.x."
+
+[[bans.skip]]
+name = "linux-raw-sys"
+version = "=0.4.15"
+reason = "Required by rustix 0.38 via crossterm; prost-build uses linux-raw-sys 0.12.x via rustix 1.x."
+
+[[bans.skip]]
+name = "rustix"
+version = "=0.38.44"
+reason = "Required by crossterm for terminal I/O; prost-build uses rustix 1.x via tempfile."
 
 [[bans.skip]]
 name = "socket2"
@@ -49,9 +75,19 @@ version = "=0.4.13"
 reason = "Used by tonic 0.12 transport; reqwest and newer Hyper/Axum dependencies use tower 0.5."
 
 [[bans.skip]]
+name = "unicode-width"
+version = "=0.1.14"
+reason = "Required by unicode-truncate via ratatui; ratatui also uses unicode-width 0.2.x directly."
+
+[[bans.skip]]
 name = "windows-sys"
 version = "=0.52.0"
 reason = "Legacy transitive requirement from tonic 0.12/socket2 0.5 and ring on Windows; newer crates resolve windows-sys 0.61."
+
+[[bans.skip]]
+name = "windows-sys"
+version = "=0.59.0"
+reason = "Required by rustix 0.38 via crossterm on Linux; newer crates use windows-sys 0.61.x."
 
 [sources]
 unknown-registry = "deny"

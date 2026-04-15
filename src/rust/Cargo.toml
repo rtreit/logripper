@@ -5,6 +5,7 @@ members = [
     "qsoripper-server",
     "qsoripper-storage-memory",
     "qsoripper-storage-sqlite",
+    "qsoripper-tui",
 ]
 
 [workspace.package]
