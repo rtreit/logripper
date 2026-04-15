@@ -15,6 +15,8 @@ pub mod lookup;
 pub mod proto;
 /// QRZ Logbook API client for bidirectional QSO sync.
 pub mod qrz_logbook;
+/// Rig control providers, normalization, and cached rig state snapshots.
+pub mod rig_control;
 /// Space weather providers, caching, and normalization.
 pub mod space_weather;
 /// Storage ports, errors, and query types for engine-owned persistence.

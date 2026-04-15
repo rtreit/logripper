@@ -1,0 +1,13 @@
+syntax = "proto3";
+
+package qsoripper.services;
+
+option csharp_namespace = "QsoRipper.Services";
+
+import "domain/rig_connection_status.proto";
+
+message GetRigStatusResponse {
+  qsoripper.domain.RigConnectionStatus status = 1;
+  optional string error_message = 2;
+  optional string endpoint = 3;
+}

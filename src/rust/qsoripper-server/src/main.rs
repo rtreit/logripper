@@ -23,6 +23,7 @@ use qsoripper_core::proto::qsoripper::services::{
     developer_control_service_server::{DeveloperControlService, DeveloperControlServiceServer},
     logbook_service_server::{LogbookService, LogbookServiceServer},
     lookup_service_server::{LookupService, LookupServiceServer},
+    rig_control_service_server::{RigControlService, RigControlServiceServer},
     setup_service_server::SetupServiceServer,
     space_weather_service_server::{SpaceWeatherService, SpaceWeatherServiceServer},
     station_profile_service_server::StationProfileServiceServer,
@@ -30,13 +31,18 @@ use qsoripper_core::proto::qsoripper::services::{
     BatchLookupResponse, DeleteQsoRequest, DeleteQsoResponse, ExportAdifRequest,
     ExportAdifResponse, GetCachedCallsignRequest, GetCachedCallsignResponse,
     GetCurrentSpaceWeatherRequest, GetCurrentSpaceWeatherResponse, GetDxccEntityRequest,
-    GetDxccEntityResponse, GetQsoRequest, GetQsoResponse, GetRuntimeConfigRequest,
+    GetDxccEntityResponse, GetQsoRequest, GetQsoResponse, GetRigSnapshotRequest,
+    GetRigSnapshotResponse, GetRigStatusRequest, GetRigStatusResponse, GetRuntimeConfigRequest,
     GetRuntimeConfigResponse, GetSyncStatusRequest, GetSyncStatusResponse, ImportAdifRequest,
     ImportAdifResponse, ListQsosRequest, ListQsosResponse, LogQsoRequest, LogQsoResponse,
     LookupRequest, LookupResponse, QsoSortOrder as ProtoQsoSortOrder, RefreshSpaceWeatherRequest,
     RefreshSpaceWeatherResponse, ResetRuntimeConfigRequest, ResetRuntimeConfigResponse,
     StreamLookupRequest, StreamLookupResponse, SyncWithQrzRequest, SyncWithQrzResponse,
-    UpdateQsoRequest, UpdateQsoResponse,
+    TestRigConnectionRequest, TestRigConnectionResponse, UpdateQsoRequest, UpdateQsoResponse,
+};
+use qsoripper_core::rig_control::{
+    RigControlProvider, RigctldConfig, RigctldProvider, DEFAULT_RIGCTLD_HOST, DEFAULT_RIGCTLD_PORT,
+    DEFAULT_RIGCTLD_READ_TIMEOUT_MS,
 };
 use runtime_config::RuntimeConfigManager;
 use setup::{
@@ -77,6 +83,7 @@ where
     let station_profile_service =
         StationProfileControlSurface::new(setup_state.clone(), runtime_config.clone());
     let space_weather_service = SpaceWeatherControlSurface::new(runtime_config.clone());
+    let rig_control_service = RigControlControlSurface::new(runtime_config.clone());
     let active_storage_backend = runtime_config.active_storage_backend().await;
     let setup_status = setup_state.status().await;
     let setup_completion = setup_completion_label(setup_status.setup_complete);
@@ -112,6 +119,7 @@ where
         .add_service(SetupServiceServer::new(setup_service))
         .add_service(StationProfileServiceServer::new(station_profile_service))
         .add_service(SpaceWeatherServiceServer::new(space_weather_service))
+        .add_service(RigControlServiceServer::new(rig_control_service))
         .add_service(DeveloperControlServiceServer::new(
             developer_control_service,
         ))
@@ -702,6 +710,102 @@ impl SpaceWeatherService for SpaceWeatherControlSurface {
         Ok(Response::new(RefreshSpaceWeatherResponse {
             snapshot: Some(snapshot),
         }))
+    }
+}
+
+#[derive(Clone)]
+struct RigControlControlSurface {
+    runtime_config: Arc<RuntimeConfigManager>,
+}
+
+impl RigControlControlSurface {
+    fn new(runtime_config: Arc<RuntimeConfigManager>) -> Self {
+        Self { runtime_config }
+    }
+}
+
+#[tonic::async_trait]
+impl RigControlService for RigControlControlSurface {
+    async fn get_rig_status(
+        &self,
+        _request: Request<GetRigStatusRequest>,
+    ) -> Result<Response<GetRigStatusResponse>, Status> {
+        let snapshot = self
+            .runtime_config
+            .rig_control_monitor()
+            .await
+            .current_snapshot()
+            .await;
+        Ok(Response::new(GetRigStatusResponse {
+            status: snapshot.status,
+            error_message: snapshot.error_message,
+            endpoint: None,
+        }))
+    }
+
+    async fn get_rig_snapshot(
+        &self,
+        _request: Request<GetRigSnapshotRequest>,
+    ) -> Result<Response<GetRigSnapshotResponse>, Status> {
+        let snapshot = self
+            .runtime_config
+            .rig_control_monitor()
+            .await
+            .current_snapshot()
+            .await;
+        Ok(Response::new(GetRigSnapshotResponse {
+            snapshot: Some(snapshot),
+        }))
+    }
+
+    async fn test_rig_connection(
+        &self,
+        request: Request<TestRigConnectionRequest>,
+    ) -> Result<Response<TestRigConnectionResponse>, Status> {
+        let inner = request.into_inner();
+        let effective_values = self.runtime_config.effective_values().await;
+
+        let host = inner.host.unwrap_or_else(|| {
+            effective_values
+                .get(qsoripper_core::rig_control::RIGCTLD_HOST_ENV_VAR)
+                .cloned()
+                .unwrap_or_else(|| DEFAULT_RIGCTLD_HOST.to_string())
+        });
+
+        let port = inner
+            .port
+            .and_then(|p| u16::try_from(p).ok())
+            .unwrap_or_else(|| {
+                effective_values
+                    .get(qsoripper_core::rig_control::RIGCTLD_PORT_ENV_VAR)
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(DEFAULT_RIGCTLD_PORT)
+            });
+
+        let read_timeout_ms = effective_values
+            .get(qsoripper_core::rig_control::RIGCTLD_READ_TIMEOUT_MS_ENV_VAR)
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(DEFAULT_RIGCTLD_READ_TIMEOUT_MS);
+
+        let config = RigctldConfig {
+            host,
+            port,
+            read_timeout: std::time::Duration::from_millis(read_timeout_ms),
+        };
+
+        let provider = RigctldProvider::new(config);
+        match provider.get_snapshot().await {
+            Ok(snapshot) => Ok(Response::new(TestRigConnectionResponse {
+                success: true,
+                error_message: None,
+                snapshot: Some(snapshot),
+            })),
+            Err(error) => Ok(Response::new(TestRigConnectionResponse {
+                success: false,
+                error_message: Some(error.to_string()),
+                snapshot: None,
+            })),
+        }
     }
 }
 

@@ -1,0 +1,11 @@
+syntax = "proto3";
+
+package qsoripper.services;
+
+option csharp_namespace = "QsoRipper.Services";
+
+import "domain/rig_snapshot.proto";
+
+message GetRigSnapshotResponse {
+  qsoripper.domain.RigSnapshot snapshot = 1;
+}

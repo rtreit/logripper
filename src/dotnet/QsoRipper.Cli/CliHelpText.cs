@@ -34,6 +34,9 @@ internal static class CliHelpText
               config [--set KEY=VALUE]         View or modify runtime config
               setup [--status | --from-env]    Interactive setup wizard or headless config
 
+            Rig Control:
+              rig-status                       Show rig connection and current state
+
             Options:
               --endpoint, -e <url>             Engine endpoint (default: http://127.0.0.1:50051)
               --skip-cache                     Bypass cache for lookup commands
@@ -47,10 +50,13 @@ internal static class CliHelpText
         return command switch
         {
             "log" => """
-                Usage: log <callsign> <band> <mode> [options]
+                Usage: log <callsign> [band] [mode] [options]
 
                 Log a new QSO. Auto-enriches with QRZ data (grid, country, etc.)
 
+                  --from-rig           Auto-fill band, mode, and frequency from the rig
+                  --band <band>        Override band (e.g., 20m)
+                  --mode <mode>        Override mode (e.g., CW)
                   --station <call>     Your station callsign (if not set via setup)
                   --at <time>          QSO time (default: now). Relative (30.minutes) or absolute.
                   --rst-sent <rst>     RST sent (e.g., 59, 599)
@@ -60,9 +66,14 @@ internal static class CliHelpText
                   --notes <text>       Notes text
                   --no-enrich          Skip automatic QRZ lookup enrichment
 
+                Without --from-rig, band and mode are required positional arguments.
+                With --from-rig, omitted values are filled from the rig. Explicit values
+                always take priority over rig-derived values.
+
                 Examples:
                   log W1AW 20m FT8
-                  log W1AW 40m CW --station AE7XI --rst-sent 599 --freq 7030 --comment "Nice signal"
+                  log W1AW --from-rig
+                  log W1AW 40m CW --from-rig --comment "Nice signal"
                   log K7ABV 20m SSB --at 30.minutes
                 """,
             "get" => """
@@ -179,6 +190,12 @@ internal static class CliHelpText
                 Usage: status
 
                 Show engine sync status and QSO counts.
+                """,
+            "rig-status" => """
+                Usage: rig-status
+
+                Show rig connection status, endpoint, and current radio state
+                (frequency, band, mode) when connected.
                 """,
             "sync" => """
                 Usage: sync [--force]
