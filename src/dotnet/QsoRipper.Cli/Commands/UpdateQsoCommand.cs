@@ -283,6 +283,12 @@ internal static class UpdateQsoCommand
                 case "--worked-county":
                     error = "Missing value for --worked-county.";
                     return false;
+                case "--skcc" when i < args.Length - 1:
+                    qso.Skcc = args[++i];
+                    break;
+                case "--skcc":
+                    error = "Missing value for --skcc.";
+                    return false;
                 default:
                     error = $"Unknown option: {args[i]}";
                     return false;

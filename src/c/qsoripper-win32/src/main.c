@@ -81,6 +81,7 @@ enum Field {
     FIELD_EXCHANGE_SENT, FIELD_EXCHANGE_RCVD,
     FIELD_PROP_MODE, FIELD_SAT_NAME, FIELD_SAT_MODE,
     FIELD_IOTA, FIELD_ARRL_SECTION, FIELD_WORKED_STATE, FIELD_WORKED_COUNTY,
+    FIELD_SKCC,
     FIELD_COUNT
 };
 
@@ -95,7 +96,7 @@ static const char *FIELD_LABELS[] = {
     "Serial Sent", "Serial Rcvd",
     "Exch Sent", "Exch Rcvd",
     "Prop Mode", "Sat Name", "Sat Mode",
-    "IOTA", "ARRL Sect", "State", "County"
+    "IOTA", "ARRL Sect", "State", "County", "SKCC"
 };
 
 static const int FIELD_MAX_LEN[] = {
@@ -109,7 +110,7 @@ static const int FIELD_MAX_LEN[] = {
     14, 14,             /* serial_sent, serial_rcvd */
     60, 60,             /* exchange_sent, exchange_rcvd */
     14, 30, 14,         /* prop_mode, sat_name, sat_mode */
-    14, 14, 14, 30      /* iota, arrl_section, worked_state, worked_county */
+    14, 14, 14, 30, 16  /* iota, arrl_section, worked_state, worked_county, skcc */
 };
 
 /* ── Recent QSO record ─────────────────────────────────────────────────── */
@@ -174,6 +175,7 @@ typedef struct {
     char arrl_section[16];
     char worked_state[16];
     char worked_county[32];
+    char skcc[16];
 
     /* Cursor positions per field */
     int cursor_pos[FIELD_COUNT];
@@ -491,6 +493,7 @@ static char *FieldBuffer(enum Field f)
     case FIELD_ARRL_SECTION:  return g_state.arrl_section;
     case FIELD_WORKED_STATE:  return g_state.worked_state;
     case FIELD_WORKED_COUNTY: return g_state.worked_county;
+    case FIELD_SKCC:          return g_state.skcc;
     default: return NULL; /* band/mode are cycle selectors, FIELD_COUNT sentinel */
     }
 }
@@ -576,6 +579,7 @@ static char FieldHotkey(enum Field f)
     case FIELD_SUBMODE:       return 'U';
     case FIELD_SERIAL_SENT:   return 'E';
     case FIELD_PROP_MODE:     return 'P';
+    case FIELD_SKCC:          return 'K';
     default:                  return 0;
     }
 }
@@ -759,6 +763,7 @@ static void ClearForm(void)
     g_state.arrl_section[0] = 0;
     g_state.worked_state[0] = 0;
     g_state.worked_county[0] = 0;
+    g_state.skcc[0] = 0;
 }
 
 static void SetStatus(const char *msg, int is_error)
@@ -838,6 +843,7 @@ static void LogQso(void)
     AppendArg(cmd, sizeof(cmd), "--arrl-section", g_state.arrl_section);
     AppendArg(cmd, sizeof(cmd), "--state", g_state.worked_state);
     AppendArg(cmd, sizeof(cmd), "--worked-county", g_state.worked_county);
+    AppendArg(cmd, sizeof(cmd), "--skcc", g_state.skcc);
 
     if (g_state.time_off[0] && g_state.date[0]) {
         char time_off_str[64];
@@ -1205,6 +1211,9 @@ static void LoadSelectedQso(void)
     v = json_get_string(result, "workedCounty");
     if (v) { safe_strcpy(g_state.worked_county, sizeof(g_state.worked_county), v); free(v); }
 
+    v = json_get_string(result, "skcc");
+    if (v) { safe_strcpy(g_state.skcc, sizeof(g_state.skcc), v); free(v); }
+
     safe_strcpy(g_state.editing_local_id, sizeof(g_state.editing_local_id), q->local_id);
 
     g_state.cursor_pos[FIELD_CALLSIGN] = (int)strlen(g_state.callsign);
@@ -1498,7 +1507,8 @@ static const enum Field ADV_TAB_TECHNICAL[] = {
 };
 
 static const enum Field ADV_TAB_AWARDS[] = {
-    FIELD_IOTA, FIELD_ARRL_SECTION, FIELD_WORKED_STATE, FIELD_WORKED_COUNTY
+    FIELD_IOTA, FIELD_ARRL_SECTION, FIELD_WORKED_STATE, FIELD_WORKED_COUNTY,
+    FIELD_SKCC
 };
 
 static const enum Field *ADV_TABS[] = {
@@ -2254,6 +2264,7 @@ static void OnKeyDown(HWND hwnd, WPARAM vk, LPARAM lp)
         case 'U': target = FIELD_SUBMODE; break;
         case 'E': target = FIELD_SERIAL_SENT; break;
         case 'P': target = FIELD_PROP_MODE; break;
+        case 'K': target = FIELD_SKCC; break;
         }
         if (target != FIELD_COUNT) {
             g_state.focused_field = target;
