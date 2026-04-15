@@ -1,0 +1,57 @@
+{
+  "inspectSurface": "MainWindow",
+  "window": {
+    "title": "QsoRipper",
+    "x": 80,
+    "y": 80,
+    "width": 1280,
+    "height": 760
+  },
+  "actions": [
+    {
+      "type": "wait",
+      "milliseconds": 600
+    },
+    {
+      "type": "screenshot",
+      "path": "callsign-card-before.png"
+    },
+    {
+      "type": "click",
+      "name": "W1AW",
+      "controlType": "Text"
+    },
+    {
+      "type": "wait",
+      "milliseconds": 300
+    },
+    {
+      "type": "screenshot",
+      "path": "callsign-card-row-selected.png"
+    },
+    {
+      "type": "send-keys",
+      "keys": "{F8}"
+    },
+    {
+      "type": "wait",
+      "milliseconds": 1500
+    },
+    {
+      "type": "screenshot",
+      "path": "callsign-card-open.png"
+    },
+    {
+      "type": "send-keys",
+      "keys": "{ESC}"
+    },
+    {
+      "type": "wait",
+      "milliseconds": 500
+    },
+    {
+      "type": "screenshot",
+      "path": "callsign-card-closed.png"
+    }
+  ]
+}

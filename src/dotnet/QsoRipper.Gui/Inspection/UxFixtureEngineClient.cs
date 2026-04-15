@@ -334,6 +334,66 @@ internal sealed class UxFixtureEngineClient : IEngineClient
         }
     }
 
+    public Task<LookupResponse> LookupCallsignAsync(string callsign, CancellationToken ct = default)
+    {
+        var record = new CallsignRecord
+        {
+            Callsign = callsign.ToUpperInvariant(),
+            FirstName = "Randy",
+            LastName = "Treit",
+            Nickname = "Randy",
+            FormattedName = "Randy Treit",
+            LicenseClass = "Extra",
+            Addr1 = "1234 Ham Radio Ln",
+            Addr2 = "Redmond",
+            State = "WA",
+            Zip = "98052",
+            Country = "United States",
+            GridSquare = "CN87",
+            County = "King",
+            Latitude = 47.6740,
+            Longitude = -122.1215,
+            Email = "fixture@example.com",
+            WebUrl = "https://www.qrz.com/db/" + callsign.ToUpperInvariant(),
+            CqZone = 3,
+            ItuZone = 2,
+            DxccCountryName = "United States",
+            DxccContinent = "NA",
+            Eqsl = QslPreference.Yes,
+            Lotw = QslPreference.Yes,
+            PaperQsl = QslPreference.No,
+            TimeZone = "America/Los_Angeles",
+        };
+
+        record.Aliases.Add("KD7BBJ");
+
+        var result = new LookupResult
+        {
+            State = LookupState.Found,
+            Record = record,
+            CacheHit = false,
+            LookupLatencyMs = 42,
+            QueriedCallsign = callsign,
+        };
+
+        return Task.FromResult(new LookupResponse { Result = result });
+    }
+
+    public Task<DeleteQsoResponse> DeleteQsoAsync(string localId, bool deleteFromQrz = false, CancellationToken ct = default)
+    {
+        lock (_gate)
+        {
+            var index = _recentQsos.FindIndex(item => string.Equals(item.LocalId, localId, StringComparison.Ordinal));
+            if (index < 0)
+            {
+                return Task.FromResult(new DeleteQsoResponse { Success = false, Error = "QSO not found." });
+            }
+
+            _recentQsos.RemoveAt(index);
+            return Task.FromResult(new DeleteQsoResponse { Success = true });
+        }
+    }
+
     private SetupStatus BuildSetupStatus()
     {
         var status = new SetupStatus

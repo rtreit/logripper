@@ -19,6 +19,7 @@
     <KeyBinding Gesture="Ctrl+Shift+S" Command="{Binding ToggleSortChooserCommand}" />
     <KeyBinding Gesture="Ctrl+H" Command="{Binding ToggleColumnChooserCommand}" />
     <KeyBinding Gesture="Alt+Enter" Command="{Binding ToggleInspectorCommand}" />
+    <KeyBinding Gesture="F8" Command="{Binding OpenCallsignCardCommand}" />
     <KeyBinding Gesture="F6" Command="{Binding SyncNowCommand}" />
   </Window.KeyBindings>
 
@@ -57,6 +58,18 @@
       <Setter Property="BorderThickness" Value="0" />
     </Style>
 
+    <!-- Hide white border lines on current/focused cell; use subtle background instead -->
+    <Style Selector="DataGrid#RecentQsoGrid DataGridCell:current /template/ Rectangle#CurrencyVisual">
+      <Setter Property="IsVisible" Value="False" />
+    </Style>
+    <Style Selector="DataGrid#RecentQsoGrid DataGridCell:focus /template/ Grid#FocusVisual">
+      <Setter Property="IsVisible" Value="False" />
+    </Style>
+    <Style Selector="DataGrid#RecentQsoGrid DataGridCell:current">
+      <Setter Property="Background" Value="#400078D7" />
+      <Setter Property="BorderBrush" Value="Transparent" />
+    </Style>
+
   </Window.Styles>
 
   <DockPanel ClipToBounds="True">
@@ -93,6 +106,8 @@
                   Command="{Binding ToggleColumnChooserCommand}" />
         <MenuItem Header="_Inspector" InputGesture="Alt+Enter"
                   Command="{Binding ToggleInspectorCommand}" />
+        <MenuItem Header="Callsign _Card" InputGesture="F8"
+                  Command="{Binding OpenCallsignCardCommand}" />
       </MenuItem>
       <MenuItem Header="_Tools">
         <MenuItem Header="Sync _Now" InputGesture="F6"
@@ -172,7 +187,7 @@
                     Command="{Binding OpenWizardCommand}"
                     Classes="accent"
                     MinWidth="62"
-                    Height="28"
+                    MinHeight="28"
                     IsVisible="{Binding IsSetupIncomplete}" />
             <TextBlock Classes="commandCaption"
                        Text="{Binding RecentQsos.RefreshIndicatorText}"
@@ -182,7 +197,7 @@
                     AutomationProperties.AutomationId="SyncNowButton"
                     Content="⟳ Sync"
                     Command="{Binding SyncNowCommand}"
-                    Height="28"
+                    MinHeight="28"
                     MinWidth="54"
                     ToolTip.Tip="Sync with QRZ (F6)" />
             <TextBlock Text="{Binding CurrentUtcTime}"
@@ -196,13 +211,13 @@
                     AutomationProperties.AutomationId="SortButton"
                     Content="Sort"
                     Command="{Binding ToggleSortChooserCommand}"
-                    Height="28"
+                    MinHeight="28"
                     MinWidth="54" />
             <Button x:Name="ColumnsButton"
                     AutomationProperties.AutomationId="ColumnsButton"
                     Content="Cols"
                     Command="{Binding ToggleColumnChooserCommand}"
-                    Height="28"
+                    MinHeight="28"
                     MinWidth="54" />
           </StackPanel>
         </Grid>
@@ -221,30 +236,94 @@
                          SelectedItem="{Binding RecentQsos.SelectedQso, Mode=TwoWay}">
                 <DataGrid.Columns>
                   <DataGridTextColumn Header="UTC"
-                                      Width="130"
+                                      Width="138"
                                       MinWidth="96"
                                       Binding="{ReflectionBinding UtcDisplay, Mode=TwoWay}"
                                       SortMemberPath="UtcSortKey" />
-                  <DataGridTextColumn Header="Call"
-                                      Width="88"
-                                      MinWidth="80"
-                                      Binding="{ReflectionBinding WorkedCallsign, Mode=TwoWay}"
-                                      SortMemberPath="WorkedCallsign" />
-                  <DataGridTextColumn Header="Band"
-                                      Width="72"
-                                      MinWidth="64"
-                                      Binding="{ReflectionBinding Band, Mode=TwoWay}"
-                                      SortMemberPath="Band" />
-                  <DataGridTextColumn Header="Mode"
-                                      Width="76"
-                                      MinWidth="64"
-                                      Binding="{ReflectionBinding Mode, Mode=TwoWay}"
-                                      SortMemberPath="Mode" />
-                  <DataGridTextColumn Header="Freq"
-                                      Width="82"
-                                      MinWidth="80"
-                                      Binding="{ReflectionBinding Frequency, Mode=TwoWay}"
-                                      SortMemberPath="FrequencySortKey" />
+                  <DataGridTemplateColumn Header="Call"
+                                          Width="88"
+                                          MinWidth="80"
+                                          SortMemberPath="WorkedCallsign">
+                    <DataGridTemplateColumn.CellTemplate>
+                      <DataTemplate x:DataType="vm:RecentQsoItemViewModel">
+                        <TextBlock Text="{Binding WorkedCallsign}"
+                                   FontWeight="SemiBold"
+                                   Foreground="#00d4ff"
+                                   TextTrimming="CharacterEllipsis"
+                                   VerticalAlignment="Center"
+                                   ToolTip.Tip="{Binding WorkedCallsign}" />
+                      </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                    <DataGridTemplateColumn.CellEditingTemplate>
+                      <DataTemplate x:DataType="vm:RecentQsoItemViewModel">
+                        <TextBox Text="{Binding WorkedCallsign, Mode=TwoWay}"
+                                 BorderThickness="0"
+                                 Padding="0"
+                                 Background="Transparent" />
+                      </DataTemplate>
+                    </DataGridTemplateColumn.CellEditingTemplate>
+                  </DataGridTemplateColumn>
+                  <DataGridTemplateColumn Header="Band"
+                                          Width="72"
+                                          MinWidth="64"
+                                          SortMemberPath="Band">
+                    <DataGridTemplateColumn.CellTemplate>
+                      <DataTemplate x:DataType="vm:RecentQsoItemViewModel">
+                        <TextBlock Text="{Binding Band}"
+                                   Foreground="#FFB347"
+                                   VerticalAlignment="Center" />
+                      </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                    <DataGridTemplateColumn.CellEditingTemplate>
+                      <DataTemplate x:DataType="vm:RecentQsoItemViewModel">
+                        <TextBox Text="{Binding Band, Mode=TwoWay}"
+                                 BorderThickness="0"
+                                 Padding="0"
+                                 Background="Transparent" />
+                      </DataTemplate>
+                    </DataGridTemplateColumn.CellEditingTemplate>
+                  </DataGridTemplateColumn>
+                  <DataGridTemplateColumn Header="Mode"
+                                          Width="76"
+                                          MinWidth="64"
+                                          SortMemberPath="Mode">
+                    <DataGridTemplateColumn.CellTemplate>
+                      <DataTemplate x:DataType="vm:RecentQsoItemViewModel">
+                        <TextBlock Text="{Binding Mode}"
+                                   Foreground="#77DD77"
+                                   VerticalAlignment="Center" />
+                      </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                    <DataGridTemplateColumn.CellEditingTemplate>
+                      <DataTemplate x:DataType="vm:RecentQsoItemViewModel">
+                        <TextBox Text="{Binding Mode, Mode=TwoWay}"
+                                 BorderThickness="0"
+                                 Padding="0"
+                                 Background="Transparent" />
+                      </DataTemplate>
+                    </DataGridTemplateColumn.CellEditingTemplate>
+                  </DataGridTemplateColumn>
+                  <DataGridTemplateColumn Header="Freq"
+                                          Width="82"
+                                          MinWidth="80"
+                                          SortMemberPath="FrequencySortKey">
+                    <DataGridTemplateColumn.CellTemplate>
+                      <DataTemplate x:DataType="vm:RecentQsoItemViewModel">
+                        <TextBlock Text="{Binding Frequency}"
+                                   FontFamily="Cascadia Mono, Consolas, monospace"
+                                   Foreground="#B0B0B0"
+                                   VerticalAlignment="Center" />
+                      </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                    <DataGridTemplateColumn.CellEditingTemplate>
+                      <DataTemplate x:DataType="vm:RecentQsoItemViewModel">
+                        <TextBox Text="{Binding Frequency, Mode=TwoWay}"
+                                 BorderThickness="0"
+                                 Padding="0"
+                                 Background="Transparent" />
+                      </DataTemplate>
+                    </DataGridTemplateColumn.CellEditingTemplate>
+                  </DataGridTemplateColumn>
                   <DataGridTextColumn Header="RST"
                                       Width="88"
                                       MinWidth="64"
@@ -264,6 +343,7 @@
                         <TextBlock Text="{Binding Country}"
                                    TextWrapping="NoWrap"
                                    TextTrimming="CharacterEllipsis"
+                                   VerticalAlignment="Center"
                                    ToolTip.Tip="{Binding Country}" />
                       </DataTemplate>
                     </DataGridTemplateColumn.CellTemplate>
@@ -285,6 +365,7 @@
                         <TextBlock Text="{Binding OperatorName}"
                                    TextWrapping="NoWrap"
                                    TextTrimming="CharacterEllipsis"
+                                   VerticalAlignment="Center"
                                    ToolTip.Tip="{Binding OperatorName}" />
                       </DataTemplate>
                     </DataGridTemplateColumn.CellTemplate>
@@ -316,6 +397,7 @@
                         <TextBlock Text="{Binding Contest}"
                                    TextWrapping="NoWrap"
                                    TextTrimming="CharacterEllipsis"
+                                   VerticalAlignment="Center"
                                    ToolTip.Tip="{Binding Contest}" />
                       </DataTemplate>
                     </DataGridTemplateColumn.CellTemplate>
@@ -342,6 +424,7 @@
                         <TextBlock Text="{Binding Note}"
                                    TextWrapping="NoWrap"
                                    TextTrimming="CharacterEllipsis"
+                                   VerticalAlignment="Center"
                                    ToolTip.Tip="{Binding Note}" />
                       </DataTemplate>
                     </DataGridTemplateColumn.CellTemplate>
@@ -383,6 +466,7 @@
                         <TextBlock Text="{Binding Qth}"
                                    TextWrapping="NoWrap"
                                    TextTrimming="CharacterEllipsis"
+                                   VerticalAlignment="Center"
                                    ToolTip.Tip="{Binding Qth}" />
                       </DataTemplate>
                     </DataGridTemplateColumn.CellTemplate>
@@ -563,6 +647,16 @@
               </ScrollViewer>
             </StackPanel>
           </Border>
+
+          <!-- Callsign Card overlay -->
+          <Border x:Name="CallsignCardPanel"
+                  AutomationProperties.AutomationId="CallsignCardPanel"
+                  HorizontalAlignment="Right"
+                  VerticalAlignment="Top"
+                  Margin="0,8,14,8"
+                  IsVisible="{Binding IsCallsignCardOpen}">
+            <v:CallsignCardView DataContext="{Binding CallsignCard}" />
+          </Border>
         </Panel>
 
         <Border Grid.Row="2"
@@ -599,7 +693,7 @@
             </StackPanel>
 
             <TextBlock Grid.Column="1"
-                       Text="F2 Edit • Ctrl+S Save • F5 Refresh • F6 Sync • Alt+Enter Details"
+                       Text="F2 Edit • Del Delete • Ctrl+S Save • F5 Refresh • F6 Sync • F8 Card • Alt+Enter Details"
                        FontSize="11.5"
                        Opacity="0.68"
                        VerticalAlignment="Center"
@@ -607,6 +701,45 @@
           </Grid>
         </Border>
       </Grid>
+
+      <!-- Delete confirmation overlay -->
+      <Border x:Name="DeleteConfirmOverlay"
+              AutomationProperties.AutomationId="DeleteConfirmOverlay"
+              IsVisible="{Binding RecentQsos.IsDeletePending}"
+              Background="#80000000">
+        <Border Background="{DynamicResource SystemControlBackgroundAltHighBrush}"
+                CornerRadius="8"
+                Padding="24"
+                HorizontalAlignment="Center"
+                VerticalAlignment="Center"
+                BoxShadow="0 8 24 0 #40000000"
+                MinWidth="320">
+          <StackPanel Spacing="16">
+            <TextBlock Text="Delete QSO?"
+                       FontSize="16"
+                       FontWeight="SemiBold" />
+            <TextBlock FontSize="13"
+                       TextWrapping="Wrap">
+              <Run Text="Permanently delete the QSO with " />
+              <Run Text="{Binding RecentQsos.DeleteConfirmCallsign}"
+                   FontWeight="Bold"
+                   Foreground="#00d4ff" />
+              <Run Text="?" />
+            </TextBlock>
+            <StackPanel Orientation="Horizontal"
+                        Spacing="10"
+                        HorizontalAlignment="Right">
+              <Button Content="Cancel"
+                      MinWidth="80"
+                      Command="{Binding RecentQsos.CancelDeleteCommand}" />
+              <Button Content="Delete"
+                      MinWidth="80"
+                      Classes="accent"
+                      Command="{Binding RecentQsos.ConfirmDeleteCommand}" />
+            </StackPanel>
+          </StackPanel>
+        </Border>
+      </Border>
 
       <Border x:Name="SetupWizardOverlay"
               AutomationProperties.AutomationId="SetupWizardOverlay"

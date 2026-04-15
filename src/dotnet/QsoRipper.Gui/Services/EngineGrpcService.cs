@@ -17,12 +17,14 @@ internal sealed class EngineGrpcService : IEngineClient, IDisposable
     private readonly GrpcChannel _channel;
     private readonly SetupService.SetupServiceClient _setupClient;
     private readonly LogbookService.LogbookServiceClient _logbookClient;
+    private readonly LookupService.LookupServiceClient _lookupClient;
 
     public EngineGrpcService(GrpcChannel channel)
     {
         _channel = channel;
         _setupClient = new SetupService.SetupServiceClient(channel);
         _logbookClient = new LogbookService.LogbookServiceClient(channel);
+        _lookupClient = new LookupService.LookupServiceClient(channel);
     }
 
     public async Task<GetSetupWizardStateResponse> GetWizardStateAsync(CancellationToken ct = default)
@@ -136,6 +138,31 @@ internal sealed class EngineGrpcService : IEngineClient, IDisposable
     {
         return await _logbookClient.GetSyncStatusAsync(
             new GetSyncStatusRequest(), cancellationToken: ct);
+    }
+
+    public async Task<LookupResponse> LookupCallsignAsync(string callsign, CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(callsign);
+
+        return await _lookupClient.LookupAsync(
+            new LookupRequest { Callsign = callsign },
+            cancellationToken: ct);
+    }
+
+    public async Task<DeleteQsoResponse> DeleteQsoAsync(
+        string localId,
+        bool deleteFromQrz = false,
+        CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(localId);
+
+        return await _logbookClient.DeleteQsoAsync(
+            new DeleteQsoRequest
+            {
+                LocalId = localId,
+                DeleteFromQrz = deleteFromQrz
+            },
+            cancellationToken: ct);
     }
 
     public void Dispose()

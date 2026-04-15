@@ -63,6 +63,12 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
     [ObservableProperty]
     private string _currentUtcDate = string.Empty;
 
+    [ObservableProperty]
+    private bool _isCallsignCardOpen;
+
+    [ObservableProperty]
+    private CallsignCardViewModel? _callsignCard;
+
     internal MainWindowViewModel(string endpoint)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(endpoint);
@@ -232,10 +238,44 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
     }
 
     [RelayCommand]
+    private void OpenCallsignCard()
+    {
+        var selectedQso = RecentQsos.SelectedQso;
+        if (selectedQso is null || string.IsNullOrWhiteSpace(selectedQso.WorkedCallsign))
+        {
+            return;
+        }
+
+        var vm = new CallsignCardViewModel(_engine);
+        vm.CloseRequested += OnCallsignCardCloseRequested;
+        CallsignCard = vm;
+        IsCallsignCardOpen = true;
+        _ = vm.LoadAsync(selectedQso.WorkedCallsign);
+    }
+
+    [RelayCommand]
+    private void CloseCallsignCard()
+    {
+        if (CallsignCard is { } card)
+        {
+            card.CloseRequested -= OnCallsignCardCloseRequested;
+        }
+
+        IsCallsignCardOpen = false;
+        CallsignCard = null;
+    }
+
+    private void OnCallsignCardCloseRequested(object? sender, EventArgs e)
+    {
+        CloseCallsignCard();
+    }
+
+    [RelayCommand]
     private void CloseTransientPanels()
     {
         IsSortChooserOpen = false;
         IsColumnChooserOpen = false;
+        CloseCallsignCard();
     }
 
     [RelayCommand]

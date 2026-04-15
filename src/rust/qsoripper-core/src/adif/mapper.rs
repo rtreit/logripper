@@ -132,6 +132,7 @@ impl AdifMapper {
                 }
                 "IOTA" => qso.worked_iota = Some(value_str.to_owned()),
                 "ARRL_SECT" => qso.worked_arrl_section = Some(value_str.to_owned()),
+                "SKCC" => qso.skcc = Some(value_str.to_owned()),
                 "MY_NAME" => {
                     station_snapshot
                         .get_or_insert_with(StationSnapshot::default)
@@ -454,6 +455,9 @@ impl AdifMapper {
         }
         if let Some(v) = qso.worked_arrl_section.as_deref() {
             push_field(&mut fields, "ARRL_SECT", v);
+        }
+        if let Some(v) = qso.skcc.as_deref() {
+            push_field(&mut fields, "SKCC", v);
         }
         if let Some(snapshot) = station_snapshot.as_ref() {
             if let Some(v) = snapshot.operator_name.as_deref() {
@@ -808,6 +812,8 @@ fn field_is_overridden(
         qso.worked_operator_callsign.is_some()
     } else if key.eq_ignore_ascii_case("ARRL_SECT") {
         qso.worked_arrl_section.is_some()
+    } else if key.eq_ignore_ascii_case("SKCC") {
+        qso.skcc.is_some()
     } else if key.eq_ignore_ascii_case("MY_NAME") {
         station_snapshot
             .and_then(|snapshot| snapshot.operator_name.as_ref())
@@ -1636,5 +1642,48 @@ mod tests {
             Some("W122 19.866".to_string()),
             format_adif_location(longitude, false)
         );
+    }
+
+    #[test]
+    fn record_to_qso_imports_skcc() {
+        let mut rec = Record::new();
+        rec.insert("CALL", "W1AW").unwrap();
+        rec.insert("SKCC", "12345T").unwrap();
+
+        let qso = AdifMapper::record_to_qso(&rec);
+        assert_eq!(qso.skcc.as_deref(), Some("12345T"));
+    }
+
+    #[test]
+    fn qso_to_adif_fields_exports_skcc() {
+        let qso = crate::proto::qsoripper::domain::QsoRecord {
+            worked_callsign: "W1AW".into(),
+            skcc: Some("12345T".into()),
+            ..Default::default()
+        };
+
+        let fields = AdifMapper::qso_to_adif_fields(&qso);
+        let skcc_values: Vec<&str> = fields
+            .iter()
+            .filter(|(k, _)| k == "SKCC")
+            .map(|(_, v)| v.as_str())
+            .collect();
+        assert_eq!(skcc_values, vec!["12345T"]);
+    }
+
+    #[test]
+    fn skcc_round_trips_through_adif() {
+        let mut rec = Record::new();
+        rec.insert("CALL", "K7ABC").unwrap();
+        rec.insert("SKCC", "999S").unwrap();
+
+        let qso = AdifMapper::record_to_qso(&rec);
+        let fields = AdifMapper::qso_to_adif_fields(&qso);
+        let skcc_out: Vec<&str> = fields
+            .iter()
+            .filter(|(k, _)| k == "SKCC")
+            .map(|(_, v)| v.as_str())
+            .collect();
+        assert_eq!(skcc_out, vec!["999S"]);
     }
 }

@@ -1,0 +1,22 @@
+{
+  "inspectSurface": "MainWindow",
+  "window": {
+    "title": "QsoRipper",
+    "x": 80,
+    "y": 80,
+    "width": 1280,
+    "height": 760
+  },
+  "actions": [
+    { "type": "wait", "milliseconds": 800 },
+    {
+      "comment": "Click the Name cell in first row to select it",
+      "type": "click",
+      "name": "ARRL HQ",
+      "controlType": "Text"
+    },
+    { "type": "wait", "milliseconds": 400 },
+    { "type": "dump-tree", "path": "cell-tree.json" },
+    { "type": "screenshot", "path": "cell-selected.png" }
+  ]
+}
