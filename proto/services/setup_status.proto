@@ -6,6 +6,7 @@ option csharp_namespace = "QsoRipper.Services";
 
 import "domain/station_profile.proto";
 import "domain/sync_config.proto";
+import "services/rig_control_settings.proto";
 import "services/storage_backend.proto";
 
 message SetupStatus {
@@ -33,4 +34,6 @@ message SetupStatus {
   bool has_qrz_logbook_api_key = 17;
   // Current sync configuration, if set.
   optional qsoripper.domain.SyncConfig sync_config = 18;
+  // Current persisted rig control configuration, if set.
+  optional RigControlSettings rig_control = 19;
 }

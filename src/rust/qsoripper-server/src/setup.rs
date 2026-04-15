@@ -17,13 +17,14 @@ use qsoripper_core::proto::qsoripper::services::{
     DeleteStationProfileResponse, GetActiveStationContextRequest, GetActiveStationContextResponse,
     GetSetupStatusRequest, GetSetupStatusResponse, GetSetupWizardStateRequest,
     GetSetupWizardStateResponse, GetStationProfileRequest, GetStationProfileResponse,
-    ListStationProfilesRequest, ListStationProfilesResponse, SaveSetupRequest, SaveSetupResponse,
-    SaveStationProfileRequest, SaveStationProfileResponse, SetActiveStationProfileRequest,
-    SetActiveStationProfileResponse, SetSessionStationProfileOverrideRequest,
-    SetSessionStationProfileOverrideResponse, SetupFieldValidation, SetupStatus, SetupWizardStep,
-    SetupWizardStepStatus, StationProfileRecord, StorageBackend, TestQrzCredentialsRequest,
-    TestQrzCredentialsResponse, TestQrzLogbookCredentialsRequest,
-    TestQrzLogbookCredentialsResponse, ValidateSetupStepRequest, ValidateSetupStepResponse,
+    ListStationProfilesRequest, ListStationProfilesResponse, RigControlSettings, SaveSetupRequest,
+    SaveSetupResponse, SaveStationProfileRequest, SaveStationProfileResponse,
+    SetActiveStationProfileRequest, SetActiveStationProfileResponse,
+    SetSessionStationProfileOverrideRequest, SetSessionStationProfileOverrideResponse,
+    SetupFieldValidation, SetupStatus, SetupWizardStep, SetupWizardStepStatus,
+    StationProfileRecord, StorageBackend, TestQrzCredentialsRequest, TestQrzCredentialsResponse,
+    TestQrzLogbookCredentialsRequest, TestQrzLogbookCredentialsResponse, ValidateSetupStepRequest,
+    ValidateSetupStepResponse,
 };
 use qsoripper_core::qrz_logbook::{QrzLogbookClient, QrzLogbookConfig};
 use qsoripper_core::rig_control::{
@@ -623,6 +624,11 @@ impl PersistedSetupConfig {
             config.sync = PersistedSyncConfig::from_proto(sync_config);
         }
 
+        // Rig control config: update when explicitly provided, otherwise keep existing.
+        if let Some(ref rig_control) = request.rig_control {
+            config.rig_control = PersistedRigControlConfig::from_proto(rig_control)?;
+        }
+
         config.sync_active_station_profile();
 
         Ok(config)
@@ -1141,6 +1147,61 @@ impl PersistedRigControlConfig {
             && config.read_timeout_ms.is_none()
             && config.stale_threshold_ms.is_none()
     }
+
+    fn from_proto(rig_control: &RigControlSettings) -> Result<Self, String> {
+        let port = match rig_control.port {
+            Some(0) => {
+                return Err("Rig control port must be between 1 and 65535.".to_string());
+            }
+            Some(port) => Some(
+                u16::try_from(port)
+                    .map_err(|_| "Rig control port must be between 1 and 65535.".to_string())?,
+            ),
+            None => None,
+        };
+
+        let read_timeout_ms = match rig_control.read_timeout_ms {
+            Some(0) => {
+                return Err(
+                    "Rig control read timeout must be greater than 0 milliseconds.".to_string(),
+                );
+            }
+            Some(value) => Some(value),
+            None => None,
+        };
+
+        let stale_threshold_ms = match rig_control.stale_threshold_ms {
+            Some(0) => {
+                return Err(
+                    "Rig control stale threshold must be greater than 0 milliseconds.".to_string(),
+                );
+            }
+            Some(value) => Some(value),
+            None => None,
+        };
+
+        Ok(Self {
+            enabled: rig_control.enabled,
+            host: normalize_optional_string(rig_control.host.as_deref()),
+            port,
+            read_timeout_ms,
+            stale_threshold_ms,
+        })
+    }
+
+    fn to_proto(&self) -> Option<RigControlSettings> {
+        if Self::is_empty(self) {
+            return None;
+        }
+
+        Some(RigControlSettings {
+            enabled: self.enabled,
+            host: self.host.clone(),
+            port: self.port.map(u32::from),
+            read_timeout_ms: self.read_timeout_ms,
+            stale_threshold_ms: self.stale_threshold_ms,
+        })
+    }
 }
 
 pub(crate) fn default_config_path() -> Result<PathBuf, String> {
@@ -1264,6 +1325,7 @@ fn build_status(
             .and_then(|config| config.qrz_logbook.api_key.as_ref())
             .is_some(),
         sync_config: persisted_config.map(|config| config.sync.to_proto()),
+        rig_control: persisted_config.and_then(|config| config.rig_control.to_proto()),
     }
 }
 
@@ -1727,16 +1789,19 @@ mod tests {
         build_station_profiles_step, build_wizard_steps, default_config_path,
         suggested_log_file_path, validate_log_file_step, validate_qrz_step,
         validate_station_profiles_step, PersistedSetupConfig, SetupControlSurface, SetupState,
-        StationProfileControlSurface, DEFAULT_CONFIG_FILE_NAME,
+        StationProfileControlSurface, DEFAULT_CONFIG_FILE_NAME, RIGCTLD_ENABLED_ENV_VAR,
+        RIGCTLD_HOST_ENV_VAR, RIGCTLD_PORT_ENV_VAR, RIGCTLD_READ_TIMEOUT_MS_ENV_VAR,
+        RIGCTLD_STALE_THRESHOLD_MS_ENV_VAR,
     };
     use crate::runtime_config::RuntimeConfigManager;
     use qsoripper_core::proto::qsoripper::domain::{ConflictPolicy, StationProfile, SyncConfig};
     use qsoripper_core::proto::qsoripper::services::{
         setup_service_server::SetupService, station_profile_service_server::StationProfileService,
         GetActiveStationContextRequest, GetSetupStatusRequest, GetSetupWizardStateRequest,
-        ListStationProfilesRequest, SaveSetupRequest, SaveStationProfileRequest,
-        SetActiveStationProfileRequest, SetSessionStationProfileOverrideRequest, SetupWizardStep,
-        StorageBackend, ValidateSetupStepRequest,
+        ListStationProfilesRequest, RigControlSettings, SaveSetupRequest,
+        SaveStationProfileRequest, SetActiveStationProfileRequest,
+        SetSessionStationProfileOverrideRequest, SetupWizardStep, StorageBackend,
+        ValidateSetupStepRequest,
     };
 
     fn unique_config_path() -> std::path::PathBuf {
@@ -2752,6 +2817,149 @@ station_callsign = "K7RND"
     }
 
     #[tokio::test]
+    async fn save_setup_persists_rig_control_and_round_trips() {
+        let config_path = unique_config_path();
+        let log_file_path = absolute_log_file_path(&config_path, "rig-control.db");
+        let setup_state = Arc::new(SetupState::load(config_path.clone()).expect("setup state"));
+        let runtime_config = Arc::new(RuntimeConfigManager::new(BTreeMap::new()).expect("runtime"));
+        let service = SetupControlSurface::new(setup_state.clone(), runtime_config.clone());
+
+        let response = SetupService::save_setup(
+            &service,
+            Request::new(SaveSetupRequest {
+                log_file_path: Some(log_file_path),
+                station_profile: Some(StationProfile {
+                    station_callsign: "k7rnd".to_string(),
+                    ..StationProfile::default()
+                }),
+                rig_control: Some(RigControlSettings {
+                    enabled: Some(true),
+                    host: Some("127.0.0.1".to_string()),
+                    port: Some(4532),
+                    read_timeout_ms: Some(2500),
+                    stale_threshold_ms: Some(6000),
+                }),
+                ..Default::default()
+            }),
+        )
+        .await
+        .expect("save setup")
+        .into_inner();
+
+        let status = response.status.expect("status payload");
+        let rig_control = status.rig_control.expect("rig_control");
+        assert_eq!(Some(true), rig_control.enabled);
+        assert_eq!(Some("127.0.0.1"), rig_control.host.as_deref());
+        assert_eq!(Some(4532), rig_control.port);
+        assert_eq!(Some(2500), rig_control.read_timeout_ms);
+        assert_eq!(Some(6000), rig_control.stale_threshold_ms);
+
+        let saved_toml = fs::read_to_string(&config_path).expect("read config");
+        let parsed =
+            toml::from_str::<PersistedSetupConfig>(&saved_toml).expect("parse saved config");
+        assert_eq!(Some(true), parsed.rig_control.enabled);
+        assert_eq!(Some("127.0.0.1"), parsed.rig_control.host.as_deref());
+        assert_eq!(Some(4532), parsed.rig_control.port);
+        assert_eq!(Some(2500), parsed.rig_control.read_timeout_ms);
+        assert_eq!(Some(6000), parsed.rig_control.stale_threshold_ms);
+
+        let runtime_values = setup_state.runtime_config_values().await;
+        assert_eq!(
+            Some("true"),
+            runtime_values
+                .get(RIGCTLD_ENABLED_ENV_VAR)
+                .map(String::as_str)
+        );
+        assert_eq!(
+            Some("127.0.0.1"),
+            runtime_values.get(RIGCTLD_HOST_ENV_VAR).map(String::as_str)
+        );
+        assert_eq!(
+            Some("4532"),
+            runtime_values.get(RIGCTLD_PORT_ENV_VAR).map(String::as_str)
+        );
+        assert_eq!(
+            Some("2500"),
+            runtime_values
+                .get(RIGCTLD_READ_TIMEOUT_MS_ENV_VAR)
+                .map(String::as_str)
+        );
+        assert_eq!(
+            Some("6000"),
+            runtime_values
+                .get(RIGCTLD_STALE_THRESHOLD_MS_ENV_VAR)
+                .map(String::as_str)
+        );
+
+        drop(service);
+        drop(runtime_config);
+        drop(setup_state);
+
+        let config_directory = config_path.parent().expect("config directory");
+        let _ = fs::remove_dir_all(config_directory);
+    }
+
+    #[tokio::test]
+    async fn save_setup_preserves_rig_control_when_omitted_in_subsequent_save() {
+        let config_path = unique_config_path();
+        let log_file_path = absolute_log_file_path(&config_path, "preserve-rig-control.db");
+        let setup_state = Arc::new(SetupState::load(config_path.clone()).expect("setup state"));
+        let runtime_config = Arc::new(RuntimeConfigManager::new(BTreeMap::new()).expect("runtime"));
+        let service = SetupControlSurface::new(setup_state.clone(), runtime_config.clone());
+
+        SetupService::save_setup(
+            &service,
+            Request::new(SaveSetupRequest {
+                log_file_path: Some(log_file_path.clone()),
+                station_profile: Some(StationProfile {
+                    station_callsign: "k7rnd".to_string(),
+                    ..StationProfile::default()
+                }),
+                rig_control: Some(RigControlSettings {
+                    enabled: Some(true),
+                    host: Some("127.0.0.1".to_string()),
+                    port: Some(4532),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+        )
+        .await
+        .expect("first save");
+
+        let response = SetupService::save_setup(
+            &service,
+            Request::new(SaveSetupRequest {
+                log_file_path: Some(log_file_path),
+                station_profile: Some(StationProfile {
+                    station_callsign: "k7rnd".to_string(),
+                    ..StationProfile::default()
+                }),
+                ..Default::default()
+            }),
+        )
+        .await
+        .expect("second save")
+        .into_inner();
+
+        let rig_control = response
+            .status
+            .expect("status payload")
+            .rig_control
+            .expect("rig_control");
+        assert_eq!(Some(true), rig_control.enabled);
+        assert_eq!(Some("127.0.0.1"), rig_control.host.as_deref());
+        assert_eq!(Some(4532), rig_control.port);
+
+        drop(service);
+        drop(runtime_config);
+        drop(setup_state);
+
+        let config_directory = config_path.parent().expect("config directory");
+        let _ = fs::remove_dir_all(config_directory);
+    }
+
+    #[tokio::test]
     async fn save_setup_preserves_logbook_key_when_omitted_in_subsequent_save() {
         let config_path = unique_config_path();
         let log_file_path = absolute_log_file_path(&config_path, "preserve-key.db");
@@ -2836,5 +3044,40 @@ station_callsign = "K7RND"
 
         let back = persisted.to_proto();
         assert_eq!(300, back.sync_interval_seconds);
+    }
+
+    #[test]
+    fn persisted_rig_control_config_round_trips_through_proto() {
+        let proto = RigControlSettings {
+            enabled: Some(true),
+            host: Some("127.0.0.1".to_string()),
+            port: Some(4532),
+            read_timeout_ms: Some(2000),
+            stale_threshold_ms: Some(5000),
+        };
+        let persisted =
+            super::PersistedRigControlConfig::from_proto(&proto).expect("rig control config");
+        assert_eq!(Some(true), persisted.enabled);
+        assert_eq!(Some("127.0.0.1"), persisted.host.as_deref());
+        assert_eq!(Some(4532), persisted.port);
+        assert_eq!(Some(2000), persisted.read_timeout_ms);
+        assert_eq!(Some(5000), persisted.stale_threshold_ms);
+
+        let back = persisted.to_proto().expect("rig control proto");
+        assert_eq!(proto.enabled, back.enabled);
+        assert_eq!(proto.host, back.host);
+        assert_eq!(proto.port, back.port);
+        assert_eq!(proto.read_timeout_ms, back.read_timeout_ms);
+        assert_eq!(proto.stale_threshold_ms, back.stale_threshold_ms);
+    }
+
+    #[test]
+    fn persisted_rig_control_config_rejects_invalid_port() {
+        let error = super::PersistedRigControlConfig::from_proto(&RigControlSettings {
+            port: Some(u32::from(u16::MAX) + 1),
+            ..Default::default()
+        })
+        .expect_err("invalid port should be rejected");
+        assert_eq!("Rig control port must be between 1 and 65535.", error);
     }
 }

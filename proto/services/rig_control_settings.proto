@@ -1,0 +1,14 @@
+syntax = "proto3";
+
+package qsoripper.services;
+
+option csharp_namespace = "QsoRipper.Services";
+
+// Persisted engine-wide rigctld settings.
+message RigControlSettings {
+  optional bool enabled = 1;
+  optional string host = 2;
+  optional uint32 port = 3;
+  optional uint64 read_timeout_ms = 4;
+  optional uint64 stale_threshold_ms = 5;
+}
