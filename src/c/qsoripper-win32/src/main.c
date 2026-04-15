@@ -28,6 +28,12 @@
 #define MAX_RECENT      50
 #define MAX_FIELD_LEN   256
 
+/* ── Menu item IDs ─────────────────────────────────────────────────────── */
+
+#define IDM_FILE_EXIT        1001
+#define IDM_HELP_KEYBOARD    1101
+#define IDM_HELP_ABOUT       1102
+
 /* ── Color palette (Win2K classic theme) ────────────────────────────────── */
 
 #define CLR_BG          RGB(212, 208, 200)  /* COLOR_BTNFACE */
@@ -2605,11 +2611,47 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         /* Start timer */
         SetTimer(hwnd, TIMER_ID, TIMER_MS, NULL);
 
+        /* Build menu bar */
+        {
+            HMENU hMenuBar = CreateMenu();
+
+            HMENU hFile = CreatePopupMenu();
+            AppendMenuW(hFile, MF_STRING, IDM_FILE_EXIT, L"E&xit\tAlt+F4");
+
+            HMENU hHelp = CreatePopupMenu();
+            AppendMenuW(hHelp, MF_STRING, IDM_HELP_KEYBOARD, L"&Keyboard Shortcuts\tF1");
+            AppendMenuW(hHelp, MF_STRING, IDM_HELP_ABOUT,    L"&About QsoRipper");
+
+            AppendMenuW(hMenuBar, MF_POPUP, (UINT_PTR)hFile, L"&File");
+            AppendMenuW(hMenuBar, MF_POPUP, (UINT_PTR)hHelp, L"&Help");
+
+            SetMenu(hwnd, hMenuBar);
+        }
+
         /* Initial data load (async-ish — runs synchronously but fast) */
         RefreshQsoList();
         FetchSpaceWeather();
         break;
     }
+
+    case WM_COMMAND:
+        switch (LOWORD(wParam)) {
+        case IDM_FILE_EXIT:
+            DestroyWindow(hwnd);
+            break;
+        case IDM_HELP_KEYBOARD:
+            g_state.help_visible = !g_state.help_visible;
+            InvalidateRect(hwnd, NULL, FALSE);
+            break;
+        case IDM_HELP_ABOUT:
+            MessageBoxW(hwnd,
+                L"QsoRipper\r\n\r\n"
+                L"Keyboard-first ham radio logging.\r\n\r\n"
+                L"Press F1 for keyboard shortcuts.",
+                L"About QsoRipper", MB_OK | MB_ICONINFORMATION);
+            break;
+        }
+        break;
 
     case WM_DESTROY:
         KillTimer(hwnd, TIMER_ID);
