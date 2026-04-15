@@ -85,7 +85,7 @@ async fn run<B: ratatui::backend::Backend>(
         let ep = app.endpoint.clone();
         tokio::spawn(async move {
             if let Ok(ch) = grpc::create_channel(&ep).await {
-                if let Ok(qsos) = grpc::list_recent_qsos(ch, 20).await {
+                if let Ok(qsos) = grpc::list_recent_qsos(ch, 0).await {
                     let _ = tx.send(AppEvent::RecentQsos(qsos));
                 }
             }
@@ -196,10 +196,12 @@ fn handle_event(
                 }
             }
             // Enrich QSOs that have no operator name from the lookup cache.
+            // Cap to the first 50 to avoid flooding the engine with lookups.
             let unnamed: Vec<(String, String)> = app
                 .recent_qsos
                 .iter()
                 .filter(|q| q.name.is_none())
+                .take(50)
                 .map(|q| (q.local_id.clone(), q.callsign.clone()))
                 .collect();
             if !unnamed.is_empty() {
@@ -697,7 +699,7 @@ fn refresh_recent_qsos(event_tx: &mpsc::UnboundedSender<AppEvent>, endpoint: &st
     let ep = endpoint.to_string();
     tokio::spawn(async move {
         if let Ok(ch) = grpc::create_channel(&ep).await {
-            if let Ok(qsos) = grpc::list_recent_qsos(ch, 20).await {
+            if let Ok(qsos) = grpc::list_recent_qsos(ch, 0).await {
                 let _ = tx.send(AppEvent::RecentQsos(qsos));
             }
         }
