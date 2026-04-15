@@ -15,7 +15,7 @@ use crate::ui::log_form::styled_field;
 /// Render the advanced field entry form into `area`.
 pub(super) fn render(app: &App, frame: &mut Frame, area: Rect) {
     let block = Block::bordered()
-        .title(" Advanced Fields  (F2/Esc to return | F5/F6 to switch tabs) ")
+        .title(" Advanced Fields  (F2/Esc return | Alt+1-4 tabs | F5/F6 cycle) ")
         .border_style(Style::default().fg(Color::Magenta));
 
     let inner = block.inner(area);
@@ -51,20 +51,22 @@ pub(super) fn render(app: &App, frame: &mut Frame, area: Rect) {
 fn render_tab_bar(frame: &mut Frame, area: Rect, active: AdvancedTab) {
     let mut spans: Vec<Span<'static>> = Vec::new();
     for &tab in AdvancedTab::ALL {
-        let label = format!(" {} ", tab.label());
+        let digit = tab.shortcut_digit().to_string();
+        let name = tab.label().to_string();
+        let label_text = format!(" {name} ");
         if tab == active {
-            spans.push(Span::styled(
-                label,
-                Style::default()
-                    .fg(Color::Black)
-                    .bg(Color::Magenta)
-                    .add_modifier(Modifier::BOLD),
-            ));
+            let base = Style::default()
+                .fg(Color::Black)
+                .bg(Color::Magenta)
+                .add_modifier(Modifier::BOLD);
+            spans.push(Span::styled(" ", base));
+            spans.push(Span::styled(digit, base.add_modifier(Modifier::UNDERLINED)));
+            spans.push(Span::styled(label_text, base));
         } else {
-            spans.push(Span::styled(
-                label,
-                Style::default().fg(Color::Magenta).bg(Color::Reset),
-            ));
+            let base = Style::default().fg(Color::Magenta).bg(Color::Reset);
+            spans.push(Span::styled(" ", base));
+            spans.push(Span::styled(digit, base.add_modifier(Modifier::UNDERLINED)));
+            spans.push(Span::styled(label_text, base));
         }
         spans.push(Span::raw(" "));
     }
@@ -73,15 +75,16 @@ fn render_tab_bar(frame: &mut Frame, area: Rect, active: AdvancedTab) {
 
 #[expect(
     clippy::too_many_lines,
-    reason = "renders six content rows plus a hint line for the main tab"
+    reason = "renders seven content rows plus a hint line for the main tab"
 )]
-fn render_main_tab(frame: &mut Frame, area: Rect, form: &crate::form::LogForm, wide: usize) {
+fn render_main_tab(frame: &mut Frame, area: Rect, form: &crate::form::LogForm, _wide: usize) {
     if area.height == 0 {
         return;
     }
     let rows = Layout::vertical([
         Constraint::Length(1), // callsign / band / mode
-        Constraint::Length(1), // freq / date / time / time-off
+        Constraint::Length(1), // freq / date
+        Constraint::Length(1), // time / time-off
         Constraint::Length(1), // qth / name
         Constraint::Length(1), // rst sent / rst rcvd
         Constraint::Length(1), // comment
@@ -100,7 +103,7 @@ fn render_main_tab(frame: &mut Frame, area: Rect, form: &crate::form::LogForm, w
         let band_val = cycle_adv(form.band_str(), band_focused);
         let mode_val = cycle_adv(form.mode_str(), mode_focused);
         let mut spans: Vec<Span<'static>> = Vec::new();
-        spans.extend(kl("", 'c', "allsign "));
+        spans.extend(kl("", 'c', "allsign  "));
         spans.push(styled_field(cs_val, cs_focused, cs_selected));
         spans.push(Span::raw("  "));
         spans.extend(kl("", 'b', "and "));
@@ -137,97 +140,145 @@ fn render_main_tab(frame: &mut Frame, area: Rect, form: &crate::form::LogForm, w
         frame.render_widget(Paragraph::new(Line::from(spans)), row);
     }
 
-    // Row 1: [F]req  [D]ate  [T]ime  T[e]nd (time off)
+    // Row 1: [F]req MHz (left half) | [D]ate (right half)
     if let Some(row) = rows.get(1).copied() {
+        let cols =
+            Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)]).split(row);
         let ff = form.focused == Field::FrequencyMhz;
         let fs = ff && form.field_selected;
         let df = form.focused == Field::Date;
         let ds = df && form.field_selected;
+        if let Some(&left) = cols.first() {
+            let fw = (left.width as usize).saturating_sub(10).max(5);
+            let fv = adv_field(&form.frequency_mhz, ff, fs, fw);
+            let mut s: Vec<Span<'static>> = Vec::new();
+            s.extend(kl("", 'f', "req MHz  "));
+            s.push(styled_field(fv, ff, fs));
+            frame.render_widget(Paragraph::new(Line::from(s)), left);
+        }
+        if let Some(&right) = cols.get(1) {
+            let dw = (right.width as usize).saturating_sub(10).max(5);
+            let dv = adv_field(&form.date, df, ds, dw);
+            let mut s: Vec<Span<'static>> = Vec::new();
+            s.extend(kl("", 'd', "ate      "));
+            s.push(styled_field(dv, df, ds));
+            frame.render_widget(Paragraph::new(Line::from(s)), right);
+        }
+    }
+
+    // Row 2: [T]ime (left half) | T[e]nd / time-off (right half)
+    if let Some(row) = rows.get(2).copied() {
+        let cols =
+            Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)]).split(row);
         let tf = form.focused == Field::Time;
         let ts = tf && form.field_selected;
         let ef = form.focused == Field::TimeOff;
         let es = ef && form.field_selected;
-        let fv = adv_field(&form.frequency_mhz, ff, fs, 9);
-        let dv = adv_field(&form.date, df, ds, 10);
-        let tv = adv_field(&form.time, tf, ts, 8);
-        let ev = adv_field(&form.time_off, ef, es, 8);
-        let mut spans: Vec<Span<'static>> = Vec::new();
-        spans.extend(kl("", 'f', "req "));
-        spans.push(styled_field(fv, ff, fs));
-        spans.push(Span::raw("  "));
-        spans.extend(kl("", 'd', "ate "));
-        spans.push(styled_field(dv, df, ds));
-        spans.push(Span::raw("  "));
-        spans.extend(kl("", 't', "ime "));
-        spans.push(styled_field(tv, tf, ts));
-        spans.push(Span::raw("  "));
-        spans.extend(kl("T", 'e', "nd  "));
-        spans.push(styled_field(ev, ef, es));
-        frame.render_widget(Paragraph::new(Line::from(spans)), row);
+        if let Some(&left) = cols.first() {
+            let tw = (left.width as usize).saturating_sub(10).max(5);
+            let tv = adv_field(&form.time, tf, ts, tw);
+            let mut s: Vec<Span<'static>> = Vec::new();
+            s.extend(kl("", 't', "ime      "));
+            s.push(styled_field(tv, tf, ts));
+            frame.render_widget(Paragraph::new(Line::from(s)), left);
+        }
+        if let Some(&right) = cols.get(1) {
+            let ew = (right.width as usize).saturating_sub(10).max(5);
+            let ev = adv_field(&form.time_off, ef, es, ew);
+            let mut s: Vec<Span<'static>> = Vec::new();
+            s.extend(kl("T", 'e', "nd      "));
+            s.push(styled_field(ev, ef, es));
+            frame.render_widget(Paragraph::new(Line::from(s)), right);
+        }
     }
 
-    // Row 2: [Q]th  N[a]me
-    if let Some(row) = rows.get(2).copied() {
+    // Row 3: [Q]th (left half) | N[a]me (right half)
+    if let Some(row) = rows.get(3).copied() {
+        let cols =
+            Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)]).split(row);
         let qf = form.focused == Field::Qth;
         let qs = qf && form.field_selected;
         let nf = form.focused == Field::WorkedName;
         let ns = nf && form.field_selected;
-        let half = wide.saturating_sub(8) / 2;
-        let qv = adv_field(&form.qth, qf, qs, half.max(8));
-        let nv = adv_field(&form.worked_name, nf, ns, half.max(8));
-        let mut spans: Vec<Span<'static>> = Vec::new();
-        spans.extend(kl("", 'q', "th      "));
-        spans.push(styled_field(qv, qf, qs));
-        spans.push(Span::raw("  "));
-        spans.extend(kl("N", 'a', "me     "));
-        spans.push(styled_field(nv, nf, ns));
-        frame.render_widget(Paragraph::new(Line::from(spans)), row);
+        if let Some(&left) = cols.first() {
+            let qw = (left.width as usize).saturating_sub(10).max(5);
+            let qv = adv_field(&form.qth, qf, qs, qw);
+            let mut s: Vec<Span<'static>> = Vec::new();
+            s.extend(kl("", 'q', "th       "));
+            s.push(styled_field(qv, qf, qs));
+            frame.render_widget(Paragraph::new(Line::from(s)), left);
+        }
+        if let Some(&right) = cols.get(1) {
+            let nw = (right.width as usize).saturating_sub(10).max(5);
+            let nv = adv_field(&form.worked_name, nf, ns, nw);
+            let mut s: Vec<Span<'static>> = Vec::new();
+            s.extend(kl("N", 'a', "me      "));
+            s.push(styled_field(nv, nf, ns));
+            frame.render_widget(Paragraph::new(Line::from(s)), right);
+        }
     }
 
-    // Row 3: RST [S]nt  RST [R]cv
-    if let Some(row) = rows.get(3).copied() {
+    // Row 4: RST [S]ent (left half) | RST [R]cvd (right half)
+    if let Some(row) = rows.get(4).copied() {
+        let cols =
+            Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)]).split(row);
         let sf = form.focused == Field::RstSent;
         let ss = sf && form.field_selected;
         let rf = form.focused == Field::RstRcvd;
         let rs = rf && form.field_selected;
-        let sv = adv_field(&form.rst_sent, sf, ss, 5);
-        let rv = adv_field(&form.rst_rcvd, rf, rs, 5);
-        let mut spans: Vec<Span<'static>> = Vec::new();
-        spans.extend(kl("RST ", 's', "nt  "));
-        spans.push(styled_field(sv, sf, ss));
-        spans.push(Span::raw("    "));
-        spans.extend(kl("RST ", 'r', "cv  "));
-        spans.push(styled_field(rv, rf, rs));
-        frame.render_widget(Paragraph::new(Line::from(spans)), row);
+        if let Some(&left) = cols.first() {
+            let sv = adv_field(&form.rst_sent, sf, ss, 5);
+            let mut s: Vec<Span<'static>> = Vec::new();
+            s.extend(kl("RST ", 's', "ent  "));
+            s.push(styled_field(sv, sf, ss));
+            frame.render_widget(Paragraph::new(Line::from(s)), left);
+        }
+        if let Some(&right) = cols.get(1) {
+            let rv = adv_field(&form.rst_rcvd, rf, rs, 5);
+            let mut s: Vec<Span<'static>> = Vec::new();
+            s.extend(kl("RST ", 'r', "cvd  "));
+            s.push(styled_field(rv, rf, rs));
+            frame.render_widget(Paragraph::new(Line::from(s)), right);
+        }
     }
 
-    // Row 4: C[o]mment
-    if let Some(row) = rows.get(4).copied() {
+    // Row 5: C[o]mment
+    if let Some(row) = rows.get(5).copied() {
         let focused = form.focused == Field::Comment;
         let selected = focused && form.field_selected;
-        let val = adv_field(&form.comment, focused, selected, wide);
+        let val = adv_field(
+            &form.comment,
+            focused,
+            selected,
+            (row.width as usize).saturating_sub(10).max(10),
+        );
         let mut spans: Vec<Span<'static>> = Vec::new();
-        spans.extend(kl("C", 'o', "mment  "));
+        spans.extend(kl("C", 'o', "mment   "));
         spans.push(styled_field(val, focused, selected));
         frame.render_widget(Paragraph::new(Line::from(spans)), row);
     }
 
-    // Row 5: [N]otes
-    if let Some(row) = rows.get(5).copied() {
+    // Row 6: [N]otes
+    if let Some(row) = rows.get(6).copied() {
         let focused = form.focused == Field::Notes;
         let selected = focused && form.field_selected;
-        let val = adv_field(&form.notes, focused, selected, wide);
+        let val = adv_field(
+            &form.notes,
+            focused,
+            selected,
+            (row.width as usize).saturating_sub(10).max(10),
+        );
         let mut spans: Vec<Span<'static>> = Vec::new();
-        spans.extend(kl("", 'n', "otes   "));
+        spans.extend(kl("", 'n', "otes     "));
         spans.push(styled_field(val, focused, selected));
         frame.render_widget(Paragraph::new(Line::from(spans)), row);
     }
 
     // Hint row
-    if let Some(row) = rows.get(6).copied() {
+    if let Some(row) = rows.get(7).copied() {
         frame.render_widget(
             Paragraph::new(Span::styled(
-                "Alt+key to jump to field  |  Tab/ShiftTab to navigate  |  F5/F6 to switch tabs",
+                "Alt+key to jump  |  Alt+1-4 for tabs  |  Tab/ShiftTab to navigate",
                 Style::default().fg(Color::DarkGray),
             )),
             row,
@@ -255,16 +306,13 @@ fn render_contest_tab(frame: &mut Frame, area: Rect, form: &crate::form::LogForm
         let ss = sf && form.field_selected;
         let pv = adv_field(&form.tx_power, pf, ps, short);
         let sv = adv_field(&form.submode_override, sf, ss, short);
-        frame.render_widget(
-            Paragraph::new(Line::from(vec![
-                label("TX Power "),
-                styled_field(pv, pf, ps),
-                Span::raw("   "),
-                label("Submode  "),
-                styled_field(sv, sf, ss),
-            ])),
-            row,
-        );
+        let mut row0_spans: Vec<Span<'static>> = Vec::new();
+        row0_spans.extend(kl("TX Po", 'w', "er "));
+        row0_spans.push(styled_field(pv, pf, ps));
+        row0_spans.push(Span::raw("   "));
+        row0_spans.push(label("Submode  "));
+        row0_spans.push(styled_field(sv, sf, ss));
+        frame.render_widget(Paragraph::new(Line::from(row0_spans)), row);
     }
     if let Some(row) = rows.get(1).copied() {
         let focused = form.focused == Field::ContestId;
@@ -335,13 +383,10 @@ fn render_technical_tab(frame: &mut Frame, area: Rect, form: &crate::form::LogFo
         let focused = form.focused == Field::PropMode;
         let selected = focused && form.field_selected;
         let val = adv_field(&form.prop_mode, focused, selected, wide);
-        frame.render_widget(
-            Paragraph::new(Line::from(vec![
-                label("Prop Mode"),
-                styled_field(val, focused, selected),
-            ])),
-            row,
-        );
+        let mut spans: Vec<Span<'static>> = Vec::new();
+        spans.extend(kl("", 'p', "rop Mode"));
+        spans.push(styled_field(val, focused, selected));
+        frame.render_widget(Paragraph::new(Line::from(spans)), row);
     }
     if let Some(row) = rows.get(1).copied() {
         let focused = form.focused == Field::SatName;
@@ -371,6 +416,7 @@ fn render_technical_tab(frame: &mut Frame, area: Rect, form: &crate::form::LogFo
 
 fn render_awards_tab(frame: &mut Frame, area: Rect, form: &crate::form::LogForm, wide: usize) {
     let rows = Layout::vertical([
+        Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Length(1),
@@ -422,6 +468,15 @@ fn render_awards_tab(frame: &mut Frame, area: Rect, form: &crate::form::LogForm,
             ])),
             row,
         );
+    }
+    if let Some(row) = rows.get(3).copied() {
+        let focused = form.focused == Field::Skcc;
+        let selected = focused && form.field_selected;
+        let val = adv_field(&form.skcc, focused, selected, short);
+        let mut spans: Vec<Span<'static>> = Vec::new();
+        spans.extend(kl("S", 'k', "CC     "));
+        spans.push(styled_field(val, focused, selected));
+        frame.render_widget(Paragraph::new(Line::from(spans)), row);
     }
 }
 
