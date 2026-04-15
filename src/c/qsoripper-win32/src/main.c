@@ -1794,7 +1794,7 @@ static int PaintRecentQsos(HDC hdc, int y_start, int w, int bottom)
         _snprintf(hdr, sizeof(hdr),
                   "%-19s %-10s %-5s %-5s %-4s %-4s %-16s %-6s",
                   "UTC", "Callsign", "Band", "Mode",
-                  "RST\x18", "RST\x19", "Country", "Grid");
+                  "Sent", "Rcvd", "Country", "Grid");
         SelectObject(hdc, g_state.hFontBold);
         DrawText_A(hdc, pad + cw, y + 1, CLR_HIGHLIGHT, hdr);
         SelectObject(hdc, g_state.hFont);
