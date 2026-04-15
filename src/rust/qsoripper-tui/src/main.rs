@@ -506,27 +506,51 @@ fn handle_char_key(app: &mut App, c: char, lookup_tx: &watch::Sender<String>) {
     }
 }
 
+fn digit_to_tab(ch: char) -> Option<AdvancedTab> {
+    match ch {
+        '1' => Some(AdvancedTab::Main),
+        '2' => Some(AdvancedTab::Contest),
+        '3' => Some(AdvancedTab::Technical),
+        '4' => Some(AdvancedTab::Awards),
+        _ => None,
+    }
+}
+
+fn switch_to_tab(app: &mut App, tab: AdvancedTab) {
+    app.view = app::View::Advanced;
+    app.form.advanced_tab = tab;
+    app.form.focused = tab.first_field();
+    app.form.field_selected = true;
+    app.qso_list_focused = false;
+}
+
 /// Jump form focus to the field bound to `ch` (Alt+key mapping).
 fn jump_to_field(app: &mut App, ch: char) {
-    let target = match ch.to_ascii_lowercase() {
-        'c' => Field::Callsign,
-        'b' => Field::Band,
-        'm' => Field::Mode,
-        's' => Field::RstSent,
-        'r' => Field::RstRcvd,
-        'o' => Field::Comment,
-        'n' => Field::Notes,
-        'f' => Field::FrequencyMhz,
-        'd' => Field::Date,
-        't' => Field::Time,
-        'e' => Field::TimeOff,
-        'q' => Field::Qth,
-        'a' => Field::WorkedName,
+    if let Some(tab) = digit_to_tab(ch) {
+        switch_to_tab(app, tab);
+        return;
+    }
+    let (target, tab) = match ch.to_ascii_lowercase() {
+        'c' => (Field::Callsign, None),
+        'b' => (Field::Band, None),
+        'm' => (Field::Mode, None),
+        's' => (Field::RstSent, None),
+        'r' => (Field::RstRcvd, None),
+        'o' => (Field::Comment, None),
+        'n' => (Field::Notes, None),
+        'f' => (Field::FrequencyMhz, None),
+        'd' => (Field::Date, None),
+        't' => (Field::Time, None),
+        'e' => (Field::TimeOff, None),
+        'q' => (Field::Qth, None),
+        'a' => (Field::WorkedName, Some(AdvancedTab::Main)),
+        'k' => (Field::Skcc, Some(AdvancedTab::Awards)),
+        'w' => (Field::TxPower, Some(AdvancedTab::Contest)),
+        'p' => (Field::PropMode, Some(AdvancedTab::Technical)),
         _ => return,
     };
-    if !matches!(app.view, app::View::Advanced) && matches!(target, Field::WorkedName) {
-        app.view = app::View::Advanced;
-        app.form.advanced_tab = AdvancedTab::Main;
+    if let Some(tab) = tab {
+        switch_to_tab(app, tab);
     }
     app.form.focused = target;
     app.form.field_selected = true;
@@ -876,6 +900,77 @@ mod tests {
         let original_focused = app.form.focused.clone();
         jump_to_field(&mut app, 'z');
         assert_eq!(app.form.focused, original_focused);
+    }
+
+    #[test]
+    fn jump_to_tab_1_switches_to_main() {
+        let mut app = make_app();
+        jump_to_field(&mut app, '1');
+        assert!(matches!(app.view, View::Advanced));
+        assert_eq!(app.form.advanced_tab, AdvancedTab::Main);
+        assert_eq!(app.form.focused, Field::Callsign);
+        assert!(app.form.field_selected);
+        assert!(!app.qso_list_focused);
+    }
+
+    #[test]
+    fn jump_to_tab_2_switches_to_contest() {
+        let mut app = make_app();
+        jump_to_field(&mut app, '2');
+        assert!(matches!(app.view, View::Advanced));
+        assert_eq!(app.form.advanced_tab, AdvancedTab::Contest);
+        assert_eq!(app.form.focused, Field::TxPower);
+        assert!(app.form.field_selected);
+    }
+
+    #[test]
+    fn jump_to_tab_3_switches_to_technical() {
+        let mut app = make_app();
+        jump_to_field(&mut app, '3');
+        assert!(matches!(app.view, View::Advanced));
+        assert_eq!(app.form.advanced_tab, AdvancedTab::Technical);
+        assert_eq!(app.form.focused, Field::PropMode);
+        assert!(app.form.field_selected);
+    }
+
+    #[test]
+    fn jump_to_tab_4_switches_to_awards() {
+        let mut app = make_app();
+        jump_to_field(&mut app, '4');
+        assert!(matches!(app.view, View::Advanced));
+        assert_eq!(app.form.advanced_tab, AdvancedTab::Awards);
+        assert_eq!(app.form.focused, Field::Iota);
+        assert!(app.form.field_selected);
+    }
+
+    #[test]
+    fn jump_to_field_skcc_opens_awards_tab() {
+        let mut app = make_app();
+        jump_to_field(&mut app, 'k');
+        assert!(matches!(app.view, View::Advanced));
+        assert_eq!(app.form.advanced_tab, AdvancedTab::Awards);
+        assert_eq!(app.form.focused, Field::Skcc);
+        assert!(app.form.field_selected);
+    }
+
+    #[test]
+    fn jump_to_field_tx_power_opens_contest_tab() {
+        let mut app = make_app();
+        jump_to_field(&mut app, 'w');
+        assert!(matches!(app.view, View::Advanced));
+        assert_eq!(app.form.advanced_tab, AdvancedTab::Contest);
+        assert_eq!(app.form.focused, Field::TxPower);
+        assert!(app.form.field_selected);
+    }
+
+    #[test]
+    fn jump_to_field_prop_mode_opens_technical_tab() {
+        let mut app = make_app();
+        jump_to_field(&mut app, 'p');
+        assert!(matches!(app.view, View::Advanced));
+        assert_eq!(app.form.advanced_tab, AdvancedTab::Technical);
+        assert_eq!(app.form.focused, Field::PropMode);
+        assert!(app.form.field_selected);
     }
 
     #[test]
