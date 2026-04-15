@@ -11,7 +11,7 @@ public class CliRegressionTests
         var result = await CliProcessRunner.RunAsync("log", "--help");
 
         Assert.Equal(0, result.ExitCode);
-        Assert.Contains("Usage: log <callsign> <band> <mode> [options]", result.StandardOutput, StringComparison.Ordinal);
+        Assert.Contains("Usage: log <callsign> [band] [mode] [options]", result.StandardOutput, StringComparison.Ordinal);
         Assert.DoesNotContain("Usage: qsoripper-cli [options] <command> [arguments]", result.StandardOutput, StringComparison.Ordinal);
     }
 

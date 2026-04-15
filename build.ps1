@@ -74,8 +74,63 @@ function Build-Rust {
     }
 }
 
+function Find-VcVarsAll {
+    $vswherePath = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio' 'Installer' 'vswhere.exe'
+    if (-not (Test-Path $vswherePath)) {
+        return $null
+    }
+
+    # Try vswhere first (standard detection used by ILCompiler)
+    $vsPath = & $vswherePath -latest -prerelease -products * `
+        -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
+        -property installationPath 2>$null
+    if ($vsPath) {
+        $vcvars = Join-Path $vsPath 'VC' 'Auxiliary' 'Build' 'vcvarsall.bat'
+        if (Test-Path $vcvars) {
+            return $vcvars
+        }
+    }
+
+    # Fallback: scan all VS installations for vcvarsall.bat
+    $allPaths = & $vswherePath -all -products * -property installationPath 2>$null
+    foreach ($path in $allPaths) {
+        $vcvars = Join-Path $path 'VC' 'Auxiliary' 'Build' 'vcvarsall.bat'
+        if (Test-Path $vcvars) {
+            return $vcvars
+        }
+    }
+
+    return $null
+}
+
 function Build-Dotnet {
-    Invoke-Build "Publishing QsoRipper.Cli Native AOT ($Configuration)" dotnet @(
+    # Native AOT requires the MSVC linker. ILCompiler's findvcvarsall.bat uses
+    # vswhere to locate it, but some VS installations (e.g., VS 18 BuildTools)
+    # may not register VC.Tools correctly. When that happens, set up the VC
+    # environment manually and pass IlcUseEnvironmentalTools=true.
+    $vcvarsAll = Find-VcVarsAll
+    $needsVcEnv = $false
+    $extraPublishArgs = @()
+
+    if ($vcvarsAll) {
+        # Test if ILCompiler's own detection works
+        $ilcFindScript = Join-Path $env:USERPROFILE '.nuget' 'packages' 'microsoft.dotnet.ilcompiler' '*' 'build' 'findvcvarsall.bat' |
+            Resolve-Path -ErrorAction SilentlyContinue |
+            Sort-Object -Descending |
+            Select-Object -First 1
+
+        if ($ilcFindScript) {
+            $testResult = cmd /c "`"$($ilcFindScript.Path)`" x64 >nul 2>&1 && echo OK" 2>$null
+            if ($testResult -ne 'OK') {
+                Write-Host "  ILCompiler cannot find the platform linker via vswhere." -ForegroundColor Yellow
+                Write-Host "  Using vcvarsall.bat workaround: $vcvarsAll" -ForegroundColor Yellow
+                $needsVcEnv = $true
+                $extraPublishArgs = @('-p:IlcUseEnvironmentalTools=true')
+            }
+        }
+    }
+
+    $publishArgs = @(
         'publish',
         $DotnetCliProject,
         '-c',
@@ -83,7 +138,20 @@ function Build-Dotnet {
         '--use-current-runtime',
         '-o',
         $DotnetCliPublishDir
-    )
+    ) + $extraPublishArgs
+
+    if ($needsVcEnv) {
+        $arch = if ([System.Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture -eq 'Arm64') { 'arm64' } else { 'amd64' }
+        Write-Step "Publishing QsoRipper.Cli Native AOT ($Configuration)"
+        cmd /c "call `"$vcvarsAll`" $arch >nul 2>&1 && dotnet $($publishArgs -join ' ')"
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "FAILED: Publishing QsoRipper.Cli Native AOT ($Configuration)" -ForegroundColor Red
+            exit $LASTEXITCODE
+        }
+    }
+    else {
+        Invoke-Build "Publishing QsoRipper.Cli Native AOT ($Configuration)" dotnet $publishArgs
+    }
 
     Invoke-Build "Publishing QsoRipper.Gui ($Configuration)" dotnet @(
         'publish',

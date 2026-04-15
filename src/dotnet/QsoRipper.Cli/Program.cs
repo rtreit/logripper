@@ -49,6 +49,7 @@ try
         "setup" => await SetupCommand.RunAsync(channel, arguments),
         "sync" => await SyncCommand.RunAsync(channel, arguments.Force),
         "sync-status" => await SyncStatusCommand.RunAsync(channel, arguments.JsonOutput),
+        "rig-status" => await RigStatusCommand.RunAsync(channel),
         "test-logbook" => await TestLogbookCommand.RunAsync(channel, arguments.RemainingArgs),
         _ => ShowHelp($"Unknown command: {arguments.Command}")
     };

@@ -1,0 +1,11 @@
+syntax = "proto3";
+
+package qsoripper.services;
+
+option csharp_namespace = "QsoRipper.Services";
+
+// Allows testing rig connectivity with optional overrides before persisting config.
+message TestRigConnectionRequest {
+  optional string host = 1;
+  optional uint32 port = 2;
+}

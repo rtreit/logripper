@@ -1,0 +1,22 @@
+syntax = "proto3";
+
+package qsoripper.domain;
+
+option csharp_namespace = "QsoRipper.Domain";
+
+import "domain/band.proto";
+import "domain/mode.proto";
+import "domain/rig_connection_status.proto";
+import "google/protobuf/timestamp.proto";
+
+// Normalized snapshot of the current rig state, derived from a rigctld read.
+message RigSnapshot {
+  uint64 frequency_hz = 1;
+  Band band = 2;
+  Mode mode = 3;
+  optional string submode = 4;
+  optional string raw_mode = 5;
+  RigConnectionStatus status = 6;
+  optional string error_message = 7;
+  google.protobuf.Timestamp sampled_at = 8;
+}

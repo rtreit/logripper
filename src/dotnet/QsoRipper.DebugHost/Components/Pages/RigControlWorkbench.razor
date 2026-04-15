@@ -1,0 +1,284 @@
+@page "/rig-control"
+@using QsoRipper.DebugHost.Utilities
+@using QsoRipper.Domain
+@using QsoRipper.Services
+@inject DebugWorkbenchState WorkbenchState
+@inject RigControlWorkbenchService RigControlService
+@inject ProtoJsonService ProtoJsonService
+
+<PageTitle>Rig Control Workbench</PageTitle>
+
+<h1 class="mb-3">Rig Control Workbench</h1>
+<p class="text-muted">
+    Exercise the rig control gRPC service: query rig status, read the current frequency/band/mode snapshot from rigctld, and test connectivity with optional host/port overrides.
+</p>
+
+<div class="alert alert-secondary">
+    <div><strong>Current engine endpoint:</strong> @WorkbenchState.EngineEndpoint</div>
+</div>
+
+<div class="card shadow-sm mb-4">
+    <div class="card-body">
+        <h2 class="h5 mb-3">Actions</h2>
+        <div class="row g-3 align-items-end">
+            <div class="col-auto">
+                <button class="btn btn-primary" @onclick="GetStatusAsync" disabled="@isBusy">
+                    @if (isBusy && activeAction == "status") { <span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span> }
+                    Get Rig Status
+                </button>
+            </div>
+            <div class="col-auto">
+                <button class="btn btn-outline-primary" @onclick="GetSnapshotAsync" disabled="@isBusy">
+                    @if (isBusy && activeAction == "snapshot") { <span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span> }
+                    Get Rig Snapshot
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="card shadow-sm mb-4">
+    <div class="card-body">
+        <h2 class="h5 mb-3">Test Connection</h2>
+        <p class="text-muted small">
+            Override host/port to test a different rigctld instance without changing the server config.
+        </p>
+        <div class="row g-3 align-items-end">
+            <div class="col-md-4">
+                <label class="form-label" for="test-host">Host (optional)</label>
+                <InputText id="test-host" class="form-control" @bind-Value="testHost" placeholder="127.0.0.1" />
+            </div>
+            <div class="col-md-3">
+                <label class="form-label" for="test-port">Port (optional)</label>
+                <InputNumber id="test-port" class="form-control" @bind-Value="testPort" />
+            </div>
+            <div class="col-md-3">
+                <button class="btn btn-outline-warning" @onclick="TestConnectionAsync" disabled="@isBusy">
+                    @if (isBusy && activeAction == "test") { <span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span> }
+                    Test Connection
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+@if (lastResult is not null)
+{
+    <div class="card shadow-sm mb-4">
+        <div class="card-body">
+            <div class="d-flex justify-content-between align-items-center mb-2">
+                <h2 class="h5 mb-0">Result — @lastResult.InvocationMode</h2>
+                <span class="badge @(lastResult.Succeeded ? "text-bg-success" : "text-bg-danger")">
+                    @(lastResult.Succeeded ? "Succeeded" : "Failed")
+                </span>
+            </div>
+            <div class="mb-3">
+                <strong>Completed:</strong> @lastResult.CompletedAtUtc.LocalDateTime.ToString("g")
+            </div>
+
+            @if (!string.IsNullOrWhiteSpace(lastResult.ErrorMessage))
+            {
+                <div class="alert alert-danger mb-3">
+                    @lastResult.ErrorMessage
+                </div>
+            }
+
+            @if (responsePayload is not null)
+            {
+                <PayloadCard Title="Response payload" Payload="@responsePayload" />
+            }
+        </div>
+    </div>
+}
+
+@if (statusSummary is not null)
+{
+    <div class="card shadow-sm mb-4">
+        <div class="card-body">
+            <h2 class="h5 mb-3">Rig Status Summary</h2>
+            <table class="table table-sm mb-0">
+                <tbody>
+                    <tr><th scope="row" style="width:180px">Connection</th><td>@statusSummary.ConnectionDisplay</td></tr>
+                    @if (statusSummary.Endpoint is not null)
+                    {
+                        <tr><th scope="row">Endpoint</th><td>@statusSummary.Endpoint</td></tr>
+                    }
+                    @if (statusSummary.Error is not null)
+                    {
+                        <tr><th scope="row">Error</th><td class="text-danger">@statusSummary.Error</td></tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+}
+
+@if (snapshotSummary is not null)
+{
+    <div class="card shadow-sm mb-4">
+        <div class="card-body">
+            <h2 class="h5 mb-3">Rig Snapshot</h2>
+            <table class="table table-sm mb-0">
+                <tbody>
+                    <tr><th scope="row" style="width:180px">Frequency</th><td>@snapshotSummary.FrequencyDisplay</td></tr>
+                    <tr><th scope="row">Band</th><td>@snapshotSummary.BandDisplay</td></tr>
+                    <tr><th scope="row">Mode</th><td>@snapshotSummary.ModeDisplay</td></tr>
+                    @if (snapshotSummary.Submode is not null)
+                    {
+                        <tr><th scope="row">Submode</th><td>@snapshotSummary.Submode</td></tr>
+                    }
+                    @if (snapshotSummary.RawMode is not null)
+                    {
+                        <tr><th scope="row">Raw mode</th><td><code>@snapshotSummary.RawMode</code></td></tr>
+                    }
+                    <tr><th scope="row">Status</th><td>@snapshotSummary.StatusDisplay</td></tr>
+                    @if (snapshotSummary.SampledAt is not null)
+                    {
+                        <tr><th scope="row">Sampled at</th><td>@snapshotSummary.SampledAt</td></tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+}
+
+@code {
+    private bool isBusy;
+    private string activeAction = string.Empty;
+    private string testHost = string.Empty;
+    private int? testPort;
+
+    private RigControlInvocationResult? lastResult;
+    private string? responsePayload;
+    private RigStatusSummary? statusSummary;
+    private RigSnapshotSummary? snapshotSummary;
+
+    private async Task GetStatusAsync()
+    {
+        isBusy = true;
+        activeAction = "status";
+        snapshotSummary = null;
+        try
+        {
+            lastResult = await RigControlService.GetRigStatusAsync();
+            responsePayload = lastResult.Response is not null ? ProtoJsonService.Describe(lastResult.Response).Json : null;
+        }
+        finally
+        {
+            isBusy = false;
+        }
+
+        ExtractStatusSummary();
+    }
+
+    private async Task GetSnapshotAsync()
+    {
+        isBusy = true;
+        activeAction = "snapshot";
+        statusSummary = null;
+        try
+        {
+            lastResult = await RigControlService.GetRigSnapshotAsync();
+            responsePayload = lastResult.Response is not null ? ProtoJsonService.Describe(lastResult.Response).Json : null;
+        }
+        finally
+        {
+            isBusy = false;
+        }
+
+        ExtractSnapshotSummary();
+    }
+
+    private async Task TestConnectionAsync()
+    {
+        isBusy = true;
+        activeAction = "test";
+        statusSummary = null;
+        snapshotSummary = null;
+        try
+        {
+            uint? port = testPort.HasValue ? (uint)testPort.Value : null;
+            lastResult = await RigControlService.TestRigConnectionAsync(
+                string.IsNullOrWhiteSpace(testHost) ? null : testHost,
+                port);
+            responsePayload = lastResult.Response is not null ? ProtoJsonService.Describe(lastResult.Response).Json : null;
+        }
+        finally
+        {
+            isBusy = false;
+        }
+
+        ExtractTestSnapshotSummary();
+    }
+
+    private void ExtractStatusSummary()
+    {
+        if (lastResult?.Response is not GetRigStatusResponse response)
+        {
+            statusSummary = null;
+            return;
+        }
+
+        statusSummary = new RigStatusSummary(
+            FormatConnectionStatus(response.Status),
+            response.HasEndpoint ? response.Endpoint : null,
+            response.HasErrorMessage ? response.ErrorMessage : null);
+    }
+
+    private void ExtractSnapshotSummary()
+    {
+        if (lastResult?.Response is not GetRigSnapshotResponse response || response.Snapshot is null)
+        {
+            snapshotSummary = null;
+            return;
+        }
+
+        snapshotSummary = BuildSnapshotSummary(response.Snapshot);
+    }
+
+    private void ExtractTestSnapshotSummary()
+    {
+        if (lastResult?.Response is not TestRigConnectionResponse response || response.Snapshot is null)
+        {
+            snapshotSummary = null;
+            return;
+        }
+
+        snapshotSummary = BuildSnapshotSummary(response.Snapshot);
+    }
+
+    private static RigSnapshotSummary BuildSnapshotSummary(RigSnapshot snapshot)
+    {
+        var freqHz = snapshot.FrequencyHz;
+        var freqDisplay = freqHz > 0 ? $"{freqHz / 1_000_000.0:F6} MHz ({freqHz:N0} Hz)" : "Unknown";
+
+        return new RigSnapshotSummary(
+            freqDisplay,
+            snapshot.Band != Band.Unspecified ? ProtoEnumDisplay.ForBand(snapshot.Band) : "Unknown",
+            snapshot.Mode != Mode.Unspecified ? ProtoEnumDisplay.ForMode(snapshot.Mode) : "Unknown",
+            snapshot.HasSubmode ? snapshot.Submode : null,
+            snapshot.HasRawMode ? snapshot.RawMode : null,
+            FormatConnectionStatus(snapshot.Status),
+            snapshot.SampledAt?.ToDateTime().ToLocalTime().ToString("G"));
+    }
+
+    private static string FormatConnectionStatus(RigConnectionStatus status) => status switch
+    {
+        RigConnectionStatus.Connected => "\u2705 Connected",
+        RigConnectionStatus.Disconnected => "\u274c Disconnected",
+        RigConnectionStatus.Error => "\u26a0\ufe0f Error",
+        RigConnectionStatus.Disabled => "\u2b55 Disabled",
+        _ => "Unknown"
+    };
+
+    private sealed record RigStatusSummary(string ConnectionDisplay, string? Endpoint, string? Error);
+
+    private sealed record RigSnapshotSummary(
+        string FrequencyDisplay,
+        string BandDisplay,
+        string ModeDisplay,
+        string? Submode,
+        string? RawMode,
+        string StatusDisplay,
+        string? SampledAt);
+}

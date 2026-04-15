@@ -1,0 +1,14 @@
+syntax = "proto3";
+
+package qsoripper.domain;
+
+option csharp_namespace = "QsoRipper.Domain";
+
+// Connection status of the rig control provider.
+enum RigConnectionStatus {
+  RIG_CONNECTION_STATUS_UNSPECIFIED = 0;
+  RIG_CONNECTION_STATUS_CONNECTED = 1;
+  RIG_CONNECTION_STATUS_DISCONNECTED = 2;
+  RIG_CONNECTION_STATUS_ERROR = 3;
+  RIG_CONNECTION_STATUS_DISABLED = 4;
+}

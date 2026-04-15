@@ -138,6 +138,76 @@ public sealed class CommandHelperTests
     }
 
     [Fact]
+    public void TryBuildQso_from_rig_allows_omitting_band_mode()
+    {
+        var success = LogQsoCommand.TryBuildQso(
+            "W1AW",
+            ["--from-rig"],
+            out var qso,
+            out _,
+            out var fromRig,
+            out var error);
+
+        Assert.True(success);
+        Assert.Null(error);
+        Assert.True(fromRig);
+        Assert.NotNull(qso);
+        Assert.Equal(Band.Unspecified, qso!.Band);
+        Assert.Equal(Mode.Unspecified, qso.Mode);
+    }
+
+    [Fact]
+    public void TryBuildQso_from_rig_with_explicit_band_mode()
+    {
+        var success = LogQsoCommand.TryBuildQso(
+            "W1AW",
+            ["40m", "CW", "--from-rig"],
+            out var qso,
+            out _,
+            out var fromRig,
+            out var error);
+
+        Assert.True(success);
+        Assert.Null(error);
+        Assert.True(fromRig);
+        Assert.NotNull(qso);
+        Assert.Equal(Band._40M, qso!.Band);
+        Assert.Equal(Mode.Cw, qso.Mode);
+    }
+
+    [Fact]
+    public void TryBuildQso_from_rig_with_named_band_mode_overrides()
+    {
+        var success = LogQsoCommand.TryBuildQso(
+            "W1AW",
+            ["--from-rig", "--band", "20m", "--mode", "FT8"],
+            out var qso,
+            out _,
+            out var fromRig,
+            out var error);
+
+        Assert.True(success);
+        Assert.Null(error);
+        Assert.True(fromRig);
+        Assert.NotNull(qso);
+        Assert.Equal(Band._20M, qso!.Band);
+        Assert.Equal(Mode.Ft8, qso.Mode);
+    }
+
+    [Fact]
+    public void TryBuildQso_without_from_rig_requires_band_mode()
+    {
+        var success = LogQsoCommand.TryBuildQso(
+            "W1AW",
+            [],
+            out _,
+            out _,
+            out _);
+
+        Assert.False(success);
+    }
+
+    [Fact]
     public void TryParseArgs_populates_filters()
     {
         var success = ListQsosCommand.TryParseArgs(["--callsign", "w1aw", "--band", "20m", "--mode", "ft8", "--after", "2026-04-10T00:00:00Z", "--before", "2026-04-11T00:00:00Z", "--limit", "5"],

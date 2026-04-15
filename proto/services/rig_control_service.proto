@@ -1,0 +1,18 @@
+syntax = "proto3";
+
+package qsoripper.services;
+
+option csharp_namespace = "QsoRipper.Services";
+
+import "services/get_rig_status_request.proto";
+import "services/get_rig_status_response.proto";
+import "services/get_rig_snapshot_request.proto";
+import "services/get_rig_snapshot_response.proto";
+import "services/test_rig_connection_request.proto";
+import "services/test_rig_connection_response.proto";
+
+service RigControlService {
+  rpc GetRigStatus(GetRigStatusRequest) returns (GetRigStatusResponse);
+  rpc GetRigSnapshot(GetRigSnapshotRequest) returns (GetRigSnapshotResponse);
+  rpc TestRigConnection(TestRigConnectionRequest) returns (TestRigConnectionResponse);
+}

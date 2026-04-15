@@ -16,6 +16,12 @@ use qsoripper_core::proto::qsoripper::services::{
     RuntimeConfigMutation, RuntimeConfigMutationKind, RuntimeConfigSnapshot, RuntimeConfigValue,
     RuntimeConfigValueKind,
 };
+use qsoripper_core::rig_control::{
+    DisabledRigControlProvider, RigControlMonitor, RigControlProvider, RigctldConfig,
+    RigctldProvider, DEFAULT_RIGCTLD_HOST, DEFAULT_RIGCTLD_STALE_THRESHOLD_MS,
+    RIGCTLD_ENABLED_ENV_VAR, RIGCTLD_HOST_ENV_VAR, RIGCTLD_PORT_ENV_VAR,
+    RIGCTLD_READ_TIMEOUT_MS_ENV_VAR, RIGCTLD_STALE_THRESHOLD_MS_ENV_VAR,
+};
 use qsoripper_core::space_weather::{
     DisabledSpaceWeatherProvider, NoaaSpaceWeatherConfig, NoaaSpaceWeatherProvider,
     SpaceWeatherMonitor, SpaceWeatherProvider, NOAA_HTTP_TIMEOUT_SECONDS_ENV_VAR,
@@ -68,6 +74,7 @@ struct RuntimeBindings {
     logbook_engine: LogbookEngine,
     lookup_coordinator: Arc<LookupCoordinator>,
     space_weather_monitor: Arc<SpaceWeatherMonitor>,
+    rig_control_monitor: Arc<RigControlMonitor>,
     active_storage_backend: String,
     lookup_provider_summary: String,
     active_station_profile: Option<StationProfile>,
@@ -177,6 +184,10 @@ impl RuntimeConfigManager {
 
     pub(crate) async fn space_weather_monitor(&self) -> Arc<SpaceWeatherMonitor> {
         self.bindings.read().await.space_weather_monitor.clone()
+    }
+
+    pub(crate) async fn rig_control_monitor(&self) -> Arc<RigControlMonitor> {
+        self.bindings.read().await.rig_control_monitor.clone()
     }
 
     pub(crate) async fn active_storage_backend(&self) -> String {
@@ -627,6 +638,51 @@ const SUPPORTED_FIELDS: &[ConfigFieldSpec] = &[
         allowed_values: &[],
         default_value: Some("3600"),
     },
+    ConfigFieldSpec {
+        key: RIGCTLD_ENABLED_ENV_VAR,
+        label: "Rig control enabled",
+        description: "Enable live rig control via rigctld.",
+        kind: RuntimeConfigValueKind::Boolean,
+        secret: false,
+        allowed_values: BOOLEAN_ALLOWED_VALUES,
+        default_value: Some("false"),
+    },
+    ConfigFieldSpec {
+        key: RIGCTLD_HOST_ENV_VAR,
+        label: "Rig control host",
+        description: "Host address of the running rigctld daemon.",
+        kind: RuntimeConfigValueKind::String,
+        secret: false,
+        allowed_values: &[],
+        default_value: Some(DEFAULT_RIGCTLD_HOST),
+    },
+    ConfigFieldSpec {
+        key: RIGCTLD_PORT_ENV_VAR,
+        label: "Rig control port",
+        description: "TCP port used to connect to the rigctld daemon.",
+        kind: RuntimeConfigValueKind::Integer,
+        secret: false,
+        allowed_values: &[],
+        default_value: Some("4532"),
+    },
+    ConfigFieldSpec {
+        key: RIGCTLD_READ_TIMEOUT_MS_ENV_VAR,
+        label: "Rig control read timeout ms",
+        description: "Read timeout in milliseconds for rigctld TCP operations.",
+        kind: RuntimeConfigValueKind::Integer,
+        secret: false,
+        allowed_values: &[],
+        default_value: Some("2000"),
+    },
+    ConfigFieldSpec {
+        key: RIGCTLD_STALE_THRESHOLD_MS_ENV_VAR,
+        label: "Rig control stale threshold ms",
+        description: "How long a cached rig snapshot is considered fresh before re-polling.",
+        kind: RuntimeConfigValueKind::Integer,
+        secret: false,
+        allowed_values: &[],
+        default_value: Some("5000"),
+    },
 ];
 
 fn capture_supported_env() -> BTreeMap<String, String> {
@@ -755,6 +811,22 @@ fn normalize_value(key: &'static str, raw_value: &str) -> Result<String, String>
                 CONFLICT_POLICY_ALLOWED_VALUES.join(", ")
             ))
         }
+    } else if key == RIGCTLD_ENABLED_ENV_VAR {
+        parse_bool(trimmed).map(|value| {
+            if value {
+                "true".to_string()
+            } else {
+                "false".to_string()
+            }
+        })
+    } else if matches!(
+        key,
+        RIGCTLD_PORT_ENV_VAR | RIGCTLD_READ_TIMEOUT_MS_ENV_VAR | RIGCTLD_STALE_THRESHOLD_MS_ENV_VAR
+    ) {
+        trimmed
+            .parse::<u64>()
+            .map(|value| value.to_string())
+            .map_err(|_| format!("'{key}' expects an integer value."))
     } else {
         Ok(trimmed.to_string())
     }
@@ -847,12 +919,14 @@ fn build_runtime_bindings(values: &BTreeMap<String, String>) -> Result<RuntimeBi
         LookupCoordinatorConfig::default(),
     ));
     let space_weather_monitor = build_space_weather_monitor(values);
+    let rig_control_monitor = build_rig_control_monitor(values);
     let active_station_profile = build_active_station_profile(values)?;
 
     Ok(RuntimeBindings {
         logbook_engine,
         lookup_coordinator,
         space_weather_monitor,
+        rig_control_monitor,
         active_storage_backend,
         lookup_provider_summary,
         active_station_profile,
@@ -980,6 +1054,24 @@ fn build_space_weather_monitor(values: &BTreeMap<String, String>) -> Arc<SpaceWe
             std::time::Duration::from_secs(900),
             std::time::Duration::from_secs(3600),
         )),
+    }
+}
+
+fn build_rig_control_monitor(values: &BTreeMap<String, String>) -> Arc<RigControlMonitor> {
+    let stale_threshold_ms = values
+        .get(RIGCTLD_STALE_THRESHOLD_MS_ENV_VAR)
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(DEFAULT_RIGCTLD_STALE_THRESHOLD_MS);
+    let stale_threshold = std::time::Duration::from_millis(stale_threshold_ms);
+
+    if let Some(config) = RigctldConfig::from_value_provider(|name| values.get(name).cloned()) {
+        let provider: Arc<dyn RigControlProvider> = Arc::new(RigctldProvider::new(config));
+        Arc::new(RigControlMonitor::new(provider, stale_threshold))
+    } else {
+        let provider: Arc<dyn RigControlProvider> = Arc::new(DisabledRigControlProvider::new(
+            "Rig control is not enabled.",
+        ));
+        Arc::new(RigControlMonitor::new(provider, stale_threshold))
     }
 }
 

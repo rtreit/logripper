@@ -26,6 +26,10 @@ use qsoripper_core::proto::qsoripper::services::{
     TestQrzLogbookCredentialsResponse, ValidateSetupStepRequest, ValidateSetupStepResponse,
 };
 use qsoripper_core::qrz_logbook::{QrzLogbookClient, QrzLogbookConfig};
+use qsoripper_core::rig_control::{
+    RIGCTLD_ENABLED_ENV_VAR, RIGCTLD_HOST_ENV_VAR, RIGCTLD_PORT_ENV_VAR,
+    RIGCTLD_READ_TIMEOUT_MS_ENV_VAR, RIGCTLD_STALE_THRESHOLD_MS_ENV_VAR,
+};
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 use tonic::{Request, Response, Status};
@@ -519,6 +523,8 @@ struct PersistedSetupConfig {
     qrz_logbook: PersistedQrzLogbookConfig,
     #[serde(default, skip_serializing_if = "PersistedSyncConfig::is_empty")]
     sync: PersistedSyncConfig,
+    #[serde(default, skip_serializing_if = "PersistedRigControlConfig::is_empty")]
+    rig_control: PersistedRigControlConfig,
 }
 
 impl PersistedSetupConfig {
@@ -674,6 +680,29 @@ impl PersistedSetupConfig {
             values.insert(
                 SYNC_CONFLICT_POLICY_ENV_VAR.to_string(),
                 self.sync.conflict_policy.clone(),
+            );
+        }
+
+        // Rig control config
+        if let Some(enabled) = self.rig_control.enabled {
+            values.insert(RIGCTLD_ENABLED_ENV_VAR.to_string(), enabled.to_string());
+        }
+        if let Some(ref host) = self.rig_control.host {
+            values.insert(RIGCTLD_HOST_ENV_VAR.to_string(), host.clone());
+        }
+        if let Some(port) = self.rig_control.port {
+            values.insert(RIGCTLD_PORT_ENV_VAR.to_string(), port.to_string());
+        }
+        if let Some(read_timeout_ms) = self.rig_control.read_timeout_ms {
+            values.insert(
+                RIGCTLD_READ_TIMEOUT_MS_ENV_VAR.to_string(),
+                read_timeout_ms.to_string(),
+            );
+        }
+        if let Some(stale_threshold_ms) = self.rig_control.stale_threshold_ms {
+            values.insert(
+                RIGCTLD_STALE_THRESHOLD_MS_ENV_VAR.to_string(),
+                stale_threshold_ms.to_string(),
             );
         }
 
@@ -1092,6 +1121,25 @@ impl PersistedSyncConfig {
             },
             conflict_policy: conflict_policy as i32,
         }
+    }
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+struct PersistedRigControlConfig {
+    enabled: Option<bool>,
+    host: Option<String>,
+    port: Option<u16>,
+    read_timeout_ms: Option<u64>,
+    stale_threshold_ms: Option<u64>,
+}
+
+impl PersistedRigControlConfig {
+    fn is_empty(config: &Self) -> bool {
+        config.enabled.is_none()
+            && config.host.is_none()
+            && config.port.is_none()
+            && config.read_timeout_ms.is_none()
+            && config.stale_threshold_ms.is_none()
     }
 }
 
