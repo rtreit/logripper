@@ -57,6 +57,16 @@
       <Setter Property="BorderThickness" Value="0" />
     </Style>
 
+    <!-- Current cell: subtle background highlight instead of white vertical border lines -->
+    <Style Selector="DataGrid#RecentQsoGrid DataGridCell:current /template/ Rectangle#CurrencyVisual">
+      <Setter Property="IsVisible" Value="False" />
+    </Style>
+
+    <Style Selector="DataGrid#RecentQsoGrid DataGridCell:current">
+      <Setter Property="Background" Value="#400078D7" />
+      <Setter Property="BorderBrush" Value="Transparent" />
+    </Style>
+
   </Window.Styles>
 
   <DockPanel ClipToBounds="True">
@@ -221,7 +231,7 @@
                          SelectedItem="{Binding RecentQsos.SelectedQso, Mode=TwoWay}">
                 <DataGrid.Columns>
                   <DataGridTextColumn Header="UTC"
-                                      Width="130"
+                                      Width="138"
                                       MinWidth="96"
                                       Binding="{ReflectionBinding UtcDisplay, Mode=TwoWay}"
                                       SortMemberPath="UtcSortKey" />
@@ -264,6 +274,7 @@
                         <TextBlock Text="{Binding Country}"
                                    TextWrapping="NoWrap"
                                    TextTrimming="CharacterEllipsis"
+                                   VerticalAlignment="Center"
                                    ToolTip.Tip="{Binding Country}" />
                       </DataTemplate>
                     </DataGridTemplateColumn.CellTemplate>
@@ -285,6 +296,7 @@
                         <TextBlock Text="{Binding OperatorName}"
                                    TextWrapping="NoWrap"
                                    TextTrimming="CharacterEllipsis"
+                                   VerticalAlignment="Center"
                                    ToolTip.Tip="{Binding OperatorName}" />
                       </DataTemplate>
                     </DataGridTemplateColumn.CellTemplate>
@@ -316,6 +328,7 @@
                         <TextBlock Text="{Binding Contest}"
                                    TextWrapping="NoWrap"
                                    TextTrimming="CharacterEllipsis"
+                                   VerticalAlignment="Center"
                                    ToolTip.Tip="{Binding Contest}" />
                       </DataTemplate>
                     </DataGridTemplateColumn.CellTemplate>
@@ -342,6 +355,7 @@
                         <TextBlock Text="{Binding Note}"
                                    TextWrapping="NoWrap"
                                    TextTrimming="CharacterEllipsis"
+                                   VerticalAlignment="Center"
                                    ToolTip.Tip="{Binding Note}" />
                       </DataTemplate>
                     </DataGridTemplateColumn.CellTemplate>
@@ -383,6 +397,7 @@
                         <TextBlock Text="{Binding Qth}"
                                    TextWrapping="NoWrap"
                                    TextTrimming="CharacterEllipsis"
+                                   VerticalAlignment="Center"
                                    ToolTip.Tip="{Binding Qth}" />
                       </DataTemplate>
                     </DataGridTemplateColumn.CellTemplate>
