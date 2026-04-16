@@ -628,7 +628,7 @@ fn populate_qso_detail(qso: &QsoRecord, out: &mut QsrQsoDetail) {
     if let Some(freq_khz) = qso.frequency_khz {
         if freq_khz > 0 {
             let mhz = freq_khz as f64 / 1000.0;
-            let freq_str = format!("{mhz:.3}");
+            let freq_str = format!("{mhz:.5}");
             str_to_buf(&freq_str, &mut out.freq_mhz);
         }
     }
@@ -760,8 +760,8 @@ fn populate_rig_status(
 
     if snapshot.frequency_hz > 0 {
         let mhz = snapshot.frequency_hz as f64 / 1_000_000.0;
-        let display = format!("{mhz:.3} MHz");
-        let mhz_str = format!("{mhz:.3}");
+        let display = format!("{mhz:.5} MHz");
+        let mhz_str = format!("{mhz:.5}");
         str_to_buf(&display, &mut out.freq_display);
         str_to_buf(&mhz_str, &mut out.freq_mhz);
     }

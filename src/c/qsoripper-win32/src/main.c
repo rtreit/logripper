@@ -866,7 +866,7 @@ static void InitState(void)
     safe_strcpy(g_state.rst_rcvd, sizeof(g_state.rst_rcvd), "59");
 
     snprintf(g_state.freq_mhz, sizeof(g_state.freq_mhz),
-              "%.3f", BAND_DEFAULT_FREQS[DEFAULT_BAND_IDX]);
+              "%.5f", BAND_DEFAULT_FREQS[DEFAULT_BAND_IDX]);
 
     SetCurrentDateTime();
 }
@@ -877,7 +877,7 @@ static void ClearForm(void)
     g_state.comment[0] = 0;
     g_state.notes[0] = 0;
     snprintf(g_state.freq_mhz, sizeof(g_state.freq_mhz),
-              "%.3f", BAND_DEFAULT_FREQS[g_state.band_idx]);
+              "%.5f", BAND_DEFAULT_FREQS[g_state.band_idx]);
     SetCurrentDateTime();
 
     g_state.has_lookup = 0;
@@ -1488,7 +1488,7 @@ static void LoadSelectedQso(void)
         safe_strcpy(g_state.freq_mhz, sizeof(g_state.freq_mhz), (const char *)detail.freq_mhz);
     else
         snprintf(g_state.freq_mhz, sizeof(g_state.freq_mhz),
-                  "%.3f", BAND_DEFAULT_FREQS[g_state.band_idx]);
+                  "%.5f", BAND_DEFAULT_FREQS[g_state.band_idx]);
 
     if (detail.rst_sent[0])
         safe_strcpy(g_state.rst_sent, sizeof(g_state.rst_sent), (const char *)detail.rst_sent);
@@ -1795,21 +1795,25 @@ static int PaintLogForm(HDC hdc, int y_start, int w)
     /* Row 7: padding */
     y += 4;
 
-    /* Row 8: Hint chips */
+    /* Row 8: Hint chips (small font) */
     {
+        int scw = g_state.list_cw;
+        int sch = g_state.list_ch;
+        SelectObject(hdc, g_state.hFontSmall);
         int cx = pad;
         const char *submit_label = g_state.editing_local_id[0]
                                        ? "F10 Update QSO" : "F10 Log QSO";
-        DrawChip(hdc, cx, y, CLR_FOOTER_BG, CLR_FOOTER_FG, submit_label, cw, ch);
-        cx += ((int)strlen(submit_label) * cw + 16);
+        DrawChip(hdc, cx, y, CLR_FOOTER_BG, CLR_FOOTER_FG, submit_label, scw, sch);
+        cx += ((int)strlen(submit_label) * scw + 10);
 
-        DrawChip(hdc, cx, y, CLR_FOOTER_BG, CLR_FOOTER_FG, "Esc Clear", cw, ch);
-        cx += (9 * cw + 16);
+        DrawChip(hdc, cx, y, CLR_FOOTER_BG, CLR_FOOTER_FG, "Esc Clear", scw, sch);
+        cx += (9 * scw + 10);
 
-        DrawChip(hdc, cx, y, CLR_FOOTER_BG, CLR_FOOTER_FG, "F3 QSO List", cw, ch);
-        cx += (11 * cw + 16);
+        DrawChip(hdc, cx, y, CLR_FOOTER_BG, CLR_FOOTER_FG, "F3 QSO List", scw, sch);
+        cx += (11 * scw + 10);
 
-        DrawChip(hdc, cx, y, CLR_FOOTER_BG, CLR_FOOTER_FG, "F4 Search", cw, ch);
+        DrawChip(hdc, cx, y, CLR_FOOTER_BG, CLR_FOOTER_FG, "F4 Search", scw, sch);
+        SelectObject(hdc, g_state.hFont);
     }
     y += row_h;
 
@@ -2012,25 +2016,29 @@ static int PaintAdvancedForm(HDC hdc, int y_start, int w)
 
     y += 4;
 
-    /* Hint chips */
+    /* Hint chips (small font) */
     {
+        int scw = g_state.list_cw;
+        int sch = g_state.list_ch;
+        SelectObject(hdc, g_state.hFontSmall);
         int cx = pad;
         const char *submit_label = g_state.editing_local_id[0]
                                        ? "F10 Update QSO" : "F10 Log QSO";
         DrawChip(hdc, cx, y, CLR_FOOTER_BG, CLR_FOOTER_FG, submit_label,
-                 cw, ch);
-        cx += ((int)strlen(submit_label) * cw + 16);
+                 scw, sch);
+        cx += ((int)strlen(submit_label) * scw + 10);
 
         DrawChip(hdc, cx, y, CLR_FOOTER_BG, CLR_FOOTER_FG, "Esc Basic View",
-                 cw, ch);
-        cx += (14 * cw + 16);
+                 scw, sch);
+        cx += (14 * scw + 10);
 
         DrawChip(hdc, cx, y, CLR_FOOTER_BG, CLR_FOOTER_FG, "F5/F6 Tabs",
-                 cw, ch);
-        cx += (10 * cw + 16);
+                 scw, sch);
+        cx += (10 * scw + 10);
 
         DrawChip(hdc, cx, y, CLR_FOOTER_BG, CLR_FOOTER_FG, "F3 QSO List",
-                 cw, ch);
+                 scw, sch);
+        SelectObject(hdc, g_state.hFont);
     }
 
     return y_start + form_h;
@@ -2246,13 +2254,14 @@ static int PaintRecentQsos(HDC hdc, int y_start, int w, int bottom)
 
 static void PaintFooter(HDC hdc, int y, int w)
 {
-    int cw = g_state.char_w;
-    int ch = g_state.char_h;
+    int cw = g_state.list_cw;
+    int ch = g_state.list_ch;
     int bar_h = ch + 4;
 
     FillRect_Color(hdc, 0, y, w, bar_h, CLR_BG);
     DrawHLine(hdc, 0, w, y, CLR_CYAN);
 
+    SelectObject(hdc, g_state.hFontSmall);
     int x = cw;
     y += 2;
 
@@ -2262,9 +2271,10 @@ static void PaintFooter(HDC hdc, int y, int w)
     };
     for (int i = 0; shortcuts[i]; i++) {
         DrawChip(hdc, x, y, CLR_FOOTER_BG, CLR_FOOTER_FG, shortcuts[i], cw, ch);
-        x += (int)strlen(shortcuts[i]) * cw + 14;
+        x += (int)strlen(shortcuts[i]) * cw + 10;
         if (x > w - 10 * cw) break;
     }
+    SelectObject(hdc, g_state.hFont);
 }
 
 /* ── Drawing: Help overlay ─────────────────────────────────────────────── */
@@ -2395,8 +2405,8 @@ static void PaintAll(HWND hwnd, HDC hdc_screen, RECT *rc)
     y = PaintLookup(hdc, y, w);
     y += 2;
 
-    /* Footer position */
-    int footer_y = h - ch - 6;
+    /* Footer position (small font height) */
+    int footer_y = h - g_state.list_ch - 6;
 
     /* Recent QSOs (fill between lookup and footer) */
     PaintRecentQsos(hdc, y, w, footer_y);
@@ -2485,7 +2495,7 @@ static void TypeSelectBand(char c)
         if (toupper((unsigned char)BANDS[idx][0]) == c) {
             g_state.band_idx = idx;
             snprintf(g_state.freq_mhz, sizeof(g_state.freq_mhz),
-                      "%.3f", BAND_DEFAULT_FREQS[idx]);
+                      "%.5f", BAND_DEFAULT_FREQS[idx]);
             g_state.cursor_pos[FIELD_FREQ] = (int)strlen(g_state.freq_mhz);
             return;
         }
@@ -2848,7 +2858,7 @@ static void OnKeyDown(HWND hwnd, WPARAM vk, LPARAM lp)
         if (g_state.focused_field == FIELD_BAND) {
             g_state.band_idx = (g_state.band_idx + NUM_BANDS - 1) % NUM_BANDS;
             snprintf(g_state.freq_mhz, sizeof(g_state.freq_mhz),
-                      "%.3f", BAND_DEFAULT_FREQS[g_state.band_idx]);
+                      "%.5f", BAND_DEFAULT_FREQS[g_state.band_idx]);
             g_state.cursor_pos[FIELD_FREQ] = (int)strlen(g_state.freq_mhz);
         } else if (g_state.focused_field == FIELD_MODE) {
             g_state.mode_idx = (g_state.mode_idx + NUM_MODES - 1) % NUM_MODES;
@@ -2869,7 +2879,7 @@ static void OnKeyDown(HWND hwnd, WPARAM vk, LPARAM lp)
         if (g_state.focused_field == FIELD_BAND) {
             g_state.band_idx = (g_state.band_idx + 1) % NUM_BANDS;
             snprintf(g_state.freq_mhz, sizeof(g_state.freq_mhz),
-                      "%.3f", BAND_DEFAULT_FREQS[g_state.band_idx]);
+                      "%.5f", BAND_DEFAULT_FREQS[g_state.band_idx]);
             g_state.cursor_pos[FIELD_FREQ] = (int)strlen(g_state.freq_mhz);
         } else if (g_state.focused_field == FIELD_MODE) {
             g_state.mode_idx = (g_state.mode_idx + 1) % NUM_MODES;
