@@ -235,7 +235,7 @@ Built-in local profiles:
 | `local-rust` | `rust-tonic` | `http://127.0.0.1:50051` | `sqlite` |
 | `local-dotnet` | `dotnet-aspnet` | `http://127.0.0.1:50052` | `memory` |
 
-`start-qsoripper.ps1` is the clean local abstraction for those profiles. It imports `.env`, builds the selected engine if needed, starts it in the background from the repository root, and records process state plus stdout/stderr logs under `artifacts\run\`.
+`start-qsoripper.ps1` is the clean local abstraction for those profiles. It imports `.env`, builds the selected engine if needed, starts it in the background from the repository root, and records process state plus stdout/stderr logs under `artifacts\run\`. `-ForceRestart` only restarts the requested profile, so `local-rust` and `local-dotnet` can run side-by-side on their default ports.
 
 **Direct engine host launch:**
 
@@ -283,6 +283,14 @@ If you want an engine to stay running in the background while you log QSOs from 
 .\start-qsoripper.ps1 -Engine local-rust
 .\artifacts\publish\QsoRipper.Cli\Release\QsoRipper.Cli.exe log W1AW 20m FT8
 .\stop-qsoripper.ps1
+```
+
+To stop a specific profile (or all tracked profiles):
+
+```powershell
+.\stop-qsoripper.ps1 -Engine local-rust
+.\stop-qsoripper.ps1 -Engine local-dotnet
+.\stop-qsoripper.ps1 -All
 ```
 
 The shared client-side engine selector uses `QSORIPPER_ENGINE` (legacy `QSORIPPER_ENGINE_IMPLEMENTATION`) and `QSORIPPER_ENDPOINT`. The built-in profiles are `local-rust` and `local-dotnet`.

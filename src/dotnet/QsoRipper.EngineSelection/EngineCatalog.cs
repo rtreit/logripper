@@ -52,8 +52,12 @@ public static class EngineCatalog
             [KnownEngineProfiles.LocalDotNet, "dotnet", "dotnet-aspnet", "managed"],
             new EngineLaunchRecipe(
                 Path.Combine(".", "artifacts", "run", "dotnet-engine.json"),
-                SupportsStorageSession: false,
-                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                SupportsStorageSession: true,
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+                {
+                    ["QSORIPPER_STORAGE_BACKEND"] = "{storageBackend}",
+                    ["QSORIPPER_STORAGE_PATH"] = "{enginePersistenceLocation}",
+                },
                 new EngineCommand(
                     "pwsh",
                     [
@@ -64,7 +68,7 @@ public static class EngineCatalog
                         "-ListenAddress",
                         "{listenAddress}",
                         "-Storage",
-                        "memory",
+                        "{storageBackend}",
                         "-PersistenceLocation",
                         "{persistenceLocation}",
                         "-ConfigPath",

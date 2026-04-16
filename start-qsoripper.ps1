@@ -23,7 +23,8 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $runtimeDirectory = Join-Path $PSScriptRoot 'artifacts' | Join-Path -ChildPath 'run'
-$statePath = Join-Path $runtimeDirectory 'qsoripper-engine.json'
+$legacyStatePath = Join-Path $runtimeDirectory 'qsoripper-engine.json'
+$statePath = $null
 $dotenvPath = Join-Path $PSScriptRoot '.env'
 $defaultPersistenceLocation = Join-Path (Join-Path '.' 'data') 'qsoripper.db'
 
@@ -60,23 +61,42 @@ function Import-DotEnv([string]$Path) {
     }
 }
 
-function Get-State {
-    if (-not (Test-Path -LiteralPath $statePath)) {
+function Get-StatePathForProfile([string]$ProfileId) {
+    if ([string]::IsNullOrWhiteSpace($ProfileId)) {
+        throw 'ProfileId is required.'
+    }
+
+    return Join-Path $runtimeDirectory "qsoripper-engine-$ProfileId.json"
+}
+
+function Get-State([string]$Path = $statePath) {
+    if ([string]::IsNullOrWhiteSpace($Path) -or -not (Test-Path -LiteralPath $Path)) {
         return $null
     }
 
-    return Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json
+    return Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
 }
 
-function Get-TrackedProcess {
-    $state = Get-State
+function Remove-StateIfTrackedProcess([string]$Path, [int]$ProcessId) {
+    if ([string]::IsNullOrWhiteSpace($Path) -or -not (Test-Path -LiteralPath $Path)) {
+        return
+    }
+
+    $state = Get-State -Path $Path
+    if ($null -eq $state -or [int]$state.pid -eq $ProcessId) {
+        Remove-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Get-TrackedProcess([string]$Path = $statePath) {
+    $state = Get-State -Path $Path
     if ($null -eq $state) {
         return $null
     }
 
     $process = Get-Process -Id $state.pid -ErrorAction SilentlyContinue
     if ($null -eq $process) {
-        Remove-Item -LiteralPath $statePath -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
         return $null
     }
 
@@ -120,12 +140,12 @@ function Get-ProbeTargets([string]$Address) {
     )
 }
 
-function Format-HttpEndpoint([string]$Host, [int]$Port) {
-    if ($Host.Contains(':') -and -not $Host.StartsWith('[')) {
-        return "http://[$Host]:$Port"
+function Format-HttpEndpoint([string]$TargetHost, [int]$Port) {
+    if ($TargetHost.Contains(':') -and -not $TargetHost.StartsWith('[')) {
+        return "http://[${TargetHost}]:${Port}"
     }
 
-    return "http://$Host:$Port"
+    return "http://${TargetHost}:${Port}"
 }
 
 function Test-TcpEndpoint([string]$TargetHost, [int]$Port) {
@@ -172,6 +192,110 @@ function Stop-TrackedProcess([int]$ProcessId) {
     throw "Timed out waiting for process $ProcessId to stop."
 }
 
+function Get-ListeningProcessIdsForPort([int]$Port) {
+    if ($Port -le 0) {
+        return @()
+    }
+
+    if ($IsWindows) {
+        try {
+            $listeners = Get-NetTCPConnection -State Listen -LocalPort $Port -ErrorAction Stop
+            return @(
+                $listeners |
+                    Select-Object -ExpandProperty OwningProcess -Unique |
+                    Where-Object { $_ -gt 0 }
+            )
+        }
+        catch {
+            # Fall back to netstat parsing if Get-NetTCPConnection is unavailable.
+            $matches = netstat -ano |
+                Select-String -Pattern "LISTENING\s+(?<pid>\d+)\s*$" |
+                ForEach-Object {
+                    $line = $_.Line
+                    if ($line -match ":(?<port>\d+)\s+\S+\s+LISTENING\s+(?<pid>\d+)\s*$" -and [int]$Matches.port -eq $Port) {
+                        [int]$Matches.pid
+                    }
+                } |
+                Where-Object { $_ -gt 0 } |
+                Select-Object -Unique
+
+            return @($matches)
+        }
+    }
+
+    foreach ($netstatPath in @('/bin/netstat', '/usr/bin/netstat')) {
+        if (-not (Test-Path -LiteralPath $netstatPath)) {
+            continue
+        }
+
+        $matches = & $netstatPath -tunlp 2>$null |
+            Select-String -Pattern ":(?<port>\d+)\s+.*LISTEN" |
+            ForEach-Object {
+                $line = $_.Line
+                if ($line -match ":(?<port>\d+)\s+.*LISTEN\s+(?<pid>\d+)/" -and [int]$Matches.port -eq $Port -and [int]$Matches.pid -gt 0) {
+                    [int]$Matches.pid
+                }
+            } |
+            Where-Object { $_ -gt 0 } |
+            Select-Object -Unique
+
+        return @($matches)
+    }
+
+    return @()
+}
+
+function Get-ListeningProcessIds([object[]]$Targets) {
+    $ports = $Targets |
+        Select-Object -ExpandProperty Port -Unique |
+        Where-Object { $_ -gt 0 }
+
+    $processIds = [System.Collections.Generic.List[int]]::new()
+    foreach ($port in $ports) {
+        foreach ($processId in Get-ListeningProcessIdsForPort -Port $port) {
+            if ($processId -gt 0) {
+                $processIds.Add($processId)
+            }
+        }
+    }
+
+    return @($processIds | Select-Object -Unique)
+}
+
+function Test-LikelyQsoRipperProcess([pscustomobject]$Profile, [int]$ProcessId) {
+    $commandLine = Get-ProcessCommandLine -ProcessId $ProcessId
+    if ([string]::IsNullOrWhiteSpace($commandLine)) {
+        return $false
+    }
+
+    if (
+        $commandLine.Contains('qsoripper', [System.StringComparison]::OrdinalIgnoreCase) -or
+        $commandLine.Contains('QsoRipper.Engine.DotNet', [System.StringComparison]::OrdinalIgnoreCase)
+    ) {
+        return $true
+    }
+
+    if (
+        -not [string]::IsNullOrWhiteSpace($Profile.LaunchFilePath) -and
+        $Profile.LaunchFilePath -notin @('cargo', 'dotnet') -and
+        $commandLine.Contains($Profile.LaunchFilePath, [System.StringComparison]::OrdinalIgnoreCase)
+    ) {
+        return $true
+    }
+
+    foreach ($argument in $Profile.LaunchArguments) {
+        if ([string]::IsNullOrWhiteSpace($argument) -or $argument -match '^\{.+\}$') {
+            continue
+        }
+
+        if ($commandLine.Contains($argument, [System.StringComparison]::OrdinalIgnoreCase)) {
+            return $true
+        }
+    }
+
+    return $false
+}
+
 function Get-ProcessCommandLine([int]$ProcessId) {
     if ($IsWindows) {
         return (Get-CimInstance Win32_Process -Filter "ProcessId = $ProcessId" -ErrorAction SilentlyContinue).CommandLine
@@ -208,31 +332,64 @@ function Get-UntrackedEngineProcesses {
     }
 
     foreach ($argument in $Profile.LaunchArguments) {
-        if ([string]::IsNullOrWhiteSpace($argument) -or $argument -match '^\{.+\}$') {
+        if ([string]::IsNullOrWhiteSpace($argument) -or $argument -match '^\{.+\}$' -or $argument.StartsWith('-')) {
             continue
         }
 
-        $fragments.Add($argument)
         if (Test-Path -LiteralPath $argument) {
+            $fragments.Add($argument)
             $fragments.Add([System.IO.Path]::GetFileName($argument))
+            continue
+        }
+
+        if (
+            $argument.EndsWith('.dll', [System.StringComparison]::OrdinalIgnoreCase) -or
+            $argument.EndsWith('.exe', [System.StringComparison]::OrdinalIgnoreCase) -or
+            $argument.Contains('qsoripper', [System.StringComparison]::OrdinalIgnoreCase)
+        ) {
+            $fragments.Add($argument)
         }
     }
 
-    $matches = [System.Collections.Generic.List[System.Diagnostics.Process]]::new()
-    foreach ($candidate in Get-Process -ErrorAction SilentlyContinue) {
-        if ($TrackedProcessId -gt 0 -and $candidate.Id -eq $TrackedProcessId) {
-            continue
-        }
+    $uniqueFragments = @($fragments | Select-Object -Unique)
+    if ($uniqueFragments.Count -eq 0) {
+        return @()
+    }
 
-        $commandLine = Get-ProcessCommandLine -ProcessId $candidate.Id
-        if ([string]::IsNullOrWhiteSpace($commandLine)) {
-            continue
-        }
+    $matches = [System.Collections.Generic.List[pscustomobject]]::new()
+    if ($IsWindows) {
+        $candidates = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+            Where-Object {
+                $_.ProcessId -gt 0 -and
+                ($TrackedProcessId -le 0 -or $_.ProcessId -ne $TrackedProcessId) -and
+                -not [string]::IsNullOrWhiteSpace($_.CommandLine)
+            }
 
-        foreach ($fragment in $fragments | Select-Object -Unique) {
-            if ($commandLine.Contains($fragment, [System.StringComparison]::OrdinalIgnoreCase)) {
-                $matches.Add($candidate)
-                break
+        foreach ($candidate in $candidates) {
+            foreach ($fragment in $uniqueFragments) {
+                if ($candidate.CommandLine.Contains($fragment, [System.StringComparison]::OrdinalIgnoreCase)) {
+                    $matches.Add([pscustomobject]@{ Id = [int]$candidate.ProcessId })
+                    break
+                }
+            }
+        }
+    }
+    else {
+        foreach ($candidate in Get-Process -ErrorAction SilentlyContinue) {
+            if ($TrackedProcessId -gt 0 -and $candidate.Id -eq $TrackedProcessId) {
+                continue
+            }
+
+            $commandLine = Get-ProcessCommandLine -ProcessId $candidate.Id
+            if ([string]::IsNullOrWhiteSpace($commandLine)) {
+                continue
+            }
+
+            foreach ($fragment in $uniqueFragments) {
+                if ($commandLine.Contains($fragment, [System.StringComparison]::OrdinalIgnoreCase)) {
+                    $matches.Add([pscustomobject]@{ Id = [int]$candidate.Id })
+                    break
+                }
             }
         }
     }
@@ -341,7 +498,10 @@ function Get-EngineProfiles {
             DefaultStorage = 'memory'
             DefaultPersistenceLocation = $defaultPersistenceLocation
             DefaultConfigPath = Join-Path $runtimeDirectory 'dotnet-engine.json'
-            EnvironmentTemplates = @{}
+            EnvironmentTemplates = @{
+                QSORIPPER_STORAGE_BACKEND = '{storageBackend}'
+                QSORIPPER_STORAGE_PATH = '{persistenceLocation}'
+            }
             BuildFilePath = 'dotnet'
             BuildArguments = @('build', $dotnetProjectPath, '-c', 'Debug')
             LaunchFilePath = 'dotnet'
@@ -352,7 +512,7 @@ function Get-EngineProfiles {
                 '--config',
                 '{configPath}'
             )
-            SupportsStorageSession = $false
+            SupportsStorageSession = $true
         }
     )
 }
@@ -389,6 +549,7 @@ if ([string]::IsNullOrWhiteSpace($Engine)) {
 
 $profiles = Get-EngineProfiles
 $profile = Resolve-EngineProfile -RequestedEngine $Engine -Profiles $profiles
+$statePath = Get-StatePathForProfile -ProfileId $profile.ProfileId
 $stdoutPath = Join-Path $runtimeDirectory "qsoripper-$($profile.ProfileId).stdout.log"
 $stderrPath = Join-Path $runtimeDirectory "qsoripper-$($profile.ProfileId).stderr.log"
 
@@ -412,7 +573,7 @@ if ([string]::IsNullOrWhiteSpace($ConfigPath)) {
     $ConfigPath = $profile.DefaultConfigPath
 }
 
-$existing = Get-TrackedProcess
+$existing = Get-TrackedProcess -Path $statePath
 if ($null -ne $existing) {
     if (-not $ForceRestart) {
         Write-Host "QsoRipper is already running (PID $($existing.Process.Id)) at $($existing.State.listenAddress)." -ForegroundColor Yellow
@@ -423,10 +584,18 @@ if ($null -ne $existing) {
     Write-Info "Stopping existing QsoRipper process $($existing.Process.Id)."
     Stop-TrackedProcess -ProcessId $existing.Process.Id
     Remove-Item -LiteralPath $statePath -Force -ErrorAction SilentlyContinue
+    Remove-StateIfTrackedProcess -Path $legacyStatePath -ProcessId $existing.Process.Id
+}
+else {
+    $otherEngine = Get-TrackedProcess -Path $legacyStatePath
+    if ($null -ne $otherEngine -and $otherEngine.State.engine -ine $profile.ProfileId) {
+        Write-Info "Another tracked engine is running (PID $($otherEngine.Process.Id), $($otherEngine.State.engine)); it will be left running."
+    }
 }
 
 if ($ForceRestart) {
     $trackedProcessId = if ($null -ne $existing) { $existing.Process.Id } else { 0 }
+    Write-Info "Checking for untracked $($profile.DisplayName) processes."
     $orphans = Get-UntrackedEngineProcesses -Profile $profile -TrackedProcessId $trackedProcessId
     foreach ($orphan in $orphans) {
         Write-Info "Stopping untracked $($profile.DisplayName) process $($orphan.Id)."
@@ -451,6 +620,49 @@ if ($ForceRestart) {
             }
         }
     }
+}
+
+$probeTargets = Get-ProbeTargets -Address $ListenAddress
+Write-Info "Checking endpoint availability for $ListenAddress."
+$blockingProcessIds = Get-ListeningProcessIds -Targets $probeTargets |
+    Where-Object { $_ -ne $PID }
+if ($null -ne $existing) {
+    $blockingProcessIds = $blockingProcessIds | Where-Object { $_ -ne $existing.Process.Id }
+}
+$blockingProcessIds = @($blockingProcessIds)
+
+if ($ForceRestart -and @($blockingProcessIds).Count -gt 0) {
+    foreach ($blockingProcessId in $blockingProcessIds) {
+        if (-not (Test-LikelyQsoRipperProcess -Profile $profile -ProcessId $blockingProcessId)) {
+            continue
+        }
+
+        Write-Info "Stopping endpoint owner process $blockingProcessId on $ListenAddress."
+        Stop-TrackedProcess -ProcessId $blockingProcessId
+    }
+
+    $blockingProcessIds = Get-ListeningProcessIds -Targets $probeTargets |
+        Where-Object { $_ -ne $PID }
+    if ($null -ne $existing) {
+        $blockingProcessIds = $blockingProcessIds | Where-Object { $_ -ne $existing.Process.Id }
+    }
+    $blockingProcessIds = @($blockingProcessIds)
+}
+
+if (@($blockingProcessIds).Count -gt 0) {
+    $processLabels = $blockingProcessIds |
+        ForEach-Object {
+            $processId = $_
+            $process = Get-Process -Id $processId -ErrorAction SilentlyContinue
+            if ($null -ne $process) {
+                "$processId ($($process.ProcessName))"
+            }
+            else {
+                "$processId"
+            }
+        }
+    $endpoints = @($probeTargets | ForEach-Object { Format-HttpEndpoint -TargetHost $_.Host -Port $_.Port }) -join ', '
+    throw "Endpoint already in use: $endpoints (PID(s): $($processLabels -join ', ')). Stop the process or rerun with -ForceRestart."
 }
 
 if (-not $SkipBuild) {
@@ -519,9 +731,10 @@ $state = [pscustomobject]@{
     storage = $Storage
 }
 $state | ConvertTo-Json | Set-Content -LiteralPath $statePath
+$state | ConvertTo-Json | Set-Content -LiteralPath $legacyStatePath
 
-$probeTargets = Get-ProbeTargets -Address $ListenAddress
 $deadline = [DateTime]::UtcNow.AddSeconds($StartupTimeoutSeconds)
+$startupErrorPattern = '(?i)address already in use|only one usage of each socket address'
 
 while ([DateTime]::UtcNow -lt $deadline) {
     $runningProcess = Get-Process -Id $process.Id -ErrorAction SilentlyContinue
@@ -535,7 +748,7 @@ while ([DateTime]::UtcNow -lt $deadline) {
     foreach ($probeTarget in $probeTargets) {
         if (Test-TcpEndpoint -TargetHost $probeTarget.Host -Port $probeTarget.Port) {
             Write-Host "$($profile.DisplayName) started in the background (PID $($process.Id))." -ForegroundColor Green
-            Write-Host "Endpoint: $(Format-HttpEndpoint -Host $probeTarget.Host -Port $probeTarget.Port)" -ForegroundColor Green
+            Write-Host "Endpoint: $(Format-HttpEndpoint -TargetHost $probeTarget.Host -Port $probeTarget.Port)" -ForegroundColor Green
             if ($Storage -ne 'memory' -and -not [string]::IsNullOrWhiteSpace($PersistenceLocation)) {
                 Write-Host "Persistence location: $PersistenceLocation" -ForegroundColor Green
             }
@@ -547,9 +760,18 @@ while ([DateTime]::UtcNow -lt $deadline) {
         }
     }
 
+    $stderrTail = Get-LogTail -Path $stderrPath
+    if (($stderrTail -join [Environment]::NewLine) -match $startupErrorPattern) {
+        Stop-TrackedProcess -ProcessId $process.Id
+        Remove-Item -LiteralPath $statePath -Force -ErrorAction SilentlyContinue
+        Remove-StateIfTrackedProcess -Path $legacyStatePath -ProcessId $process.Id
+        throw "QsoRipper failed to start because the endpoint is already in use.`n$($stderrTail -join [Environment]::NewLine)"
+    }
+
     Start-Sleep -Milliseconds 250
 }
 
 Stop-TrackedProcess -ProcessId $process.Id
 Remove-Item -LiteralPath $statePath -Force -ErrorAction SilentlyContinue
-throw "QsoRipper did not open any expected endpoint ($((@($probeTargets | ForEach-Object { Format-HttpEndpoint -Host $_.Host -Port $_.Port })) -join ', ')) within $StartupTimeoutSeconds seconds."
+Remove-StateIfTrackedProcess -Path $legacyStatePath -ProcessId $process.Id
+throw "QsoRipper did not open any expected endpoint ($((@($probeTargets | ForEach-Object { Format-HttpEndpoint -TargetHost $_.Host -Port $_.Port })) -join ', ')) within $StartupTimeoutSeconds seconds."

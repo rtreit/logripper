@@ -4,6 +4,12 @@ using System.Text.RegularExpressions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using QsoRipper.Domain;
+using QsoRipper.Engine.Lookup;
+using QsoRipper.Engine.QrzLogbook;
+using QsoRipper.Engine.RigControl;
+using QsoRipper.Engine.SpaceWeather;
+using QsoRipper.Engine.Storage;
+using QsoRipper.Engine.Storage.Memory;
 using QsoRipper.EngineSelection;
 using QsoRipper.Services;
 
@@ -12,6 +18,7 @@ namespace QsoRipper.Engine.DotNet;
 internal sealed class ManagedEngineState
 {
     private const string PersistenceStepDescription = "The managed .NET engine keeps its logbook in memory. No persistence input is required during setup.";
+    private const string PersistenceStepDescriptionSqlite = "The managed .NET engine stores its logbook in a local SQLite database.";
     private const string PersistenceStepLabel = "Storage";
     private const string PersistenceSummary = "In-memory logbook";
 
@@ -35,8 +42,10 @@ internal sealed class ManagedEngineState
     private static readonly JsonParser ProtoJsonParser = new(JsonParser.Settings.Default.WithIgnoreUnknownFields(true));
 
     private readonly Lock _gate = new();
-    private readonly List<QsoRecord> _recentQsos = [];
-    private readonly Dictionary<string, LookupResult> _lookupCache = new(StringComparer.OrdinalIgnoreCase);
+    private readonly IEngineStorage _storage;
+    private readonly ILookupCoordinator _lookupCoordinator;
+    private readonly RigControlMonitor? _rigControlMonitor;
+    private readonly SpaceWeatherMonitor? _spaceWeatherMonitor;
     private readonly string _configPath;
     private string? _qrzXmlUsername;
     private bool _hasQrzXmlPassword;
@@ -46,14 +55,45 @@ internal sealed class ManagedEngineState
     private readonly List<ManagedPersistedStationProfile> _stationProfiles;
     private string? _activeProfileId;
     private StationProfile? _sessionOverrideProfile;
-    private DateTimeOffset? _lastSyncUtc;
     private readonly Dictionary<string, string> _runtimeOverrides;
+    private readonly QrzSyncEngine? _syncEngine;
 
     public ManagedEngineState(string configPath)
+        : this(configPath, new MemoryStorage(), null, null, null, null)
+    {
+    }
+
+    public ManagedEngineState(string configPath, IEngineStorage storage)
+        : this(configPath, storage, null, null, null, null)
+    {
+    }
+
+    public ManagedEngineState(string configPath, IEngineStorage storage, ILookupCoordinator? lookupCoordinator)
+        : this(configPath, storage, lookupCoordinator, null, null, null)
+    {
+    }
+
+    public ManagedEngineState(string configPath, IEngineStorage storage, ILookupCoordinator? lookupCoordinator, RigControlMonitor? rigControlMonitor)
+        : this(configPath, storage, lookupCoordinator, rigControlMonitor, null, null)
+    {
+    }
+
+    public ManagedEngineState(string configPath, IEngineStorage storage, ILookupCoordinator? lookupCoordinator, RigControlMonitor? rigControlMonitor, SpaceWeatherMonitor? spaceWeatherMonitor)
+        : this(configPath, storage, lookupCoordinator, rigControlMonitor, spaceWeatherMonitor, null)
+    {
+    }
+
+    public ManagedEngineState(string configPath, IEngineStorage storage, ILookupCoordinator? lookupCoordinator, RigControlMonitor? rigControlMonitor, SpaceWeatherMonitor? spaceWeatherMonitor, QrzSyncEngine? syncEngine)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(configPath);
+        ArgumentNullException.ThrowIfNull(storage);
 
         _configPath = Path.GetFullPath(configPath.Trim());
+        _storage = storage;
+        _lookupCoordinator = lookupCoordinator ?? CreateDefaultCoordinator(storage);
+        _rigControlMonitor = rigControlMonitor;
+        _spaceWeatherMonitor = spaceWeatherMonitor;
+        _syncEngine = syncEngine;
         var persisted = LoadPersistedState(_configPath);
         _qrzXmlUsername = NormalizeOptional(persisted.QrzXmlUsername);
         _hasQrzXmlPassword = persisted.HasQrzXmlPassword;
@@ -63,8 +103,12 @@ internal sealed class ManagedEngineState
         _stationProfiles = persisted.StationProfiles.ToList();
         _activeProfileId = NormalizeOptional(persisted.ActiveProfileId);
         _sessionOverrideProfile = ParseOptionalProto<StationProfile>(persisted.SessionOverrideProfileJson);
-        _lastSyncUtc = persisted.LastSyncUtc;
         _runtimeOverrides = new Dictionary<string, string>(persisted.RuntimeOverrides, StringComparer.OrdinalIgnoreCase);
+
+        if (persisted.LastSyncUtc is { } lastSync)
+        {
+            Sync(_storage.Logbook.UpsertSyncMetadataAsync(new SyncMetadata { LastSync = lastSync }));
+        }
     }
 
     public static EngineInfo BuildEngineInfo()
@@ -186,10 +230,11 @@ internal sealed class ManagedEngineState
 
         lock (_gate)
         {
+            var counts = Sync(_storage.Logbook.GetCountsAsync());
             var response = new TestQrzLogbookCredentialsResponse
             {
                 Success = true,
-                QsoCount = (uint)_recentQsos.Count,
+                QsoCount = (uint)counts.LocalQsoCount,
             };
             var active = GetEffectiveActiveProfileNoLock();
             if (!string.IsNullOrWhiteSpace(active?.StationCallsign))
@@ -399,7 +444,7 @@ internal sealed class ManagedEngineState
             };
 
             ApplySyncFlagsNoLock(qso, request.SyncToQrz, response);
-            _recentQsos.Insert(0, qso);
+            Sync(_storage.Logbook.InsertQsoAsync(qso));
             return response;
         }
     }
@@ -416,20 +461,20 @@ internal sealed class ManagedEngineState
                 return new UpdateQsoResponse { Success = false, Error = "local_id is required." };
             }
 
-            var index = _recentQsos.FindIndex(item => string.Equals(item.LocalId, qso.LocalId, StringComparison.Ordinal));
-            if (index < 0)
+            var existing = Sync(_storage.Logbook.GetQsoAsync(qso.LocalId));
+            if (existing is null)
             {
                 return new UpdateQsoResponse { Success = false, Error = $"QSO '{qso.LocalId}' was not found." };
             }
 
-            ApplyStationContextNoLock(qso, _recentQsos[index]);
+            ApplyStationContextNoLock(qso, existing);
             ManagedQsoParity.NormalizeQsoForPersistence(qso);
             ValidateQsoNoLock(qso);
             FinalizeQsoForWrite(qso, isNew: false);
 
             var response = new UpdateQsoResponse { Success = true };
             ApplySyncFlagsNoLock(qso, request.SyncToQrz, response);
-            _recentQsos[index] = qso;
+            Sync(_storage.Logbook.UpdateQsoAsync(qso));
             return response;
         }
     }
@@ -440,8 +485,7 @@ internal sealed class ManagedEngineState
 
         lock (_gate)
         {
-            var removed = _recentQsos.RemoveAll(item => string.Equals(item.LocalId, localId.Trim(), StringComparison.Ordinal));
-            return removed > 0;
+            return Sync(_storage.Logbook.DeleteQsoAsync(localId.Trim()));
         }
     }
 
@@ -451,9 +495,7 @@ internal sealed class ManagedEngineState
 
         lock (_gate)
         {
-            return _recentQsos
-                .FirstOrDefault(item => string.Equals(item.LocalId, localId.Trim(), StringComparison.Ordinal))
-                ?.Clone();
+            return Sync(_storage.Logbook.GetQsoAsync(localId.Trim()));
         }
     }
 
@@ -463,64 +505,30 @@ internal sealed class ManagedEngineState
 
         lock (_gate)
         {
-            IEnumerable<QsoRecord> query = _recentQsos.Select(item => item.Clone());
-
-            if (request.After is not null)
+            var storageQuery = new QsoListQuery
             {
-                var after = request.After.ToDateTimeOffset();
-                query = query.Where(item => item.UtcTimestamp.ToDateTimeOffset() > after);
-            }
+                After = request.After is not null ? request.After.ToDateTimeOffset() : null,
+                Before = request.Before is not null ? request.Before.ToDateTimeOffset() : null,
+                CallsignFilter = NormalizeOptional(request.CallsignFilter),
+                BandFilter = request.HasBandFilter ? request.BandFilter : null,
+                ModeFilter = request.HasModeFilter ? request.ModeFilter : null,
+                ContestId = NormalizeOptional(request.ContestId),
+                Offset = request.Offset > 0 ? (int)request.Offset : 0,
+                Limit = request.Limit > 0 ? (int)request.Limit : null,
+                Sort = request.Sort == QsoRipper.Services.QsoSortOrder.OldestFirst
+                    ? Storage.QsoSortOrder.OldestFirst
+                    : Storage.QsoSortOrder.NewestFirst,
+            };
 
-            if (request.Before is not null)
-            {
-                var before = request.Before.ToDateTimeOffset();
-                query = query.Where(item => item.UtcTimestamp.ToDateTimeOffset() < before);
-            }
-
-            if (!string.IsNullOrWhiteSpace(request.CallsignFilter))
-            {
-                query = query.Where(item =>
-                    item.WorkedCallsign.Contains(request.CallsignFilter.Trim(), StringComparison.OrdinalIgnoreCase));
-            }
-
-            if (request.HasBandFilter)
-            {
-                query = query.Where(item => item.Band == request.BandFilter);
-            }
-
-            if (request.HasModeFilter)
-            {
-                query = query.Where(item => item.Mode == request.ModeFilter);
-            }
-
-            if (!string.IsNullOrWhiteSpace(request.ContestId))
-            {
-                query = query.Where(item => string.Equals(item.ContestId, request.ContestId, StringComparison.OrdinalIgnoreCase));
-            }
-
-            query = request.Sort == QsoSortOrder.OldestFirst
-                ? query.OrderBy(item => item.UtcTimestamp.ToDateTimeOffset()).ThenBy(item => item.LocalId, StringComparer.Ordinal)
-                : query.OrderByDescending(item => item.UtcTimestamp.ToDateTimeOffset()).ThenByDescending(item => item.LocalId, StringComparer.Ordinal);
-
-            if (request.Offset > 0)
-            {
-                query = query.Skip((int)request.Offset);
-            }
-
-            if (request.Limit > 0)
-            {
-                query = query.Take((int)request.Limit);
-            }
-
-            return query.ToArray();
+            return Sync(_storage.Logbook.ListQsosAsync(storageQuery));
         }
     }
 
-    public SyncWithQrzResponse SyncWithQrz()
+    public SyncWithQrzResponse SyncWithQrz(bool fullSync = false)
     {
         lock (_gate)
         {
-            if (!_hasQrzLogbookApiKey)
+            if (_syncEngine is null)
             {
                 return new SyncWithQrzResponse
                 {
@@ -529,35 +537,38 @@ internal sealed class ManagedEngineState
                 };
             }
 
-            _lastSyncUtc = DateTimeOffset.UtcNow;
-            var uploadedCount = 0u;
-
-            for (var i = 0; i < _recentQsos.Count; i++)
+            try
             {
-                if (_recentQsos[i].SyncStatus != SyncStatus.Synced)
+                var result = Sync(_syncEngine.ExecuteSyncAsync(_storage.Logbook, fullSync));
+
+                var syncResponse = new SyncWithQrzResponse
                 {
-                    var updated = _recentQsos[i].Clone();
-                    updated.SyncStatus = SyncStatus.Synced;
-                    if (!updated.HasQrzLogid)
-                    {
-                        updated.QrzLogid = $"managed-{i + 1}";
-                    }
+                    DownloadedRecords = result.DownloadedCount,
+                    UploadedRecords = result.UploadedCount,
+                    ConflictRecords = result.ConflictCount,
+                    TotalRecords = result.DownloadedCount + result.UploadedCount,
+                    ProcessedRecords = result.DownloadedCount + result.UploadedCount,
+                    CurrentAction = "Sync completed.",
+                    Complete = true,
+                };
 
-                    _recentQsos[i] = updated;
-                    uploadedCount++;
+                if (result.ErrorSummary is not null)
+                {
+                    syncResponse.Error = result.ErrorSummary;
                 }
-            }
 
-            return new SyncWithQrzResponse
+                return syncResponse;
+            }
+#pragma warning disable CA1031 // Do not catch general exception types — sync must not crash the engine
+            catch (Exception ex)
+#pragma warning restore CA1031
             {
-                TotalRecords = (uint)_recentQsos.Count,
-                ProcessedRecords = (uint)_recentQsos.Count,
-                UploadedRecords = uploadedCount,
-                DownloadedRecords = 0,
-                ConflictRecords = 0,
-                CurrentAction = "Managed engine sync completed.",
-                Complete = true,
-            };
+                return new SyncWithQrzResponse
+                {
+                    Complete = true,
+                    Error = $"{ex.Message}\n{ex.StackTrace}",
+                };
+            }
         }
     }
 
@@ -565,16 +576,19 @@ internal sealed class ManagedEngineState
     {
         lock (_gate)
         {
+            var counts = Sync(_storage.Logbook.GetCountsAsync());
+            var syncMeta = Sync(_storage.Logbook.GetSyncMetadataAsync());
+
             var response = new GetSyncStatusResponse
             {
-                LocalQsoCount = (uint)_recentQsos.Count,
-                QrzQsoCount = _hasQrzLogbookApiKey ? (uint)_recentQsos.Count(item => item.SyncStatus == SyncStatus.Synced) : 0,
-                PendingUpload = (uint)_recentQsos.Count(item => item.SyncStatus != SyncStatus.Synced),
+                LocalQsoCount = (uint)counts.LocalQsoCount,
+                QrzQsoCount = _hasQrzLogbookApiKey ? (uint)(counts.LocalQsoCount - counts.PendingUploadCount) : 0,
+                PendingUpload = (uint)counts.PendingUploadCount,
                 IsSyncing = false,
                 AutoSyncEnabled = _syncConfig.AutoSyncEnabled && _hasQrzLogbookApiKey,
             };
 
-            if (_lastSyncUtc is { } lastSyncUtc)
+            if (syncMeta.LastSync is { } lastSyncUtc)
             {
                 response.LastSync = Timestamp.FromDateTimeOffset(lastSyncUtc);
             }
@@ -598,6 +612,7 @@ internal sealed class ManagedEngineState
         {
             var response = new ImportAdifResponse();
             var activeStationProfile = GetEffectiveActiveProfileNoLock();
+            var allExisting = Sync(_storage.Logbook.ListQsosAsync(new QsoListQuery())).ToList();
 
             for (var index = 0; index < qsos.Count; index++)
             {
@@ -631,13 +646,14 @@ internal sealed class ManagedEngineState
                     continue;
                 }
 
-                var existingIndex = _recentQsos.FindIndex(existing => ManagedQsoParity.QsosMatchForDuplicate(existing, qso));
-                if (existingIndex >= 0)
+                var existingMatch = allExisting.FindIndex(existing => ManagedQsoParity.QsosMatchForDuplicate(existing, qso));
+                if (existingMatch >= 0)
                 {
                     if (refresh)
                     {
-                        var merged = ManagedQsoParity.MergeQsoForRefresh(_recentQsos[existingIndex], qso);
-                        _recentQsos[existingIndex] = merged;
+                        var merged = ManagedQsoParity.MergeQsoForRefresh(allExisting[existingMatch], qso);
+                        Sync(_storage.Logbook.UpdateQsoAsync(merged));
+                        allExisting[existingMatch] = merged;
                         response.RecordsUpdated++;
                         response.Warnings.Add($"Record {recordNumber}: refreshed existing record '{merged.LocalId}'.");
                     }
@@ -654,7 +670,8 @@ internal sealed class ManagedEngineState
                 ValidateQsoNoLock(qso);
                 FinalizeQsoForWrite(qso, isNew: true);
                 qso.SyncStatus = SyncStatus.LocalOnly;
-                _recentQsos.Insert(0, qso);
+                Sync(_storage.Logbook.InsertQsoAsync(qso));
+                allExisting.Add(qso);
                 response.RecordsImported++;
             }
 
@@ -668,30 +685,16 @@ internal sealed class ManagedEngineState
 
         lock (_gate)
         {
-            IEnumerable<QsoRecord> query = _recentQsos.Select(item => item.Clone());
-
-            if (request.After is not null)
+            var storageQuery = new QsoListQuery
             {
-                var after = request.After.ToDateTimeOffset();
-                query = query.Where(item => item.UtcTimestamp is not null && item.UtcTimestamp.ToDateTimeOffset() > after);
-            }
+                After = request.After is not null ? request.After.ToDateTimeOffset() : null,
+                Before = request.Before is not null ? request.Before.ToDateTimeOffset() : null,
+                ContestId = NormalizeOptional(request.ContestId),
+                Sort = Storage.QsoSortOrder.OldestFirst,
+            };
 
-            if (request.Before is not null)
-            {
-                var before = request.Before.ToDateTimeOffset();
-                query = query.Where(item => item.UtcTimestamp is not null && item.UtcTimestamp.ToDateTimeOffset() < before);
-            }
-
-            if (!string.IsNullOrWhiteSpace(request.ContestId))
-            {
-                query = query.Where(item => string.Equals(item.ContestId, request.ContestId, StringComparison.OrdinalIgnoreCase));
-            }
-
-            query = query
-                .OrderBy(item => item.UtcTimestamp?.ToDateTimeOffset() ?? DateTimeOffset.MinValue)
-                .ThenBy(item => item.LocalId, StringComparer.Ordinal);
-
-            return ManagedAdifCodec.SerializeAdiQsos(query, request.IncludeHeader);
+            var qsos = Sync(_storage.Logbook.ListQsosAsync(storageQuery));
+            return ManagedAdifCodec.SerializeAdiQsos(qsos, request.IncludeHeader);
         }
     }
 
@@ -699,89 +702,79 @@ internal sealed class ManagedEngineState
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(callsign);
 
-        lock (_gate)
+        if (cacheOnly)
         {
-            var normalized = callsign.Trim().ToUpperInvariant();
-            if (!skipCache && _lookupCache.TryGetValue(normalized, out var cached))
-            {
-                var result = cached.Clone();
-                result.CacheHit = true;
-                result.LookupLatencyMs = 0;
-                return new LookupResponse { Result = result };
-            }
-
-            if (cacheOnly)
-            {
-                return new LookupResponse
-                {
-                    Result = new LookupResult
-                    {
-                        State = LookupState.NotFound,
-                        CacheHit = true,
-                        LookupLatencyMs = 0,
-                        QueriedCallsign = normalized,
-                    }
-                };
-            }
-
-            var resultToCache = BuildLookupResultNoLock(normalized);
-            _lookupCache[normalized] = resultToCache.Clone();
-            return new LookupResponse { Result = resultToCache };
+            var cached = _lookupCoordinator.GetCachedAsync(callsign).GetAwaiter().GetResult();
+            return new LookupResponse { Result = cached };
         }
+
+        var result = _lookupCoordinator.LookupAsync(callsign, skipCache).GetAwaiter().GetResult();
+
+        // Also persist to the snapshot store for backward compat with existing storage code.
+        var normalized = callsign.Trim().ToUpperInvariant();
+        Sync(_storage.LookupSnapshots.UpsertAsync(new LookupSnapshot
+        {
+            Callsign = normalized,
+            Result = result.Clone(),
+            StoredAt = DateTimeOffset.UtcNow,
+        }));
+
+        return new LookupResponse { Result = result };
     }
 
     public StreamLookupResponse[] StreamLookup(string callsign)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(callsign);
 
-        var normalized = callsign.Trim().ToUpperInvariant();
-        return
-        [
-            new StreamLookupResponse
-            {
-                Result = new LookupResult
-                {
-                    State = LookupState.Loading,
-                    CacheHit = false,
-                    LookupLatencyMs = 0,
-                    QueriedCallsign = normalized,
-                }
-            },
-            new StreamLookupResponse
-            {
-                Result = Lookup(callsign).Result
-            }
-        ];
+        var results = _lookupCoordinator.StreamLookupAsync(callsign).GetAwaiter().GetResult();
+        return results.Select(r => new StreamLookupResponse { Result = r }).ToArray();
     }
 
     public GetRigStatusResponse CreateRigStatusResponse()
     {
-        lock (_gate)
+        if (_rigControlMonitor is null)
         {
-            if (_rigControl is null || !_rigControl.Enabled)
+            lock (_gate)
             {
-                return new GetRigStatusResponse
+                if (_rigControl is null || !_rigControl.Enabled)
                 {
-                    Status = RigConnectionStatus.Disabled,
-                    ErrorMessage = "Rig control is disabled in the managed engine.",
+                    return new GetRigStatusResponse
+                    {
+                        Status = RigConnectionStatus.Disabled,
+                        ErrorMessage = "Rig control is disabled in the managed engine.",
+                    };
+                }
+
+                var response = new GetRigStatusResponse
+                {
+                    Status = RigConnectionStatus.Connected,
                 };
-            }
+                if (_rigControl.HasHost && _rigControl.HasPort)
+                {
+                    response.Endpoint = $"{_rigControl.Host}:{_rigControl.Port}";
+                }
 
-            var response = new GetRigStatusResponse
-            {
-                Status = RigConnectionStatus.Connected,
-            };
-            if (_rigControl.HasHost && _rigControl.HasPort)
-            {
-                response.Endpoint = $"{_rigControl.Host}:{_rigControl.Port}";
+                return response;
             }
-
-            return response;
         }
+
+        var snapshot = _rigControlMonitor.CurrentSnapshot();
+        var result = new GetRigStatusResponse { Status = snapshot.Status };
+        if (snapshot.HasErrorMessage)
+        {
+            result.ErrorMessage = snapshot.ErrorMessage;
+        }
+
+        return result;
     }
 
     public RigSnapshot BuildRigSnapshot()
     {
+        if (_rigControlMonitor is not null)
+        {
+            return _rigControlMonitor.CurrentSnapshot();
+        }
+
         var status = CreateRigStatusResponse();
         return new RigSnapshot
         {
@@ -796,6 +789,17 @@ internal sealed class ManagedEngineState
 
     public TestRigConnectionResponse TestRigConnection()
     {
+        if (_rigControlMonitor is not null)
+        {
+            var refreshed = _rigControlMonitor.RefreshSnapshot();
+            return new TestRigConnectionResponse
+            {
+                Success = refreshed.Status == RigConnectionStatus.Connected,
+                ErrorMessage = refreshed.HasErrorMessage ? refreshed.ErrorMessage : null,
+                Snapshot = refreshed.Status == RigConnectionStatus.Connected ? refreshed : null,
+            };
+        }
+
         var snapshot = BuildRigSnapshot();
         return new TestRigConnectionResponse
         {
@@ -805,21 +809,21 @@ internal sealed class ManagedEngineState
         };
     }
 
-    public static SpaceWeatherSnapshot BuildSpaceWeatherSnapshot(bool refreshed)
+    public SpaceWeatherSnapshot BuildSpaceWeatherSnapshot(bool refreshed)
     {
-        var now = DateTimeOffset.UtcNow;
-        return new SpaceWeatherSnapshot
+        if (_spaceWeatherMonitor is null)
         {
-            ObservedAt = Timestamp.FromDateTimeOffset(now),
-            FetchedAt = Timestamp.FromDateTimeOffset(now),
-            Status = SpaceWeatherStatus.Current,
-            PlanetaryKIndex = refreshed ? 2.3 : 2.0,
-            PlanetaryAIndex = 9,
-            SolarFluxIndex = refreshed ? 152.0 : 148.0,
-            SunspotNumber = 96,
-            GeomagneticStormScale = 1,
-            SourceName = "Managed sample provider",
-        };
+            return new SpaceWeatherSnapshot
+            {
+                Status = SpaceWeatherStatus.Error,
+                ErrorMessage = "Space weather not configured",
+                SourceName = "NOAA SWPC",
+            };
+        }
+
+        return refreshed
+            ? _spaceWeatherMonitor.RefreshSnapshot()
+            : _spaceWeatherMonitor.CurrentSnapshot();
     }
 
     public RuntimeConfigSnapshot GetRuntimeConfigSnapshot()
@@ -990,6 +994,7 @@ internal sealed class ManagedEngineState
             Directory.CreateDirectory(directory);
         }
 
+        var syncMeta = Sync(_storage.Logbook.GetSyncMetadataAsync());
         var persisted = new ManagedEnginePersistedState
         {
             QrzXmlUsername = _qrzXmlUsername,
@@ -999,7 +1004,7 @@ internal sealed class ManagedEngineState
             RigControlJson = _rigControl is null ? null : ProtoJsonFormatter.Format(_rigControl),
             ActiveProfileId = _activeProfileId,
             SessionOverrideProfileJson = _sessionOverrideProfile is null ? null : ProtoJsonFormatter.Format(_sessionOverrideProfile),
-            LastSyncUtc = _lastSyncUtc,
+            LastSyncUtc = syncMeta.LastSync,
         };
 
         foreach (var entry in _stationProfiles)
@@ -1021,6 +1026,7 @@ internal sealed class ManagedEngineState
 
     private SetupStatus BuildSetupStatusNoLock()
     {
+        var isSqlite = string.Equals(_storage.BackendName, "sqlite", StringComparison.OrdinalIgnoreCase);
         var status = new SetupStatus
         {
             ConfigFileExists = File.Exists(_configPath),
@@ -1032,15 +1038,15 @@ internal sealed class ManagedEngineState
             IsFirstRun = !File.Exists(_configPath),
             HasQrzXmlPassword = _hasQrzXmlPassword,
             HasQrzLogbookApiKey = _hasQrzLogbookApiKey,
-            PersistenceDescription = PersistenceStepDescription,
+            PersistenceDescription = isSqlite ? PersistenceStepDescriptionSqlite : PersistenceStepDescription,
             PersistenceLabel = PersistenceStepLabel,
             PersistenceContractExplicit = true,
             SyncConfig = _syncConfig.Clone(),
         };
 #pragma warning disable CS0612
-        status.StorageBackend = StorageBackend.Memory;
+        status.StorageBackend = isSqlite ? StorageBackend.Sqlite : StorageBackend.Memory;
 #pragma warning restore CS0612
-        status.PersistenceStepEnabled = false;
+        status.PersistenceStepEnabled = isSqlite;
 
         if (!string.IsNullOrWhiteSpace(_qrzXmlUsername))
         {
@@ -1057,7 +1063,11 @@ internal sealed class ManagedEngineState
             status.RigControl = _rigControl.Clone();
         }
 
-        status.Warnings.Add("Managed .NET engine currently uses an in-memory logbook.");
+        if (!isSqlite)
+        {
+            status.Warnings.Add("Managed .NET engine currently uses an in-memory logbook.");
+        }
+
         return status;
     }
 
@@ -1258,70 +1268,26 @@ internal sealed class ManagedEngineState
         response.SyncSuccess = true;
     }
 
-    private static LookupResult BuildLookupResultNoLock(string normalizedCallsign)
+    private static LookupCoordinator CreateDefaultCoordinator(IEngineStorage storage)
     {
-        if (normalizedCallsign.Contains("NOTFOUND", StringComparison.Ordinal))
+        ICallsignProvider provider;
+        var username = Environment.GetEnvironmentVariable("QSORIPPER_QRZ_XML_USERNAME")?.Trim();
+        var password = Environment.GetEnvironmentVariable("QSORIPPER_QRZ_XML_PASSWORD")?.Trim();
+
+        if (!string.IsNullOrWhiteSpace(username) && !string.IsNullOrWhiteSpace(password))
         {
-            return new LookupResult
-            {
-                State = LookupState.NotFound,
-                CacheHit = false,
-                LookupLatencyMs = 6,
-                QueriedCallsign = normalizedCallsign,
-            };
+            // HttpClient is intentionally not disposed — it is a singleton owned by the provider for the app lifetime.
+#pragma warning disable CA2000 // Dispose objects before losing scope
+            var httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(8) };
+#pragma warning restore CA2000
+            provider = new Lookup.Qrz.QrzXmlProvider(httpClient, username, password);
+        }
+        else
+        {
+            provider = new Lookup.Qrz.DisabledCallsignProvider();
         }
 
-        if (normalizedCallsign.Contains("ERROR", StringComparison.Ordinal))
-        {
-            return new LookupResult
-            {
-                State = LookupState.Error,
-                ErrorMessage = "Managed sample lookup forced an error for this callsign.",
-                CacheHit = false,
-                LookupLatencyMs = 6,
-                QueriedCallsign = normalizedCallsign,
-            };
-        }
-
-        var record = new CallsignRecord
-        {
-            Callsign = normalizedCallsign,
-            CrossRef = normalizedCallsign,
-            FirstName = "Managed",
-            LastName = "Operator",
-            Nickname = "Managed",
-            FormattedName = $"Managed Operator ({normalizedCallsign})",
-            LicenseClass = "Reference",
-            Addr1 = "1 Engine Way",
-            Addr2 = "Redmond",
-            State = "WA",
-            Zip = "98052",
-            Country = "United States",
-            GridSquare = "CN87",
-            County = "King",
-            Latitude = 47.6740,
-            Longitude = -122.1215,
-            Email = "managed-engine@example.com",
-            WebUrl = $"https://example.invalid/{normalizedCallsign}",
-            CqZone = 3,
-            ItuZone = 2,
-            DxccCountryName = "United States",
-            DxccContinent = "NA",
-            Eqsl = QslPreference.Yes,
-            Lotw = QslPreference.Yes,
-            PaperQsl = QslPreference.No,
-            TimeZone = "America/Los_Angeles",
-        };
-        record.Aliases.Add($"ALT-{normalizedCallsign}");
-
-        return new LookupResult
-        {
-            State = LookupState.Found,
-            Record = record,
-            CacheHit = false,
-            LookupLatencyMs = 6,
-            QueriedCallsign = normalizedCallsign,
-        };
+        return new LookupCoordinator(provider, storage.LookupSnapshots);
     }
 
     private static List<RuntimeConfigDefinition> BuildRuntimeConfigDefinitionsNoLock()
@@ -1507,4 +1473,13 @@ internal sealed class ManagedEngineState
 
         return "default";
     }
+
+    /// <summary>Synchronously extracts the result of a completed <see cref="ValueTask{T}"/>.</summary>
+    private static T Sync<T>(ValueTask<T> task) => task.GetAwaiter().GetResult();
+
+    /// <summary>Synchronously awaits a completed <see cref="ValueTask"/>.</summary>
+    private static void Sync(ValueTask task) => task.GetAwaiter().GetResult();
+
+    /// <summary>Synchronously extracts the result of a <see cref="Task{T}"/>.</summary>
+    private static T Sync<T>(Task<T> task) => task.GetAwaiter().GetResult();
 }
