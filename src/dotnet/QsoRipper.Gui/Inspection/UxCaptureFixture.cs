@@ -6,6 +6,7 @@ using System.Text.Json;
 using Google.Protobuf.WellKnownTypes;
 using QsoRipper.Domain;
 using QsoRipper.Gui.Utilities;
+using QsoRipper.Services;
 
 namespace QsoRipper.Gui.Inspection;
 
@@ -74,6 +75,16 @@ internal sealed record UxCaptureFixture
 
     public string ConflictPolicy { get; init; } = nameof(QsoRipper.Domain.ConflictPolicy.LastWriteWins);
 
+    public bool? RigControlEnabled { get; init; }
+
+    public string? RigControlHost { get; init; }
+
+    public uint? RigControlPort { get; init; }
+
+    public ulong? RigControlReadTimeoutMs { get; init; }
+
+    public ulong? RigControlStaleThresholdMs { get; init; }
+
     public bool IsSyncing { get; init; }
 
     public IReadOnlyList<UxCaptureQsoFixtureItem> RecentQsos { get; init; } = CreateDefaultRecentQsos();
@@ -137,6 +148,48 @@ internal sealed record UxCaptureFixture
         }
 
         return profile;
+    }
+
+    public RigControlSettings? BuildRigControlSettings()
+    {
+        var hasValues = RigControlEnabled.HasValue
+            || !string.IsNullOrWhiteSpace(RigControlHost)
+            || RigControlPort.HasValue
+            || RigControlReadTimeoutMs.HasValue
+            || RigControlStaleThresholdMs.HasValue;
+
+        if (!hasValues)
+        {
+            return null;
+        }
+
+        var settings = new RigControlSettings();
+        if (RigControlEnabled.HasValue)
+        {
+            settings.Enabled = RigControlEnabled.Value;
+        }
+
+        if (!string.IsNullOrWhiteSpace(RigControlHost))
+        {
+            settings.Host = RigControlHost;
+        }
+
+        if (RigControlPort.HasValue)
+        {
+            settings.Port = RigControlPort.Value;
+        }
+
+        if (RigControlReadTimeoutMs.HasValue)
+        {
+            settings.ReadTimeoutMs = RigControlReadTimeoutMs.Value;
+        }
+
+        if (RigControlStaleThresholdMs.HasValue)
+        {
+            settings.StaleThresholdMs = RigControlStaleThresholdMs.Value;
+        }
+
+        return settings;
     }
 
     public SyncConfig BuildSyncConfig() => new()

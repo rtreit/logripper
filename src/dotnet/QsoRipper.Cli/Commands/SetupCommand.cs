@@ -53,6 +53,7 @@ internal static class SetupCommand
         Console.WriteLine($"QRZ username:      {status.QrzXmlUsername ?? "(not set)"}");
         Console.WriteLine($"QRZ Logbook key:   {(status.HasQrzLogbookApiKey ? "(configured)" : "(not set)")}");
         Console.WriteLine($"Station profile:   {status.HasStationProfile}");
+        Console.WriteLine($"Rig control:       {FormatRigControlSummary(status.RigControl)}");
 #pragma warning disable CS0612 // Type or member is obsolete
         Console.WriteLine($"Storage backend:   {status.StorageBackend}");
 #pragma warning restore CS0612
@@ -63,6 +64,8 @@ internal static class SetupCommand
     internal static async Task<int> RunFromEnvAsync(GrpcChannel channel)
     {
         var client = new SetupService.SetupServiceClient(channel);
+        var statusResponse = await client.GetSetupStatusAsync(new GetSetupStatusRequest());
+        var currentStatus = statusResponse.Status;
 
         var stationCallsign = Environment.GetEnvironmentVariable("QSORIPPER_STATION_CALLSIGN");
         if (string.IsNullOrWhiteSpace(stationCallsign))
@@ -80,12 +83,45 @@ internal static class SetupCommand
         var qrzLogbookApiKey = Environment.GetEnvironmentVariable("QSORIPPER_QRZ_LOGBOOK_API_KEY");
         var autoSyncEnv = Environment.GetEnvironmentVariable("QSORIPPER_AUTO_SYNC");
         var syncIntervalEnv = Environment.GetEnvironmentVariable("QSORIPPER_SYNC_INTERVAL");
+        var rigEnabledEnv = Environment.GetEnvironmentVariable("QSORIPPER_RIGCTLD_ENABLED");
+        var rigHostEnv = Environment.GetEnvironmentVariable("QSORIPPER_RIGCTLD_HOST");
+        var rigPortEnv = Environment.GetEnvironmentVariable("QSORIPPER_RIGCTLD_PORT");
+        var rigReadTimeoutEnv = Environment.GetEnvironmentVariable("QSORIPPER_RIGCTLD_READ_TIMEOUT_MS");
+        var rigStaleThresholdEnv = Environment.GetEnvironmentVariable("QSORIPPER_RIGCTLD_STALE_THRESHOLD_MS");
+
+        if (!TryParseOptionalBooleanEnv(
+                rigEnabledEnv,
+                "QSORIPPER_RIGCTLD_ENABLED",
+                out var rigEnabled))
+        {
+            return 1;
+        }
+
+        if (!TryParseOptionalUInt32Env(rigPortEnv, "QSORIPPER_RIGCTLD_PORT", out var rigPort))
+        {
+            return 1;
+        }
+
+        if (!TryParseOptionalUInt64Env(
+                rigReadTimeoutEnv,
+                "QSORIPPER_RIGCTLD_READ_TIMEOUT_MS",
+                out var rigReadTimeoutMs))
+        {
+            return 1;
+        }
+
+        if (!TryParseOptionalUInt64Env(
+                rigStaleThresholdEnv,
+                "QSORIPPER_RIGCTLD_STALE_THRESHOLD_MS",
+                out var rigStaleThresholdMs))
+        {
+            return 1;
+        }
 
         // If no log file path, fetch the suggested one from the engine.
         if (string.IsNullOrWhiteSpace(logFilePath))
         {
-            var statusResponse = await client.GetSetupStatusAsync(new GetSetupStatusRequest());
-            logFilePath = statusResponse.Status?.SuggestedLogFilePath;
+            logFilePath = currentStatus?.SuggestedLogFilePath;
         }
 
         var profile = new StationProfile
@@ -175,6 +211,18 @@ internal static class SetupCommand
         if (!string.IsNullOrWhiteSpace(qrzLogbookApiKey))
         {
             saveRequest.QrzLogbookApiKey = qrzLogbookApiKey;
+        }
+
+        var rigControl = BuildRigControlSettings(
+            rigEnabled,
+            rigHostEnv,
+            rigPort,
+            rigReadTimeoutMs,
+            rigStaleThresholdMs,
+            currentStatus?.RigControl);
+        if (rigControl is not null)
+        {
+            saveRequest.RigControl = rigControl;
         }
 
         // Include sync config when a logbook API key is provided.
@@ -588,6 +636,143 @@ internal static class SetupCommand
 
         return input.Equals("y", StringComparison.OrdinalIgnoreCase)
             || input.Equals("yes", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static RigControlSettings? BuildRigControlSettings(
+        bool? enabled,
+        string? host,
+        uint? port,
+        ulong? readTimeoutMs,
+        ulong? staleThresholdMs,
+        RigControlSettings? existing = null)
+    {
+        var normalizedHost = string.IsNullOrWhiteSpace(host) ? null : host.Trim();
+        var hasValues = enabled.HasValue
+            || !string.IsNullOrWhiteSpace(normalizedHost)
+            || port.HasValue
+            || readTimeoutMs.HasValue
+            || staleThresholdMs.HasValue;
+
+        if (!hasValues)
+        {
+            return null;
+        }
+
+        var settings = existing?.Clone() ?? new RigControlSettings();
+        if (enabled.HasValue)
+        {
+            settings.Enabled = enabled.Value;
+        }
+
+        if (!string.IsNullOrWhiteSpace(normalizedHost))
+        {
+            settings.Host = normalizedHost;
+        }
+
+        if (port.HasValue)
+        {
+            settings.Port = port.Value;
+        }
+
+        if (readTimeoutMs.HasValue)
+        {
+            settings.ReadTimeoutMs = readTimeoutMs.Value;
+        }
+
+        if (staleThresholdMs.HasValue)
+        {
+            settings.StaleThresholdMs = staleThresholdMs.Value;
+        }
+
+        return settings;
+    }
+
+    private static string FormatRigControlSummary(RigControlSettings? rigControl)
+    {
+        if (rigControl is null)
+        {
+            return "(not set)";
+        }
+
+        var host = rigControl.HasHost ? rigControl.Host : "127.0.0.1";
+        var port = rigControl.HasPort ? rigControl.Port : 4532u;
+        return rigControl.Enabled
+            ? $"enabled ({host}:{port})"
+            : $"disabled ({host}:{port})";
+    }
+
+    private static bool TryParseOptionalBooleanEnv(
+        string? rawValue,
+        string variableName,
+        out bool? value)
+    {
+        value = null;
+        if (string.IsNullOrWhiteSpace(rawValue))
+        {
+            return true;
+        }
+
+        var trimmed = rawValue.Trim();
+        if (trimmed.Equals("true", StringComparison.OrdinalIgnoreCase)
+            || trimmed.Equals("yes", StringComparison.OrdinalIgnoreCase)
+            || trimmed == "1")
+        {
+            value = true;
+            return true;
+        }
+
+        if (trimmed.Equals("false", StringComparison.OrdinalIgnoreCase)
+            || trimmed.Equals("no", StringComparison.OrdinalIgnoreCase)
+            || trimmed == "0")
+        {
+            value = false;
+            return true;
+        }
+
+        Console.Error.WriteLine($"Error: {variableName} must be true/false, yes/no, or 1/0.");
+        return false;
+    }
+
+    private static bool TryParseOptionalUInt32Env(
+        string? rawValue,
+        string variableName,
+        out uint? value)
+    {
+        value = null;
+        if (string.IsNullOrWhiteSpace(rawValue))
+        {
+            return true;
+        }
+
+        if (uint.TryParse(rawValue.Trim(), System.Globalization.CultureInfo.InvariantCulture, out var parsed))
+        {
+            value = parsed;
+            return true;
+        }
+
+        Console.Error.WriteLine($"Error: {variableName} must be an unsigned integer.");
+        return false;
+    }
+
+    private static bool TryParseOptionalUInt64Env(
+        string? rawValue,
+        string variableName,
+        out ulong? value)
+    {
+        value = null;
+        if (string.IsNullOrWhiteSpace(rawValue))
+        {
+            return true;
+        }
+
+        if (ulong.TryParse(rawValue.Trim(), System.Globalization.CultureInfo.InvariantCulture, out var parsed))
+        {
+            value = parsed;
+            return true;
+        }
+
+        Console.Error.WriteLine($"Error: {variableName} must be an unsigned integer.");
+        return false;
     }
 
     private static void PrintFieldErrors(

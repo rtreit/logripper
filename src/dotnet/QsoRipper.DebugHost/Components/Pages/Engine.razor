@@ -465,7 +465,7 @@
             <div>
                 <h2 class="h5 mb-1">Persisted setup</h2>
                 <div class="small text-muted">
-                    Inspect and save the durable setup surface that configures storage, the initial station profile, and optional QRZ XML credentials.
+                    Inspect and save the durable engine settings surface that configures storage, shared rig control, the initial station profile, and optional QRZ XML credentials.
                 </div>
             </div>
             <div class="d-flex gap-2 flex-wrap">
@@ -510,10 +510,10 @@
                 <span><strong>Profile count:</strong> @setupStatus.StationProfileCount</span>
             </div>
             <div class="row g-3 mb-3">
-                <div class="col-lg-6">
+                <div class="col-lg-4">
                     <strong>Persisted log file:</strong> @GetSetupLogFileSummary(setupStatus)
                 </div>
-                <div class="col-lg-6">
+                <div class="col-lg-4">
                     <strong>QRZ XML:</strong>
                     @if (!string.IsNullOrWhiteSpace(setupStatus.QrzXmlUsername))
                     {
@@ -524,13 +524,16 @@
                         <span>Not configured</span>
                     }
                 </div>
+                <div class="col-lg-4">
+                    <strong>Rig control:</strong> @GetSetupRigControlSummary(setupStatus)
+                </div>
             </div>
         }
 
         @if (WorkbenchState.SetupStatus?.SetupComplete == true && !isSetupExpanded)
         {
             <div class="small text-muted">
-                Bootstrap setup is complete. Expand this section if you want to inspect or edit the log file path, QRZ credentials, or the currently active persisted station profile.
+                Bootstrap setup is complete. Expand this section if you want to inspect or edit the log file path, QRZ credentials, shared rig control settings, or the currently active persisted station profile.
             </div>
         }
         else
@@ -570,7 +573,7 @@
                     <div>
                         <h3 class="h6 mb-1">Setup editor</h3>
                         <div class="small text-muted">
-                            This form calls <code>SetupService.SaveSetup</code> to edit the persisted log file path, QRZ credentials, and the currently active bootstrap station profile. Use the station profile editor above to add additional profiles. If QRZ XML is enabled, the service requires both username and password on save.
+                            This form calls <code>SetupService.SaveSetup</code> to edit persisted engine-wide settings: the log file path, QRZ credentials, shared rig-control defaults, and the currently active bootstrap station profile. Use the station profile editor above to add additional profiles. If QRZ XML is enabled, the service requires both username and password on save.
                         </div>
                     </div>
                     @if (WorkbenchState.SetupStatus?.HasQrzXmlPassword == true)
@@ -704,8 +707,50 @@
                             <ValidationMessage For="@(() => setupEditor.QrzXmlPassword)" />
                         </div>
                         <div class="col-12">
+                            <div class="form-check">
+                                <InputCheckbox id="setup-rig-enabled"
+                                               class="form-check-input"
+                                               @bind-Value="setupEditor.RigControlEnabled"
+                                               disabled="@isSetupBusy" />
+                                <label class="form-check-label" for="setup-rig-enabled">
+                                    Enable rig control for this engine instance
+                                </label>
+                            </div>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label" for="setup-rig-host">Rig control host</label>
+                            <InputText id="setup-rig-host"
+                                       class="form-control"
+                                       @bind-Value="setupEditor.RigControlHost"
+                                       disabled="@isSetupBusy" />
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label" for="setup-rig-port">Rig control port</label>
+                            <InputNumber id="setup-rig-port"
+                                         class="form-control"
+                                         @bind-Value="setupEditor.RigControlPort"
+                                         disabled="@isSetupBusy" />
+                            <ValidationMessage For="@(() => setupEditor.RigControlPort)" />
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label" for="setup-rig-read-timeout">Read timeout (ms)</label>
+                            <InputNumber id="setup-rig-read-timeout"
+                                         class="form-control"
+                                         @bind-Value="setupEditor.RigControlReadTimeoutMs"
+                                         disabled="@isSetupBusy" />
+                            <ValidationMessage For="@(() => setupEditor.RigControlReadTimeoutMs)" />
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label" for="setup-rig-stale-threshold">Stale threshold (ms)</label>
+                            <InputNumber id="setup-rig-stale-threshold"
+                                         class="form-control"
+                                         @bind-Value="setupEditor.RigControlStaleThresholdMs"
+                                         disabled="@isSetupBusy" />
+                            <ValidationMessage For="@(() => setupEditor.RigControlStaleThresholdMs)" />
+                        </div>
+                        <div class="col-12">
                             <div class="small text-muted mb-2">
-                                Stored QRZ passwords cannot be read back. Re-enter the password when saving QRZ XML credentials, or clear both QRZ fields to remove them.
+                                Stored QRZ passwords cannot be read back. Re-enter the password when saving QRZ XML credentials, or clear both QRZ fields to remove them. Use the Rig Control workbench to test live connections after saving shared rig settings.
                             </div>
                             <button class="btn btn-primary"
                                     type="submit"
@@ -1324,6 +1369,32 @@
         }
 
         return $"Not configured (suggested: {status.SuggestedLogFilePath})";
+    }
+
+    private static string GetSetupRigControlSummary(SetupStatus status)
+    {
+        if (status.RigControl is null)
+        {
+            return "Not configured";
+        }
+
+        var host = status.RigControl.HasHost ? status.RigControl.Host : "127.0.0.1";
+        var port = status.RigControl.HasPort ? status.RigControl.Port : 4532u;
+        var summary = status.RigControl.Enabled
+            ? $"Enabled ({host}:{port})"
+            : $"Disabled ({host}:{port})";
+
+        if (status.RigControl.HasReadTimeoutMs)
+        {
+            summary = $"{summary}, read {status.RigControl.ReadTimeoutMs} ms";
+        }
+
+        if (status.RigControl.HasStaleThresholdMs)
+        {
+            summary = $"{summary}, stale {status.RigControl.StaleThresholdMs} ms";
+        }
+
+        return summary;
     }
 
     private static bool AreSameProfile(StationProfile left, StationProfile right)

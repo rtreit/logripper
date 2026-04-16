@@ -55,6 +55,14 @@ internal sealed class RecentQsoGridLayoutStore
         JsonSerializer.Serialize(stream, state, JsonOptions);
     }
 
+    public void Delete()
+    {
+        if (File.Exists(_filePath))
+        {
+            File.Delete(_filePath);
+        }
+    }
+
     private static string GetDefaultFilePath()
     {
         var localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);

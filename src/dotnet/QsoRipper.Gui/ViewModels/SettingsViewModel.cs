@@ -96,6 +96,22 @@ internal sealed partial class SettingsViewModel : ObservableObject
     [ObservableProperty]
     private ConflictPolicy _conflictPolicy = ConflictPolicy.LastWriteWins;
 
+    // Rig control
+    [ObservableProperty]
+    private bool _rigControlEnabled;
+
+    [ObservableProperty]
+    private string _rigControlHost = string.Empty;
+
+    [ObservableProperty]
+    private string _rigControlPort = string.Empty;
+
+    [ObservableProperty]
+    private string _rigControlReadTimeoutMs = string.Empty;
+
+    [ObservableProperty]
+    private string _rigControlStaleThresholdMs = string.Empty;
+
     // Log file (read-only display)
     [ObservableProperty]
     private string _logFilePath = string.Empty;
@@ -115,6 +131,8 @@ internal sealed partial class SettingsViewModel : ObservableObject
     /// </summary>
     [ObservableProperty]
     private bool _didSave;
+
+    private bool _hasPersistedRigControl;
 
     /// <summary>
     /// Raised when the dialog should close. The bool parameter is true for save, false for cancel.
@@ -164,6 +182,12 @@ internal sealed partial class SettingsViewModel : ObservableObject
         ErrorMessage = null;
         try
         {
+            if (!TryValidateRigControlInputs(out var validationError))
+            {
+                ErrorMessage = validationError;
+                return;
+            }
+
             var request = BuildSaveRequest();
             await _engine.SaveSetupAsync(request);
             DidSave = true;
@@ -262,6 +286,7 @@ internal sealed partial class SettingsViewModel : ObservableObject
     {
         QrzXmlUsername = status.QrzXmlUsername ?? string.Empty;
         LogFilePath = status.LogFilePath ?? string.Empty;
+        _hasPersistedRigControl = status.RigControl is not null;
 
         if (status.SyncConfig is not null)
         {
@@ -270,6 +295,31 @@ internal sealed partial class SettingsViewModel : ObservableObject
                 ? (int)status.SyncConfig.SyncIntervalSeconds
                 : 300;
             ConflictPolicy = status.SyncConfig.ConflictPolicy;
+        }
+
+        if (status.RigControl is not null)
+        {
+            RigControlEnabled = status.RigControl.Enabled;
+            RigControlHost = status.RigControl.HasHost
+                ? status.RigControl.Host
+                : string.Empty;
+            RigControlPort = status.RigControl.HasPort
+                ? status.RigControl.Port.ToString(CultureInfo.InvariantCulture)
+                : string.Empty;
+            RigControlReadTimeoutMs = status.RigControl.HasReadTimeoutMs
+                ? status.RigControl.ReadTimeoutMs.ToString(CultureInfo.InvariantCulture)
+                : string.Empty;
+            RigControlStaleThresholdMs = status.RigControl.HasStaleThresholdMs
+                ? status.RigControl.StaleThresholdMs.ToString(CultureInfo.InvariantCulture)
+                : string.Empty;
+        }
+        else
+        {
+            RigControlEnabled = false;
+            RigControlHost = string.Empty;
+            RigControlPort = string.Empty;
+            RigControlReadTimeoutMs = string.Empty;
+            RigControlStaleThresholdMs = string.Empty;
         }
 
         // Password and API key are never returned by the engine for security;
@@ -347,7 +397,67 @@ internal sealed partial class SettingsViewModel : ObservableObject
             request.QrzLogbookApiKey = QrzLogbookApiKey.Trim();
         }
 
+        var rigControl = BuildRigControlSettings();
+        if (rigControl is not null)
+        {
+            request.RigControl = rigControl;
+        }
+
         return request;
+    }
+
+    private RigControlSettings? BuildRigControlSettings()
+    {
+        var hasExplicitValues = RigControlEnabled
+            || !string.IsNullOrWhiteSpace(RigControlHost)
+            || !string.IsNullOrWhiteSpace(RigControlPort)
+            || !string.IsNullOrWhiteSpace(RigControlReadTimeoutMs)
+            || !string.IsNullOrWhiteSpace(RigControlStaleThresholdMs);
+
+        if (!_hasPersistedRigControl && !hasExplicitValues)
+        {
+            return null;
+        }
+
+        var settings = new RigControlSettings();
+        if (_hasPersistedRigControl || RigControlEnabled)
+        {
+            settings.Enabled = RigControlEnabled;
+        }
+
+        SetOptionalString(RigControlHost, value => settings.Host = value);
+        SetUInt32Field(RigControlPort, value => settings.Port = value);
+        SetUInt64Field(RigControlReadTimeoutMs, value => settings.ReadTimeoutMs = value);
+        SetUInt64Field(RigControlStaleThresholdMs, value => settings.StaleThresholdMs = value);
+        return settings;
+    }
+
+    private bool TryValidateRigControlInputs(out string? validationError)
+    {
+        if (!TryValidateUInt32Field(
+                RigControlPort,
+                1,
+                65_535,
+                "Rig control port",
+                out validationError))
+        {
+            return false;
+        }
+
+        if (!TryValidateUInt64Field(
+                RigControlReadTimeoutMs,
+                1,
+                "Rig control read timeout",
+                out validationError))
+        {
+            return false;
+        }
+
+        return TryValidateUInt64Field(
+            RigControlStaleThresholdMs,
+            1,
+            "Rig control stale threshold",
+            out validationError);
     }
 
     private static void SetOptionalString(string input, Action<string> setter)
@@ -364,6 +474,67 @@ internal sealed partial class SettingsViewModel : ObservableObject
         {
             setter(value);
         }
+    }
+
+    private static void SetUInt32Field(string? input, Action<uint> setter)
+    {
+        if (uint.TryParse(input, CultureInfo.InvariantCulture, out var value))
+        {
+            setter(value);
+        }
+    }
+
+    private static void SetUInt64Field(string? input, Action<ulong> setter)
+    {
+        if (ulong.TryParse(input, CultureInfo.InvariantCulture, out var value))
+        {
+            setter(value);
+        }
+    }
+
+    private static bool TryValidateUInt32Field(
+        string? input,
+        uint min,
+        uint max,
+        string label,
+        out string? errorMessage)
+    {
+        errorMessage = null;
+        if (string.IsNullOrWhiteSpace(input))
+        {
+            return true;
+        }
+
+        if (!uint.TryParse(input, CultureInfo.InvariantCulture, out var value)
+            || value < min
+            || value > max)
+        {
+            errorMessage = $"{label} must be a whole number between {min} and {max}.";
+            return false;
+        }
+
+        return true;
+    }
+
+    private static bool TryValidateUInt64Field(
+        string? input,
+        ulong min,
+        string label,
+        out string? errorMessage)
+    {
+        errorMessage = null;
+        if (string.IsNullOrWhiteSpace(input))
+        {
+            return true;
+        }
+
+        if (!ulong.TryParse(input, CultureInfo.InvariantCulture, out var value) || value < min)
+        {
+            errorMessage = $"{label} must be a whole number greater than or equal to {min}.";
+            return false;
+        }
+
+        return true;
     }
 
     private static void SetDoubleField(string? input, Action<double> setter)

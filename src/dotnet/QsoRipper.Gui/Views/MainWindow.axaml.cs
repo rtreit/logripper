@@ -17,6 +17,7 @@ namespace QsoRipper.Gui.Views;
 internal sealed partial class MainWindow : Window
 {
     private readonly RecentQsoGridLayoutStore _gridLayoutStore = new();
+    private readonly UiPreferencesStore _preferencesStore = new();
     private readonly MenuItem? _fileMenuItem;
     private readonly TextBox? _recentQsoSearchBox;
     private readonly DataGrid? _recentQsoGrid;
@@ -59,6 +60,7 @@ internal sealed partial class MainWindow : Window
             ApplyPersistedGridLayout();
             if (DataContext is MainWindowViewModel vm)
             {
+                vm.ApplyPreferences(_preferencesStore.Load());
                 await vm.CheckFirstRunAsync();
             }
         }
@@ -67,6 +69,7 @@ internal sealed partial class MainWindow : Window
     protected override void OnClosed(EventArgs e)
     {
         SaveGridLayout();
+        SavePreferences();
 
         if (_viewModel is not null)
         {
@@ -75,6 +78,7 @@ internal sealed partial class MainWindow : Window
             _viewModel.GridFocusRequested -= OnGridFocusRequested;
             _viewModel.SettingsRequested -= OnSettingsRequested;
             _viewModel.LoggerFocusRequested -= OnLoggerFocusRequested;
+            _viewModel.ColumnLayoutResetRequested -= OnColumnLayoutResetRequested;
             UnsubscribeColumnOptions(_viewModel.RecentQsos);
             _viewModel = null;
         }
@@ -113,6 +117,14 @@ internal sealed partial class MainWindow : Window
         }
 
         if (HandleRecentQsoGridKeyDown(e))
+        {
+            return;
+        }
+
+        // Global navigation keys — handled explicitly so they work even when
+        // focus is inside a TextBox (e.g. the QSO logger fields) where the
+        // XAML KeyBinding may not fire reliably.
+        if (TryHandleGlobalNavigationKey(e))
         {
             return;
         }
@@ -277,6 +289,29 @@ internal sealed partial class MainWindow : Window
         return false;
     }
 
+    private bool TryHandleGlobalNavigationKey(KeyEventArgs e)
+    {
+        if (_viewModel is null || e.KeyModifiers != KeyModifiers.None)
+        {
+            return false;
+        }
+
+        switch (e.Key)
+        {
+            case Key.F3:
+                _viewModel.FocusGridCommand.Execute(null);
+                e.Handled = true;
+                return true;
+            case Key.F4:
+                _viewModel.FocusSearchCommand.Execute(null);
+                e.Handled = true;
+                return true;
+            default:
+                return false;
+        }
+    }
+
+
     private bool TryHandleRecentQsoZoomKey(KeyEventArgs e)
     {
         if (_viewModel is null || !e.KeyModifiers.HasFlag(KeyModifiers.Control))
@@ -342,6 +377,7 @@ internal sealed partial class MainWindow : Window
             _viewModel.GridFocusRequested -= OnGridFocusRequested;
             _viewModel.SettingsRequested -= OnSettingsRequested;
             _viewModel.LoggerFocusRequested -= OnLoggerFocusRequested;
+            _viewModel.ColumnLayoutResetRequested -= OnColumnLayoutResetRequested;
             UnsubscribeColumnOptions(_viewModel.RecentQsos);
         }
 
@@ -353,6 +389,7 @@ internal sealed partial class MainWindow : Window
             _viewModel.GridFocusRequested += OnGridFocusRequested;
             _viewModel.SettingsRequested += OnSettingsRequested;
             _viewModel.LoggerFocusRequested += OnLoggerFocusRequested;
+            _viewModel.ColumnLayoutResetRequested += OnColumnLayoutResetRequested;
             SubscribeColumnOptions(_viewModel.RecentQsos);
             ApplyDefaultColumnVisibility();
             WireLoggerFocusTracking();
@@ -370,7 +407,24 @@ internal sealed partial class MainWindow : Window
 
     private void OnGridFocusRequested(object? sender, EventArgs e)
     {
-        _recentQsoGrid?.Focus();
+        if (_recentQsoGrid is null)
+        {
+            return;
+        }
+
+        // Defer focus so the current key event finishes processing first —
+        // synchronous Focus() during a KeyBinding handler doesn't reliably
+        // move focus away from the active TextBox.
+        Dispatcher.UIThread.Post(
+            () =>
+            {
+                _recentQsoGrid.Focus();
+                if (_recentQsoGrid.SelectedIndex < 0 && _viewModel?.RecentQsos.VisibleItems.Count > 0)
+                {
+                    _recentQsoGrid.SelectedIndex = 0;
+                }
+            },
+            DispatcherPriority.Input);
     }
 
     private async void OnSettingsRequested(object? sender, EventArgs e)
@@ -713,6 +767,46 @@ internal sealed partial class MainWindow : Window
         }
 
         _gridLayoutStore.Save(state);
+    }
+
+    private void SavePreferences()
+    {
+        if (IsInspectionMode || _viewModel is null)
+        {
+            return;
+        }
+
+        _preferencesStore.Save(_viewModel.CapturePreferences());
+    }
+
+    private void OnColumnLayoutResetRequested(object? sender, EventArgs e)
+    {
+        ResetGridLayout();
+    }
+
+    private void ResetGridLayout()
+    {
+        if (_viewModel is null || _recentQsoGrid is null || _columnMap.Count == 0)
+        {
+            return;
+        }
+
+        // Reset display indices to XAML declaration order.
+        var xamlOrder = 0;
+        foreach (var column in _recentQsoGrid.Columns)
+        {
+            column.DisplayIndex = xamlOrder++;
+        }
+
+        // Reset visibility and widths to defaults.
+        _viewModel.RecentQsos.ResetColumnOptions();
+        ApplyDefaultColumnVisibility();
+
+        // Delete the persisted file so a fresh save captures clean state.
+        _gridLayoutStore.Delete();
+        _gridLayoutApplied = false;
+
+        _recentQsoGrid.Focus();
     }
 
     private static bool HandleZoomAction(Action handler, KeyEventArgs e)

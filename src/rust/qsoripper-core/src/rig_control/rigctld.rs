@@ -33,7 +33,7 @@ pub const RIGCTLD_READ_TIMEOUT_MS_ENV_VAR: &str = "QSORIPPER_RIGCTLD_READ_TIMEOU
 pub const RIGCTLD_STALE_THRESHOLD_MS_ENV_VAR: &str = "QSORIPPER_RIGCTLD_STALE_THRESHOLD_MS";
 
 /// Default stale threshold in milliseconds.
-pub const DEFAULT_RIGCTLD_STALE_THRESHOLD_MS: u64 = 5_000;
+pub const DEFAULT_RIGCTLD_STALE_THRESHOLD_MS: u64 = 500;
 
 /// Configuration for the rigctld adapter.
 #[derive(Debug, Clone)]
@@ -52,7 +52,7 @@ impl RigctldConfig {
     /// Returns `None` if rig control is not enabled.
     pub fn from_value_provider(get_value: impl Fn(&str) -> Option<String>) -> Option<Self> {
         let enabled = get_value(RIGCTLD_ENABLED_ENV_VAR)
-            .is_some_and(|value| value.eq_ignore_ascii_case("true") || value == "1");
+            .is_none_or(|value| value.eq_ignore_ascii_case("true") || value == "1");
 
         if !enabled {
             return None;
@@ -333,8 +333,19 @@ mod tests {
     }
 
     #[test]
-    fn config_from_value_provider_disabled_by_default() {
+    fn config_from_value_provider_enabled_by_default() {
         let config = RigctldConfig::from_value_provider(|_| None);
+        let config = config.expect("enabled by default");
+        assert_eq!("127.0.0.1", config.host);
+        assert_eq!(4532, config.port);
+    }
+
+    #[test]
+    fn config_from_value_provider_disabled_explicitly() {
+        let config = RigctldConfig::from_value_provider(|name| match name {
+            "QSORIPPER_RIGCTLD_ENABLED" => Some("false".to_string()),
+            _ => None,
+        });
         assert!(config.is_none());
     }
 

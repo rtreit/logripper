@@ -65,6 +65,7 @@ const DEFAULT_SYNC_CONFLICT_POLICY: &str = "last_write_wins";
 
 const DEFAULT_STORAGE_BACKEND: &str = "memory";
 const DEFAULT_SQLITE_PATH: &str = "qsoripper.db";
+const DEFAULT_QRZ_USER_AGENT: &str = "QsoRipper/1.0";
 const REDACTED_VALUE: &str = "<redacted>";
 
 const CONFLICT_POLICY_ALLOWED_VALUES: &[&str] = &["last_write_wins", "flag_for_review"];
@@ -498,7 +499,7 @@ const SUPPORTED_FIELDS: &[ConfigFieldSpec] = &[
         kind: RuntimeConfigValueKind::String,
         secret: false,
         allowed_values: &[],
-        default_value: None,
+        default_value: Some(DEFAULT_QRZ_USER_AGENT),
     },
     ConfigFieldSpec {
         key: QRZ_XML_BASE_URL_ENV_VAR,
@@ -681,7 +682,7 @@ const SUPPORTED_FIELDS: &[ConfigFieldSpec] = &[
         kind: RuntimeConfigValueKind::Integer,
         secret: false,
         allowed_values: &[],
-        default_value: Some("5000"),
+        default_value: Some("500"),
     },
 ];
 
@@ -1002,7 +1003,22 @@ fn parse_storage_options_from_values(
 }
 
 fn build_lookup_provider(values: &BTreeMap<String, String>) -> (Arc<dyn CallsignProvider>, String) {
-    match QrzXmlConfig::from_value_provider(|name| values.get(name).cloned()) {
+    // Derive a user agent fallback from the username when no explicit value is
+    // configured, matching the pattern used by TestQrzCredentials.
+    let derived_user_agent = values
+        .get(QRZ_XML_USERNAME_ENV_VAR)
+        .filter(|u| !u.trim().is_empty())
+        .map(|u| format!("{DEFAULT_QRZ_USER_AGENT} ({u})"));
+
+    match QrzXmlConfig::from_value_provider(|name| {
+        values.get(name).cloned().or_else(|| {
+            if name == QRZ_USER_AGENT_ENV_VAR {
+                derived_user_agent.clone()
+            } else {
+                None
+            }
+        })
+    }) {
         Ok(config) => match QrzXmlProvider::new(config.clone()) {
             Ok(provider) => {
                 let summary = if config.capture_only() {

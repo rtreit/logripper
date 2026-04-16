@@ -17,14 +17,16 @@ import "services/test_qrz_logbook_credentials_response.proto";
 import "services/validate_setup_step_request.proto";
 import "services/validate_setup_step_response.proto";
 
-// Production setup/bootstrap surface for first-run configuration.
+// Production setup/bootstrap surface for first-run and shared engine configuration.
 //
 // This service owns persisted engine configuration, not ephemeral developer
 // runtime overrides. Clients can use it to detect missing setup, present the
-// recommended config/data paths, and save the initial station/logbook settings.
+// recommended config/data paths, and save persisted engine settings such as
+// station, logbook, and rig-control defaults.
 //
 // The wizard RPCs (GetSetupWizardState, ValidateSetupStep, TestQrzCredentials)
-// support step-by-step guided setup for new users in any UI surface.
+// support step-by-step guided setup for common first-run settings in any UI
+// surface.
 service SetupService {
   // Read the current persisted setup status and suggested default paths.
   rpc GetSetupStatus(GetSetupStatusRequest) returns (GetSetupStatusResponse);

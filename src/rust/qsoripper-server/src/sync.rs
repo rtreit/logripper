@@ -224,6 +224,13 @@ async fn download_phase(
 
     // Process each remote QSO.
     for remote in &remote_qsos {
+        // Defense-in-depth: skip records that lack the minimum fields needed
+        // for matching and storage. These are artefacts of ADIF
+        // header/trailer fragments that slip through the parser.
+        if remote.worked_callsign.trim().is_empty() || remote.utc_timestamp.is_none() {
+            continue;
+        }
+
         let remote_logid = extract_qrz_logid(remote);
 
         let local_match = remote_logid
@@ -1339,5 +1346,59 @@ mod tests {
         assert_eq!(all.len(), 1);
         assert_eq!(all[0].sync_status, SyncStatus::Synced as i32);
         assert_eq!(all[0].notes.as_deref(), Some("remote tie"));
+    }
+
+    #[tokio::test]
+    async fn download_skips_ghost_records_with_empty_callsign() {
+        let store = MemoryStorage::new();
+
+        // One valid remote QSO and one ghost (empty callsign, no timestamp).
+        let valid = {
+            let mut q = make_qso("W1AW", "K7ABC", Band::Band20m, Mode::Ft8, 1_700_000_000);
+            q.qrz_logid = Some("QRZ001".into());
+            q
+        };
+        let ghost = QsoRecord::default();
+
+        let api = MockQrzApi::new(Ok(vec![valid, ghost]), vec![]);
+
+        let (tx, rx) = mpsc::channel(16);
+        execute_sync(&api, &store, true, ConflictPolicy::LastWriteWins, &tx).await;
+        drop(tx);
+
+        let final_msg = collect_final(rx).await;
+        assert!(final_msg.complete);
+        assert_eq!(final_msg.downloaded_records, 1, "ghost should be skipped");
+
+        let all = store.list_qsos(&QsoListQuery::default()).await.unwrap();
+        assert_eq!(all.len(), 1, "only the valid QSO should be stored");
+        assert_eq!(all[0].worked_callsign, "K7ABC");
+    }
+
+    #[tokio::test]
+    async fn download_skips_records_with_callsign_but_no_timestamp() {
+        let store = MemoryStorage::new();
+
+        let no_ts = QsoRecord {
+            worked_callsign: "W1AW".to_string(),
+            utc_timestamp: None,
+            ..Default::default()
+        };
+
+        let api = MockQrzApi::new(Ok(vec![no_ts]), vec![]);
+
+        let (tx, rx) = mpsc::channel(16);
+        execute_sync(&api, &store, true, ConflictPolicy::LastWriteWins, &tx).await;
+        drop(tx);
+
+        let final_msg = collect_final(rx).await;
+        assert!(final_msg.complete);
+        assert_eq!(
+            final_msg.downloaded_records, 0,
+            "record without timestamp should be skipped"
+        );
+
+        let all = store.list_qsos(&QsoListQuery::default()).await.unwrap();
+        assert!(all.is_empty());
     }
 }
