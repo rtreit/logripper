@@ -776,15 +776,21 @@ internal sealed class ManagedEngineState
         }
 
         var status = CreateRigStatusResponse();
-        return new RigSnapshot
+        var snapshot = new RigSnapshot
         {
             FrequencyHz = status.Status == RigConnectionStatus.Connected ? 14_074_000UL : 0UL,
             Band = status.Status == RigConnectionStatus.Connected ? Band._20M : Band.Unspecified,
             Mode = status.Status == RigConnectionStatus.Connected ? Mode.Ft8 : Mode.Unspecified,
             Status = status.Status,
-            ErrorMessage = status.HasErrorMessage ? status.ErrorMessage : null,
             SampledAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
         };
+
+        if (status.HasErrorMessage)
+        {
+            snapshot.ErrorMessage = status.ErrorMessage;
+        }
+
+        return snapshot;
     }
 
     public TestRigConnectionResponse TestRigConnection()
@@ -792,21 +798,40 @@ internal sealed class ManagedEngineState
         if (_rigControlMonitor is not null)
         {
             var refreshed = _rigControlMonitor.RefreshSnapshot();
-            return new TestRigConnectionResponse
+            var response = new TestRigConnectionResponse
             {
                 Success = refreshed.Status == RigConnectionStatus.Connected,
-                ErrorMessage = refreshed.HasErrorMessage ? refreshed.ErrorMessage : null,
-                Snapshot = refreshed.Status == RigConnectionStatus.Connected ? refreshed : null,
             };
+
+            if (refreshed.HasErrorMessage)
+            {
+                response.ErrorMessage = refreshed.ErrorMessage;
+            }
+
+            if (refreshed.Status == RigConnectionStatus.Connected)
+            {
+                response.Snapshot = refreshed;
+            }
+
+            return response;
         }
 
         var snapshot = BuildRigSnapshot();
-        return new TestRigConnectionResponse
+        var fallbackResponse = new TestRigConnectionResponse
         {
             Success = snapshot.Status == RigConnectionStatus.Connected,
-            ErrorMessage = snapshot.Status == RigConnectionStatus.Connected ? null : "Rig control is disabled in the managed engine.",
-            Snapshot = snapshot.Status == RigConnectionStatus.Connected ? snapshot : null,
         };
+
+        if (snapshot.Status == RigConnectionStatus.Connected)
+        {
+            fallbackResponse.Snapshot = snapshot;
+        }
+        else
+        {
+            fallbackResponse.ErrorMessage = "Rig control is disabled in the managed engine.";
+        }
+
+        return fallbackResponse;
     }
 
     public SpaceWeatherSnapshot BuildSpaceWeatherSnapshot(bool refreshed)

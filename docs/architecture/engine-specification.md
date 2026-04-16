@@ -87,6 +87,8 @@ The 1-1-1 rule applies: one top-level message, enum, or service per `.proto` fil
 
 An engine must implement all services in this section except where marked **optional**. Each subsection documents every RPC with its exact types, streaming mode, expected behavior, and error semantics.
 
+For generated protobuf runtimes, absent optional scalar fields must be **omitted**, not assigned `null`. A successful handler must never fail while materializing a response just because an optional string/error field is not present.
+
 ### 3.1 EngineService
 
 **Proto file:** `proto/services/engine_service.proto`
@@ -1199,17 +1201,18 @@ A conformant engine must pass all of the following scenarios:
 6. `ListQsos` returns exactly the expected QSOs with correct ordering.
 7. `UpdateQso` modifies the specified fields and updates `updated_at`.
 8. `DeleteQso` removes the QSO; subsequent `GetQso` returns `NOT_FOUND`.
+9. Unary success and failure responses with optional scalar fields serialize cleanly at the service boundary without handler exceptions.
 
 #### ADIF Round-Trip
 
-9. `ExportAdif` produces valid ADIF output containing all logged QSOs.
-10. `ImportAdif` with previously exported ADIF creates equivalent records.
-11. `extra_fields` survive a full import → export → import round-trip.
+10. `ExportAdif` produces valid ADIF output containing all logged QSOs.
+11. `ImportAdif` with previously exported ADIF creates equivalent records.
+12. `extra_fields` survive a full import → export → import round-trip.
 
 #### Cross-Engine Parity
 
-12. Given the same sequence of operations, the Rust and .NET engines produce field-identical `GetQso`, `ListQsos`, and `ExportAdif` results.
-13. Both engines report `localQsoCount == 1` after logging one QSO.
+13. Given the same sequence of operations, the Rust and .NET engines produce field-identical `GetQso`, `ListQsos`, and `ExportAdif` results.
+14. Both engines report `localQsoCount == 1` after logging one QSO.
 
 #### Lookup (if credentials available)
 

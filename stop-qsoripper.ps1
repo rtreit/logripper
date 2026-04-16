@@ -115,27 +115,29 @@ function Wait-ForProcessStop([int]$ProcessId, [int]$TimeoutSeconds) {
 }
 
 function Resolve-Targets([pscustomobject[]]$Entries) {
-    if ($Entries.Count -eq 0) {
+    $normalizedEntries = @($Entries)
+
+    if ($normalizedEntries.Count -eq 0) {
         return @()
     }
 
     if ($All) {
-        return $Entries
+        return $normalizedEntries
     }
 
     if (-not [string]::IsNullOrWhiteSpace($Engine)) {
         return @(
-            $Entries |
+            $normalizedEntries |
                 Where-Object { Test-EngineMatch -State $_.State -RequestedEngine $Engine }
         )
     }
 
-    $legacyEntry = $Entries | Where-Object { $_.IsLegacy } | Select-Object -First 1
+    $legacyEntry = $normalizedEntries | Where-Object { $_.IsLegacy } | Select-Object -First 1
     if ($null -ne $legacyEntry) {
         return @($legacyEntry)
     }
 
-    $latestEntry = $Entries |
+    $latestEntry = $normalizedEntries |
         Sort-Object {
             try {
                 [DateTime]::Parse($_.State.startedAtUtc, [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::RoundtripKind)
@@ -153,7 +155,7 @@ function Resolve-Targets([pscustomobject[]]$Entries) {
     return @()
 }
 
-$stateEntries = Get-StateEntries
+$stateEntries = @(Get-StateEntries)
 if ($stateEntries.Count -eq 0) {
     Write-Host 'QsoRipper is not running through the helper script.' -ForegroundColor Yellow
     exit 0

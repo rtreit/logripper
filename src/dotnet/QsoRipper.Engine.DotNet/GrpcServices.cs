@@ -265,13 +265,23 @@ internal sealed class ManagedLogbookGrpcService(ManagedEngineState state)
     public override Task<DeleteQsoResponse> DeleteQso(DeleteQsoRequest request, ServerCallContext context)
     {
         var deleted = state.DeleteQso(request.LocalId);
-        return Task.FromResult(new DeleteQsoResponse
+        var response = new DeleteQsoResponse
         {
             Success = deleted,
-            Error = deleted ? null : $"QSO '{request.LocalId}' was not found.",
             QrzDeleteSuccess = false,
-            QrzDeleteError = request.DeleteFromQrz ? "Managed engine does not delete remote QRZ records." : null,
-        });
+        };
+
+        if (!deleted)
+        {
+            response.Error = $"QSO '{request.LocalId}' was not found.";
+        }
+
+        if (request.DeleteFromQrz)
+        {
+            response.QrzDeleteError = "Managed engine does not delete remote QRZ records.";
+        }
+
+        return Task.FromResult(response);
     }
 
     public override Task<GetQsoResponse> GetQso(GetQsoRequest request, ServerCallContext context)

@@ -3,6 +3,7 @@ using Google.Protobuf.WellKnownTypes;
 using QsoRipper.Domain;
 using QsoRipper.Engine.DotNet;
 using QsoRipper.Engine.QrzLogbook;
+using QsoRipper.Engine.RigControl;
 using QsoRipper.Engine.Storage.Memory;
 using QsoRipper.EngineSelection;
 using QsoRipper.Services;
@@ -154,6 +155,94 @@ public sealed class ManagedEngineStateTests : IDisposable
         ]));
 
         Assert.Equal("The managed .NET engine currently supports only memory storage.", exception.Message);
+    }
+
+    [Fact]
+    public async Task Delete_qso_grpc_success_omits_optional_error_fields()
+    {
+        var state = CreateState();
+        state.SaveSetup(new SaveSetupRequest
+        {
+            StationProfile = new StationProfile
+            {
+                ProfileName = "Home",
+                StationCallsign = "K7RND",
+                OperatorCallsign = "K7RND",
+                Grid = "CN87"
+            }
+        });
+
+        var logged = state.LogQso(new LogQsoRequest
+        {
+            SyncToQrz = false,
+            Qso = new QsoRecord
+            {
+                WorkedCallsign = "W1AW",
+                Band = Band._20M,
+                Mode = Mode.Ft8,
+                UtcTimestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-04-16T22:48:00Z", System.Globalization.CultureInfo.InvariantCulture))
+            }
+        });
+
+        var service = new ManagedLogbookGrpcService(state);
+        var response = await service.DeleteQso(
+            new DeleteQsoRequest
+            {
+                LocalId = logged.LocalId,
+                DeleteFromQrz = false
+            },
+            null!);
+
+        Assert.True(response.Success);
+        Assert.True(string.IsNullOrEmpty(response.Error));
+        Assert.True(string.IsNullOrEmpty(response.QrzDeleteError));
+    }
+
+    [Fact]
+    public void Test_rig_connection_connected_omits_error_message()
+    {
+        var state = CreateStateWithRigSnapshot(new RigSnapshot
+        {
+            FrequencyHz = 14_074_000,
+            Band = Band._20M,
+            Mode = Mode.Ft8
+        });
+
+        var response = state.TestRigConnection();
+
+        Assert.True(response.Success);
+        Assert.True(string.IsNullOrEmpty(response.ErrorMessage));
+        Assert.NotNull(response.Snapshot);
+        Assert.Equal(14_074_000UL, response.Snapshot.FrequencyHz);
+        Assert.Equal(RigConnectionStatus.Connected, response.Snapshot.Status);
+    }
+
+    [Fact]
+    public void Build_rig_snapshot_connected_omits_error_message_without_monitor()
+    {
+        var state = CreateState();
+        state.SaveSetup(new SaveSetupRequest
+        {
+            StationProfile = new StationProfile
+            {
+                ProfileName = "Home",
+                StationCallsign = "K7RND",
+                OperatorCallsign = "K7RND",
+                Grid = "CN87"
+            },
+            RigControl = new RigControlSettings
+            {
+                Enabled = true,
+                Host = "127.0.0.1",
+                Port = 4532
+            }
+        });
+
+        var snapshot = state.BuildRigSnapshot();
+
+        Assert.Equal(RigConnectionStatus.Connected, snapshot.Status);
+        Assert.False(snapshot.HasErrorMessage);
+        Assert.Equal(14_074_000UL, snapshot.FrequencyHz);
     }
 
     [Fact]
@@ -365,9 +454,29 @@ public sealed class ManagedEngineStateTests : IDisposable
             syncEngine: syncEngine);
     }
 
+    private ManagedEngineState CreateStateWithRigSnapshot(RigSnapshot snapshot)
+    {
+        var storage = new MemoryStorage();
+        var monitor = new RigControlMonitor(
+            new FakeRigControlProvider(() => snapshot.Clone()),
+            TimeSpan.Zero);
+        return new ManagedEngineState(
+            Path.Combine(_tempDirectory, "managed-engine.json"),
+            storage,
+            lookupCoordinator: null,
+            rigControlMonitor: monitor,
+            spaceWeatherMonitor: null,
+            syncEngine: null);
+    }
+
     private static byte[] Utf8(string value)
     {
         return Encoding.UTF8.GetBytes(value);
+    }
+
+    private sealed class FakeRigControlProvider(Func<RigSnapshot> factory) : IRigControlProvider
+    {
+        public RigSnapshot GetSnapshot() => factory();
     }
 
     /// <summary>

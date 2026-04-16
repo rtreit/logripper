@@ -367,6 +367,21 @@ function Invoke-ConformanceScenario {
         throw "$EngineProfile export expected exactly one ADIF record but saw $($exportRecords.Count)."
     }
 
+    $deleteResult = Invoke-Cli -Arguments @('--engine', $EngineProfile, 'delete', $localId)
+    Assert-CommandSucceeded -Result $deleteResult -Description "$EngineProfile delete"
+
+    $listAfterDeleteResult = Invoke-Cli -Arguments @('--engine', $EngineProfile, 'list', '--json', '--limit', '5')
+    Assert-CommandSucceeded -Result $listAfterDeleteResult -Description "$EngineProfile list after delete --json"
+    $listAfterDeleteJson = @($listAfterDeleteResult.StdOut | ConvertFrom-Json)
+    if ($listAfterDeleteJson.Count -ne 0) {
+        throw "$EngineProfile expected zero QSOs after delete but saw $($listAfterDeleteJson.Count)."
+    }
+
+    $getAfterDeleteResult = Invoke-Cli -Arguments @('--engine', $EngineProfile, 'get', $localId, '--json')
+    if ($getAfterDeleteResult.ExitCode -eq 0) {
+        throw "$EngineProfile get unexpectedly succeeded after delete for local id '$localId'."
+    }
+
     return [pscustomobject]@{
         EngineProfile = $EngineProfile
         EngineId = $expectedEngineId
