@@ -16,28 +16,37 @@
 //! | `EA8/AE7XI`   | `AE7XI`   | "EA8"         | PrefixOverride  | Some("EA8")     | Standard    |
 //! | `DL/AE7XI/P`  | `AE7XI`   | "DL"          | PrefixOverride  | Some("DL")      | Ambiguous   |
 
-use crate::{
-    domain::lookup::normalize_callsign,
-    proto::qsoripper::domain::{CallsignAmbiguity as ProtoCallsignAmbiguity, CallsignRecord, ModifierKind as ProtoModifierKind},
+use crate::proto::qsoripper::domain::{
+    CallsignAmbiguity as ProtoCallsignAmbiguity, CallsignRecord, ModifierKind as ProtoModifierKind,
 };
 
 /// The operating modifier kind derived from a slash-modified callsign.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ModifierKind {
+    /// Portable operation (e.g. `/P`).
     Portable,
+    /// Mobile operation (e.g. `/M`).
     Mobile,
+    /// Maritime mobile operation (e.g. `/MM`).
     MaritimeMobile,
+    /// Aeronautical mobile operation (e.g. `/AM`).
     AeronauticalMobile,
+    /// Operating from a different call area (e.g. `/5`).
     CallArea,
+    /// Foreign prefix override (e.g. `EA8/AE7XI`).
     PrefixOverride,
+    /// Unrecognized modifier (e.g. `/QRP`).
     Other,
 }
 
 /// Indicates how unambiguously the callsign was parsed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CallsignAmbiguity {
+    /// Callsign parsed without ambiguity.
     Standard,
+    /// Multiple valid interpretations exist (e.g. `DL/AE7XI/P`).
     Ambiguous,
+    /// Does not conform to known patterns.
     NonStandard,
 }
 
@@ -132,7 +141,7 @@ fn parse_two_segment(left: &str, right: &str) -> ParsedCallsign {
     }
 
     // Single digit → call area (e.g. AE7XI/5, K7DBG/0).
-    if right.len() == 1 && right.chars().next().map_or(false, |ch| ch.is_ascii_digit()) {
+    if right.len() == 1 && right.chars().next().is_some_and(|ch| ch.is_ascii_digit()) {
         return ParsedCallsign {
             base_callsign: left.to_string(),
             modifier_text: Some(right.to_string()),
@@ -215,21 +224,25 @@ pub fn annotate_record(record: &mut CallsignRecord, parsed: &ParsedCallsign) {
     }
 
     record.base_callsign = Some(parsed.base_callsign.clone());
-    record.modifier_text = parsed.modifier_text.clone();
+    record.modifier_text.clone_from(&parsed.modifier_text);
     record.modifier_kind = parsed
         .modifier_kind
         .as_ref()
-        .map(proto_modifier_kind)
-        .unwrap_or(0);
-    record.prefix_override_callsign = parsed.prefix_override.clone();
-    record.operating_entity_hint = parsed.operating_entity_hint.clone();
-    record.callsign_ambiguity = proto_callsign_ambiguity(&parsed.ambiguity);
+        .map_or(Some(0), |kind| Some(proto_modifier_kind(kind)));
+    record
+        .prefix_override_callsign
+        .clone_from(&parsed.prefix_override);
+    record
+        .operating_entity_hint
+        .clone_from(&parsed.operating_entity_hint);
+    record.callsign_ambiguity = Some(proto_callsign_ambiguity(&parsed.ambiguity));
 }
 
 #[cfg(test)]
 #[allow(clippy::panic)]
 mod tests {
     use super::*;
+    use crate::domain::lookup::normalize_callsign;
 
     #[test]
     fn bare_callsign_no_modifier() {
@@ -355,12 +368,12 @@ mod tests {
         assert_eq!(record.modifier_text.as_deref(), Some("P"));
         assert_eq!(
             record.modifier_kind,
-            ProtoModifierKind::Portable as i32
+            Some(ProtoModifierKind::Portable as i32)
         );
         assert_eq!(record.prefix_override_callsign, None);
         assert_eq!(
             record.callsign_ambiguity,
-            ProtoCallsignAmbiguity::Standard as i32
+            Some(ProtoCallsignAmbiguity::Standard as i32)
         );
     }
 
@@ -374,6 +387,6 @@ mod tests {
         annotate_record(&mut record, &parsed);
         assert_eq!(record.base_callsign, None);
         assert_eq!(record.modifier_text, None);
-        assert_eq!(record.modifier_kind, 0);
+        assert_eq!(record.modifier_kind, None);
     }
 }

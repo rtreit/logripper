@@ -731,6 +731,12 @@ fn map_callsign_record(queried_callsign: &str, qrz: &QrzCallsign) -> CallsignRec
         gmt_offset: parse_gmt_offset(qrz.gmt_offset.as_deref()),
         dst_observed: parse_yes_no(qrz.dst_observed.as_deref()),
         profile_views: parse_u32(qrz.profile_views.as_deref()),
+        base_callsign: None,
+        modifier_text: None,
+        modifier_kind: None,
+        prefix_override_callsign: None,
+        operating_entity_hint: None,
+        callsign_ambiguity: None,
     };
 
     // Derive missing CQ zone from location data (state, lat/lon, grid square)

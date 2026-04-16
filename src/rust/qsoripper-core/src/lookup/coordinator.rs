@@ -176,8 +176,13 @@ impl LookupCoordinator {
             .await;
         let latency_ms = duration_to_millis_u32(started_at.elapsed());
         updates.push(
-            self.provider_result_to_lookup(provider_result, &normalized_callsign, latency_ms, &parsed)
-                .await,
+            self.provider_result_to_lookup(
+                provider_result,
+                &normalized_callsign,
+                latency_ms,
+                &parsed,
+            )
+            .await,
         );
 
         updates
@@ -544,7 +549,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn concurrent_identical_lookups_share_inflight_request() {        let provider = QueueProvider::new(
+    async fn concurrent_identical_lookups_share_inflight_request() {
+        let provider = QueueProvider::new(
             vec![Ok(ProviderLookup::found(
                 found_record("W1AW", "Shared"),
                 Vec::new(),

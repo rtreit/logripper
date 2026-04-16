@@ -74,10 +74,10 @@ pub fn placeholder_lookup_error(callsign: &str) -> LookupResult {
             profile_views: None,
             base_callsign: None,
             modifier_text: None,
-            modifier_kind: 0,
+            modifier_kind: None,
             prefix_override_callsign: None,
             operating_entity_hint: None,
-            callsign_ambiguity: 0,
+            callsign_ambiguity: None,
         }),
         error_message: Some(
             "Lookup transport is live, but provider-backed callsign lookup is not implemented yet."
