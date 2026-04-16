@@ -23,9 +23,13 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $runtimeDirectory = Join-Path $PSScriptRoot 'artifacts' | Join-Path -ChildPath 'run'
-$statePath = Join-Path $runtimeDirectory 'qsoripper-engine.json'
+$legacyStatePath = Join-Path $runtimeDirectory 'qsoripper-engine.json'
 $dotenvPath = Join-Path $PSScriptRoot '.env'
 $defaultPersistenceLocation = Join-Path (Join-Path '.' 'data') 'qsoripper.db'
+
+function Get-ProfileStatePath([string]$ProfileId) {
+    return Join-Path $runtimeDirectory "qsoripper-$ProfileId.state.json"
+}
 
 function Write-Info([string]$Message) {
     Write-Host $Message -ForegroundColor Cyan
@@ -60,23 +64,23 @@ function Import-DotEnv([string]$Path) {
     }
 }
 
-function Get-State {
-    if (-not (Test-Path -LiteralPath $statePath)) {
+function Get-State([string]$Path) {
+    if (-not (Test-Path -LiteralPath $Path)) {
         return $null
     }
 
-    return Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json
+    return Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
 }
 
-function Get-TrackedProcess {
-    $state = Get-State
+function Get-TrackedProcess([string]$Path) {
+    $state = Get-State -Path $Path
     if ($null -eq $state) {
         return $null
     }
 
     $process = Get-Process -Id $state.pid -ErrorAction SilentlyContinue
     if ($null -eq $process) {
-        Remove-Item -LiteralPath $statePath -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
         return $null
     }
 
@@ -412,15 +416,25 @@ if ([string]::IsNullOrWhiteSpace($ConfigPath)) {
     $ConfigPath = $profile.DefaultConfigPath
 }
 
-$existing = Get-TrackedProcess
+$statePath = Get-ProfileStatePath -ProfileId $profile.ProfileId
+
+# Migrate legacy single-engine state file if it exists and matches this profile
+if ((Test-Path -LiteralPath $legacyStatePath) -and -not (Test-Path -LiteralPath $statePath)) {
+    $legacyState = Get-State -Path $legacyStatePath
+    if ($null -ne $legacyState -and $legacyState.engine -eq $profile.ProfileId) {
+        Move-Item -LiteralPath $legacyStatePath -Destination $statePath -Force
+    }
+}
+
+$existing = Get-TrackedProcess -Path $statePath
 if ($null -ne $existing) {
     if (-not $ForceRestart) {
-        Write-Host "QsoRipper is already running (PID $($existing.Process.Id)) at $($existing.State.listenAddress)." -ForegroundColor Yellow
-        Write-Host "Stop it first with .\stop-qsoripper.ps1 or rerun with -ForceRestart." -ForegroundColor Yellow
+        Write-Host "$($profile.DisplayName) is already running (PID $($existing.Process.Id)) at $($existing.State.listenAddress)." -ForegroundColor Yellow
+        Write-Host "Stop it first with .\stop-qsoripper.ps1 -Engine $($profile.ProfileId) or rerun with -ForceRestart." -ForegroundColor Yellow
         exit 0
     }
 
-    Write-Info "Stopping existing QsoRipper process $($existing.Process.Id)."
+    Write-Info "Stopping existing $($profile.DisplayName) process $($existing.Process.Id)."
     Stop-TrackedProcess -ProcessId $existing.Process.Id
     Remove-Item -LiteralPath $statePath -Force -ErrorAction SilentlyContinue
 }
