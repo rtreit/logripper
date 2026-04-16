@@ -1,13 +1,16 @@
 using System.Net;
 using Microsoft.AspNetCore.Server.Kestrel.Core;
 using QsoRipper.Engine.DotNet;
+using QsoRipper.Engine.Storage;
+using QsoRipper.Engine.Storage.Memory;
 
 var options = ManagedEngineHostOptions.Parse(args);
 
 var builder = WebApplication.CreateBuilder(args);
 builder.WebHost.ConfigureKestrel(kestrel => ConfigureListenEndpoint(kestrel, options.ListenAddress));
 builder.Services.AddGrpc();
-builder.Services.AddSingleton(new ManagedEngineState(options.ConfigPath));
+builder.Services.AddSingleton<IEngineStorage>(new MemoryStorage());
+builder.Services.AddSingleton(provider => new ManagedEngineState(options.ConfigPath, provider.GetRequiredService<IEngineStorage>()));
 
 var app = builder.Build();
 app.MapGrpcService<ManagedEngineInfoGrpcService>();

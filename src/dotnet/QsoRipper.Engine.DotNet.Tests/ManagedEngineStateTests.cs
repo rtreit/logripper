@@ -2,6 +2,7 @@ using System.Text;
 using Google.Protobuf.WellKnownTypes;
 using QsoRipper.Domain;
 using QsoRipper.Engine.DotNet;
+using QsoRipper.Engine.Storage.Memory;
 using QsoRipper.EngineSelection;
 using QsoRipper.Services;
 
@@ -345,7 +346,7 @@ public sealed class ManagedEngineStateTests : IDisposable
 
     private ManagedEngineState CreateState()
     {
-        return new ManagedEngineState(Path.Combine(_tempDirectory, "managed-engine.json"));
+        return new ManagedEngineState(Path.Combine(_tempDirectory, "managed-engine.json"), new MemoryStorage());
     }
 
     private static byte[] Utf8(string value)

@@ -14,9 +14,6 @@
   </ItemGroup>
 
   <ItemGroup>
-    <Protobuf Include="..\..\..\proto\domain\*.proto"
-              ProtoRoot="..\..\..\proto"
-              GrpcServices="None" />
     <Protobuf Include="..\..\..\proto\services\*.proto"
               ProtoRoot="..\..\..\proto"
               GrpcServices="None" />
@@ -25,6 +22,8 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\QsoRipper.Engine.Storage.Abstractions\QsoRipper.Engine.Storage.Abstractions.csproj" />
+    <ProjectReference Include="..\QsoRipper.Engine.Storage.Memory\QsoRipper.Engine.Storage.Memory.csproj" />
     <ProjectReference Include="..\QsoRipper.EngineSelection\QsoRipper.EngineSelection.csproj" />
   </ItemGroup>
 

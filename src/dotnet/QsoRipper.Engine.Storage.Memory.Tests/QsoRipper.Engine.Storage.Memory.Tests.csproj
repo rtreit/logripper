@@ -17,7 +17,6 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\QsoRipper.Engine.DotNet\QsoRipper.Engine.DotNet.csproj" />
     <ProjectReference Include="..\QsoRipper.Engine.Storage.Memory\QsoRipper.Engine.Storage.Memory.csproj" />
   </ItemGroup>
 
