@@ -9,6 +9,8 @@
   <Project Path="QsoRipper.Engine.RigControl/QsoRipper.Engine.RigControl.csproj" />
   <Project Path="QsoRipper.Engine.RigControl.Tests/QsoRipper.Engine.RigControl.Tests.csproj" />
   <Project Path="QsoRipper.Engine.Lookup.Abstractions/QsoRipper.Engine.Lookup.Abstractions.csproj" />
+  <Project Path="QsoRipper.Engine.SpaceWeather/QsoRipper.Engine.SpaceWeather.csproj" />
+  <Project Path="QsoRipper.Engine.SpaceWeather.Tests/QsoRipper.Engine.SpaceWeather.Tests.csproj" />
   <Project Path="QsoRipper.Engine.Lookup.Qrz/QsoRipper.Engine.Lookup.Qrz.csproj" />
   <Project Path="QsoRipper.Engine.Lookup.Tests/QsoRipper.Engine.Lookup.Tests.csproj" />
   <Project Path="QsoRipper.Engine.Storage.Abstractions/QsoRipper.Engine.Storage.Abstractions.csproj" />

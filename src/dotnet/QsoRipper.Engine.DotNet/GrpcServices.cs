@@ -451,7 +451,7 @@ internal sealed class ManagedRigControlGrpcService(ManagedEngineState state)
 }
 
 [SuppressMessage("Performance", "CA1812:Avoid uninstantiated internal classes", Justification = "Activated by ASP.NET Core gRPC.")]
-internal sealed class ManagedSpaceWeatherGrpcService
+internal sealed class ManagedSpaceWeatherGrpcService(ManagedEngineState state)
     : SpaceWeatherService.SpaceWeatherServiceBase
 {
     public override Task<GetCurrentSpaceWeatherResponse> GetCurrentSpaceWeather(
@@ -460,7 +460,7 @@ internal sealed class ManagedSpaceWeatherGrpcService
     {
         return Task.FromResult(new GetCurrentSpaceWeatherResponse
         {
-            Snapshot = ManagedEngineState.BuildSpaceWeatherSnapshot(refreshed: false),
+            Snapshot = state.BuildSpaceWeatherSnapshot(refreshed: false),
         });
     }
 
@@ -470,7 +470,7 @@ internal sealed class ManagedSpaceWeatherGrpcService
     {
         return Task.FromResult(new RefreshSpaceWeatherResponse
         {
-            Snapshot = ManagedEngineState.BuildSpaceWeatherSnapshot(refreshed: true),
+            Snapshot = state.BuildSpaceWeatherSnapshot(refreshed: true),
         });
     }
 }

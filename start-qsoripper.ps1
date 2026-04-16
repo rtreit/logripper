@@ -23,7 +23,8 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $runtimeDirectory = Join-Path $PSScriptRoot 'artifacts' | Join-Path -ChildPath 'run'
-$statePath = Join-Path $runtimeDirectory 'qsoripper-engine.json'
+$legacyStatePath = Join-Path $runtimeDirectory 'qsoripper-engine.json'
+$statePath = $null
 $dotenvPath = Join-Path $PSScriptRoot '.env'
 $defaultPersistenceLocation = Join-Path (Join-Path '.' 'data') 'qsoripper.db'
 
@@ -60,23 +61,42 @@ function Import-DotEnv([string]$Path) {
     }
 }
 
-function Get-State {
-    if (-not (Test-Path -LiteralPath $statePath)) {
+function Get-StatePathForProfile([string]$ProfileId) {
+    if ([string]::IsNullOrWhiteSpace($ProfileId)) {
+        throw 'ProfileId is required.'
+    }
+
+    return Join-Path $runtimeDirectory "qsoripper-engine-$ProfileId.json"
+}
+
+function Get-State([string]$Path = $statePath) {
+    if ([string]::IsNullOrWhiteSpace($Path) -or -not (Test-Path -LiteralPath $Path)) {
         return $null
     }
 
-    return Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json
+    return Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
 }
 
-function Get-TrackedProcess {
-    $state = Get-State
+function Remove-StateIfTrackedProcess([string]$Path, [int]$ProcessId) {
+    if ([string]::IsNullOrWhiteSpace($Path) -or -not (Test-Path -LiteralPath $Path)) {
+        return
+    }
+
+    $state = Get-State -Path $Path
+    if ($null -eq $state -or [int]$state.pid -eq $ProcessId) {
+        Remove-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Get-TrackedProcess([string]$Path = $statePath) {
+    $state = Get-State -Path $Path
     if ($null -eq $state) {
         return $null
     }
 
     $process = Get-Process -Id $state.pid -ErrorAction SilentlyContinue
     if ($null -eq $process) {
-        Remove-Item -LiteralPath $statePath -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
         return $null
     }
 
@@ -520,6 +540,7 @@ if ([string]::IsNullOrWhiteSpace($Engine)) {
 
 $profiles = Get-EngineProfiles
 $profile = Resolve-EngineProfile -RequestedEngine $Engine -Profiles $profiles
+$statePath = Get-StatePathForProfile -ProfileId $profile.ProfileId
 $stdoutPath = Join-Path $runtimeDirectory "qsoripper-$($profile.ProfileId).stdout.log"
 $stderrPath = Join-Path $runtimeDirectory "qsoripper-$($profile.ProfileId).stderr.log"
 
@@ -543,7 +564,7 @@ if ([string]::IsNullOrWhiteSpace($ConfigPath)) {
     $ConfigPath = $profile.DefaultConfigPath
 }
 
-$existing = Get-TrackedProcess
+$existing = Get-TrackedProcess -Path $statePath
 if ($null -ne $existing) {
     if (-not $ForceRestart) {
         Write-Host "QsoRipper is already running (PID $($existing.Process.Id)) at $($existing.State.listenAddress)." -ForegroundColor Yellow
@@ -554,6 +575,13 @@ if ($null -ne $existing) {
     Write-Info "Stopping existing QsoRipper process $($existing.Process.Id)."
     Stop-TrackedProcess -ProcessId $existing.Process.Id
     Remove-Item -LiteralPath $statePath -Force -ErrorAction SilentlyContinue
+    Remove-StateIfTrackedProcess -Path $legacyStatePath -ProcessId $existing.Process.Id
+}
+else {
+    $otherEngine = Get-TrackedProcess -Path $legacyStatePath
+    if ($null -ne $otherEngine -and $otherEngine.State.engine -ine $profile.ProfileId) {
+        Write-Info "Another tracked engine is running (PID $($otherEngine.Process.Id), $($otherEngine.State.engine)); it will be left running."
+    }
 }
 
 if ($ForceRestart) {
@@ -694,6 +722,7 @@ $state = [pscustomobject]@{
     storage = $Storage
 }
 $state | ConvertTo-Json | Set-Content -LiteralPath $statePath
+$state | ConvertTo-Json | Set-Content -LiteralPath $legacyStatePath
 
 $deadline = [DateTime]::UtcNow.AddSeconds($StartupTimeoutSeconds)
 $startupErrorPattern = '(?i)address already in use|only one usage of each socket address'
@@ -726,6 +755,7 @@ while ([DateTime]::UtcNow -lt $deadline) {
     if (($stderrTail -join [Environment]::NewLine) -match $startupErrorPattern) {
         Stop-TrackedProcess -ProcessId $process.Id
         Remove-Item -LiteralPath $statePath -Force -ErrorAction SilentlyContinue
+        Remove-StateIfTrackedProcess -Path $legacyStatePath -ProcessId $process.Id
         throw "QsoRipper failed to start because the endpoint is already in use.`n$($stderrTail -join [Environment]::NewLine)"
     }
 
@@ -734,4 +764,5 @@ while ([DateTime]::UtcNow -lt $deadline) {
 
 Stop-TrackedProcess -ProcessId $process.Id
 Remove-Item -LiteralPath $statePath -Force -ErrorAction SilentlyContinue
+Remove-StateIfTrackedProcess -Path $legacyStatePath -ProcessId $process.Id
 throw "QsoRipper did not open any expected endpoint ($((@($probeTargets | ForEach-Object { Format-HttpEndpoint -TargetHost $_.Host -Port $_.Port })) -join ', ')) within $StartupTimeoutSeconds seconds."

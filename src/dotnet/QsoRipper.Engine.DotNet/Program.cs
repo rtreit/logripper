@@ -4,6 +4,7 @@ using QsoRipper.Engine.DotNet;
 using QsoRipper.Engine.Lookup;
 using QsoRipper.Engine.Lookup.Qrz;
 using QsoRipper.Engine.RigControl;
+using QsoRipper.Engine.SpaceWeather;
 using QsoRipper.Engine.Storage;
 using QsoRipper.Engine.Storage.Memory;
 using QsoRipper.Engine.Storage.Sqlite;
@@ -21,12 +22,14 @@ var lookupCoordinator = CreateLookupCoordinator(storage);
 builder.Services.AddSingleton(lookupCoordinator);
 
 var rigControlMonitor = CreateRigControlMonitor();
+var spaceWeatherMonitor = CreateSpaceWeatherMonitor();
 
 builder.Services.AddSingleton(provider => new ManagedEngineState(
     options.ConfigPath,
     provider.GetRequiredService<IEngineStorage>(),
     provider.GetRequiredService<ILookupCoordinator>(),
-    rigControlMonitor));
+    rigControlMonitor,
+    spaceWeatherMonitor));
 
 var app = builder.Build();
 app.MapGrpcService<ManagedEngineInfoGrpcService>();
@@ -117,6 +120,24 @@ static RigControlMonitor? CreateRigControlMonitor()
     var provider = new RigctldProvider(host, port, TimeSpan.FromMilliseconds(readTimeoutMs));
     Console.WriteLine($"Rig control enabled: rigctld at {host}:{port} (timeout {readTimeoutMs}ms, stale {staleThresholdMs}ms)");
     return new RigControlMonitor(provider, TimeSpan.FromMilliseconds(staleThresholdMs));
+}
+
+static SpaceWeatherMonitor? CreateSpaceWeatherMonitor()
+{
+    var config = NoaaSpaceWeatherConfig.FromEnvironment();
+    if (!config.Enabled)
+    {
+        Console.WriteLine("NOAA space weather: disabled");
+        return null;
+    }
+
+    // HttpClient is intentionally not disposed — it is a singleton owned by the provider for the app lifetime.
+#pragma warning disable CA2000 // Dispose objects before losing scope
+    var httpClient = new HttpClient { Timeout = config.HttpTimeout };
+#pragma warning restore CA2000
+    var provider = new NoaaSpaceWeatherProvider(httpClient, config);
+    Console.WriteLine($"NOAA space weather: enabled (refresh every {config.RefreshInterval.TotalSeconds}s, stale after {config.StaleAfter.TotalSeconds}s)");
+    return new SpaceWeatherMonitor(provider, config.RefreshInterval, config.StaleAfter);
 }
 
 static void ConfigureListenEndpoint(KestrelServerOptions options, string listenAddress)

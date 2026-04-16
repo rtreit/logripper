@@ -6,6 +6,7 @@ using Google.Protobuf.WellKnownTypes;
 using QsoRipper.Domain;
 using QsoRipper.Engine.Lookup;
 using QsoRipper.Engine.RigControl;
+using QsoRipper.Engine.SpaceWeather;
 using QsoRipper.Engine.Storage;
 using QsoRipper.Engine.Storage.Memory;
 using QsoRipper.EngineSelection;
@@ -43,6 +44,7 @@ internal sealed class ManagedEngineState
     private readonly IEngineStorage _storage;
     private readonly ILookupCoordinator _lookupCoordinator;
     private readonly RigControlMonitor? _rigControlMonitor;
+    private readonly SpaceWeatherMonitor? _spaceWeatherMonitor;
     private readonly string _configPath;
     private string? _qrzXmlUsername;
     private bool _hasQrzXmlPassword;
@@ -55,21 +57,26 @@ internal sealed class ManagedEngineState
     private readonly Dictionary<string, string> _runtimeOverrides;
 
     public ManagedEngineState(string configPath)
-        : this(configPath, new MemoryStorage(), null, null)
+        : this(configPath, new MemoryStorage(), null, null, null)
     {
     }
 
     public ManagedEngineState(string configPath, IEngineStorage storage)
-        : this(configPath, storage, null, null)
+        : this(configPath, storage, null, null, null)
     {
     }
 
     public ManagedEngineState(string configPath, IEngineStorage storage, ILookupCoordinator? lookupCoordinator)
-        : this(configPath, storage, lookupCoordinator, null)
+        : this(configPath, storage, lookupCoordinator, null, null)
     {
     }
 
     public ManagedEngineState(string configPath, IEngineStorage storage, ILookupCoordinator? lookupCoordinator, RigControlMonitor? rigControlMonitor)
+        : this(configPath, storage, lookupCoordinator, rigControlMonitor, null)
+    {
+    }
+
+    public ManagedEngineState(string configPath, IEngineStorage storage, ILookupCoordinator? lookupCoordinator, RigControlMonitor? rigControlMonitor, SpaceWeatherMonitor? spaceWeatherMonitor)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(configPath);
         ArgumentNullException.ThrowIfNull(storage);
@@ -78,6 +85,7 @@ internal sealed class ManagedEngineState
         _storage = storage;
         _lookupCoordinator = lookupCoordinator ?? CreateDefaultCoordinator(storage);
         _rigControlMonitor = rigControlMonitor;
+        _spaceWeatherMonitor = spaceWeatherMonitor;
         var persisted = LoadPersistedState(_configPath);
         _qrzXmlUsername = NormalizeOptional(persisted.QrzXmlUsername);
         _hasQrzXmlPassword = persisted.HasQrzXmlPassword;
@@ -796,21 +804,21 @@ internal sealed class ManagedEngineState
         };
     }
 
-    public static SpaceWeatherSnapshot BuildSpaceWeatherSnapshot(bool refreshed)
+    public SpaceWeatherSnapshot BuildSpaceWeatherSnapshot(bool refreshed)
     {
-        var now = DateTimeOffset.UtcNow;
-        return new SpaceWeatherSnapshot
+        if (_spaceWeatherMonitor is null)
         {
-            ObservedAt = Timestamp.FromDateTimeOffset(now),
-            FetchedAt = Timestamp.FromDateTimeOffset(now),
-            Status = SpaceWeatherStatus.Current,
-            PlanetaryKIndex = refreshed ? 2.3 : 2.0,
-            PlanetaryAIndex = 9,
-            SolarFluxIndex = refreshed ? 152.0 : 148.0,
-            SunspotNumber = 96,
-            GeomagneticStormScale = 1,
-            SourceName = "Managed sample provider",
-        };
+            return new SpaceWeatherSnapshot
+            {
+                Status = SpaceWeatherStatus.Error,
+                ErrorMessage = "Space weather not configured",
+                SourceName = "NOAA SWPC",
+            };
+        }
+
+        return refreshed
+            ? _spaceWeatherMonitor.RefreshSnapshot()
+            : _spaceWeatherMonitor.CurrentSnapshot();
     }
 
     public RuntimeConfigSnapshot GetRuntimeConfigSnapshot()

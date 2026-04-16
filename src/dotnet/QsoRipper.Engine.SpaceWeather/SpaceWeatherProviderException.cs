@@ -18,7 +18,9 @@ public enum SpaceWeatherProviderErrorKind
 /// <summary>
 /// Exception surfaced by the space weather provider layer.
 /// </summary>
+#pragma warning disable CA1032, RCS1194 // Standard constructors intentionally omitted — use factory methods.
 public sealed class SpaceWeatherProviderException : Exception
+#pragma warning restore CA1032, RCS1194
 {
     /// <summary>Gets the stable error category.</summary>
     public SpaceWeatherProviderErrorKind Kind { get; }

@@ -36,9 +36,11 @@ public sealed class NoaaSpaceWeatherConfig
     public bool Enabled { get; init; } = true;
 
     /// <summary>Gets or sets the K-index JSON endpoint URL.</summary>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1056:URI-like properties should not be strings", Justification = "Stored as string from env vars; passed directly to HttpRequestMessage.")]
     public string KpIndexUrl { get; init; } = DefaultKpIndexUrl;
 
     /// <summary>Gets or sets the daily solar indices text endpoint URL.</summary>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1056:URI-like properties should not be strings", Justification = "Stored as string from env vars; passed directly to HttpRequestMessage.")]
     public string SolarIndicesUrl { get; init; } = DefaultSolarIndicesUrl;
 
     /// <summary>Gets or sets the HTTP request timeout.</summary>
