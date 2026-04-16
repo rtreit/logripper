@@ -1620,9 +1620,9 @@ static void PaintHeader(HDC hdc, RECT *rc)
 
     FillRect_Color(hdc, 0, 0, w, header_h, CLR_HEADER_BG);
 
-    /* Left: title */
+    /* Left: title (top-justified with small padding) */
     SelectObject(hdc, g_state.hFontBold);
-    DrawText_A(hdc, cw, ch, CLR_HEADER_FG, "QsoRipper");
+    DrawText_A(hdc, cw, 2, CLR_HEADER_FG, "QsoRipper");
     SelectObject(hdc, g_state.hFont);
 
     /* Center: space weather */
