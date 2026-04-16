@@ -26,18 +26,15 @@ pub(super) fn render(app: &App, frame: &mut Frame, area: Rect) {
     frame.render_widget(block, area);
 
     let Some(info) = &app.lookup_result else {
-        let hint = if app.form.callsign.len() >= 3 {
-            "Looking up…"
-        } else {
-            "Type a callsign to look up"
-        };
-        frame.render_widget(
-            Paragraph::new(Line::from(Span::styled(
-                hint,
-                Style::default().fg(Color::DarkGray),
-            ))),
-            inner,
-        );
+        if app.form.callsign.len() >= 3 {
+            frame.render_widget(
+                Paragraph::new(Line::from(Span::styled(
+                    "Looking up\u{2026}",
+                    Style::default().fg(Color::DarkGray),
+                ))),
+                inner,
+            );
+        }
         return;
     };
 

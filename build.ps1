@@ -39,10 +39,12 @@ $DotnetGuiProject = Join-Path $PSScriptRoot 'src' 'dotnet' 'QsoRipper.Gui' 'QsoR
 $DotnetCliPublishDir = Join-Path $PSScriptRoot 'artifacts' 'publish' | Join-Path -ChildPath 'QsoRipper.Cli' | Join-Path -ChildPath $Configuration
 $DotnetGuiPublishDir = Join-Path $PSScriptRoot 'artifacts' 'publish' | Join-Path -ChildPath 'QsoRipper.Gui' | Join-Path -ChildPath $Configuration
 $TuiPublishDir = Join-Path $PSScriptRoot 'artifacts' 'publish' | Join-Path -ChildPath 'qsoripper-tui' | Join-Path -ChildPath $Configuration
+$StressTuiPublishDir = Join-Path $PSScriptRoot 'artifacts' 'publish' | Join-Path -ChildPath 'qsoripper-stress-tui' | Join-Path -ChildPath $Configuration
 $RustDir = Join-Path $PSScriptRoot 'src' 'rust'
 $IsReleaseBuild = $Configuration -eq 'Release'
 $RustTargetProfile = if ($IsReleaseBuild) { 'release' } else { 'debug' }
 $TuiBinary = if ($IsWindows) { 'qsoripper-tui.exe' } else { 'qsoripper-tui' }
+$StressTuiBinary = if ($IsWindows) { 'qsoripper-stress-tui.exe' } else { 'qsoripper-stress-tui' }
 
 function Write-Step([string]$Message) {
     Write-Host "`n=== $Message ===" -ForegroundColor Cyan
@@ -75,6 +77,14 @@ function Build-Rust {
         $null = New-Item -ItemType Directory -Force -Path $TuiPublishDir
         Copy-Item -Path $tuiSrc -Destination $TuiPublishDir -Force
         Write-Host "  -> $TuiPublishDir"
+    }
+
+    $stressTuiSrc = Join-Path $PSScriptRoot 'src' 'rust' 'target' $RustTargetProfile $StressTuiBinary
+    if (Test-Path $stressTuiSrc) {
+        Write-Step "Publishing qsoripper-stress-tui ($Configuration)"
+        $null = New-Item -ItemType Directory -Force -Path $StressTuiPublishDir
+        Copy-Item -Path $stressTuiSrc -Destination $StressTuiPublishDir -Force
+        Write-Host "  -> $StressTuiPublishDir"
     }
 }
 
@@ -182,6 +192,26 @@ function Build-Win32 {
         return
     }
 
+    # cppcheck static analysis — fails the build on error-severity findings
+    Write-Step 'Win32 static analysis (cppcheck)'
+    $cppcheckExe = Get-Command cppcheck -ErrorAction SilentlyContinue
+    if ($cppcheckExe) {
+        cppcheck --enable=warning,performance,portability `
+                 --error-exitcode=1 `
+                 --std=c11 `
+                 --suppress=missingIncludeSystem `
+                 --suppress=missingInclude `
+                 --inline-suppr `
+                 $Win32Source
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host 'FAILED: cppcheck found errors' -ForegroundColor Red
+            exit $LASTEXITCODE
+        }
+    }
+    else {
+        Write-Host 'cppcheck not found, skipping. Install from https://cppcheck.sourceforge.io/' -ForegroundColor Yellow
+    }
+
     Write-Step "Building qsoripper-win32 ($Configuration)"
     $null = New-Item -ItemType Directory -Force -Path $Win32PublishDir
     $optFlags = if ($IsReleaseBuild) { '/O2' } else { '/Od /Zi' }
@@ -192,7 +222,7 @@ function Build-Win32 {
     @"
 @echo off
 call "$vcvars" $arch >nul 2>&1
-cl /W4 /WX $optFlags /DUNICODE /D_UNICODE "$Win32Source" /Fe:"$exe" /link user32.lib gdi32.lib shell32.lib comctl32.lib
+cl /W4 /WX /analyze $optFlags /DUNICODE /D_UNICODE "$Win32Source" /Fe:"$exe" /link user32.lib gdi32.lib shell32.lib comctl32.lib
 "@ | Set-Content -LiteralPath $buildScript -Encoding ASCII
 
     Push-Location $Win32PublishDir
@@ -209,6 +239,7 @@ cl /W4 /WX $optFlags /DUNICODE /D_UNICODE "$Win32Source" /Fe:"$exe" /link user32
 
     # Clean intermediate files
     Remove-Item (Join-Path $Win32PublishDir '*.obj') -Force -ErrorAction SilentlyContinue
+    Remove-Item (Join-Path $Win32PublishDir '*.pft') -Force -ErrorAction SilentlyContinue
     Remove-Item $buildScript -Force -ErrorAction SilentlyContinue
 
     Write-Host "  -> $Win32PublishDir"
@@ -279,7 +310,7 @@ Usage: ./build.ps1 [command] [-Configuration Release|Debug]
 Commands:
   build         Build Rust, .NET, and Win32 apps (default: Release)
   check         Full CI-equivalent quality check
-  rust          Build Rust only (copies qsoripper-tui binary to artifacts)
+  rust          Build Rust only (copies qsoripper-tui and qsoripper-stress-tui binaries to artifacts)
   dotnet        Publish the CLI and GUI apps only
   win32         Build the Win32 C GUI app only
   check-rust    Rust quality: fmt, clippy, test, buf lint, cargo deny

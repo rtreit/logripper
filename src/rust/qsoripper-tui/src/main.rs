@@ -440,6 +440,20 @@ fn handle_qso_list_key(
                 None => 0,
             });
         }
+        KeyCode::Home
+            if key
+                .modifiers
+                .contains(crossterm::event::KeyModifiers::CONTROL) =>
+        {
+            app.qso_selected = Some(0);
+        }
+        KeyCode::End
+            if key
+                .modifiers
+                .contains(crossterm::event::KeyModifiers::CONTROL) =>
+        {
+            app.qso_selected = Some(max);
+        }
         KeyCode::Enter => {
             if let Some(id) = enter_id {
                 load_qso_into_form(app, &id, lookup_tx);

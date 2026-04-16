@@ -1,13 +1,14 @@
 /* ==========================================================================
  * QsoRipper Win32 — Pure Win32/GDI ham radio logging application
  * Single-file C implementation using owner-drawn controls.
- * Compile: cl /W4 /DUNICODE /D_UNICODE main.c /link user32.lib gdi32.lib
+ * Compile: cl /W4 /WX /analyze /DUNICODE /D_UNICODE main.c /link user32.lib gdi32.lib
  *          shell32.lib comctl32.lib
  * ========================================================================== */
 
 #define WIN32_LEAN_AND_MEAN
 #define _CRT_SECURE_NO_WARNINGS
 #include <windows.h>
+#include <windowsx.h>
 #include <commctrl.h>
 #include <shellapi.h>
 #include <process.h>
@@ -26,7 +27,7 @@
 #define TIMER_MS        100
 #define STATUS_LIFETIME_MS  3000
 #define LOOKUP_DEBOUNCE_MS  500
-#define MAX_RECENT      50
+/* Tuning / behaviour constants */
 #define MAX_FIELD_LEN   256
 
 /* ── Menu item IDs ─────────────────────────────────────────────────────── */
@@ -37,6 +38,8 @@
 
 /* Custom window messages */
 #define WM_APP_LOOKUP_DONE   (WM_APP + 1)
+#define WM_APP_RIG_DONE      (WM_APP + 2)
+#define WM_APP_QSO_LOADED    (WM_APP + 3)
 
 /* ── Color palette (Win2K classic theme) ────────────────────────────────── */
 
@@ -49,7 +52,8 @@
 #define CLR_WHITE       RGB(255, 255, 255)
 #define CLR_GRAY        RGB(50, 50, 50)
 #define CLR_DARKGRAY    RGB(20, 20, 20)
-#define CLR_GREEN       RGB(0, 128, 0)
+#define CLR_GREEN           RGB(0, 128, 0)
+#define CLR_BRIGHT_GREEN    RGB(0, 255, 0)
 #define CLR_RED         RGB(192, 0, 0)
 #define CLR_BLUE_BG     RGB(0, 0, 128)      /* Navy selection */
 #define CLR_FORM_BORDER RGB(128, 128, 128)  /* Group box border */
@@ -140,6 +144,20 @@ typedef struct {
     int  cq_zone;
     int  has_data;
 } LookupResultMsg;
+
+/* ── Rig poll message structs ──────────────────────────────────────────── */
+
+typedef struct {
+    HWND hwnd;
+} RigPollArg;
+
+typedef struct {
+    int  connected;
+    char freq_display[32];
+    char freq_mhz[16];
+    char band[8];
+    char mode[16];
+} RigPollResult;
 
 /* ── Recent QSO record ─────────────────────────────────────────────────── */
 
@@ -233,18 +251,31 @@ typedef struct {
     int  has_lookup;
     int  lookup_in_progress;
 
-    /* Recent QSOs */
-    RecentQso recent_qsos[MAX_RECENT];
+    /* Recent QSOs (heap-allocated; grows as needed) */
+    RecentQso *recent_qsos;
     int recent_count;
+    int recent_capacity;
+    int qso_loading;
 
     /* Scroll offset for QSO list */
     int qso_scroll;
+    int qso_page_size;
 
     /* Space weather */
     double k_index;
     double solar_flux;
     int sunspot_number;
     int has_weather;
+
+    /* Rig control */
+    int  rig_enabled;
+    int  rig_connected;
+    int  rig_poll_in_progress;
+    ULONGLONG last_rig_poll;
+    char rig_freq_display[32];
+    char rig_freq_mhz[16];
+    char rig_band[8];
+    char rig_mode[16];
 
     /* Editing existing QSO */
     char editing_local_id[64];
@@ -259,7 +290,10 @@ typedef struct {
     /* GDI objects */
     HFONT hFont;
     HFONT hFontBold;
+    HFONT hFontSmall;
+    HFONT hFontSmallBold;
     int char_w, char_h;
+    int list_cw, list_ch;
 
     HWND hwnd;
 } AppState;
@@ -278,6 +312,7 @@ static void ClearForm(void);
 static void SetStatus(const char *msg, int is_error);
 static void LogQso(void);
 static void RefreshQsoList(void);
+static void RefreshQsoListAsync(HWND hwnd);
 static void FetchSpaceWeather(void);
 static void LoadSelectedQso(void);
 static void DeleteSelectedQso(void);
@@ -316,7 +351,7 @@ static void safe_strcat(char *dst, size_t dstsz, const char *src)
 static char *json_get_string(const char *json, const char *key)
 {
     char pattern[128];
-    _snprintf(pattern, sizeof(pattern), "\"%s\"", key);
+    snprintf(pattern, sizeof(pattern), "\"%s\"", key);
     const char *p = strstr(json, pattern);
     if (!p) return NULL;
     p += strlen(pattern);
@@ -327,6 +362,7 @@ static char *json_get_string(const char *json, const char *key)
         if (!end) return NULL;
         size_t len = (size_t)(end - p);
         char *val = (char *)malloc(len + 1);
+        if (!val) return NULL;
         memcpy(val, p, len);
         val[len] = 0;
         return val;
@@ -337,6 +373,7 @@ static char *json_get_string(const char *json, const char *key)
         while (*end && *end != ',' && *end != '}' && *end != ' ' && *end != '\n') end++;
         size_t len = (size_t)(end - p);
         char *val = (char *)malloc(len + 1);
+        if (!val) return NULL;
         memcpy(val, p, len);
         val[len] = 0;
         return val;
@@ -398,6 +435,7 @@ static char *json_extract_object(const char *start)
     }
     size_t len = (size_t)(p - start);
     char *obj = (char *)malloc(len + 1);
+    if (!obj) return NULL;
     memcpy(obj, start, len);
     obj[len] = 0;
     return obj;
@@ -424,7 +462,7 @@ static void FindCliPath(void)
     if (p) *p = 0; /* strip qsoripper-win32 */
 
     /* Try sibling directory */
-    _snprintf(g_cli_path, MAX_PATH, "%s\\QsoRipper.Cli\\Release\\QsoRipper.Cli.exe", module);
+    snprintf(g_cli_path, MAX_PATH, "%s\\QsoRipper.Cli\\Release\\QsoRipper.Cli.exe", module);
     if (GetFileAttributesA(g_cli_path) != INVALID_FILE_ATTRIBUTES)
         return;
 
@@ -449,7 +487,7 @@ static char *RunQrCommand(const char *args)
     SetHandleInformation(hReadPipe, HANDLE_FLAG_INHERIT, 0);
 
     char cmdline[8192];
-    _snprintf(cmdline, sizeof(cmdline), "\"%s\" %s", g_cli_path, args);
+    snprintf(cmdline, sizeof(cmdline), "\"%s\" %s", g_cli_path, args);
 
     STARTUPINFOA si = {0};
     si.cb = sizeof(si);
@@ -471,12 +509,29 @@ static char *RunQrCommand(const char *args)
 
     /* Read all stdout */
     char *output = (char *)malloc(8192);
+    if (!output) {
+        WaitForSingleObject(pi.hProcess, 5000);
+        CloseHandle(pi.hProcess);
+        CloseHandle(pi.hThread);
+        CloseHandle(hReadPipe);
+        return NULL;
+    }
     DWORD totalRead = 0;
     DWORD capacity = 8192;
     for (;;) {
         if (totalRead + 1024 > capacity) {
-            capacity *= 2;
-            output = (char *)realloc(output, capacity);
+            DWORD newCapacity = capacity * 2;
+            char *grown = (char *)realloc(output, newCapacity);
+            if (!grown) {
+                free(output);
+                WaitForSingleObject(pi.hProcess, 5000);
+                CloseHandle(pi.hProcess);
+                CloseHandle(pi.hThread);
+                CloseHandle(hReadPipe);
+                return NULL;
+            }
+            output = grown;
+            capacity = newCapacity;
         }
         DWORD bytesRead = 0;
         if (!ReadFile(hReadPipe, output + totalRead, 1024, &bytesRead, NULL) || bytesRead == 0)
@@ -675,7 +730,8 @@ static void DrawField(HDC hdc, int x, int y, int width_chars,
         FillRect_Color(hdc, x + 3, y + 2, text_w, ch, CLR_HIGHLIGHT);
         DrawText_A_BG(hdc, x + 3, y + 2, CLR_HILITE_FG, CLR_HIGHLIGHT, value);
     } else {
-        DrawText_A_BG(hdc, x + 3, y + 2, fg, bg, value);
+        if (value)
+            DrawText_A_BG(hdc, x + 3, y + 2, fg, bg, value);
 
         /* Cursor */
         if (focused) {
@@ -720,7 +776,7 @@ static void DrawCycleField(HDC hdc, int x, int y, int width_chars,
     /* Arrow indicators */
     if (focused) {
         char buf[64];
-        _snprintf(buf, sizeof(buf), "< %s >", value);
+        snprintf(buf, sizeof(buf), "< %s >", value);
         DrawText_A_BG(hdc, x + 3, y + 2, fg, bg, buf);
     } else {
         DrawText_A_BG(hdc, x + 3, y + 2, fg, bg, value);
@@ -733,9 +789,9 @@ static void SetCurrentDateTime(void)
 {
     SYSTEMTIME st;
     GetSystemTime(&st);
-    _snprintf(g_state.date, sizeof(g_state.date),
+    snprintf(g_state.date, sizeof(g_state.date),
               "%04d-%02d-%02d", st.wYear, st.wMonth, st.wDay);
-    _snprintf(g_state.time_str, sizeof(g_state.time_str),
+    snprintf(g_state.time_str, sizeof(g_state.time_str),
               "%02d:%02d", st.wHour, st.wMinute);
 }
 
@@ -761,7 +817,7 @@ static void InitState(void)
     safe_strcpy(g_state.rst_sent, sizeof(g_state.rst_sent), "59");
     safe_strcpy(g_state.rst_rcvd, sizeof(g_state.rst_rcvd), "59");
 
-    _snprintf(g_state.freq_mhz, sizeof(g_state.freq_mhz),
+    snprintf(g_state.freq_mhz, sizeof(g_state.freq_mhz),
               "%.3f", BAND_DEFAULT_FREQS[DEFAULT_BAND_IDX]);
 
     SetCurrentDateTime();
@@ -772,7 +828,7 @@ static void ClearForm(void)
     g_state.callsign[0] = 0;
     g_state.comment[0] = 0;
     g_state.notes[0] = 0;
-    _snprintf(g_state.freq_mhz, sizeof(g_state.freq_mhz),
+    snprintf(g_state.freq_mhz, sizeof(g_state.freq_mhz),
               "%.3f", BAND_DEFAULT_FREQS[g_state.band_idx]);
     SetCurrentDateTime();
 
@@ -850,7 +906,7 @@ static void LogQso(void)
     int is_update = g_state.editing_local_id[0] != 0;
 
     if (is_update) {
-        _snprintf(cmd, sizeof(cmd),
+        snprintf(cmd, sizeof(cmd),
                   "update %s --band %s --mode %s --at \"%s %s\" "
                   "--rst-sent %s --rst-rcvd %s",
                   g_state.editing_local_id,
@@ -860,7 +916,7 @@ static void LogQso(void)
                   g_state.rst_sent,
                   g_state.rst_rcvd);
     } else {
-        _snprintf(cmd, sizeof(cmd),
+        snprintf(cmd, sizeof(cmd),
                   "log %s %s %s --at \"%s %s\" --rst-sent %s --rst-rcvd %s",
                   g_state.callsign,
                   BANDS[g_state.band_idx],
@@ -875,7 +931,7 @@ static void LogQso(void)
             (unsigned long long)(atof(g_state.freq_mhz) * 1000.0 + 0.5);
         if (freq_khz > 0) {
             char freq_arg[32];
-            _snprintf(freq_arg, sizeof(freq_arg), " --freq %llu", freq_khz);
+            snprintf(freq_arg, sizeof(freq_arg), " --freq %llu", freq_khz);
             safe_strcat(cmd, sizeof(cmd), freq_arg);
         }
     }
@@ -901,7 +957,7 @@ static void LogQso(void)
 
     if (g_state.time_off[0] && g_state.date[0]) {
         char time_off_str[64];
-        _snprintf(time_off_str, sizeof(time_off_str), "%s %s",
+        snprintf(time_off_str, sizeof(time_off_str), "%s %s",
                   g_state.date, g_state.time_off);
         AppendArg(cmd, sizeof(cmd), "--time-off", time_off_str);
     }
@@ -912,7 +968,7 @@ static void LogQso(void)
             SetStatus("QSO updated", 0);
         } else {
             char msg[128];
-            _snprintf(msg, sizeof(msg), "Logged %s on %s %s",
+            snprintf(msg, sizeof(msg), "Logged %s on %s %s",
                       g_state.callsign, BANDS[g_state.band_idx],
                       MODES[g_state.mode_idx]);
             SetStatus(msg, 0);
@@ -928,109 +984,143 @@ static void LogQso(void)
 
 /* ── CLI integration: Refresh QSO list ─────────────────────────────────── */
 
-static void RefreshQsoList(void)
+typedef struct {
+    HWND hwnd;
+} QsoLoadArg;
+
+typedef struct {
+    RecentQso *qsos;
+    int count;
+    int capacity;
+} QsoLoadResult;
+
+static unsigned __stdcall QsoLoadThread(void *param)
 {
-    char *result = RunQrCommand("list --limit 20 --json");
-    if (!result) return;
+    QsoLoadArg *arg = (QsoLoadArg *)param;
+    QsoLoadResult *res = (QsoLoadResult *)calloc(1, sizeof(QsoLoadResult));
+    if (!res) { free(arg); return 0; }
 
-    g_state.recent_count = 0;
-    for (int i = 0; i < MAX_RECENT; i++) {
-        const char *obj_start = json_array_nth(result, i);
-        if (!obj_start) break;
+    char *result = RunQrCommand("list --limit 0 --json");
+    if (result) {
+        for (int i = 0; ; i++) {
+            const char *obj_start = json_array_nth(result, i);
+            if (!obj_start) break;
 
-        char *obj = json_extract_object(obj_start);
-        if (!obj) break;
+            char *obj = json_extract_object(obj_start);
+            if (!obj) break;
 
-        RecentQso *q = &g_state.recent_qsos[g_state.recent_count];
-        memset(q, 0, sizeof(*q));
-
-        char *v;
-        v = json_get_string(obj, "utcTimestamp");
-        if (!v) v = json_get_string(obj, "utc");
-        if (v) {
-            /* Trim to HH:MM for display */
-            if (strlen(v) >= 16) {
-                char buf[6];
-                buf[0] = v[11]; buf[1] = v[12]; buf[2] = ':';
-                buf[3] = v[14]; buf[4] = v[15]; buf[5] = 0;
-                safe_strcpy(q->utc, sizeof(q->utc), buf);
-            } else {
-                safe_strcpy(q->utc, sizeof(q->utc), v);
+            if (res->count >= res->capacity) {
+                int new_cap = res->capacity == 0 ? 64 : res->capacity * 2;
+                RecentQso *tmp = (RecentQso *)realloc(res->qsos,
+                                                       (size_t)new_cap * sizeof(RecentQso));
+                if (!tmp) { free(obj); break; }
+                res->qsos = tmp;
+                res->capacity = new_cap;
             }
-            free(v);
-        }
 
-        v = json_get_string(obj, "workedCallsign");
-        if (!v) v = json_get_string(obj, "callsign");
-        if (v) { safe_strcpy(q->callsign, sizeof(q->callsign), v); free(v); }
+            RecentQso *q = &res->qsos[res->count];
+            memset(q, 0, sizeof(*q));
 
-        v = json_get_string(obj, "band");
-        if (v) {
-            /* Strip "BAND_" prefix: "BAND_40M" -> "40M" */
-            const char *display = v;
-            if (strncmp(display, "BAND_", 5) == 0) display += 5;
-            safe_strcpy(q->band, sizeof(q->band), display);
-            free(v);
-        }
-
-        v = json_get_string(obj, "mode");
-        if (v) {
-            /* Strip "MODE_" prefix: "MODE_CW" -> "CW" */
-            const char *display = v;
-            if (strncmp(display, "MODE_", 5) == 0) display += 5;
-            safe_strcpy(q->mode, sizeof(q->mode), display);
-            free(v);
-        }
-
-        /* RST is a nested object: {"readability":5,"strength":9,"tone":9} -> "599" */
-        {
-            int r = json_get_int(obj, "readability", 0);
-            int s = json_get_int(obj, "strength", 0);
-            int t = json_get_int(obj, "tone", 0);
-            if (r > 0) {
-                if (t > 0) _snprintf(q->rst_sent, sizeof(q->rst_sent), "%d%d%d", r, s, t);
-                else       _snprintf(q->rst_sent, sizeof(q->rst_sent), "%d%d", r, s);
+            char *v;
+            v = json_get_string(obj, "utcTimestamp");
+            if (!v) v = json_get_string(obj, "utc");
+            if (v) {
+                if (strlen(v) >= 16) {
+                    char buf[6];
+                    buf[0] = v[11]; buf[1] = v[12]; buf[2] = ':';
+                    buf[3] = v[14]; buf[4] = v[15]; buf[5] = 0;
+                    safe_strcpy(q->utc, sizeof(q->utc), buf);
+                } else {
+                    safe_strcpy(q->utc, sizeof(q->utc), v);
+                }
+                free(v);
             }
-        }
 
-        /* Look for rstReceived nested object */
-        {
-            /* The JSON has rstSent and rstReceived as nested objects.
-               Our simple parser finds the first match for "readability" etc,
-               which is rstSent. For rstReceived, search from after rstReceived key. */
-            const char *rcvd_pos = strstr(obj, "rstReceived");
-            if (rcvd_pos) {
-                int r = json_get_int(rcvd_pos, "readability", 0);
-                int s = json_get_int(rcvd_pos, "strength", 0);
-                int t = json_get_int(rcvd_pos, "tone", 0);
+            v = json_get_string(obj, "workedCallsign");
+            if (!v) v = json_get_string(obj, "callsign");
+            if (v) { safe_strcpy(q->callsign, sizeof(q->callsign), v); free(v); }
+
+            v = json_get_string(obj, "band");
+            if (v) {
+                const char *display = v;
+                if (strncmp(display, "BAND_", 5) == 0) display += 5;
+                safe_strcpy(q->band, sizeof(q->band), display);
+                free(v);
+            }
+
+            v = json_get_string(obj, "mode");
+            if (v) {
+                const char *display = v;
+                if (strncmp(display, "MODE_", 5) == 0) display += 5;
+                safe_strcpy(q->mode, sizeof(q->mode), display);
+                free(v);
+            }
+
+            {
+                int r = json_get_int(obj, "readability", 0);
+                int s = json_get_int(obj, "strength", 0);
+                int t = json_get_int(obj, "tone", 0);
                 if (r > 0) {
-                    if (t > 0) _snprintf(q->rst_rcvd, sizeof(q->rst_rcvd), "%d%d%d", r, s, t);
-                    else       _snprintf(q->rst_rcvd, sizeof(q->rst_rcvd), "%d%d", r, s);
+                    if (t > 0) snprintf(q->rst_sent, sizeof(q->rst_sent), "%d%d%d", r, s, t);
+                    else       snprintf(q->rst_sent, sizeof(q->rst_sent), "%d%d", r, s);
                 }
             }
+
+            {
+                const char *rcvd_pos = strstr(obj, "rstReceived");
+                if (rcvd_pos) {
+                    int r = json_get_int(rcvd_pos, "readability", 0);
+                    int s = json_get_int(rcvd_pos, "strength", 0);
+                    int t = json_get_int(rcvd_pos, "tone", 0);
+                    if (r > 0) {
+                        if (t > 0) snprintf(q->rst_rcvd, sizeof(q->rst_rcvd), "%d%d%d", r, s, t);
+                        else       snprintf(q->rst_rcvd, sizeof(q->rst_rcvd), "%d%d", r, s);
+                    }
+                }
+            }
+
+            v = json_get_string(obj, "country");
+            if (!v) {
+                const char *snap = strstr(obj, "stationSnapshot");
+                if (snap) v = json_get_string(snap, "country");
+            }
+            if (v) { safe_strcpy(q->country, sizeof(q->country), v); free(v); }
+
+            v = json_get_string(obj, "workedGrid");
+            if (!v) v = json_get_string(obj, "grid");
+            if (v) { safe_strcpy(q->grid, sizeof(q->grid), v); free(v); }
+
+            v = json_get_string(obj, "localId");
+            if (!v) v = json_get_string(obj, "local_id");
+            if (v) { safe_strcpy(q->local_id, sizeof(q->local_id), v); free(v); }
+
+            res->count++;
+            free(obj);
         }
-
-        v = json_get_string(obj, "country");
-        if (!v) {
-            /* Try stationSnapshot.country as a fallback */
-            const char *snap = strstr(obj, "stationSnapshot");
-            if (snap) v = json_get_string(snap, "country");
-        }
-        if (v) { safe_strcpy(q->country, sizeof(q->country), v); free(v); }
-
-        v = json_get_string(obj, "workedGrid");
-        if (!v) v = json_get_string(obj, "grid");
-        if (v) { safe_strcpy(q->grid, sizeof(q->grid), v); free(v); }
-
-        v = json_get_string(obj, "localId");
-        if (!v) v = json_get_string(obj, "local_id");
-        if (v) { safe_strcpy(q->local_id, sizeof(q->local_id), v); free(v); }
-
-        g_state.recent_count++;
-        free(obj);
+        free(result);
     }
 
-    free(result);
+    if (!PostMessage(arg->hwnd, WM_APP_QSO_LOADED, 0, (LPARAM)res))
+        free(res);
+
+    free(arg);
+    return 0;
+}
+
+static void RefreshQsoListAsync(HWND hwnd)
+{
+    QsoLoadArg *arg = (QsoLoadArg *)malloc(sizeof(QsoLoadArg));
+    if (!arg) return;
+    arg->hwnd = hwnd;
+    g_state.qso_loading = 1;
+    HANDLE h = (HANDLE)_beginthreadex(NULL, 0, QsoLoadThread, arg, 0, NULL);
+    if (h) CloseHandle(h);
+    else { free(arg); g_state.qso_loading = 0; }
+}
+
+static void RefreshQsoList(void)
+{
+    RefreshQsoListAsync(g_state.hwnd);
 }
 
 /* ── CLI integration: Lookup callsign ──────────────────────────────────── */
@@ -1056,7 +1146,7 @@ static unsigned __stdcall LookupThread(void *param)
     safe_strcpy(res->callsign, sizeof(res->callsign), arg->callsign);
 
     char cmd[128];
-    _snprintf(cmd, sizeof(cmd), "lookup %s --json", arg->callsign);
+    snprintf(cmd, sizeof(cmd), "lookup %s --json", arg->callsign);
     char *result = RunQrCommand(cmd);
 
     if (result) {
@@ -1087,6 +1177,40 @@ static unsigned __stdcall LookupThread(void *param)
     }
 
     if (!PostMessage(arg->hwnd, WM_APP_LOOKUP_DONE, 0, (LPARAM)res))
+        free(res);
+
+    free(arg);
+    return 0;
+}
+
+/* ── CLI integration: Rig snapshot poll ────────────────────────────────── */
+
+static unsigned __stdcall RigPollThread(void *param)
+{
+    RigPollArg *arg = (RigPollArg *)param;
+    RigPollResult *res = (RigPollResult *)calloc(1, sizeof(RigPollResult));
+    if (!res) { free(arg); return 0; }
+
+    char *result = RunQrCommand("rig-status --json");
+    if (result) {
+        char *status = json_get_string(result, "status");
+        if (status && _stricmp(status, "connected") == 0) {
+            char *v;
+            res->connected = 1;
+            v = json_get_string(result, "frequencyDisplay");
+            if (v) { safe_strcpy(res->freq_display, sizeof(res->freq_display), v); free(v); }
+            v = json_get_string(result, "frequencyMhz");
+            if (v) { safe_strcpy(res->freq_mhz, sizeof(res->freq_mhz), v); free(v); }
+            v = json_get_string(result, "band");
+            if (v) { safe_strcpy(res->band, sizeof(res->band), v); free(v); }
+            v = json_get_string(result, "mode");
+            if (v) { safe_strcpy(res->mode, sizeof(res->mode), v); free(v); }
+        }
+        if (status) free(status);
+        free(result);
+    }
+
+    if (!PostMessage(arg->hwnd, WM_APP_RIG_DONE, 0, (LPARAM)res))
         free(res);
 
     free(arg);
@@ -1128,7 +1252,7 @@ static void LoadSelectedQso(void)
     }
 
     char cmd[128];
-    _snprintf(cmd, sizeof(cmd), "get %s --json", q->local_id);
+    snprintf(cmd, sizeof(cmd), "get %s --json", q->local_id);
     char *result = RunQrCommand(cmd);
     if (!result) {
         SetStatus("Failed to load QSO data", 1);
@@ -1167,10 +1291,10 @@ static void LoadSelectedQso(void)
     if (v) {
         double khz = atof(v);
         if (khz > 0)
-            _snprintf(g_state.freq_mhz, sizeof(g_state.freq_mhz), "%.3f", khz / 1000.0);
+            snprintf(g_state.freq_mhz, sizeof(g_state.freq_mhz), "%.3f", khz / 1000.0);
         free(v);
     } else {
-        _snprintf(g_state.freq_mhz, sizeof(g_state.freq_mhz),
+        snprintf(g_state.freq_mhz, sizeof(g_state.freq_mhz),
                   "%.3f", BAND_DEFAULT_FREQS[g_state.band_idx]);
     }
 
@@ -1198,8 +1322,8 @@ static void LoadSelectedQso(void)
         int s = json_get_int(result, "strength", 0);
         int t = json_get_int(result, "tone", 0);
         if (r > 0) {
-            if (t > 0) _snprintf(g_state.rst_sent, sizeof(g_state.rst_sent), "%d%d%d", r, s, t);
-            else       _snprintf(g_state.rst_sent, sizeof(g_state.rst_sent), "%d%d", r, s);
+            if (t > 0) snprintf(g_state.rst_sent, sizeof(g_state.rst_sent), "%d%d%d", r, s, t);
+            else       snprintf(g_state.rst_sent, sizeof(g_state.rst_sent), "%d%d", r, s);
         } else {
             safe_strcpy(g_state.rst_sent, sizeof(g_state.rst_sent), "59");
         }
@@ -1212,8 +1336,8 @@ static void LoadSelectedQso(void)
             int s = json_get_int(rcvd_pos, "strength", 0);
             int t = json_get_int(rcvd_pos, "tone", 0);
             if (r > 0) {
-                if (t > 0) _snprintf(g_state.rst_rcvd, sizeof(g_state.rst_rcvd), "%d%d%d", r, s, t);
-                else       _snprintf(g_state.rst_rcvd, sizeof(g_state.rst_rcvd), "%d%d", r, s);
+                if (t > 0) snprintf(g_state.rst_rcvd, sizeof(g_state.rst_rcvd), "%d%d%d", r, s, t);
+                else       snprintf(g_state.rst_rcvd, sizeof(g_state.rst_rcvd), "%d%d", r, s);
             } else {
                 safe_strcpy(g_state.rst_rcvd, sizeof(g_state.rst_rcvd), "59");
             }
@@ -1306,11 +1430,11 @@ static void DeleteSelectedQso(void)
     }
 
     char cmd[128];
-    _snprintf(cmd, sizeof(cmd), "delete %s", q->local_id);
+    snprintf(cmd, sizeof(cmd), "delete %s", q->local_id);
     char *result = RunQrCommand(cmd);
     if (result) {
         char msg[128];
-        _snprintf(msg, sizeof(msg), "Deleted QSO with %s", q->callsign);
+        snprintf(msg, sizeof(msg), "Deleted QSO with %s", q->callsign);
         SetStatus(msg, 0);
         free(result);
     } else {
@@ -1341,9 +1465,9 @@ static void PaintHeader(HDC hdc, RECT *rc)
     /* Center: space weather */
     if (g_state.has_weather) {
         char weather[128];
-        COLORREF kclr = g_state.k_index <= 3 ? CLR_GREEN :
+        COLORREF kclr = g_state.k_index <= 3 ? CLR_BRIGHT_GREEN :
                         g_state.k_index <= 5 ? CLR_YELLOW : CLR_RED;
-        _snprintf(weather, sizeof(weather),
+        snprintf(weather, sizeof(weather),
                   "K:%.0f  SFI:%.0f  SN:%d",
                   g_state.k_index, g_state.solar_flux,
                   g_state.sunspot_number);
@@ -1351,11 +1475,11 @@ static void PaintHeader(HDC hdc, RECT *rc)
         int cx = (w - tw) / 2;
         /* Draw K-index colored, rest white */
         char kbuf[16];
-        _snprintf(kbuf, sizeof(kbuf), "K:%.0f", g_state.k_index);
+        snprintf(kbuf, sizeof(kbuf), "K:%.0f", g_state.k_index);
         DrawText_A_BG(hdc, cx, ch, kclr, CLR_HEADER_BG, kbuf);
         int kw = (int)strlen(kbuf) * cw;
         char rest[100];
-        _snprintf(rest, sizeof(rest), "  SFI:%.0f  SN:%d",
+        snprintf(rest, sizeof(rest), "  SFI:%.0f  SN:%d",
                   g_state.solar_flux, g_state.sunspot_number);
         DrawText_A_BG(hdc, cx + kw, ch, CLR_HEADER_FG, CLR_HEADER_BG, rest);
     } else {
@@ -1368,10 +1492,25 @@ static void PaintHeader(HDC hdc, RECT *rc)
         SYSTEMTIME st;
         GetSystemTime(&st);
         char clk[32];
-        _snprintf(clk, sizeof(clk), "%02d:%02d:%02d UTC",
+        snprintf(clk, sizeof(clk), "%02d:%02d:%02d UTC",
                   st.wHour, st.wMinute, st.wSecond);
         int tw = (int)strlen(clk) * cw;
         DrawText_A_BG(hdc, w - tw - cw, ch, CLR_YELLOW, CLR_HEADER_BG, clk);
+    }
+
+    /* Row 2: rig status */
+    {
+        int ry = ch * 2;
+        if (!g_state.rig_enabled) {
+            DrawText_A_BG(hdc, cw, ry, CLR_HEADER_FG, CLR_HEADER_BG, "  Rig: OFF");
+        } else if (g_state.rig_connected && g_state.rig_freq_display[0]) {
+            char rigbuf[64];
+            snprintf(rigbuf, sizeof(rigbuf), "* %s  %s",
+                      g_state.rig_freq_display, g_state.rig_mode);
+            DrawText_A_BG(hdc, cw, ry, CLR_BRIGHT_GREEN, CLR_HEADER_BG, rigbuf);
+        } else {
+            DrawText_A_BG(hdc, cw, ry, CLR_YELLOW, CLR_HEADER_BG, "? Rig: waiting...");
+        }
     }
 }
 
@@ -1516,7 +1655,7 @@ static int PaintLogForm(HDC hdc, int y_start, int w)
             int secs = (int)(elapsed / 1000);
             int mins = secs / 60;
             secs %= 60;
-            _snprintf(dur, sizeof(dur), "QSO Duration: %02d:%02d", mins, secs);
+            snprintf(dur, sizeof(dur), "QSO Duration: %02d:%02d", mins, secs);
             DrawText_A(hdc, pad, y + 3, CLR_GREEN, dur);
         } else {
             DrawText_A(hdc, pad, y + 3, CLR_DARKGRAY, "QSO Duration: 00:00");
@@ -1648,7 +1787,7 @@ static int PaintAdvancedForm(HDC hdc, int y_start, int w)
     {
         char title[64];
         const char *pfx = g_state.editing_local_id[0] ? "Edit" : "Advanced";
-        _snprintf(title, sizeof(title), " %s - %s ", pfx, ADV_TAB_NAMES[tab]);
+        snprintf(title, sizeof(title), " %s - %s ", pfx, ADV_TAB_NAMES[tab]);
         DrawText_A_BG(hdc, pad, y_start, CLR_MAGENTA, CLR_BG, title);
     }
 
@@ -1661,7 +1800,7 @@ static int PaintAdvancedForm(HDC hdc, int y_start, int w)
             char tab_label[32];
             COLORREF bg = (t == tab) ? CLR_CYAN : CLR_DARKGRAY;
             COLORREF fg = (t == tab) ? CLR_BG : CLR_WHITE;
-            _snprintf(tab_label, sizeof(tab_label), " %s ", ADV_TAB_NAMES[t]);
+            snprintf(tab_label, sizeof(tab_label), " %s ", ADV_TAB_NAMES[t]);
             DrawChip(hdc, tx, y, bg, fg, tab_label, cw, ch);
             tx += (int)strlen(tab_label) * cw + 12;
         }
@@ -1788,43 +1927,48 @@ static int PaintLookup(HDC hdc, int y_start, int w)
         SelectObject(hdc, g_state.hFont);
         y += ch + 2;
 
-        _snprintf(line, sizeof(line), "QTH: %s", g_state.lookup_qth);
+        snprintf(line, sizeof(line), "QTH: %s", g_state.lookup_qth);
         DrawText_A(hdc, pad + cw, y, CLR_GRAY, line);
 
         if (g_state.lookup_grid[0]) {
             int gx = pad + cw + (int)(strlen(line) + 2) * cw;
-            _snprintf(line, sizeof(line), "Grid: %s", g_state.lookup_grid);
+            snprintf(line, sizeof(line), "Grid: %s", g_state.lookup_grid);
             DrawText_A(hdc, gx, y, CLR_GRAY, line);
         }
         y += ch + 2;
 
-        _snprintf(line, sizeof(line), "Country: %s   CQ Zone: %d",
+        snprintf(line, sizeof(line), "Country: %s   CQ Zone: %d",
                   g_state.lookup_country, g_state.lookup_cq_zone);
         DrawText_A(hdc, pad + cw, y, CLR_GRAY, line);
     } else if (g_state.lookup_in_progress) {
         static const char *dots[] = { ".", "..", "..." };
         int frame = (int)(GetTickCount64() / 400) % 3;
         char line[64];
-        _snprintf(line, sizeof(line), "Looking up%s", dots[frame]);
+        snprintf(line, sizeof(line), "Looking up%s", dots[frame]);
         DrawText_A(hdc, pad + cw, y + ch, CLR_CYAN, line);
     } else {
-        DrawText_A(hdc, pad + cw, y + ch, CLR_DARKGRAY,
-                   "Type a callsign to look up");
+        DrawText_A(hdc, pad + cw, y + ch, CLR_DARKGRAY, "");
     }
 
     return y_start + panel_h + 2;
 }
 
-/* ── Drawing: Recent QSOs table ────────────────────────────────────────── */
+/* ── Drawing: QSOs table ─────────────────────────────────────────────────── */
 
 static int PaintRecentQsos(HDC hdc, int y_start, int w, int bottom)
 {
     int cw = g_state.char_w;
     int ch = g_state.char_h;
+    int lcw = g_state.list_cw;
+    int lch = g_state.list_ch;
     int pad = cw * 2;
-    int row_h = ch + 4;
-    int panel_h = bottom - y_start - row_h - 4; /* Leave room for footer */
-    if (panel_h < row_h * 3) panel_h = row_h * 3;
+    int list_row_h = lch + 3;
+    int panel_h = bottom - y_start - list_row_h - 4;
+    if (panel_h < list_row_h * 3) panel_h = list_row_h * 3;
+
+    /* Store layout metrics for click and double-click detection */
+    g_state.qso_list_y = y_start;
+    g_state.qso_list_row_h = list_row_h;
 
     /* Border color depends on focus state */
     COLORREF border_clr = CLR_CYAN;
@@ -1835,46 +1979,55 @@ static int PaintRecentQsos(HDC hdc, int y_start, int w, int bottom)
 
     DrawBox(hdc, 4, y_start, w - 8, panel_h, border_clr);
 
-    /* Title */
+    /* Title with total count (drawn using main font) */
     {
-        const char *title;
-        if (g_state.search_focused)
-            title = " Search QSOs ";
+        char title[64];
+        if (g_state.qso_loading)
+            snprintf(title, sizeof(title), " QSOs (loading...) ");
+        else if (g_state.search_focused)
+            snprintf(title, sizeof(title), " Search QSOs (%d) ", g_state.recent_count);
         else if (g_state.qso_list_focused)
-            title = " Recent QSOs (focused) ";
+            snprintf(title, sizeof(title), " QSOs (%d) (focused) ", g_state.recent_count);
         else
-            title = " Recent QSOs ";
+            snprintf(title, sizeof(title), " QSOs (%d) ", g_state.recent_count);
         DrawText_A_BG(hdc, pad, y_start, border_clr, CLR_BG, title);
     }
 
     int y = y_start + ch + 4;
 
-    /* Search bar (if search focused) */
+    /* Search bar (if search focused) — uses main font */
     if (g_state.search_focused) {
         DrawText_A(hdc, pad + cw, y + 1, CLR_CYAN, "Search:");
         DrawField(hdc, pad + cw + 8 * cw, y, 30,
                   g_state.search_text, g_state.search_cursor, 1, cw, ch);
-        y += row_h + 2;
+        y += (ch + 4) + 2;
     }
+
+    /* Switch to small font for table header and rows */
+    SelectObject(hdc, g_state.hFontSmallBold);
 
     /* Table header */
     {
         char hdr[256];
-        _snprintf(hdr, sizeof(hdr),
+        snprintf(hdr, sizeof(hdr),
                   "%-19s %-10s %-5s %-5s %-4s %-4s %-16s %-6s",
                   "UTC", "Callsign", "Band", "Mode",
                   "Sent", "Rcvd", "Country", "Grid");
-        SelectObject(hdc, g_state.hFontBold);
-        DrawText_A(hdc, pad + cw, y + 1, CLR_HIGHLIGHT, hdr);
-        SelectObject(hdc, g_state.hFont);
-        y += row_h;
+        DrawText_A(hdc, pad + lcw, y + 1, CLR_HIGHLIGHT, hdr);
+        SelectObject(hdc, g_state.hFontSmall);
+        y += list_row_h;
         DrawHLine(hdc, pad, w - pad, y, CLR_DARKGRAY);
         y += 2;
     }
 
+    /* Store first-row y for hit-testing */
+    int rows_start_y = y;
+    (void)rows_start_y;
+
     /* Rows */
-    int max_rows = (y_start + panel_h - y) / row_h;
+    int max_rows = (y_start + panel_h - y) / list_row_h;
     if (max_rows < 1) max_rows = 1;
+    g_state.qso_page_size = max_rows;
 
     /* Adjust scroll to keep selection visible */
     if (g_state.qso_selected >= 0) {
@@ -1891,7 +2044,6 @@ static int PaintRecentQsos(HDC hdc, int y_start, int w, int bottom)
 
         /* Filter by search text */
         if (g_state.search_text[0]) {
-            /* Simple case-insensitive substring match on callsign */
             char upper_call[16], upper_search[64];
             int j;
             for (j = 0; q->callsign[j]; j++)
@@ -1908,40 +2060,42 @@ static int PaintRecentQsos(HDC hdc, int y_start, int w, int bottom)
         int selected = (idx == g_state.qso_selected) && g_state.qso_list_focused;
 
         char row[256];
-        _snprintf(row, sizeof(row),
+        snprintf(row, sizeof(row),
                   "%-19s %-10s %-5s %-5s %-4s %-4s %-16s %-6s",
                   q->utc, q->callsign, q->band, q->mode,
                   q->rst_sent, q->rst_rcvd, q->country, q->grid);
 
         if (selected) {
-            FillRect_Color(hdc, pad, y, w - pad * 2, row_h, CLR_HIGHLIGHT);
-            DrawText_A_BG(hdc, pad + cw, y + 2, CLR_HILITE_FG, CLR_HIGHLIGHT, row);
+            FillRect_Color(hdc, pad, y, w - pad * 2, list_row_h, CLR_HIGHLIGHT);
+            DrawText_A_BG(hdc, pad + lcw, y + 2, CLR_HILITE_FG, CLR_HIGHLIGHT, row);
         } else {
-            /* Callsign in bold, rest in normal text */
             char utc_part[24];
-            _snprintf(utc_part, sizeof(utc_part), "%-19s ", q->utc);
-            DrawText_A(hdc, pad + cw, y + 2, CLR_TEXT, utc_part);
+            snprintf(utc_part, sizeof(utc_part), "%-19s ", q->utc);
+            DrawText_A(hdc, pad + lcw, y + 2, CLR_TEXT, utc_part);
 
-            int call_x = pad + cw + 20 * cw;
+            int call_x = pad + lcw + 20 * lcw;
             char call_part[16];
-            _snprintf(call_part, sizeof(call_part), "%-10s ", q->callsign);
-            SelectObject(hdc, g_state.hFontBold);
+            snprintf(call_part, sizeof(call_part), "%-10s ", q->callsign);
+            SelectObject(hdc, g_state.hFontSmallBold);
             DrawText_A(hdc, call_x, y + 2, CLR_HIGHLIGHT, call_part);
-            SelectObject(hdc, g_state.hFont);
+            SelectObject(hdc, g_state.hFontSmall);
 
-            int rest_x = call_x + 11 * cw;
+            int rest_x = call_x + 11 * lcw;
             char rest_part[128];
-            _snprintf(rest_part, sizeof(rest_part),
+            snprintf(rest_part, sizeof(rest_part),
                       "%-5s %-5s %-4s %-4s %-16s %-6s",
                       q->band, q->mode, q->rst_sent, q->rst_rcvd,
                       q->country, q->grid);
             DrawText_A(hdc, rest_x, y + 2, CLR_TEXT, rest_part);
         }
 
-        y += row_h;
+        y += list_row_h;
     }
 
-    if (g_state.recent_count == 0) {
+    /* Restore main font */
+    SelectObject(hdc, g_state.hFont);
+
+    if (g_state.recent_count == 0 && !g_state.qso_loading) {
         DrawText_A(hdc, pad + cw, y + 2, CLR_DARKGRAY, "No QSOs logged yet");
     }
 
@@ -1964,7 +2118,7 @@ static void PaintFooter(HDC hdc, int y, int w)
 
     const char *shortcuts[] = {
         "Ctrl+Q Quit", "F1 Help", "F2 Advanced", "F10 Log", "Tab Next",
-        "F3 List", "F4 Search", "F7 Timer", NULL
+        "F3 List", "F4 Search", "F7 Timer", "F8 Rig", NULL
     };
     for (int i = 0; shortcuts[i]; i++) {
         DrawChip(hdc, x, y, CLR_FOOTER_BG, CLR_FOOTER_FG, shortcuts[i], cw, ch);
@@ -2012,6 +2166,7 @@ static void PaintHelp(HDC hdc, int w, int h)
         "F3              Toggle QSO list focus",
         "F4              Toggle search",
         "F7              Reset QSO timer",
+        "F8              Toggle rig control",
         "F5 / F6         Adv tab next/prev",
         "F10 / Alt+Enter Log QSO (or update)",
         "Tab / Shift+Tab Navigate fields",
@@ -2054,12 +2209,12 @@ static void PaintConfirmDelete(HDC hdc, int w, int h)
 
     if (g_state.qso_selected >= 0 && g_state.qso_selected < g_state.recent_count) {
         char msg[128];
-        _snprintf(msg, sizeof(msg), "Delete QSO with %s?",
+        snprintf(msg, sizeof(msg), "Delete QSO with %s?",
                   g_state.recent_qsos[g_state.qso_selected].callsign);
         DrawText_A(hdc, ox + cw * 2, oy + ch * 3, CLR_WHITE, msg);
     }
 
-    DrawText_A(hdc, ox + cw * 2, oy + ch * 5, CLR_GRAY,
+    DrawText_A(hdc, ox + cw * 2, oy + ch * 5, CLR_HEADER_FG,
                "Y = confirm   N/Esc = cancel");
 }
 
@@ -2187,10 +2342,9 @@ static void TypeSelectBand(char c)
     /* Find next band starting with this char after current */
     for (int attempt = 0; attempt < NUM_BANDS; attempt++) {
         int idx = (g_state.band_idx + 1 + attempt) % NUM_BANDS;
-        if (toupper((unsigned char)BANDS[idx][0]) == c ||
-            (c >= '0' && c <= '9' && BANDS[idx][0] == c)) {
+        if (toupper((unsigned char)BANDS[idx][0]) == c) {
             g_state.band_idx = idx;
-            _snprintf(g_state.freq_mhz, sizeof(g_state.freq_mhz),
+            snprintf(g_state.freq_mhz, sizeof(g_state.freq_mhz),
                       "%.3f", BAND_DEFAULT_FREQS[idx]);
             g_state.cursor_pos[FIELD_FREQ] = (int)strlen(g_state.freq_mhz);
             return;
@@ -2333,6 +2487,24 @@ static void OnKeyDown(HWND hwnd, WPARAM vk, LPARAM lp)
         return;
     }
 
+    /* F8: toggle rig control */
+    if (vk == VK_F8) {
+        g_state.rig_enabled = !g_state.rig_enabled;
+        if (!g_state.rig_enabled) {
+            g_state.rig_connected = 0;
+            g_state.rig_freq_display[0] = 0;
+            g_state.rig_freq_mhz[0] = 0;
+            g_state.rig_band[0] = 0;
+            g_state.rig_mode[0] = 0;
+            SetStatus("Rig control OFF", 0);
+        } else {
+            g_state.last_rig_poll = 0;
+            SetStatus("Rig control ON", 0);
+        }
+        InvalidateRect(hwnd, NULL, FALSE);
+        return;
+    }
+
     /* F10, Shift+Enter, or Alt+Enter: log/update QSO */
     if (vk == VK_F10 || (shift_down && vk == VK_RETURN) || (alt_down && vk == VK_RETURN)) {
         LogQso();
@@ -2436,6 +2608,32 @@ static void OnKeyDown(HWND hwnd, WPARAM vk, LPARAM lp)
             InvalidateRect(hwnd, NULL, FALSE);
             return;
         }
+        if (vk == VK_HOME && ctrl_down) {
+            g_state.qso_selected = g_state.recent_count > 0 ? 0 : -1;
+            g_state.qso_scroll = 0;
+            InvalidateRect(hwnd, NULL, FALSE);
+            return;
+        }
+        if (vk == VK_END && ctrl_down) {
+            g_state.qso_selected = g_state.recent_count - 1;
+            InvalidateRect(hwnd, NULL, FALSE);
+            return;
+        }
+        if (vk == VK_PRIOR) { /* Page Up */
+            int page = g_state.qso_page_size > 0 ? g_state.qso_page_size : 10;
+            g_state.qso_selected -= page;
+            if (g_state.qso_selected < 0) g_state.qso_selected = 0;
+            InvalidateRect(hwnd, NULL, FALSE);
+            return;
+        }
+        if (vk == VK_NEXT) { /* Page Down */
+            int page = g_state.qso_page_size > 0 ? g_state.qso_page_size : 10;
+            g_state.qso_selected += page;
+            if (g_state.qso_selected >= g_state.recent_count)
+                g_state.qso_selected = g_state.recent_count - 1;
+            InvalidateRect(hwnd, NULL, FALSE);
+            return;
+        }
         if (vk == VK_RETURN) {
             LoadSelectedQso();
             InvalidateRect(hwnd, NULL, FALSE);
@@ -2509,7 +2707,7 @@ static void OnKeyDown(HWND hwnd, WPARAM vk, LPARAM lp)
     if (vk == VK_LEFT) {
         if (g_state.focused_field == FIELD_BAND) {
             g_state.band_idx = (g_state.band_idx + NUM_BANDS - 1) % NUM_BANDS;
-            _snprintf(g_state.freq_mhz, sizeof(g_state.freq_mhz),
+            snprintf(g_state.freq_mhz, sizeof(g_state.freq_mhz),
                       "%.3f", BAND_DEFAULT_FREQS[g_state.band_idx]);
             g_state.cursor_pos[FIELD_FREQ] = (int)strlen(g_state.freq_mhz);
         } else if (g_state.focused_field == FIELD_MODE) {
@@ -2530,7 +2728,7 @@ static void OnKeyDown(HWND hwnd, WPARAM vk, LPARAM lp)
     if (vk == VK_RIGHT) {
         if (g_state.focused_field == FIELD_BAND) {
             g_state.band_idx = (g_state.band_idx + 1) % NUM_BANDS;
-            _snprintf(g_state.freq_mhz, sizeof(g_state.freq_mhz),
+            snprintf(g_state.freq_mhz, sizeof(g_state.freq_mhz),
                       "%.3f", BAND_DEFAULT_FREQS[g_state.band_idx]);
             g_state.cursor_pos[FIELD_FREQ] = (int)strlen(g_state.freq_mhz);
         } else if (g_state.focused_field == FIELD_MODE) {
@@ -2663,6 +2861,22 @@ static void OnTimer(HWND hwnd)
         }
     }
 
+    /* Rig poll: every 1000ms when enabled and no poll in flight */
+    if (g_state.rig_enabled && !g_state.rig_poll_in_progress) {
+        ULONGLONG now = GetTickCount64();
+        if (now - g_state.last_rig_poll >= 1000) {
+            g_state.last_rig_poll = now;
+            RigPollArg *rarg = (RigPollArg *)malloc(sizeof(RigPollArg));
+            if (rarg) {
+                rarg->hwnd = hwnd;
+                g_state.rig_poll_in_progress = 1;
+                uintptr_t rh = _beginthreadex(NULL, 0, RigPollThread, rarg, 0, NULL);
+                if (rh) CloseHandle((HANDLE)rh);
+                else { free(rarg); g_state.rig_poll_in_progress = 0; }
+            }
+        }
+    }
+
     InvalidateRect(hwnd, NULL, FALSE);
 }
 
@@ -2677,6 +2891,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         HDC hdc = GetDC(hwnd);
         int dpi = GetDeviceCaps(hdc, LOGPIXELSY);
         int fontHeight = -MulDiv(FONT_SIZE, dpi, 72);
+        int smallFontHeight = -MulDiv(9, dpi, 72);
 
         g_state.hFont = CreateFontW(
             fontHeight, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
@@ -2688,12 +2903,29 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
             CLEARTYPE_QUALITY, FIXED_PITCH | FF_MODERN, FONT_NAME);
 
-        /* Measure character size */
+        g_state.hFontSmall = CreateFontW(
+            smallFontHeight, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+            DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+            CLEARTYPE_QUALITY, FIXED_PITCH | FF_MODERN, FONT_NAME);
+
+        g_state.hFontSmallBold = CreateFontW(
+            smallFontHeight, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
+            DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+            CLEARTYPE_QUALITY, FIXED_PITCH | FF_MODERN, FONT_NAME);
+
+        /* Measure main font character size */
         HFONT old = (HFONT)SelectObject(hdc, g_state.hFont);
         TEXTMETRICW tm;
         GetTextMetricsW(hdc, &tm);
         g_state.char_w = tm.tmAveCharWidth;
         g_state.char_h = tm.tmHeight;
+
+        /* Measure small font character size */
+        SelectObject(hdc, g_state.hFontSmall);
+        GetTextMetricsW(hdc, &tm);
+        g_state.list_cw = tm.tmAveCharWidth;
+        g_state.list_ch = tm.tmHeight;
+
         SelectObject(hdc, old);
         ReleaseDC(hwnd, hdc);
 
@@ -2719,8 +2951,8 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             SetMenu(hwnd, hMenuBar);
         }
 
-        /* Initial data load (async-ish — runs synchronously but fast) */
-        RefreshQsoList();
+        /* Kick off async data loads so the window appears immediately */
+        RefreshQsoListAsync(hwnd);
         FetchSpaceWeather();
         break;
     }
@@ -2748,6 +2980,9 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         KillTimer(hwnd, TIMER_ID);
         if (g_state.hFont) DeleteObject(g_state.hFont);
         if (g_state.hFontBold) DeleteObject(g_state.hFontBold);
+        if (g_state.hFontSmall) DeleteObject(g_state.hFontSmall);
+        if (g_state.hFontSmallBold) DeleteObject(g_state.hFontSmallBold);
+        free(g_state.recent_qsos);
         PostQuitMessage(0);
         break;
 
@@ -2838,6 +3073,59 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         break;
     }
 
+    case WM_APP_RIG_DONE:
+    {
+        RigPollResult *res = (RigPollResult *)lParam;
+        g_state.rig_poll_in_progress = 0;
+        if (res) {
+            if (g_state.rig_enabled) {
+                g_state.rig_connected = res->connected;
+                if (res->connected) {
+                    safe_strcpy(g_state.rig_freq_display, sizeof(g_state.rig_freq_display), res->freq_display);
+                    safe_strcpy(g_state.rig_freq_mhz, sizeof(g_state.rig_freq_mhz), res->freq_mhz);
+                    safe_strcpy(g_state.rig_band, sizeof(g_state.rig_band), res->band);
+                    safe_strcpy(g_state.rig_mode, sizeof(g_state.rig_mode), res->mode);
+                    /* Auto-fill band/mode/freq when callsign is empty */
+                    if (g_state.callsign[0] == 0) {
+                        for (int bi = 0; bi < NUM_BANDS; bi++) {
+                            if (_stricmp(BANDS[bi], res->band) == 0) {
+                                g_state.band_idx = bi;
+                                break;
+                            }
+                        }
+                        for (int mi = 0; mi < NUM_MODES; mi++) {
+                            if (_stricmp(MODES[mi], res->mode) == 0) {
+                                g_state.mode_idx = mi;
+                                ApplyModeDefaults();
+                                break;
+                            }
+                        }
+                        if (res->freq_mhz[0])
+                            safe_strcpy(g_state.freq_mhz, sizeof(g_state.freq_mhz), res->freq_mhz);
+                    }
+                }
+            }
+            free(res);
+        }
+        InvalidateRect(hwnd, NULL, FALSE);
+        break;
+    }
+
+    case WM_APP_QSO_LOADED:
+    {
+        QsoLoadResult *res = (QsoLoadResult *)lParam;
+        g_state.qso_loading = 0;
+        if (res) {
+            free(g_state.recent_qsos);
+            g_state.recent_qsos = res->qsos;
+            g_state.recent_count = res->count;
+            g_state.recent_capacity = res->capacity;
+            free(res);
+        }
+        InvalidateRect(hwnd, NULL, FALSE);
+        break;
+    }
+
     case WM_MOUSEWHEEL:
         if (g_state.qso_list_focused) {
             int delta = GET_WHEEL_DELTA_WPARAM(wParam);
@@ -2851,8 +3139,8 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
 
     case WM_LBUTTONDOWN:
     {
-        int mx = LOWORD(lParam);
-        int my = HIWORD(lParam);
+        int mx = GET_X_LPARAM(lParam);
+        int my = GET_Y_LPARAM(lParam);
         int cw = g_state.char_w;
         int ch = g_state.char_h;
         if (cw == 0 || ch == 0) break;
@@ -2933,10 +3221,11 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         }
         /* Click in QSO list area? */
         else if (my >= qso_list_start && g_state.recent_count > 0) {
-            int header_row_h = row_h + 2; /* header + separator */
+            int lrh = g_state.qso_list_row_h > 0 ? g_state.qso_list_row_h : (ch + 4);
+            int header_row_h = lrh + 2;
             int list_content_start = qso_list_start + ch + 4 + header_row_h;
             if (my >= list_content_start) {
-                int row_idx = (my - list_content_start) / row_h + g_state.qso_scroll;
+                int row_idx = (my - list_content_start) / lrh + g_state.qso_scroll;
                 if (row_idx >= 0 && row_idx < g_state.recent_count) {
                     g_state.qso_list_focused = 1;
                     g_state.search_focused = 0;
@@ -2950,6 +3239,42 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 if (g_state.qso_selected < 0 && g_state.recent_count > 0)
                     g_state.qso_selected = 0;
                 InvalidateRect(hwnd, NULL, FALSE);
+            }
+        }
+        break;
+    }
+
+    case WM_LBUTTONDBLCLK:
+    {
+        int mx = GET_X_LPARAM(lParam);
+        int my = GET_Y_LPARAM(lParam);
+        int cw = g_state.char_w;
+        int ch = g_state.char_h;
+        if (cw == 0 || ch == 0) break;
+        (void)mx;
+
+        int header_h = ch * 3 + 4;
+        int status_h = ch + 4;
+        int row_h = ch + 8;
+        int form_start = header_h + status_h;
+        int form_h = g_state.advanced_view
+            ? (row_h * 12 + ch + 10)
+            : (row_h * 9 + ch + 10);
+        int form_end = form_start + form_h;
+        int lookup_h = ch * 5 + 8;
+        int qso_list_start = form_end + lookup_h;
+
+        if (my >= qso_list_start && g_state.recent_count > 0) {
+            int lrh = g_state.qso_list_row_h > 0 ? g_state.qso_list_row_h : (ch + 4);
+            int header_row_h = lrh + 2;
+            int list_content_start = qso_list_start + ch + 4 + header_row_h;
+            if (my >= list_content_start) {
+                int row_idx = (my - list_content_start) / lrh + g_state.qso_scroll;
+                if (row_idx >= 0 && row_idx < g_state.recent_count) {
+                    g_state.qso_selected = row_idx;
+                    LoadSelectedQso();
+                    InvalidateRect(hwnd, NULL, FALSE);
+                }
             }
         }
         break;
@@ -2971,6 +3296,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
 
 /* ── Entry point ───────────────────────────────────────────────────────── */
 
+_Use_decl_annotations_
 int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
                     LPWSTR lpCmdLine, int nCmdShow)
 {
@@ -2988,7 +3314,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
     /* Register window class */
     WNDCLASSEXW wc = {0};
     wc.cbSize        = sizeof(wc);
-    wc.style         = CS_HREDRAW | CS_VREDRAW;
+    wc.style         = CS_HREDRAW | CS_VREDRAW | CS_DBLCLKS;
     wc.lpfnWndProc   = WndProc;
     wc.hInstance      = hInstance;
     wc.hCursor       = LoadCursor(NULL, IDC_ARROW);
