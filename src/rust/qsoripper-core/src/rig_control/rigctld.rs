@@ -52,8 +52,7 @@ impl RigctldConfig {
     /// Returns `None` if rig control is not enabled.
     pub fn from_value_provider(get_value: impl Fn(&str) -> Option<String>) -> Option<Self> {
         let enabled = get_value(RIGCTLD_ENABLED_ENV_VAR)
-            .map(|value| value.eq_ignore_ascii_case("true") || value == "1")
-            .unwrap_or(true);
+            .is_none_or(|value| value.eq_ignore_ascii_case("true") || value == "1");
 
         if !enabled {
             return None;
