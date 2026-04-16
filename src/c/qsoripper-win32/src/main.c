@@ -395,6 +395,36 @@ static void safe_strcat(char *dst, size_t dstsz, const char *src)
     safe_strcpy(dst + cur, avail, src);
 }
 
+/* Convert raw MHz decimal string to radio-style: "14.22500" -> "14.225.00" */
+static void freq_to_radio_style(const char *mhz_str, char *out, size_t outsz)
+{
+    double mhz = atof(mhz_str);
+    unsigned long long hz = (unsigned long long)(mhz * 1000000.0 + 0.5);
+    unsigned long long whole_mhz = hz / 1000000;
+    unsigned long long khz = (hz % 1000000) / 1000;
+    unsigned long long tens = (hz % 1000) / 10;
+    snprintf(out, outsz, "%llu.%03llu.%02llu", whole_mhz, khz, tens);
+}
+
+/* Parse radio-style freq "14.225.00" to raw MHz double (14.22500).
+   Also accepts plain decimal "14.22500". */
+static double freq_parse_mhz(const char *s)
+{
+    /* Count dots to detect radio-style format */
+    int dots = 0;
+    for (const char *p = s; *p; p++)
+        if (*p == '.') dots++;
+
+    if (dots == 2) {
+        /* Radio-style: MHz.kHz.tens_hz */
+        unsigned long long whole_mhz = 0, khz = 0, tens = 0;
+        if (sscanf(s, "%llu.%llu.%llu", &whole_mhz, &khz, &tens) >= 1)
+            return (double)whole_mhz + (double)khz / 1000.0 + (double)tens / 100000.0;
+        return 0.0;
+    }
+    return atof(s);
+}
+
 /* ── Minimal JSON value extractor (no dependency) ──────────────────────── */
 
 /* Finds "key": "value" or "key": number in a JSON string.
@@ -869,8 +899,7 @@ static void InitState(void)
     safe_strcpy(g_state.rst_sent, sizeof(g_state.rst_sent), "59");
     safe_strcpy(g_state.rst_rcvd, sizeof(g_state.rst_rcvd), "59");
 
-    snprintf(g_state.freq_mhz, sizeof(g_state.freq_mhz),
-              "%.5f", BAND_DEFAULT_FREQS[DEFAULT_BAND_IDX]);
+    { char _tmp[32]; snprintf(_tmp, sizeof(_tmp), "%.5f", BAND_DEFAULT_FREQS[DEFAULT_BAND_IDX]); freq_to_radio_style(_tmp, g_state.freq_mhz, sizeof(g_state.freq_mhz)); }
 
     SetCurrentDateTime();
 }
@@ -880,8 +909,7 @@ static void ClearForm(void)
     g_state.callsign[0] = 0;
     g_state.comment[0] = 0;
     g_state.notes[0] = 0;
-    snprintf(g_state.freq_mhz, sizeof(g_state.freq_mhz),
-              "%.5f", BAND_DEFAULT_FREQS[g_state.band_idx]);
+    { char _tmp[32]; snprintf(_tmp, sizeof(_tmp), "%.5f", BAND_DEFAULT_FREQS[g_state.band_idx]); freq_to_radio_style(_tmp, g_state.freq_mhz, sizeof(g_state.freq_mhz)); }
     SetCurrentDateTime();
 
     g_state.has_lookup = 0;
@@ -964,7 +992,7 @@ static void fill_log_request(QsrLogQsoRequest *req)
 
     if (g_state.freq_mhz[0]) {
         unsigned long long freq_khz =
-            (unsigned long long)(atof(g_state.freq_mhz) * 1000.0 + 0.5);
+            (unsigned long long)(freq_parse_mhz(g_state.freq_mhz) * 1000.0 + 0.5);
         req->freq_khz = freq_khz;
     }
 
@@ -1050,7 +1078,7 @@ static void LogQso(void)
         if (g_state.freq_mhz[0]) {
             char freq_arg[32];
             unsigned long long freq_khz =
-                (unsigned long long)(atof(g_state.freq_mhz) * 1000.0 + 0.5);
+                (unsigned long long)(freq_parse_mhz(g_state.freq_mhz) * 1000.0 + 0.5);
             snprintf(freq_arg, sizeof(freq_arg), "%llu", freq_khz);
             AppendArg(cmd, sizeof(cmd), "--freq", freq_arg);
         }
@@ -1494,10 +1522,9 @@ static void LoadSelectedQso(void)
     safe_strcpy(g_state.time_str, sizeof(g_state.time_str), (const char *)detail.time);
 
     if (detail.freq_mhz[0])
-        safe_strcpy(g_state.freq_mhz, sizeof(g_state.freq_mhz), (const char *)detail.freq_mhz);
+        freq_to_radio_style((const char *)detail.freq_mhz, g_state.freq_mhz, sizeof(g_state.freq_mhz));
     else
-        snprintf(g_state.freq_mhz, sizeof(g_state.freq_mhz),
-                  "%.5f", BAND_DEFAULT_FREQS[g_state.band_idx]);
+        { char _tmp[32]; snprintf(_tmp, sizeof(_tmp), "%.5f", BAND_DEFAULT_FREQS[g_state.band_idx]); freq_to_radio_style(_tmp, g_state.freq_mhz, sizeof(g_state.freq_mhz)); }
 
     if (detail.rst_sent[0])
         safe_strcpy(g_state.rst_sent, sizeof(g_state.rst_sent), (const char *)detail.rst_sent);
@@ -2452,8 +2479,7 @@ static void TypeSelectBand(char c)
         int idx = (g_state.band_idx + 1 + attempt) % NUM_BANDS;
         if (toupper((unsigned char)BANDS[idx][0]) == c) {
             g_state.band_idx = idx;
-            snprintf(g_state.freq_mhz, sizeof(g_state.freq_mhz),
-                      "%.5f", BAND_DEFAULT_FREQS[idx]);
+            { char _tmp[32]; snprintf(_tmp, sizeof(_tmp), "%.5f", BAND_DEFAULT_FREQS[idx]); freq_to_radio_style(_tmp, g_state.freq_mhz, sizeof(g_state.freq_mhz)); }
             g_state.cursor_pos[FIELD_FREQ] = (int)strlen(g_state.freq_mhz);
             return;
         }
@@ -2815,8 +2841,7 @@ static void OnKeyDown(HWND hwnd, WPARAM vk, LPARAM lp)
     if (vk == VK_LEFT) {
         if (g_state.focused_field == FIELD_BAND) {
             g_state.band_idx = (g_state.band_idx + NUM_BANDS - 1) % NUM_BANDS;
-            snprintf(g_state.freq_mhz, sizeof(g_state.freq_mhz),
-                      "%.5f", BAND_DEFAULT_FREQS[g_state.band_idx]);
+            { char _tmp[32]; snprintf(_tmp, sizeof(_tmp), "%.5f", BAND_DEFAULT_FREQS[g_state.band_idx]); freq_to_radio_style(_tmp, g_state.freq_mhz, sizeof(g_state.freq_mhz)); }
             g_state.cursor_pos[FIELD_FREQ] = (int)strlen(g_state.freq_mhz);
         } else if (g_state.focused_field == FIELD_MODE) {
             g_state.mode_idx = (g_state.mode_idx + NUM_MODES - 1) % NUM_MODES;
@@ -2836,8 +2861,7 @@ static void OnKeyDown(HWND hwnd, WPARAM vk, LPARAM lp)
     if (vk == VK_RIGHT) {
         if (g_state.focused_field == FIELD_BAND) {
             g_state.band_idx = (g_state.band_idx + 1) % NUM_BANDS;
-            snprintf(g_state.freq_mhz, sizeof(g_state.freq_mhz),
-                      "%.5f", BAND_DEFAULT_FREQS[g_state.band_idx]);
+            { char _tmp[32]; snprintf(_tmp, sizeof(_tmp), "%.5f", BAND_DEFAULT_FREQS[g_state.band_idx]); freq_to_radio_style(_tmp, g_state.freq_mhz, sizeof(g_state.freq_mhz)); }
             g_state.cursor_pos[FIELD_FREQ] = (int)strlen(g_state.freq_mhz);
         } else if (g_state.focused_field == FIELD_MODE) {
             g_state.mode_idx = (g_state.mode_idx + 1) % NUM_MODES;
@@ -3243,8 +3267,8 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                                 break;
                             }
                         }
-                        if (res->freq_mhz[0])
-                            safe_strcpy(g_state.freq_mhz, sizeof(g_state.freq_mhz), res->freq_mhz);
+                        if (res->freq_display[0])
+                            safe_strcpy(g_state.freq_mhz, sizeof(g_state.freq_mhz), res->freq_display);
                     }
                 }
             }
