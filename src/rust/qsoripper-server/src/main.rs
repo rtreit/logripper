@@ -279,6 +279,37 @@ impl DeveloperLogbookService {
             sync_scheduler,
         }
     }
+
+    /// Build a QRZ logbook client from the current runtime configuration.
+    /// Returns a human-readable error string on failure (suitable for gRPC
+    /// response fields, not `Status`).
+    async fn build_qrz_logbook_client(
+        &self,
+    ) -> Result<qsoripper_core::qrz_logbook::QrzLogbookClient, String> {
+        let effective = self.runtime_config.effective_values().await;
+
+        let api_key = effective
+            .get(runtime_config::QRZ_LOGBOOK_API_KEY_ENV_VAR)
+            .cloned()
+            .unwrap_or_default();
+        if api_key.trim().is_empty() {
+            return Err("QRZ Logbook API key is not configured.".into());
+        }
+
+        let base_url = effective
+            .get(runtime_config::QRZ_LOGBOOK_BASE_URL_ENV_VAR)
+            .cloned()
+            .unwrap_or_else(|| runtime_config::DEFAULT_QRZ_LOGBOOK_BASE_URL.to_string());
+
+        let config = qsoripper_core::qrz_logbook::QrzLogbookConfig::new(
+            api_key,
+            base_url,
+            "QsoRipper/1.0".to_string(),
+        );
+
+        qsoripper_core::qrz_logbook::QrzLogbookClient::new(config)
+            .map_err(|err| format!("Failed to create QRZ logbook client: {err}"))
+    }
 }
 
 #[tonic::async_trait]
@@ -336,12 +367,41 @@ impl LogbookService for DeveloperLogbookService {
     ) -> Result<Response<DeleteQsoResponse>, Status> {
         let engine = self.runtime_config.logbook_engine().await;
         let request = request.into_inner();
+
+        // When the caller requests QRZ deletion, look up the QSO first so we
+        // can grab the qrz_logid before removing the local row.
+        let (qrz_delete_success, qrz_delete_error) = if request.delete_from_qrz {
+            match engine.get_qso(&request.local_id).await {
+                Ok(qso) => match qso.qrz_logid.as_deref() {
+                    Some(logid) if !logid.is_empty() => {
+                        match self.build_qrz_logbook_client().await {
+                            Ok(client) => match client.delete_qso(logid).await {
+                                Ok(()) => (true, None),
+                                Err(err) => (false, Some(format!("QRZ delete failed: {err}"))),
+                            },
+                            Err(err) => (false, Some(err)),
+                        }
+                    }
+                    _ => (
+                        false,
+                        Some("QSO has no QRZ logid — it may not have been synced yet.".into()),
+                    ),
+                },
+                Err(_) => (
+                    false,
+                    Some("Could not look up QSO to retrieve QRZ logid.".into()),
+                ),
+            }
+        } else {
+            (true, None)
+        };
+
+        // Always delete locally, even if the QRZ delete failed — the user
+        // explicitly asked to remove it from the local logbook.
         engine
             .delete_qso(&request.local_id)
             .await
             .map_err(map_logbook_error)?;
-        let (qrz_delete_success, qrz_delete_error) =
-            sync_result(request.delete_from_qrz, "QRZ delete");
 
         Ok(Response::new(DeleteQsoResponse {
             success: true,
@@ -393,33 +453,13 @@ impl LogbookService for DeveloperLogbookService {
         request: Request<SyncWithQrzRequest>,
     ) -> Result<Response<Self::SyncWithQrzStream>, Status> {
         let request = request.into_inner();
+
+        let client = self
+            .build_qrz_logbook_client()
+            .await
+            .map_err(Status::failed_precondition)?;
+
         let effective = self.runtime_config.effective_values().await;
-
-        let api_key = effective
-            .get(runtime_config::QRZ_LOGBOOK_API_KEY_ENV_VAR)
-            .cloned()
-            .unwrap_or_default();
-        if api_key.trim().is_empty() {
-            return Err(Status::failed_precondition(
-                "QRZ Logbook API key is not configured. Set it via setup or runtime config.",
-            ));
-        }
-
-        let base_url = effective
-            .get(runtime_config::QRZ_LOGBOOK_BASE_URL_ENV_VAR)
-            .cloned()
-            .unwrap_or_else(|| runtime_config::DEFAULT_QRZ_LOGBOOK_BASE_URL.to_string());
-
-        let config = qsoripper_core::qrz_logbook::QrzLogbookConfig::new(
-            api_key,
-            base_url,
-            "QsoRipper/1.0".to_string(),
-        );
-
-        let client = qsoripper_core::qrz_logbook::QrzLogbookClient::new(config).map_err(|err| {
-            Status::internal(format!("Failed to create QRZ logbook client: {err}"))
-        })?;
-
         let conflict_policy = match effective
             .get(runtime_config::SYNC_CONFLICT_POLICY_ENV_VAR)
             .map(String::as_str)

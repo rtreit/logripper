@@ -66,4 +66,31 @@ public sealed class RecentQsoGridLayoutStoreTests
             }
         }
     }
+
+    [Fact]
+    public void DeleteRemovesPersistedFile()
+    {
+        var layoutDirectory = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        var layoutPath = Path.Combine(layoutDirectory, "grid-layout.json");
+        var store = new RecentQsoGridLayoutStore(layoutPath);
+
+        try
+        {
+            store.Save(new RecentQsoGridLayoutState());
+            Assert.True(File.Exists(layoutPath));
+
+            store.Delete();
+            Assert.False(File.Exists(layoutPath));
+
+            // Delete on already-missing file is a no-op.
+            store.Delete();
+        }
+        finally
+        {
+            if (Directory.Exists(layoutDirectory))
+            {
+                Directory.Delete(layoutDirectory, recursive: true);
+            }
+        }
+    }
 }
