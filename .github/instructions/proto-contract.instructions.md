@@ -30,11 +30,16 @@ These instructions govern schema and gRPC contract work in `proto/` and any Rust
 ## Rust/.NET Contract Rules
 
 - Rust server traits and generated message types come from `src/rust/qsoripper-core/build.rs` generation.
-- .NET clients consume the same contracts through generated gRPC client code under `src/dotnet/`.
-- If a proto change affects logbook or lookup semantics, update both Rust server-side handling and the .NET debugging/client surfaces in the same change when practical.
+- .NET engine and client projects consume the same contracts through generated gRPC code under `src/dotnet/`.
+- If a proto change affects logbook or lookup semantics, update both Rust and .NET engine implementations in the same change when practical.
 - Shared contract visibility in `src/dotnet/QsoRipper.DebugHost` is part of the .NET client surface. Keep `/protobuf-lab` able to inspect generated message shapes for shared proto messages, and prefer automatic discovery over hand-maintained message lists.
 - Treat generated enum/member names as transport artifacts, not UI labels. In .NET UI and DebugHost code, do not derive band/mode/enum display text from raw generated `ToString()` output; route it through shared helpers such as `src/dotnet/QsoRipper.DebugHost/Utilities/ProtoEnumDisplay.cs`.
 - When a new shared message needs richer example data than the default constructor provides, extend the custom builder path in `src/dotnet/QsoRipper.DebugHost/Services/SampleProtoFactory.cs` instead of adding another manual UI registry.
+
+## Engine Specification
+
+- When adding or changing RPCs, services, storage contracts, integration contracts, or behavioral requirements, update `docs/architecture/engine-specification.md` in the same change.
+- The engine specification is the authoritative blueprint for implementing a conformant QsoRipper engine. It must stay current with every proto or behavioral change.
 
 ## Validation
 

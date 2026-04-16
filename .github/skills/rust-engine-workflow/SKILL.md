@@ -23,6 +23,7 @@ description: >-
 3. Do not hand-edit generated proto code; change `proto/` and regenerate.
 4. Keep ADIF and provider-specific formats at the edge, normalized into project-owned types.
 5. Favor current stable Rust semantics over workarounds for outdated compiler behavior.
+6. When adding new RPCs, services, or behavioral changes, update `docs/architecture/engine-specification.md` in the same change so both engines stay aligned.
 
 ## Validation Loop
 

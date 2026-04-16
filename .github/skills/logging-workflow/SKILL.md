@@ -17,4 +17,5 @@ description: Designing and implementing efficient QSO logging flows for rapid op
 2. Keep validation immediate and low-friction.
 3. Protect data integrity without interrupting flow.
 4. Keep interaction behavior consistent across TUI and GUI.
+5. When changing QSO logging behavior or adding new logging features, update `docs/architecture/engine-specification.md` to keep the behavioral contract current.
 

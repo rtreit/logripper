@@ -213,10 +213,16 @@ Treat protobuf 1-1-1 as an architectural rule:
 
 ### Language Split
 
-- **Rust** = Core engine, TUI, QRZ providers, gRPC server (tonic)
-- **C# / .NET** = GUI (Avalonia), reporting, analytics, gRPC client
+- **Rust** = Engine implementation (qsoripper-server), TUI, core library
+- **C# / .NET** = Engine implementation (QsoRipper.Engine.DotNet), GUI (Avalonia), CLI, DebugHost
 
-The Rust process is the engine. The .NET process is the rich client. They communicate via gRPC.
+Both engines are fully-featured, production-grade implementations of the same gRPC service contracts. They are interchangeable — any client can connect to either engine with zero loss of functionality.
+
+### Engine Specification
+
+The authoritative blueprint for implementing a QsoRipper engine lives at `docs/architecture/engine-specification.md`. It documents every gRPC service, RPC, storage contract, integration, and behavioral requirement.
+
+**When adding new features to the engine core — new RPCs, new integrations, new behavioral contracts, or changes to existing ones — update the engine specification in the same change.** The spec must stay current so that a developer could implement a new engine in any language from the spec and proto files alone.
 
 ### ADIF Is an Edge Concern
 

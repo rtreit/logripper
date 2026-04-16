@@ -23,8 +23,10 @@ Primary goals:
 - No specific UI technology is required or privileged.
 - Keep third-party integrations isolated behind interfaces.
 - Make offline logging resilient, even when network integrations fail.
-- Rust owns the core engine, QRZ providers, and gRPC server.
+- The architecture is explicitly multi-engine: both Rust and .NET are fully-featured, production-grade engine implementations. Any conformant implementation in any language can serve as the engine.
 - Components communicate via gRPC with Protocol Buffer messages.
+- See `docs/architecture/engine-specification.md` for the authoritative engine contract.
+- When adding new engine features, RPCs, integrations, or behavioral changes, update the engine specification in the same change so it stays current.
 
 ## Data Model Conventions
 

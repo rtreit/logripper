@@ -27,6 +27,7 @@ description: >-
 7. If multiple RPCs need the same payload, extract a separate message and wrap it instead of reusing an RPC response envelope as nested data.
 8. Prefer additive schema changes over breaking changes.
 9. ADIF is not an internal IPC format; protobuf remains the internal contract.
+10. When adding or changing RPCs, services, or contract behavior, update `docs/architecture/engine-specification.md` in the same change.
 
 ## Repo-Specific Contract Surfaces
 
@@ -34,8 +35,10 @@ description: >-
 - `proto/services/*.proto`
 - `src/rust/qsoripper-core/build.rs`
 - `src/rust/qsoripper-server/`
+- `src/dotnet/QsoRipper.Engine.DotNet/`
 - `src/dotnet/QsoRipper.Cli/`
 - `src/dotnet/QsoRipper.DebugHost/`
+- `docs/architecture/engine-specification.md`
 
 ## Validation
 
