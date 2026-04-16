@@ -457,6 +457,21 @@ internal sealed partial class RecentQsoListViewModel : ObservableObject
         }
     }
 
+    /// <summary>
+    /// Resets all column visibility flags to their factory defaults.
+    /// </summary>
+    internal void ResetColumnOptions()
+    {
+        var defaults = CreateColumnOptions().ToDictionary(o => o.Column, o => o.IsVisible);
+        foreach (var option in ColumnOptions)
+        {
+            if (defaults.TryGetValue(option.Column, out var defaultVisible))
+            {
+                option.IsVisible = defaultVisible;
+            }
+        }
+    }
+
     private static bool MatchesSearch(RecentQsoItemViewModel item, ParsedSearchQuery query)
     {
         if (!query.HasTokens)

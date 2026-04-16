@@ -78,6 +78,7 @@ internal sealed partial class MainWindow : Window
             _viewModel.GridFocusRequested -= OnGridFocusRequested;
             _viewModel.SettingsRequested -= OnSettingsRequested;
             _viewModel.LoggerFocusRequested -= OnLoggerFocusRequested;
+            _viewModel.ColumnLayoutResetRequested -= OnColumnLayoutResetRequested;
             UnsubscribeColumnOptions(_viewModel.RecentQsos);
             _viewModel = null;
         }
@@ -345,6 +346,7 @@ internal sealed partial class MainWindow : Window
             _viewModel.GridFocusRequested -= OnGridFocusRequested;
             _viewModel.SettingsRequested -= OnSettingsRequested;
             _viewModel.LoggerFocusRequested -= OnLoggerFocusRequested;
+            _viewModel.ColumnLayoutResetRequested -= OnColumnLayoutResetRequested;
             UnsubscribeColumnOptions(_viewModel.RecentQsos);
         }
 
@@ -356,6 +358,7 @@ internal sealed partial class MainWindow : Window
             _viewModel.GridFocusRequested += OnGridFocusRequested;
             _viewModel.SettingsRequested += OnSettingsRequested;
             _viewModel.LoggerFocusRequested += OnLoggerFocusRequested;
+            _viewModel.ColumnLayoutResetRequested += OnColumnLayoutResetRequested;
             SubscribeColumnOptions(_viewModel.RecentQsos);
             ApplyDefaultColumnVisibility();
             WireLoggerFocusTracking();
@@ -726,6 +729,36 @@ internal sealed partial class MainWindow : Window
         }
 
         _preferencesStore.Save(_viewModel.CapturePreferences());
+    }
+
+    private void OnColumnLayoutResetRequested(object? sender, EventArgs e)
+    {
+        ResetGridLayout();
+    }
+
+    private void ResetGridLayout()
+    {
+        if (_viewModel is null || _recentQsoGrid is null || _columnMap.Count == 0)
+        {
+            return;
+        }
+
+        // Reset display indices to XAML declaration order.
+        var xamlOrder = 0;
+        foreach (var column in _recentQsoGrid.Columns)
+        {
+            column.DisplayIndex = xamlOrder++;
+        }
+
+        // Reset visibility and widths to defaults.
+        _viewModel.RecentQsos.ResetColumnOptions();
+        ApplyDefaultColumnVisibility();
+
+        // Delete the persisted file so a fresh save captures clean state.
+        _gridLayoutStore.Delete();
+        _gridLayoutApplied = false;
+
+        _recentQsoGrid.Focus();
     }
 
     private static bool HandleZoomAction(Action handler, KeyEventArgs e)

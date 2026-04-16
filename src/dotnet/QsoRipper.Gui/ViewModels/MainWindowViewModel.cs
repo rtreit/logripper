@@ -378,6 +378,19 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
         }
     }
 
+    /// <summary>
+    /// Raised when the user requests a column layout reset. The View subscribes
+    /// and resets DisplayIndex/width/visibility to XAML defaults.
+    /// </summary>
+    internal event EventHandler? ColumnLayoutResetRequested;
+
+    [RelayCommand]
+    private void ResetColumnLayout()
+    {
+        ColumnLayoutResetRequested?.Invoke(this, EventArgs.Empty);
+        IsColumnChooserOpen = false;
+    }
+
     [RelayCommand]
     private void OpenCallsignCard()
     {
