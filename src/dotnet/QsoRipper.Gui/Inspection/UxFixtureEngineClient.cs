@@ -394,6 +394,47 @@ internal sealed class UxFixtureEngineClient : IEngineClient
         }
     }
 
+    public Task<LogQsoResponse> LogQsoAsync(QsoRecord qso, bool syncToQrz = false, CancellationToken ct = default)
+    {
+        return Task.FromResult(new LogQsoResponse { LocalId = Guid.NewGuid().ToString() });
+    }
+
+    public Task<GetRigSnapshotResponse> GetRigSnapshotAsync(CancellationToken ct = default)
+    {
+        return Task.FromResult(new GetRigSnapshotResponse
+        {
+            Snapshot = new RigSnapshot
+            {
+                FrequencyHz = 14225000,
+                Band = Band._20M,
+                Mode = Mode.Ssb,
+                Status = RigConnectionStatus.Connected,
+            }
+        });
+    }
+
+    public Task<GetRigStatusResponse> GetRigStatusAsync(CancellationToken ct = default)
+    {
+        return Task.FromResult(new GetRigStatusResponse
+        {
+            Status = RigConnectionStatus.Connected,
+        });
+    }
+
+    public Task<GetCurrentSpaceWeatherResponse> GetCurrentSpaceWeatherAsync(CancellationToken ct = default)
+    {
+        return Task.FromResult(new GetCurrentSpaceWeatherResponse
+        {
+            Snapshot = new SpaceWeatherSnapshot
+            {
+                PlanetaryKIndex = 2.0,
+                SolarFluxIndex = 148.0,
+                SunspotNumber = 95,
+                Status = SpaceWeatherStatus.Current,
+            }
+        });
+    }
+
     private SetupStatus BuildSetupStatus()
     {
         var status = new SetupStatus

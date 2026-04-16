@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
@@ -16,6 +17,8 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
 {
     private readonly IEngineClient _engine;
     private readonly DispatcherTimer _utcTimer;
+    private readonly DispatcherTimer _rigTimer;
+    private readonly DispatcherTimer _spaceWeatherTimer;
     private bool _setupCompleteBeforeWizard;
 
     [ObservableProperty]
@@ -69,6 +72,33 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
     [ObservableProperty]
     private CallsignCardViewModel? _callsignCard;
 
+    [ObservableProperty]
+    private bool _isRigEnabled;
+
+    [ObservableProperty]
+    private string _rigStatusText = "Rig: OFF";
+
+    [ObservableProperty]
+    private bool _isSpaceWeatherVisible;
+
+    [ObservableProperty]
+    private string _spaceWeatherText = string.Empty;
+
+    [ObservableProperty]
+    private bool _isHelpOpen;
+
+    [ObservableProperty]
+    private HelpOverlayViewModel? _helpOverlay;
+
+    [ObservableProperty]
+    private bool _isFullQsoCardOpen;
+
+    [ObservableProperty]
+    private FullQsoCardViewModel? _fullQsoCard;
+
+    [ObservableProperty]
+    private bool _isLoggerFocused;
+
     internal MainWindowViewModel(string endpoint)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(endpoint);
@@ -76,8 +106,15 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
         _engine = new EngineGrpcService(GrpcChannel.ForAddress(endpoint));
         RecentQsos = new RecentQsoListViewModel(_engine);
         RecentQsos.PropertyChanged += OnRecentQsosPropertyChanged;
+        Logger = new QsoLoggerViewModel(_engine);
+        Logger.QsoLogged += OnQsoLogged;
+        Logger.LoggerFocusRequested += OnLoggerFocusRequested;
         UpdateUtcClock();
         _utcTimer = CreateUtcTimer();
+        _rigTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
+        _rigTimer.Tick += OnRigTimerTick;
+        _spaceWeatherTimer = new DispatcherTimer { Interval = TimeSpan.FromMinutes(5) };
+        _spaceWeatherTimer.Tick += OnSpaceWeatherTimerTick;
     }
 
     internal MainWindowViewModel(IEngineClient engine)
@@ -85,11 +122,20 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
         _engine = engine;
         RecentQsos = new RecentQsoListViewModel(engine);
         RecentQsos.PropertyChanged += OnRecentQsosPropertyChanged;
+        Logger = new QsoLoggerViewModel(engine);
+        Logger.QsoLogged += OnQsoLogged;
+        Logger.LoggerFocusRequested += OnLoggerFocusRequested;
         UpdateUtcClock();
         _utcTimer = CreateUtcTimer();
+        _rigTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
+        _rigTimer.Tick += OnRigTimerTick;
+        _spaceWeatherTimer = new DispatcherTimer { Interval = TimeSpan.FromMinutes(5) };
+        _spaceWeatherTimer.Tick += OnSpaceWeatherTimerTick;
     }
 
     public RecentQsoListViewModel RecentQsos { get; }
+
+    public QsoLoggerViewModel Logger { get; }
 
     /// <summary>
     /// Proxy for <see cref="RecentQsoListViewModel.SelectedQso"/> so the Inspector
@@ -102,6 +148,8 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
     public event EventHandler? SearchFocusRequested;
 
     public event EventHandler? GridFocusRequested;
+
+    public event EventHandler? LoggerFocusRequested;
 
     /// <summary>
     /// Raised when the user requests the Settings dialog. The View subscribes to
@@ -224,6 +272,82 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
     }
 
     [RelayCommand]
+    private void FocusLogger()
+    {
+        if (!IsWizardOpen)
+        {
+            CloseTransientPanels();
+            Logger.FocusLogger();
+        }
+    }
+
+    [RelayCommand]
+    private void FocusGrid()
+    {
+        if (!IsWizardOpen)
+        {
+            CloseTransientPanels();
+            GridFocusRequested?.Invoke(this, EventArgs.Empty);
+        }
+    }
+
+    [RelayCommand]
+    private void ToggleRigControl()
+    {
+        IsRigEnabled = !IsRigEnabled;
+        if (IsRigEnabled)
+        {
+            RigStatusText = "Rig: connecting\u2026";
+            _rigTimer.Start();
+        }
+        else
+        {
+            _rigTimer.Stop();
+            RigStatusText = "Rig: OFF";
+        }
+    }
+
+    [RelayCommand]
+    private void ToggleSpaceWeather()
+    {
+        IsSpaceWeatherVisible = !IsSpaceWeatherVisible;
+        if (IsSpaceWeatherVisible && string.IsNullOrEmpty(SpaceWeatherText))
+        {
+            _ = FetchSpaceWeatherAsync();
+        }
+    }
+
+    [RelayCommand]
+    private void ToggleHelp()
+    {
+        if (IsHelpOpen)
+        {
+            CloseHelp();
+            return;
+        }
+
+        var vm = new HelpOverlayViewModel();
+        vm.CloseRequested += OnHelpCloseRequested;
+        HelpOverlay = vm;
+        IsHelpOpen = true;
+    }
+
+    [RelayCommand]
+    private void ToggleFullQsoCard()
+    {
+        if (IsFullQsoCardOpen)
+        {
+            CloseFullQsoCard();
+            return;
+        }
+
+        var vm = new FullQsoCardViewModel(Logger);
+        vm.CloseRequested += OnFullQsoCardCloseRequested;
+        FullQsoCard = vm;
+        IsFullQsoCardOpen = true;
+    }
+
+    [RelayCommand]
     private void ToggleInspector()
     {
         IsInspectorOpen = !IsInspectorOpen;
@@ -262,8 +386,22 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
             return;
         }
 
-        var selectedQso = RecentQsos.SelectedQso;
-        if (selectedQso is null || string.IsNullOrWhiteSpace(selectedQso.WorkedCallsign))
+        // If logger has focus and has a callsign, use that
+        string? callsign = null;
+        if (IsLoggerFocused && !string.IsNullOrWhiteSpace(Logger.Callsign))
+        {
+            callsign = Logger.Callsign.Trim().ToUpperInvariant();
+        }
+        else
+        {
+            var selectedQso = RecentQsos.SelectedQso;
+            if (selectedQso is not null && !string.IsNullOrWhiteSpace(selectedQso.WorkedCallsign))
+            {
+                callsign = selectedQso.WorkedCallsign;
+            }
+        }
+
+        if (string.IsNullOrWhiteSpace(callsign))
         {
             return;
         }
@@ -272,7 +410,7 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
         vm.CloseRequested += OnCallsignCardCloseRequested;
         CallsignCard = vm;
         IsCallsignCardOpen = true;
-        _ = vm.LoadAsync(selectedQso.WorkedCallsign);
+        _ = vm.LoadAsync(callsign);
     }
 
     [RelayCommand]
@@ -283,14 +421,133 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
             card.CloseRequested -= OnCallsignCardCloseRequested;
         }
 
+        var wasLoggerFocused = IsLoggerFocused;
         IsCallsignCardOpen = false;
         CallsignCard = null;
-        GridFocusRequested?.Invoke(this, EventArgs.Empty);
+
+        if (wasLoggerFocused)
+        {
+            Logger.FocusLogger();
+        }
+        else
+        {
+            GridFocusRequested?.Invoke(this, EventArgs.Empty);
+        }
     }
 
     private void OnCallsignCardCloseRequested(object? sender, EventArgs e)
     {
         CloseCallsignCard();
+    }
+
+    private void CloseHelp()
+    {
+        if (HelpOverlay is { } h)
+        {
+            h.CloseRequested -= OnHelpCloseRequested;
+        }
+
+        IsHelpOpen = false;
+        HelpOverlay = null;
+        GridFocusRequested?.Invoke(this, EventArgs.Empty);
+    }
+
+    private void OnHelpCloseRequested(object? sender, EventArgs e)
+    {
+        CloseHelp();
+    }
+
+    private void CloseFullQsoCard()
+    {
+        if (FullQsoCard is { } card)
+        {
+            card.CloseRequested -= OnFullQsoCardCloseRequested;
+        }
+
+        IsFullQsoCardOpen = false;
+        FullQsoCard = null;
+        Logger.FocusLogger();
+    }
+
+    private void OnFullQsoCardCloseRequested(object? sender, EventArgs e)
+    {
+        CloseFullQsoCard();
+    }
+
+    private async void OnQsoLogged(object? sender, EventArgs e)
+    {
+        await RecentQsos.RefreshAsync();
+    }
+
+    private void OnLoggerFocusRequested(object? sender, EventArgs e)
+    {
+        LoggerFocusRequested?.Invoke(this, EventArgs.Empty);
+    }
+
+    private async void OnRigTimerTick(object? sender, EventArgs e)
+    {
+        try
+        {
+            var response = await _engine.GetRigSnapshotAsync();
+            if (response.Snapshot is { } snapshot)
+            {
+                if (snapshot.Status == QsoRipper.Domain.RigConnectionStatus.Connected)
+                {
+                    var freqMhz = snapshot.FrequencyHz / 1_000_000.0;
+                    RigStatusText = $"Rig: {freqMhz.ToString("F3", CultureInfo.InvariantCulture)} {snapshot.Mode}";
+                    Logger.ApplyRigSnapshot(snapshot);
+                }
+                else
+                {
+                    RigStatusText = $"Rig: {snapshot.Status}";
+                }
+            }
+        }
+        catch (Grpc.Core.RpcException)
+        {
+            RigStatusText = "Rig: error";
+        }
+    }
+
+    private async void OnSpaceWeatherTimerTick(object? sender, EventArgs e)
+    {
+        await FetchSpaceWeatherAsync();
+    }
+
+    private async Task FetchSpaceWeatherAsync()
+    {
+        try
+        {
+            var response = await _engine.GetCurrentSpaceWeatherAsync();
+            if (response.Snapshot is { } sw && sw.Status == QsoRipper.Domain.SpaceWeatherStatus.Current)
+            {
+                var parts = new List<string>();
+                if (sw.HasPlanetaryKIndex)
+                {
+                    parts.Add($"K:{sw.PlanetaryKIndex.ToString("F0", CultureInfo.InvariantCulture)}");
+                }
+
+                if (sw.HasSolarFluxIndex)
+                {
+                    parts.Add($"SFI:{sw.SolarFluxIndex.ToString("F0", CultureInfo.InvariantCulture)}");
+                }
+
+                if (sw.HasSunspotNumber)
+                {
+                    parts.Add($"SN:{sw.SunspotNumber.ToString(CultureInfo.InvariantCulture)}");
+                }
+
+                SpaceWeatherText = parts.Count > 0 ? string.Join(" ", parts) : "Weather: no data";
+            }
+            else
+            {
+                SpaceWeatherText = "Weather: unavailable";
+            }
+        }
+        catch (Grpc.Core.RpcException)
+        {
+            SpaceWeatherText = "Weather: error";
+        }
     }
 
     [RelayCommand]
@@ -348,6 +605,12 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
         _utcTimer.Stop();
         _utcTimer.Tick -= UtcTimerOnTick;
 
+        _rigTimer.Stop();
+        _rigTimer.Tick -= OnRigTimerTick;
+
+        _spaceWeatherTimer.Stop();
+        _spaceWeatherTimer.Tick -= OnSpaceWeatherTimerTick;
+
         if (_engine is IDisposable disposable)
         {
             disposable.Dispose();
@@ -360,6 +623,9 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
         await RecentQsos.RefreshAsync();
         await RefreshSyncStatusAsync();
 
+        _ = FetchSpaceWeatherAsync();
+        _spaceWeatherTimer.Start();
+
         if (IsWizardOpen)
         {
             return;
@@ -371,7 +637,8 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
         }
         else
         {
-            GridFocusRequested?.Invoke(this, EventArgs.Empty);
+            // Default: focus the QSO logger callsign field for immediate entry
+            Logger.FocusLogger();
         }
     }
 

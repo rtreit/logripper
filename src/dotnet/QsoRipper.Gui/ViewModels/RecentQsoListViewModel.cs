@@ -161,11 +161,23 @@ internal sealed partial class RecentQsoListViewModel : ObservableObject
     [NotifyPropertyChangedFor(nameof(SortStatusText))]
     private bool _sortAscending;
 
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(TimestampFormatLabel))]
+    private string _timestampFormat = TimestampFormatOption.Default.FormatString;
+
+    public string TimestampFormatLabel =>
+        TimestampFormatOption.FindOrDefault(TimestampFormat).Label;
+
     partial void OnSearchTextChanged(string value)
     {
         _parsedSearchQuery = ParseSearchQuery(value);
         UpdateFilterTokens();
         RefreshView();
+    }
+
+    partial void OnTimestampFormatChanged(string value)
+    {
+        RefreshTimestampDisplay();
     }
 
     [RelayCommand(CanExecute = nameof(CanRefresh))]
@@ -179,7 +191,8 @@ internal sealed partial class RecentQsoListViewModel : ObservableObject
             var selectedLocalId = SelectedQso?.LocalId;
             var qsos = await _engine.ListRecentQsosAsync(DefaultLimit);
 
-            ReplaceItems(qsos.Select(RecentQsoItemViewModel.FromQso));
+            var format = TimestampFormat;
+            ReplaceItems(qsos.Select(q => RecentQsoItemViewModel.FromQso(q, format)));
 
             HasLoaded = true;
             LastLoadedAtUtc = DateTimeOffset.UtcNow;
@@ -353,6 +366,12 @@ internal sealed partial class RecentQsoListViewModel : ObservableObject
         ResetGridZoom();
     }
 
+    [RelayCommand]
+    private void CycleTimestampFormat()
+    {
+        TimestampFormat = TimestampFormatOption.CycleNext(TimestampFormat).FormatString;
+    }
+
     internal void ApplyPersistedSort(RecentQsoSortColumn column, bool ascending)
     {
         CurrentSortColumn = column;
@@ -368,6 +387,11 @@ internal sealed partial class RecentQsoListViewModel : ObservableObject
         }
 
         GridFontSize = Math.Clamp(fontSize, MinGridFontSize, MaxGridFontSize);
+    }
+
+    internal void ApplyPersistedTimestampFormat(string? format)
+    {
+        TimestampFormat = TimestampFormatOption.FindOrDefault(format).FormatString;
     }
 
     internal void ApplySort(RecentQsoSortColumn column)
@@ -582,6 +606,15 @@ internal sealed partial class RecentQsoListViewModel : ObservableObject
         UpdatePendingEditCount();
     }
 
+    private void RefreshTimestampDisplay()
+    {
+        var format = TimestampFormat;
+        foreach (var item in _allItems)
+        {
+            item.UpdateTimestampFormat(format);
+        }
+    }
+
     private void OnItemPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
         if (e.PropertyName != nameof(RecentQsoItemViewModel.IsDirty))
@@ -676,6 +709,7 @@ internal sealed partial class RecentQsoListViewModel : ObservableObject
         RecentQsoSortColumn.Qth => nameof(RecentQsoItemViewModel.Qth),
         RecentQsoSortColumn.State => nameof(RecentQsoItemViewModel.State),
         RecentQsoSortColumn.County => nameof(RecentQsoItemViewModel.County),
+        RecentQsoSortColumn.Comment => nameof(RecentQsoItemViewModel.Comment),
         RecentQsoSortColumn.Sync => nameof(RecentQsoItemViewModel.SyncStatus),
         _ => nameof(RecentQsoItemViewModel.UtcSortKey)
     };
@@ -704,6 +738,7 @@ internal sealed partial class RecentQsoListViewModel : ObservableObject
         nameof(RecentQsoItemViewModel.Qth) => RecentQsoSortColumn.Qth,
         nameof(RecentQsoItemViewModel.State) => RecentQsoSortColumn.State,
         nameof(RecentQsoItemViewModel.County) => RecentQsoSortColumn.County,
+        nameof(RecentQsoItemViewModel.Comment) => RecentQsoSortColumn.Comment,
         nameof(RecentQsoItemViewModel.SyncStatus) => RecentQsoSortColumn.Sync,
         _ => RecentQsoSortColumn.Utc
     };
@@ -732,7 +767,6 @@ internal sealed partial class RecentQsoListViewModel : ObservableObject
             else
             {
                 freeTextTokens.Add(rawToken.ToUpperInvariant());
-                displayTokens.Add(rawToken.Trim());
             }
         }
 
@@ -759,6 +793,7 @@ internal sealed partial class RecentQsoListViewModel : ObservableObject
         yield return new RecentQsoColumnOptionViewModel(RecentQsoGridColumn.Contest, "Contest", true);
         yield return new RecentQsoColumnOptionViewModel(RecentQsoGridColumn.Station, "Station", true);
         yield return new RecentQsoColumnOptionViewModel(RecentQsoGridColumn.Note, "Note", true);
+        yield return new RecentQsoColumnOptionViewModel(RecentQsoGridColumn.Comment, "Comment", false);
         yield return new RecentQsoColumnOptionViewModel(RecentQsoGridColumn.UtcEnd, "End", false);
         yield return new RecentQsoColumnOptionViewModel(RecentQsoGridColumn.CqZone, "CQ", false);
         yield return new RecentQsoColumnOptionViewModel(RecentQsoGridColumn.ItuZone, "ITU", false);

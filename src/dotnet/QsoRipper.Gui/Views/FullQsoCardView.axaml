@@ -1,0 +1,96 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:QsoRipper.Gui.ViewModels"
+             x:Class="QsoRipper.Gui.Views.FullQsoCardView"
+             x:DataType="vm:FullQsoCardViewModel">
+
+  <Border Background="{DynamicResource SystemControlBackgroundAltHighBrush}"
+          CornerRadius="8" Padding="20" MinWidth="480" MaxWidth="560"
+          BorderBrush="{DynamicResource SystemControlForegroundBaseMediumLowBrush}"
+          BorderThickness="1" BoxShadow="0 8 24 0 #40000000">
+    <DockPanel>
+      <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Spacing="8" Margin="0,0,0,12">
+        <TextBlock Text="Full QSO Entry" FontSize="16" FontWeight="SemiBold"
+                   VerticalAlignment="Center" />
+        <TextBlock Text="(Esc to close)" FontSize="11" Opacity="0.5"
+                   VerticalAlignment="Center" />
+      </StackPanel>
+
+      <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal"
+                  Spacing="10" HorizontalAlignment="Right" Margin="0,12,0,0">
+        <Button Content="Cancel" MinWidth="80" Command="{Binding CloseCommand}" />
+        <Button Content="Log QSO" MinWidth="80" Classes="accent"
+                Command="{Binding Logger.LogQsoCommand}" />
+      </StackPanel>
+
+      <ScrollViewer VerticalScrollBarVisibility="Auto">
+        <Grid ColumnDefinitions="Auto,*,16,Auto,*"
+              RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto"
+              RowSpacing="6" ColumnSpacing="8">
+          <!-- Left column -->
+          <TextBlock Grid.Row="0" Grid.Column="0" Text="Callsign" Opacity="0.6" VerticalAlignment="Center" />
+          <TextBox Grid.Row="0" Grid.Column="1"
+                   Text="{Binding Logger.Callsign, Mode=TwoWay}"
+                   FontWeight="SemiBold" />
+
+          <TextBlock Grid.Row="1" Grid.Column="0" Text="Band" Opacity="0.6" VerticalAlignment="Center" />
+          <TextBlock Grid.Row="1" Grid.Column="1"
+                     Text="{Binding Logger.BandLabel}" FontSize="13"
+                     Foreground="#FFB347" VerticalAlignment="Center" />
+
+          <TextBlock Grid.Row="2" Grid.Column="0" Text="Mode" Opacity="0.6" VerticalAlignment="Center" />
+          <TextBlock Grid.Row="2" Grid.Column="1"
+                     Text="{Binding Logger.ModeLabel}" FontSize="13"
+                     Foreground="#77DD77" VerticalAlignment="Center" />
+
+          <TextBlock Grid.Row="3" Grid.Column="0" Text="Freq" Opacity="0.6" VerticalAlignment="Center" />
+          <TextBox Grid.Row="3" Grid.Column="1"
+                   Text="{Binding Logger.FrequencyMhz, Mode=TwoWay}"
+                   FontFamily="Cascadia Mono, Consolas, monospace" />
+
+          <TextBlock Grid.Row="4" Grid.Column="0" Text="RST Sent" Opacity="0.6" VerticalAlignment="Center" />
+          <TextBox Grid.Row="4" Grid.Column="1"
+                   Text="{Binding Logger.RstSent, Mode=TwoWay}" />
+
+          <TextBlock Grid.Row="5" Grid.Column="0" Text="RST Rcvd" Opacity="0.6" VerticalAlignment="Center" />
+          <TextBox Grid.Row="5" Grid.Column="1"
+                   Text="{Binding Logger.RstRcvd, Mode=TwoWay}" />
+
+          <TextBlock Grid.Row="6" Grid.Column="0" Text="Comment" Opacity="0.6" VerticalAlignment="Center" />
+          <TextBox Grid.Row="6" Grid.Column="1"
+                   Text="{Binding Logger.Comment, Mode=TwoWay}" />
+
+          <TextBlock Grid.Row="7" Grid.Column="0" Text="Notes" Opacity="0.6" VerticalAlignment="Center" />
+          <TextBox Grid.Row="7" Grid.Column="1"
+                   Text="{Binding Notes, Mode=TwoWay}" AcceptsReturn="True"
+                   Height="48" TextWrapping="Wrap" />
+
+          <!-- Right column -->
+          <TextBlock Grid.Row="0" Grid.Column="3" Text="Name" Opacity="0.6" VerticalAlignment="Center" />
+          <TextBox Grid.Row="0" Grid.Column="4"
+                   Text="{Binding Name, Mode=TwoWay}" />
+
+          <TextBlock Grid.Row="1" Grid.Column="3" Text="Grid" Opacity="0.6" VerticalAlignment="Center" />
+          <TextBox Grid.Row="1" Grid.Column="4"
+                   Text="{Binding GridSquare, Mode=TwoWay}" />
+
+          <TextBlock Grid.Row="2" Grid.Column="3" Text="Country" Opacity="0.6" VerticalAlignment="Center" />
+          <TextBox Grid.Row="2" Grid.Column="4"
+                   Text="{Binding Country, Mode=TwoWay}" />
+
+          <TextBlock Grid.Row="3" Grid.Column="3" Text="State" Opacity="0.6" VerticalAlignment="Center" />
+          <TextBox Grid.Row="3" Grid.Column="4"
+                   Text="{Binding State, Mode=TwoWay}" />
+
+          <TextBlock Grid.Row="4" Grid.Column="3" Text="Contest" Opacity="0.6" VerticalAlignment="Center" />
+          <TextBox Grid.Row="4" Grid.Column="4"
+                   Text="{Binding Contest, Mode=TwoWay}" />
+
+          <TextBlock Grid.Row="5" Grid.Column="3" Text="Exchange" Opacity="0.6" VerticalAlignment="Center" />
+          <TextBox Grid.Row="5" Grid.Column="4"
+                   Text="{Binding Exchange, Mode=TwoWay}" />
+        </Grid>
+      </ScrollViewer>
+    </DockPanel>
+  </Border>
+</UserControl>

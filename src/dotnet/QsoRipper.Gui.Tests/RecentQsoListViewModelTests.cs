@@ -115,7 +115,7 @@ public class RecentQsoListViewModelTests
 
         Assert.Single(viewModel.VisibleItems);
         Assert.Equal("qso-1", viewModel.VisibleItems[0].LocalId);
-        Assert.Equal(3, viewModel.ActiveFilterTokens.Count);
+        Assert.Equal(2, viewModel.ActiveFilterTokens.Count);
         Assert.Equal("1 filtered", viewModel.FilterStatusText);
     }
 
@@ -124,7 +124,7 @@ public class RecentQsoListViewModelTests
     {
         var original = CreateQso("qso-1", "W1AW", Band._20M, Mode.Cw, 14025, "CN87", "Loaded", operatorName: "Alice", state: "WA", country: "United States");
         var updated = original.Clone();
-        updated.Comment = "Updated note";
+        updated.Notes = "Updated note";
 
         var engine = new FakeEngineClient
         {
@@ -145,7 +145,7 @@ public class RecentQsoListViewModelTests
         await viewModel.SaveEditsCommand.ExecuteAsync(null);
 
         Assert.Single(engine.UpdatedQsos);
-        Assert.Equal("Updated note", engine.UpdatedQsos[0].Comment);
+        Assert.Equal("Updated note", engine.UpdatedQsos[0].Notes);
         Assert.Equal(0, viewModel.PendingEditCount);
         Assert.Equal("No pending edits", viewModel.EditStatusText);
         Assert.Equal("Updated note", viewModel.SelectedQso?.Note);
@@ -217,7 +217,7 @@ public class RecentQsoListViewModelTests
                 contestId: "CQ-WW",
                 exchangeReceived: "WA"));
 
-        Assert.True(RecentQsoListViewModel.MatchesSearch(item, "call:w1aw band:40m contest:cq note:evening"));
+        Assert.True(RecentQsoListViewModel.MatchesSearch(item, "call:w1aw band:40m contest:cq comment:evening"));
         Assert.False(RecentQsoListViewModel.MatchesSearch(item, "call:w1aw band:20m"));
     }
 
@@ -417,6 +417,18 @@ public class RecentQsoListViewModelTests
             throw new NotImplementedException();
 
         public Task<DeleteQsoResponse> DeleteQsoAsync(string localId, bool deleteFromQrz = false, CancellationToken ct = default) =>
+            throw new NotImplementedException();
+
+        public Task<LogQsoResponse> LogQsoAsync(QsoRecord qso, bool syncToQrz = false, CancellationToken ct = default) =>
+            throw new NotImplementedException();
+
+        public Task<GetRigSnapshotResponse> GetRigSnapshotAsync(CancellationToken ct = default) =>
+            throw new NotImplementedException();
+
+        public Task<GetRigStatusResponse> GetRigStatusAsync(CancellationToken ct = default) =>
+            throw new NotImplementedException();
+
+        public Task<GetCurrentSpaceWeatherResponse> GetCurrentSpaceWeatherAsync(CancellationToken ct = default) =>
             throw new NotImplementedException();
     }
 }

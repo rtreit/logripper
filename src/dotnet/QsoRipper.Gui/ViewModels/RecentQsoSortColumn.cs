@@ -24,5 +24,6 @@ internal enum RecentQsoSortColumn
     RstSent,
     RstReceived,
     State,
-    County
+    County,
+    Comment
 }

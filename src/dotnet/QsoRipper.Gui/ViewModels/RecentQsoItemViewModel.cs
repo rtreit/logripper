@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Globalization;
 using System.Linq;
+using Avalonia.Media;
 using CommunityToolkit.Mvvm.ComponentModel;
 using Google.Protobuf.WellKnownTypes;
 using QsoRipper.Domain;
@@ -24,6 +25,7 @@ internal sealed class RecentQsoItemViewModel : ObservableObject, IEditableObject
 
     private QsoRecord _sourceQso = new();
     private EditableQsoState? _editSnapshot;
+    private string _displayTimestampFormat = TimestampFormatOption.Default.FormatString;
     private string _utcDisplay = "-";
     private string _workedCallsign = "-";
     private string _band = "-";
@@ -38,6 +40,7 @@ internal sealed class RecentQsoItemViewModel : ObservableObject, IEditableObject
     private string _contest = "-";
     private string _station = "-";
     private string _note = "-";
+    private string _comment = "-";
     private string _utcEndDisplay = "-";
     private string _cqZone = "-";
     private string _ituZone = "-";
@@ -95,7 +98,14 @@ internal sealed class RecentQsoItemViewModel : ObservableObject, IEditableObject
     public string Rst
     {
         get => _rst;
-        set => SetProperty(ref _rst, value);
+        set
+        {
+            if (SetProperty(ref _rst, value))
+            {
+                OnPropertyChanged(nameof(RstSent));
+                OnPropertyChanged(nameof(RstReceived));
+            }
+        }
     }
 
     public string RstSent => SplitCombinedReport(Rst).Sent;
@@ -138,6 +148,12 @@ internal sealed class RecentQsoItemViewModel : ObservableObject, IEditableObject
         set => SetProperty(ref _note, value);
     }
 
+    public string Comment
+    {
+        get => _comment;
+        set => SetProperty(ref _comment, value);
+    }
+
     public string UtcEndDisplay
     {
         get => _utcEndDisplay;
@@ -171,8 +187,26 @@ internal sealed class RecentQsoItemViewModel : ObservableObject, IEditableObject
     public string Continent
     {
         get => _continent;
-        private set => SetProperty(ref _continent, value);
+        private set
+        {
+            if (SetProperty(ref _continent, value))
+            {
+                OnPropertyChanged(nameof(ContinentBrush));
+            }
+        }
     }
+
+    public IBrush ContinentBrush => Continent switch
+    {
+        "NA" => new SolidColorBrush(Color.Parse("#18FFB347")),
+        "EU" => new SolidColorBrush(Color.Parse("#184488FF")),
+        "AS" => new SolidColorBrush(Color.Parse("#18FF6B6B")),
+        "AF" => new SolidColorBrush(Color.Parse("#1877DD77")),
+        "SA" => new SolidColorBrush(Color.Parse("#18FFD700")),
+        "OC" => new SolidColorBrush(Color.Parse("#1800CED1")),
+        "AN" => new SolidColorBrush(Color.Parse("#18E0E0E0")),
+        _ => Brushes.Transparent,
+    };
 
     public string State
     {
@@ -210,6 +244,7 @@ internal sealed class RecentQsoItemViewModel : ObservableObject, IEditableObject
         Exchange,
         Station,
         Note,
+        Comment,
         CqZone,
         ItuZone,
         SyncStatus,
@@ -249,11 +284,18 @@ internal sealed class RecentQsoItemViewModel : ObservableObject, IEditableObject
             ? timestamp
             : DateTimeOffset.MinValue;
 
-    public static RecentQsoItemViewModel FromQso(QsoRecord qso)
+    public static RecentQsoItemViewModel FromQso(QsoRecord qso) => FromQso(qso, null);
+
+    public static RecentQsoItemViewModel FromQso(QsoRecord qso, string? timestampFormat)
     {
         ArgumentNullException.ThrowIfNull(qso);
 
         var item = new RecentQsoItemViewModel();
+        if (timestampFormat is not null)
+        {
+            item._displayTimestampFormat = timestampFormat;
+        }
+
         item.LoadSourceQso(qso);
         return item;
     }
@@ -281,6 +323,25 @@ internal sealed class RecentQsoItemViewModel : ObservableObject, IEditableObject
         RecomputeDirty();
     }
 
+    /// <summary>
+    /// Updates the display timestamp format and re-formats the UTC columns.
+    /// Called by the parent list view model when the user cycles the format.
+    /// </summary>
+    public void UpdateTimestampFormat(string format)
+    {
+        if (string.Equals(_displayTimestampFormat, format, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _displayTimestampFormat = format;
+
+        // Re-format timestamps from the source QSO (not from the display string).
+        UtcDisplay = FormatTimestamp(_sourceQso.UtcTimestamp, _displayTimestampFormat);
+        UtcEndDisplay = FormatTimestamp(_sourceQso.UtcEndTimestamp, _displayTimestampFormat);
+        RecomputeDirty();
+    }
+
     internal void AcceptSavedChanges(QsoRecord qso)
     {
         ArgumentNullException.ThrowIfNull(qso);
@@ -290,7 +351,8 @@ internal sealed class RecentQsoItemViewModel : ObservableObject, IEditableObject
         Qth = BuildQth(_sourceQso);
         SyncStatus = BuildSyncStatus(_sourceQso.SyncStatus);
         State = NoteOrNull(_sourceQso.WorkedState) ?? string.Empty;
-        County = NoteOrNull(_sourceQso.WorkedCounty) ?? string.Empty;
+        County = ParseCountyName(_sourceQso.WorkedCounty);
+        Comment = NoteOrNull(_sourceQso.Comment) ?? "-";
         RecomputeDirty();
     }
 
@@ -316,7 +378,8 @@ internal sealed class RecentQsoItemViewModel : ObservableObject, IEditableObject
             "EXCH" or "EXCHANGE" => ContainsNormalized(Exchange, normalizedValue),
             "CONTEST" => ContainsNormalized(Contest, normalizedValue),
             "STATION" => ContainsNormalized(Station, normalizedValue),
-            "NOTE" or "COMMENT" => ContainsNormalized(Note, normalizedValue),
+            "NOTE" => ContainsNormalized(Note, normalizedValue),
+            "COMMENT" => ContainsNormalized(Comment, normalizedValue),
             "CQ" => ContainsNormalized(CqZone, normalizedValue),
             "ITU" => ContainsNormalized(ItuZone, normalizedValue),
             "QTH" => ContainsNormalized(Qth, normalizedValue),
@@ -333,7 +396,7 @@ internal sealed class RecentQsoItemViewModel : ObservableObject, IEditableObject
         qso = null;
 
         var updated = _sourceQso.Clone();
-        var sourceState = EditableQsoState.FromQso(_sourceQso);
+        var sourceState = EditableQsoState.FromQso(_sourceQso, _displayTimestampFormat);
 
         if (!TryParseTimestamp(UtcDisplay, required: true, out var utcTimestamp))
         {
@@ -408,6 +471,11 @@ internal sealed class RecentQsoItemViewModel : ObservableObject, IEditableObject
             ApplyNote(updated);
         }
 
+        if (!StringComparer.Ordinal.Equals(Comment, sourceState.Comment))
+        {
+            ApplyComment(updated);
+        }
+
         qso = updated;
         return true;
     }
@@ -416,12 +484,13 @@ internal sealed class RecentQsoItemViewModel : ObservableObject, IEditableObject
     {
         _sourceQso = qso.Clone();
         _editSnapshot = null;
-        ApplyState(EditableQsoState.FromQso(_sourceQso));
+        ApplyState(EditableQsoState.FromQso(_sourceQso, _displayTimestampFormat));
         Qth = BuildQth(_sourceQso);
         SyncStatus = BuildSyncStatus(_sourceQso.SyncStatus);
         Continent = NoteOrNull(_sourceQso.WorkedContinent) ?? "-";
         State = NoteOrNull(_sourceQso.WorkedState) ?? string.Empty;
-        County = NoteOrNull(_sourceQso.WorkedCounty) ?? string.Empty;
+        County = ParseCountyName(_sourceQso.WorkedCounty);
+        Comment = NoteOrNull(_sourceQso.Comment) ?? "-";
         RecomputeDirty();
     }
 
@@ -440,6 +509,7 @@ internal sealed class RecentQsoItemViewModel : ObservableObject, IEditableObject
         Contest,
         Station,
         Note,
+        Comment,
         UtcEndDisplay,
         CqZone,
         ItuZone);
@@ -460,6 +530,7 @@ internal sealed class RecentQsoItemViewModel : ObservableObject, IEditableObject
         Contest = state.Contest;
         Station = state.Station;
         Note = state.Note;
+        Comment = state.Comment;
         UtcEndDisplay = state.UtcEndDisplay;
         CqZone = state.CqZone;
         ItuZone = state.ItuZone;
@@ -467,7 +538,7 @@ internal sealed class RecentQsoItemViewModel : ObservableObject, IEditableObject
 
     private void RecomputeDirty()
     {
-        IsDirty = CaptureState() != EditableQsoState.FromQso(_sourceQso);
+        IsDirty = CaptureState() != EditableQsoState.FromQso(_sourceQso, _displayTimestampFormat);
     }
 
     private bool TryApplyFrequency(QsoRecord updated, out string? error)
@@ -605,17 +676,27 @@ internal sealed class RecentQsoItemViewModel : ObservableObject, IEditableObject
         var note = NoteOrNull(Note);
         if (note is null)
         {
-            updated.ClearComment();
             updated.ClearNotes();
             return;
         }
 
-        updated.Comment = note;
-        updated.ClearNotes();
+        updated.Notes = note;
     }
 
-    private static EditableQsoState EditableQsoStateFromQso(QsoRecord qso) => new(
-        FormatTimestamp(qso.UtcTimestamp),
+    private void ApplyComment(QsoRecord updated)
+    {
+        var comment = NoteOrNull(Comment);
+        if (comment is null)
+        {
+            updated.ClearComment();
+            return;
+        }
+
+        updated.Comment = comment;
+    }
+
+    private static EditableQsoState EditableQsoStateFromQso(QsoRecord qso, string format) => new(
+        FormatTimestamp(qso.UtcTimestamp, format),
         DisplayOrDash(qso.WorkedCallsign),
         ProtoEnumDisplay.ForBand(qso.Band),
         ProtoEnumDisplay.ForMode(qso.Mode),
@@ -629,23 +710,13 @@ internal sealed class RecentQsoItemViewModel : ObservableObject, IEditableObject
         DisplayOrDash(qso.ContestId),
         DisplayOrDash(qso.StationCallsign),
         BuildNote(qso),
-        FormatTimestamp(qso.UtcEndTimestamp),
+        NoteOrNull(qso.Comment) ?? "-",
+        FormatTimestamp(qso.UtcEndTimestamp, format),
         BuildOptionalNumber(qso.WorkedCqZone),
         BuildOptionalNumber(qso.WorkedItuZone));
 
-    private static string BuildNote(QsoRecord qso)
-    {
-        var parts = new[]
-            {
-                NoteOrNull(qso.Comment),
-                NoteOrNull(qso.Notes)
-            }
-            .Where(static value => value is not null)
-            .Distinct(StringComparer.Ordinal)
-            .ToArray();
-
-        return parts.Length == 0 ? "-" : string.Join(" / ", parts!);
-    }
+    private static string BuildNote(QsoRecord qso) =>
+        NoteOrNull(qso.Notes) ?? "-";
 
     private static string BuildCountry(QsoRecord qso)
     {
@@ -655,6 +726,18 @@ internal sealed class RecentQsoItemViewModel : ObservableObject, IEditableObject
                    qso.WorkedCounty,
                    qso.WorkedContinent)
                ?? "-";
+    }
+
+    private static string ParseCountyName(string? rawCounty)
+    {
+        var value = NoteOrNull(rawCounty);
+        if (value is null)
+        {
+            return string.Empty;
+        }
+
+        var lastComma = value.LastIndexOf(',');
+        return lastComma >= 0 ? value[(lastComma + 1)..].Trim() : value;
     }
 
     private static string BuildOperatorName(QsoRecord qso) =>
@@ -879,11 +962,11 @@ internal sealed class RecentQsoItemViewModel : ObservableObject, IEditableObject
         return null;
     }
 
-    private static string FormatTimestamp(Timestamp? timestamp)
+    private static string FormatTimestamp(Timestamp? timestamp, string format)
     {
         return timestamp is null
             ? "-"
-            : timestamp.ToDateTimeOffset().ToUniversalTime().ToString("yy-MM-dd HH:mm", CultureInfo.InvariantCulture);
+            : timestamp.ToDateTimeOffset().ToUniversalTime().ToString(format, CultureInfo.InvariantCulture);
     }
 
     private readonly record struct EditableQsoState(
@@ -901,10 +984,11 @@ internal sealed class RecentQsoItemViewModel : ObservableObject, IEditableObject
         string Contest,
         string Station,
         string Note,
+        string Comment,
         string UtcEndDisplay,
         string CqZone,
         string ItuZone)
     {
-        public static EditableQsoState FromQso(QsoRecord qso) => EditableQsoStateFromQso(qso);
+        public static EditableQsoState FromQso(QsoRecord qso, string format) => EditableQsoStateFromQso(qso, format);
     }
 }
