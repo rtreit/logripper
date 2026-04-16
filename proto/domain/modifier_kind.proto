@@ -1,0 +1,17 @@
+syntax = "proto3";
+
+package qsoripper.domain;
+
+option csharp_namespace = "QsoRipper.Domain";
+
+// The operating modifier kind derived from a slash-modified callsign.
+enum ModifierKind {
+  MODIFIER_KIND_UNSPECIFIED = 0;
+  MODIFIER_KIND_PORTABLE = 1;
+  MODIFIER_KIND_MOBILE = 2;
+  MODIFIER_KIND_MARITIME_MOBILE = 3;
+  MODIFIER_KIND_AERONAUTICAL_MOBILE = 4;
+  MODIFIER_KIND_CALL_AREA = 5;
+  MODIFIER_KIND_PREFIX_OVERRIDE = 6;
+  MODIFIER_KIND_OTHER = 7;
+}

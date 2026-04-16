@@ -10,7 +10,10 @@ use futures::future::{BoxFuture, FutureExt, Shared};
 use tokio::sync::{Mutex, RwLock};
 
 use crate::{
-    domain::lookup::normalize_callsign,
+    domain::{
+        callsign_parser::{annotate_record, parse_callsign},
+        lookup::normalize_callsign,
+    },
     proto::qsoripper::domain::{CallsignRecord, LookupResult, LookupState},
 };
 
@@ -106,10 +109,19 @@ impl LookupCoordinator {
             }
         }
 
+        let parsed = parse_callsign(&normalized_callsign);
+        let base = if parsed.modifier_kind.is_some() {
+            Some(parsed.base_callsign.as_str())
+        } else {
+            None
+        };
+
         let started_at = Instant::now();
-        let provider_result = self.run_provider_lookup_deduped(&normalized_callsign).await;
+        let provider_result = self
+            .run_provider_lookup_with_fallback(&normalized_callsign, base)
+            .await;
         let latency_ms = duration_to_millis_u32(started_at.elapsed());
-        self.provider_result_to_lookup(provider_result, &normalized_callsign, latency_ms)
+        self.provider_result_to_lookup(provider_result, &normalized_callsign, latency_ms, &parsed)
             .await
     }
 
@@ -151,12 +163,26 @@ impl LookupCoordinator {
             }
         }
 
+        let parsed = parse_callsign(&normalized_callsign);
+        let base = if parsed.modifier_kind.is_some() {
+            Some(parsed.base_callsign.as_str())
+        } else {
+            None
+        };
+
         let started_at = Instant::now();
-        let provider_result = self.run_provider_lookup_deduped(&normalized_callsign).await;
+        let provider_result = self
+            .run_provider_lookup_with_fallback(&normalized_callsign, base)
+            .await;
         let latency_ms = duration_to_millis_u32(started_at.elapsed());
         updates.push(
-            self.provider_result_to_lookup(provider_result, &normalized_callsign, latency_ms)
-                .await,
+            self.provider_result_to_lookup(
+                provider_result,
+                &normalized_callsign,
+                latency_ms,
+                &parsed,
+            )
+            .await,
         );
 
         updates
@@ -230,12 +256,14 @@ impl LookupCoordinator {
         provider_result: ProviderLookupResult,
         normalized_callsign: &str,
         lookup_latency_ms: u32,
+        parsed: &crate::domain::callsign_parser::ParsedCallsign,
     ) -> LookupResult {
         match provider_result {
             Ok(ProviderLookup {
-                outcome: ProviderLookupOutcome::Found(record),
+                outcome: ProviderLookupOutcome::Found(mut record),
                 debug_http_exchanges,
             }) => {
+                annotate_record(&mut record, parsed);
                 self.store_cache_entry(
                     normalized_callsign,
                     CacheEntry {
@@ -295,6 +323,39 @@ impl LookupCoordinator {
             .write()
             .await
             .insert(normalized_callsign.to_string(), entry);
+    }
+
+    /// Run provider lookup with exact-first / base-callsign-fallback behavior.
+    ///
+    /// If the exact callsign (e.g. `AE7XI/P`) returns `NotFound`, and a
+    /// `base_callsign` is supplied (e.g. `AE7XI`), a second attempt is made
+    /// with the base callsign so that providers that do not know slash forms
+    /// can still enrich the record.  The cache is always keyed on the original
+    /// exact callsign regardless of which attempt succeeded.
+    async fn run_provider_lookup_with_fallback(
+        &self,
+        exact_callsign: &str,
+        base_callsign: Option<&str>,
+    ) -> ProviderLookupResult {
+        let first = self.run_provider_lookup_deduped(exact_callsign).await;
+
+        if let Some(base) = base_callsign {
+            if base != exact_callsign {
+                if let Ok(ProviderLookup {
+                    outcome: ProviderLookupOutcome::NotFound,
+                    debug_http_exchanges: first_exchanges,
+                }) = first
+                {
+                    let second = self.run_provider_lookup_deduped(base).await;
+                    return second.map(|mut lookup| {
+                        lookup.debug_http_exchanges.extend(first_exchanges);
+                        lookup
+                    });
+                }
+            }
+        }
+
+        first
     }
 
     async fn run_provider_lookup_deduped(&self, normalized_callsign: &str) -> ProviderLookupResult {

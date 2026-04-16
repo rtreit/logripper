@@ -72,6 +72,12 @@ pub fn placeholder_lookup_error(callsign: &str) -> LookupResult {
             gmt_offset: None,
             dst_observed: None,
             profile_views: None,
+            base_callsign: None,
+            modifier_text: None,
+            modifier_kind: None,
+            prefix_override_callsign: None,
+            operating_entity_hint: None,
+            callsign_ambiguity: None,
         }),
         error_message: Some(
             "Lookup transport is live, but provider-backed callsign lookup is not implemented yet."
@@ -89,6 +95,13 @@ pub fn placeholder_lookup_error(callsign: &str) -> LookupResult {
 mod tests {
     use super::{normalize_callsign, placeholder_lookup_error};
     use crate::proto::qsoripper::domain::LookupState;
+
+    #[test]
+    fn normalize_callsign_preserves_slash_forms() {
+        assert_eq!(normalize_callsign("ae7xi/p"), "AE7XI/P");
+        assert_eq!(normalize_callsign("  ea8/ae7xi  "), "EA8/AE7XI");
+        assert_eq!(normalize_callsign("dl/ae7xi/p"), "DL/AE7XI/P");
+    }
 
     #[test]
     fn normalize_callsign_trims_uppercases_and_defaults_blank_input() {
