@@ -16,6 +16,14 @@ public class EditorModelTests
             {
                 LogFilePath = @".\data\portable.db",
                 QrzXmlUsername = "k7rnd",
+                RigControl = new RigControlSettings
+                {
+                    Enabled = true,
+                    Host = "127.0.0.1",
+                    Port = 4532,
+                    ReadTimeoutMs = 2000,
+                    StaleThresholdMs = 5000
+                },
                 StationProfile = new StationProfile
                 {
                     ProfileName = "Home",
@@ -27,6 +35,11 @@ public class EditorModelTests
 
         Assert.Equal(@".\data\portable.db", model.LogFilePath);
         Assert.Equal("k7rnd", model.QrzXmlUsername);
+        Assert.True(model.RigControlEnabled);
+        Assert.Equal("127.0.0.1", model.RigControlHost);
+        Assert.Equal(4532, model.RigControlPort);
+        Assert.Equal(2000, model.RigControlReadTimeoutMs);
+        Assert.Equal(5000, model.RigControlStaleThresholdMs);
         Assert.Equal("Home", model.ProfileName);
         Assert.Equal("K7RND", model.StationCallsign);
         Assert.Equal("CN87", model.Grid);
@@ -40,6 +53,11 @@ public class EditorModelTests
             LogFilePath = @"  .\data\qsoripper.db  ",
             QrzXmlUsername = "  k7rnd  ",
             QrzXmlPassword = "  secret  ",
+            RigControlEnabled = true,
+            RigControlHost = " 127.0.0.1 ",
+            RigControlPort = 4532,
+            RigControlReadTimeoutMs = 2000,
+            RigControlStaleThresholdMs = 5000,
             ProfileName = "  Home  ",
             StationCallsign = "  K7RND  ",
             OperatorCallsign = "  K7RND  ",
@@ -55,6 +73,16 @@ public class EditorModelTests
         Assert.True(request.HasQrzXmlPassword);
         Assert.Equal("k7rnd", request.QrzXmlUsername);
         Assert.Equal("secret", request.QrzXmlPassword);
+        Assert.NotNull(request.RigControl);
+        Assert.True(request.RigControl.Enabled);
+        Assert.True(request.RigControl.HasHost);
+        Assert.Equal("127.0.0.1", request.RigControl.Host);
+        Assert.True(request.RigControl.HasPort);
+        Assert.Equal(4532u, request.RigControl.Port);
+        Assert.True(request.RigControl.HasReadTimeoutMs);
+        Assert.Equal(2000ul, request.RigControl.ReadTimeoutMs);
+        Assert.True(request.RigControl.HasStaleThresholdMs);
+        Assert.Equal(5000ul, request.RigControl.StaleThresholdMs);
         Assert.NotNull(request.StationProfile);
         Assert.Equal("Home", request.StationProfile.ProfileName);
         Assert.Equal("K7RND", request.StationProfile.StationCallsign);
@@ -77,6 +105,25 @@ public class EditorModelTests
 
         Assert.Contains(results, result => result.MemberNames.Contains(nameof(SetupEditorModel.LogFilePath), StringComparer.Ordinal));
         Assert.Contains(results, result => result.MemberNames.Contains(nameof(SetupEditorModel.QrzXmlPassword), StringComparer.Ordinal));
+    }
+
+    [Fact]
+    public void SetupEditorModel_validate_rejects_invalid_rig_control_values()
+    {
+        var model = new SetupEditorModel
+        {
+            LogFilePath = @".\data\qsoripper.db",
+            StationCallsign = "K7RND",
+            RigControlPort = 70000,
+            RigControlReadTimeoutMs = 0,
+            RigControlStaleThresholdMs = 0
+        };
+
+        var results = Validate(model);
+
+        Assert.Contains(results, result => result.MemberNames.Contains(nameof(SetupEditorModel.RigControlPort), StringComparer.Ordinal));
+        Assert.Contains(results, result => result.MemberNames.Contains(nameof(SetupEditorModel.RigControlReadTimeoutMs), StringComparer.Ordinal));
+        Assert.Contains(results, result => result.MemberNames.Contains(nameof(SetupEditorModel.RigControlStaleThresholdMs), StringComparer.Ordinal));
     }
 
     [Fact]

@@ -311,6 +311,56 @@
 
         <Separator />
 
+        <!-- Rig Control -->
+        <StackPanel Spacing="8">
+          <TextBlock Text="Rig Control"
+                     FontSize="16" FontWeight="SemiBold" />
+          <TextBlock Text="Engine-wide rigctld settings shared by every client connected to this engine."
+                     Opacity="0.6" TextWrapping="Wrap" />
+
+          <CheckBox x:Name="SettingsRigControlEnabledCheckBox"
+                    AutomationProperties.AutomationId="SettingsRigControlEnabledCheckBox"
+                    Content="Enable live rig control"
+                    IsChecked="{Binding RigControlEnabled, Mode=TwoWay}" />
+
+          <Grid ColumnDefinitions="140,*" RowDefinitions="Auto,Auto,Auto,Auto"
+                ColumnSpacing="12" RowSpacing="6">
+            <TextBlock Grid.Row="0" Grid.Column="0"
+                       Text="Host:" VerticalAlignment="Center" />
+            <TextBox x:Name="SettingsRigControlHostBox"
+                     AutomationProperties.AutomationId="SettingsRigControlHostBox"
+                     Grid.Row="0" Grid.Column="1"
+                     Text="{Binding RigControlHost, Mode=TwoWay}"
+                     PlaceholderText="127.0.0.1" />
+
+            <TextBlock Grid.Row="1" Grid.Column="0"
+                       Text="Port:" VerticalAlignment="Center" />
+            <TextBox x:Name="SettingsRigControlPortBox"
+                     AutomationProperties.AutomationId="SettingsRigControlPortBox"
+                     Grid.Row="1" Grid.Column="1"
+                     Text="{Binding RigControlPort, Mode=TwoWay}"
+                     PlaceholderText="4532" />
+
+            <TextBlock Grid.Row="2" Grid.Column="0"
+                       Text="Read timeout (ms):" VerticalAlignment="Center" />
+            <TextBox x:Name="SettingsRigControlReadTimeoutBox"
+                     AutomationProperties.AutomationId="SettingsRigControlReadTimeoutBox"
+                     Grid.Row="2" Grid.Column="1"
+                     Text="{Binding RigControlReadTimeoutMs, Mode=TwoWay}"
+                     PlaceholderText="2000" />
+
+            <TextBlock Grid.Row="3" Grid.Column="0"
+                       Text="Stale threshold (ms):" VerticalAlignment="Center" />
+            <TextBox x:Name="SettingsRigControlStaleThresholdBox"
+                     AutomationProperties.AutomationId="SettingsRigControlStaleThresholdBox"
+                     Grid.Row="3" Grid.Column="1"
+                     Text="{Binding RigControlStaleThresholdMs, Mode=TwoWay}"
+                     PlaceholderText="5000" />
+          </Grid>
+        </StackPanel>
+
+        <Separator />
+
         <!-- Log File Path (informational) -->
         <StackPanel Spacing="8">
           <TextBlock Text="Log File"

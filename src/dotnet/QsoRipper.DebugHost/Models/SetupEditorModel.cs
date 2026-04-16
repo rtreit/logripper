@@ -11,6 +11,21 @@ internal sealed class SetupEditorModel : StationProfileEditorModelBase
 
     public string? QrzXmlPassword { get; set; }
 
+    public bool RigControlEnabled { get; set; }
+
+    public string? RigControlHost { get; set; }
+
+    [Range(1, 65535)]
+    public int? RigControlPort { get; set; }
+
+    [Range(1, long.MaxValue)]
+    public long? RigControlReadTimeoutMs { get; set; }
+
+    [Range(1, long.MaxValue)]
+    public long? RigControlStaleThresholdMs { get; set; }
+
+    private bool HasPersistedRigControl { get; set; }
+
     public static SetupEditorModel Create(SetupStatus? status, string fallbackLogFilePath)
     {
         var model = new SetupEditorModel
@@ -18,8 +33,26 @@ internal sealed class SetupEditorModel : StationProfileEditorModelBase
             LogFilePath = NormalizeOptional(status?.LogFilePath)
                 ?? NormalizeOptional(status?.SuggestedLogFilePath)
                 ?? fallbackLogFilePath,
-            QrzXmlUsername = NormalizeOptional(status?.QrzXmlUsername)
+            QrzXmlUsername = NormalizeOptional(status?.QrzXmlUsername),
+            HasPersistedRigControl = status?.RigControl is not null
         };
+
+        if (status?.RigControl is not null)
+        {
+            model.RigControlEnabled = status.RigControl.Enabled;
+            model.RigControlHost = status.RigControl.HasHost
+                ? NormalizeOptional(status.RigControl.Host)
+                : null;
+            model.RigControlPort = status.RigControl.HasPort
+                ? (int)status.RigControl.Port
+                : null;
+            model.RigControlReadTimeoutMs = status.RigControl.HasReadTimeoutMs
+                ? (long)status.RigControl.ReadTimeoutMs
+                : null;
+            model.RigControlStaleThresholdMs = status.RigControl.HasStaleThresholdMs
+                ? (long)status.RigControl.StaleThresholdMs
+                : null;
+        }
 
         model.LoadFrom(status?.StationProfile);
         return model;
@@ -47,7 +80,55 @@ internal sealed class SetupEditorModel : StationProfileEditorModelBase
             request.QrzXmlPassword = QrzXmlPassword.Trim();
         }
 
+        var rigControl = BuildRigControlRequest();
+        if (rigControl is not null)
+        {
+            request.RigControl = rigControl;
+        }
+
         return request;
+    }
+
+    private RigControlSettings? BuildRigControlRequest()
+    {
+        var hasExplicitValues = RigControlEnabled
+            || !string.IsNullOrWhiteSpace(RigControlHost)
+            || RigControlPort.HasValue
+            || RigControlReadTimeoutMs.HasValue
+            || RigControlStaleThresholdMs.HasValue;
+
+        if (!HasPersistedRigControl && !hasExplicitValues)
+        {
+            return null;
+        }
+
+        var settings = new RigControlSettings();
+        if (HasPersistedRigControl || RigControlEnabled)
+        {
+            settings.Enabled = RigControlEnabled;
+        }
+
+        if (!string.IsNullOrWhiteSpace(RigControlHost))
+        {
+            settings.Host = RigControlHost.Trim();
+        }
+
+        if (RigControlPort.HasValue)
+        {
+            settings.Port = (uint)RigControlPort.Value;
+        }
+
+        if (RigControlReadTimeoutMs.HasValue)
+        {
+            settings.ReadTimeoutMs = (ulong)RigControlReadTimeoutMs.Value;
+        }
+
+        if (RigControlStaleThresholdMs.HasValue)
+        {
+            settings.StaleThresholdMs = (ulong)RigControlStaleThresholdMs.Value;
+        }
+
+        return settings;
     }
 
     public override IEnumerable<ValidationResult> Validate(ValidationContext validationContext)
