@@ -6,6 +6,9 @@
   <Project Path="QsoRipper.DebugHost.Tests/QsoRipper.DebugHost.Tests.csproj" />
   <Project Path="QsoRipper.Engine.DotNet/QsoRipper.Engine.DotNet.csproj" />
   <Project Path="QsoRipper.Engine.DotNet.Tests/QsoRipper.Engine.DotNet.Tests.csproj" />
+  <Project Path="QsoRipper.Engine.Lookup.Abstractions/QsoRipper.Engine.Lookup.Abstractions.csproj" />
+  <Project Path="QsoRipper.Engine.Lookup.Qrz/QsoRipper.Engine.Lookup.Qrz.csproj" />
+  <Project Path="QsoRipper.Engine.Lookup.Tests/QsoRipper.Engine.Lookup.Tests.csproj" />
   <Project Path="QsoRipper.Engine.Storage.Abstractions/QsoRipper.Engine.Storage.Abstractions.csproj" />
   <Project Path="QsoRipper.Engine.Storage.Memory/QsoRipper.Engine.Storage.Memory.csproj" />
   <Project Path="QsoRipper.Engine.Storage.Memory.Tests/QsoRipper.Engine.Storage.Memory.Tests.csproj" />

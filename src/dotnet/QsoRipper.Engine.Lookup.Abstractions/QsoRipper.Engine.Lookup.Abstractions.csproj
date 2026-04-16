@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\QsoRipper.Engine.Storage.Abstractions\QsoRipper.Engine.Storage.Abstractions.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="..\..\..\shared\adif-data\dxcc_entities.tsv"
+                      LogicalName="QsoRipper.Engine.Lookup.dxcc_entities.tsv" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="QsoRipper.Engine.Lookup.Tests" />
+    <InternalsVisibleTo Include="QsoRipper.Engine.Lookup.Qrz" />
+  </ItemGroup>
+
+</Project>

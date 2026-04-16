@@ -4,6 +4,7 @@ using System.Text.RegularExpressions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using QsoRipper.Domain;
+using QsoRipper.Engine.Lookup;
 using QsoRipper.Engine.Storage;
 using QsoRipper.Engine.Storage.Memory;
 using QsoRipper.EngineSelection;
@@ -39,6 +40,7 @@ internal sealed class ManagedEngineState
 
     private readonly Lock _gate = new();
     private readonly IEngineStorage _storage;
+    private readonly ILookupCoordinator _lookupCoordinator;
     private readonly string _configPath;
     private string? _qrzXmlUsername;
     private bool _hasQrzXmlPassword;
@@ -51,17 +53,23 @@ internal sealed class ManagedEngineState
     private readonly Dictionary<string, string> _runtimeOverrides;
 
     public ManagedEngineState(string configPath)
-        : this(configPath, new MemoryStorage())
+        : this(configPath, new MemoryStorage(), null)
     {
     }
 
     public ManagedEngineState(string configPath, IEngineStorage storage)
+        : this(configPath, storage, null)
+    {
+    }
+
+    public ManagedEngineState(string configPath, IEngineStorage storage, ILookupCoordinator? lookupCoordinator)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(configPath);
         ArgumentNullException.ThrowIfNull(storage);
 
         _configPath = Path.GetFullPath(configPath.Trim());
         _storage = storage;
+        _lookupCoordinator = lookupCoordinator ?? CreateDefaultCoordinator(storage);
         var persisted = LoadPersistedState(_configPath);
         _qrzXmlUsername = NormalizeOptional(persisted.QrzXmlUsername);
         _hasQrzXmlPassword = persisted.HasQrzXmlPassword;
@@ -673,68 +681,32 @@ internal sealed class ManagedEngineState
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(callsign);
 
-        lock (_gate)
+        if (cacheOnly)
         {
-            var normalized = callsign.Trim().ToUpperInvariant();
-            if (!skipCache)
-            {
-                var cached = Sync(_storage.LookupSnapshots.GetAsync(normalized));
-                if (cached is not null)
-                {
-                    var result = cached.Result.Clone();
-                    result.CacheHit = true;
-                    result.LookupLatencyMs = 0;
-                    return new LookupResponse { Result = result };
-                }
-            }
-
-            if (cacheOnly)
-            {
-                return new LookupResponse
-                {
-                    Result = new LookupResult
-                    {
-                        State = LookupState.NotFound,
-                        CacheHit = true,
-                        LookupLatencyMs = 0,
-                        QueriedCallsign = normalized,
-                    }
-                };
-            }
-
-            var resultToCache = BuildLookupResultNoLock(normalized);
-            Sync(_storage.LookupSnapshots.UpsertAsync(new LookupSnapshot
-            {
-                Callsign = normalized,
-                Result = resultToCache.Clone(),
-                StoredAt = DateTimeOffset.UtcNow,
-            }));
-            return new LookupResponse { Result = resultToCache };
+            var cached = _lookupCoordinator.GetCachedAsync(callsign).GetAwaiter().GetResult();
+            return new LookupResponse { Result = cached };
         }
+
+        var result = _lookupCoordinator.LookupAsync(callsign, skipCache).GetAwaiter().GetResult();
+
+        // Also persist to the snapshot store for backward compat with existing storage code.
+        var normalized = callsign.Trim().ToUpperInvariant();
+        Sync(_storage.LookupSnapshots.UpsertAsync(new LookupSnapshot
+        {
+            Callsign = normalized,
+            Result = result.Clone(),
+            StoredAt = DateTimeOffset.UtcNow,
+        }));
+
+        return new LookupResponse { Result = result };
     }
 
     public StreamLookupResponse[] StreamLookup(string callsign)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(callsign);
 
-        var normalized = callsign.Trim().ToUpperInvariant();
-        return
-        [
-            new StreamLookupResponse
-            {
-                Result = new LookupResult
-                {
-                    State = LookupState.Loading,
-                    CacheHit = false,
-                    LookupLatencyMs = 0,
-                    QueriedCallsign = normalized,
-                }
-            },
-            new StreamLookupResponse
-            {
-                Result = Lookup(callsign).Result
-            }
-        ];
+        var results = _lookupCoordinator.StreamLookupAsync(callsign).GetAwaiter().GetResult();
+        return results.Select(r => new StreamLookupResponse { Result = r }).ToArray();
     }
 
     public GetRigStatusResponse CreateRigStatusResponse()
@@ -1247,70 +1219,26 @@ internal sealed class ManagedEngineState
         response.SyncSuccess = true;
     }
 
-    private static LookupResult BuildLookupResultNoLock(string normalizedCallsign)
+    private static LookupCoordinator CreateDefaultCoordinator(IEngineStorage storage)
     {
-        if (normalizedCallsign.Contains("NOTFOUND", StringComparison.Ordinal))
+        ICallsignProvider provider;
+        var username = Environment.GetEnvironmentVariable("QSORIPPER_QRZ_XML_USERNAME")?.Trim();
+        var password = Environment.GetEnvironmentVariable("QSORIPPER_QRZ_XML_PASSWORD")?.Trim();
+
+        if (!string.IsNullOrWhiteSpace(username) && !string.IsNullOrWhiteSpace(password))
         {
-            return new LookupResult
-            {
-                State = LookupState.NotFound,
-                CacheHit = false,
-                LookupLatencyMs = 6,
-                QueriedCallsign = normalizedCallsign,
-            };
+            // HttpClient is intentionally not disposed — it is a singleton owned by the provider for the app lifetime.
+#pragma warning disable CA2000 // Dispose objects before losing scope
+            var httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(8) };
+#pragma warning restore CA2000
+            provider = new Lookup.Qrz.QrzXmlProvider(httpClient, username, password);
+        }
+        else
+        {
+            provider = new Lookup.Qrz.DisabledCallsignProvider();
         }
 
-        if (normalizedCallsign.Contains("ERROR", StringComparison.Ordinal))
-        {
-            return new LookupResult
-            {
-                State = LookupState.Error,
-                ErrorMessage = "Managed sample lookup forced an error for this callsign.",
-                CacheHit = false,
-                LookupLatencyMs = 6,
-                QueriedCallsign = normalizedCallsign,
-            };
-        }
-
-        var record = new CallsignRecord
-        {
-            Callsign = normalizedCallsign,
-            CrossRef = normalizedCallsign,
-            FirstName = "Managed",
-            LastName = "Operator",
-            Nickname = "Managed",
-            FormattedName = $"Managed Operator ({normalizedCallsign})",
-            LicenseClass = "Reference",
-            Addr1 = "1 Engine Way",
-            Addr2 = "Redmond",
-            State = "WA",
-            Zip = "98052",
-            Country = "United States",
-            GridSquare = "CN87",
-            County = "King",
-            Latitude = 47.6740,
-            Longitude = -122.1215,
-            Email = "managed-engine@example.com",
-            WebUrl = $"https://example.invalid/{normalizedCallsign}",
-            CqZone = 3,
-            ItuZone = 2,
-            DxccCountryName = "United States",
-            DxccContinent = "NA",
-            Eqsl = QslPreference.Yes,
-            Lotw = QslPreference.Yes,
-            PaperQsl = QslPreference.No,
-            TimeZone = "America/Los_Angeles",
-        };
-        record.Aliases.Add($"ALT-{normalizedCallsign}");
-
-        return new LookupResult
-        {
-            State = LookupState.Found,
-            Record = record,
-            CacheHit = false,
-            LookupLatencyMs = 6,
-            QueriedCallsign = normalizedCallsign,
-        };
+        return new LookupCoordinator(provider, storage.LookupSnapshots);
     }
 
     private static List<RuntimeConfigDefinition> BuildRuntimeConfigDefinitionsNoLock()

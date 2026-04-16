@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\QsoRipper.Engine.Lookup.Abstractions\QsoRipper.Engine.Lookup.Abstractions.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="QsoRipper.Engine.Lookup.Tests" />
+  </ItemGroup>
+
+</Project>

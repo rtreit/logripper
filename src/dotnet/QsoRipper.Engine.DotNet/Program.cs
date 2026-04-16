@@ -1,6 +1,8 @@
 using System.Net;
 using Microsoft.AspNetCore.Server.Kestrel.Core;
 using QsoRipper.Engine.DotNet;
+using QsoRipper.Engine.Lookup;
+using QsoRipper.Engine.Lookup.Qrz;
 using QsoRipper.Engine.Storage;
 using QsoRipper.Engine.Storage.Memory;
 using QsoRipper.Engine.Storage.Sqlite;
@@ -13,7 +15,14 @@ builder.Services.AddGrpc();
 
 var storage = CreateStorage();
 builder.Services.AddSingleton(storage);
-builder.Services.AddSingleton(provider => new ManagedEngineState(options.ConfigPath, provider.GetRequiredService<IEngineStorage>()));
+
+var lookupCoordinator = CreateLookupCoordinator(storage);
+builder.Services.AddSingleton(lookupCoordinator);
+
+builder.Services.AddSingleton(provider => new ManagedEngineState(
+    options.ConfigPath,
+    provider.GetRequiredService<IEngineStorage>(),
+    provider.GetRequiredService<ILookupCoordinator>()));
 
 var app = builder.Build();
 app.MapGrpcService<ManagedEngineInfoGrpcService>();
@@ -45,6 +54,28 @@ static IEngineStorage CreateStorage()
     }
 
     return new MemoryStorage();
+}
+
+static ILookupCoordinator CreateLookupCoordinator(IEngineStorage storage)
+{
+    var username = Environment.GetEnvironmentVariable("QSORIPPER_QRZ_XML_USERNAME")?.Trim();
+    var password = Environment.GetEnvironmentVariable("QSORIPPER_QRZ_XML_PASSWORD")?.Trim();
+
+    ICallsignProvider provider;
+    if (!string.IsNullOrWhiteSpace(username) && !string.IsNullOrWhiteSpace(password))
+    {
+        // HttpClient is intentionally not disposed — it is a singleton owned by the provider for the app lifetime.
+#pragma warning disable CA2000 // Dispose objects before losing scope
+        var httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(8) };
+#pragma warning restore CA2000
+        provider = new QrzXmlProvider(httpClient, username, password);
+    }
+    else
+    {
+        provider = new DisabledCallsignProvider();
+    }
+
+    return new LookupCoordinator(provider, storage.LookupSnapshots);
 }
 
 static void ConfigureListenEndpoint(KestrelServerOptions options, string listenAddress)

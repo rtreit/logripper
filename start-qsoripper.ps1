@@ -122,10 +122,10 @@ function Get-ProbeTargets([string]$Address) {
 
 function Format-HttpEndpoint([string]$Host, [int]$Port) {
     if ($Host.Contains(':') -and -not $Host.StartsWith('[')) {
-        return "http://[$Host]:$Port"
+        return "http://[${Host}]:${Port}"
     }
 
-    return "http://$Host:$Port"
+    return "http://${Host}:${Port}"
 }
 
 function Test-TcpEndpoint([string]$TargetHost, [int]$Port) {
