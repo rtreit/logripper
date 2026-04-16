@@ -301,6 +301,11 @@ if ([string]::IsNullOrWhiteSpace($Engine)) {
 
 $profiles = Get-EngineProfiles
 $profile = Resolve-EngineProfile -RequestedEngine $Engine -Profiles $profiles
+$serverBinaryPath = (
+    $profiles |
+        Where-Object { $_.EngineId -eq 'rust-tonic' } |
+        Select-Object -First 1
+).LaunchFilePath
 $stdoutPath = Join-Path $runtimeDirectory "qsoripper-$($profile.ProfileId).stdout.log"
 $stderrPath = Join-Path $runtimeDirectory "qsoripper-$($profile.ProfileId).stderr.log"
 
