@@ -33,7 +33,7 @@ pub const RIGCTLD_READ_TIMEOUT_MS_ENV_VAR: &str = "QSORIPPER_RIGCTLD_READ_TIMEOU
 pub const RIGCTLD_STALE_THRESHOLD_MS_ENV_VAR: &str = "QSORIPPER_RIGCTLD_STALE_THRESHOLD_MS";
 
 /// Default stale threshold in milliseconds.
-pub const DEFAULT_RIGCTLD_STALE_THRESHOLD_MS: u64 = 5_000;
+pub const DEFAULT_RIGCTLD_STALE_THRESHOLD_MS: u64 = 500;
 
 /// Configuration for the rigctld adapter.
 #[derive(Debug, Clone)]

@@ -117,6 +117,14 @@ internal sealed partial class MainWindow : Window
             return;
         }
 
+        // Global navigation keys — handled explicitly so they work even when
+        // focus is inside a TextBox (e.g. the QSO logger fields) where the
+        // XAML KeyBinding may not fire reliably.
+        if (TryHandleGlobalNavigationKey(e))
+        {
+            return;
+        }
+
         base.OnKeyDown(e);
 
         if (e.Handled || _viewModel is null || _viewModel.IsWizardOpen)
@@ -275,6 +283,28 @@ internal sealed partial class MainWindow : Window
         }
 
         return false;
+    }
+
+    private bool TryHandleGlobalNavigationKey(KeyEventArgs e)
+    {
+        if (_viewModel is null || e.KeyModifiers != KeyModifiers.None)
+        {
+            return false;
+        }
+
+        switch (e.Key)
+        {
+            case Key.F3:
+                _viewModel.FocusGridCommand.Execute(null);
+                e.Handled = true;
+                return true;
+            case Key.F4:
+                _viewModel.FocusSearchCommand.Execute(null);
+                e.Handled = true;
+                return true;
+            default:
+                return false;
+        }
     }
 
     private bool TryHandleRecentQsoZoomKey(KeyEventArgs e)
