@@ -290,7 +290,10 @@ typedef struct {
     /* GDI objects */
     HFONT hFont;
     HFONT hFontBold;
+    HFONT hFontSmall;
+    HFONT hFontSmallBold;
     int char_w, char_h;
+    int list_cw, list_ch;
 
     HWND hwnd;
 } AppState;
@@ -1950,16 +1953,22 @@ static int PaintLookup(HDC hdc, int y_start, int w)
     return y_start + panel_h + 2;
 }
 
-/* ── Drawing: Recent QSOs table ────────────────────────────────────────── */
+/* ── Drawing: QSOs table ─────────────────────────────────────────────────── */
 
 static int PaintRecentQsos(HDC hdc, int y_start, int w, int bottom)
 {
     int cw = g_state.char_w;
     int ch = g_state.char_h;
+    int lcw = g_state.list_cw;
+    int lch = g_state.list_ch;
     int pad = cw * 2;
-    int row_h = ch + 4;
-    int panel_h = bottom - y_start - row_h - 4; /* Leave room for footer */
-    if (panel_h < row_h * 3) panel_h = row_h * 3;
+    int list_row_h = lch + 3;
+    int panel_h = bottom - y_start - list_row_h - 4;
+    if (panel_h < list_row_h * 3) panel_h = list_row_h * 3;
+
+    /* Store layout metrics for click and double-click detection */
+    g_state.qso_list_y = y_start;
+    g_state.qso_list_row_h = list_row_h;
 
     /* Border color depends on focus state */
     COLORREF border_clr = CLR_CYAN;
@@ -1970,29 +1979,32 @@ static int PaintRecentQsos(HDC hdc, int y_start, int w, int bottom)
 
     DrawBox(hdc, 4, y_start, w - 8, panel_h, border_clr);
 
-    /* Title with total count */
+    /* Title with total count (drawn using main font) */
     {
         char title[64];
         if (g_state.qso_loading)
-            snprintf(title, sizeof(title), " Recent QSOs (loading...) ");
+            snprintf(title, sizeof(title), " QSOs (loading...) ");
         else if (g_state.search_focused)
             snprintf(title, sizeof(title), " Search QSOs (%d) ", g_state.recent_count);
         else if (g_state.qso_list_focused)
-            snprintf(title, sizeof(title), " Recent QSOs (%d) (focused) ", g_state.recent_count);
+            snprintf(title, sizeof(title), " QSOs (%d) (focused) ", g_state.recent_count);
         else
-            snprintf(title, sizeof(title), " Recent QSOs (%d) ", g_state.recent_count);
+            snprintf(title, sizeof(title), " QSOs (%d) ", g_state.recent_count);
         DrawText_A_BG(hdc, pad, y_start, border_clr, CLR_BG, title);
     }
 
     int y = y_start + ch + 4;
 
-    /* Search bar (if search focused) */
+    /* Search bar (if search focused) — uses main font */
     if (g_state.search_focused) {
         DrawText_A(hdc, pad + cw, y + 1, CLR_CYAN, "Search:");
         DrawField(hdc, pad + cw + 8 * cw, y, 30,
                   g_state.search_text, g_state.search_cursor, 1, cw, ch);
-        y += row_h + 2;
+        y += (ch + 4) + 2;
     }
+
+    /* Switch to small font for table header and rows */
+    SelectObject(hdc, g_state.hFontSmallBold);
 
     /* Table header */
     {
@@ -2001,16 +2013,19 @@ static int PaintRecentQsos(HDC hdc, int y_start, int w, int bottom)
                   "%-19s %-10s %-5s %-5s %-4s %-4s %-16s %-6s",
                   "UTC", "Callsign", "Band", "Mode",
                   "Sent", "Rcvd", "Country", "Grid");
-        SelectObject(hdc, g_state.hFontBold);
-        DrawText_A(hdc, pad + cw, y + 1, CLR_HIGHLIGHT, hdr);
-        SelectObject(hdc, g_state.hFont);
-        y += row_h;
+        DrawText_A(hdc, pad + lcw, y + 1, CLR_HIGHLIGHT, hdr);
+        SelectObject(hdc, g_state.hFontSmall);
+        y += list_row_h;
         DrawHLine(hdc, pad, w - pad, y, CLR_DARKGRAY);
         y += 2;
     }
 
+    /* Store first-row y for hit-testing */
+    int rows_start_y = y;
+    (void)rows_start_y;
+
     /* Rows */
-    int max_rows = (y_start + panel_h - y) / row_h;
+    int max_rows = (y_start + panel_h - y) / list_row_h;
     if (max_rows < 1) max_rows = 1;
     g_state.qso_page_size = max_rows;
 
@@ -2029,7 +2044,6 @@ static int PaintRecentQsos(HDC hdc, int y_start, int w, int bottom)
 
         /* Filter by search text */
         if (g_state.search_text[0]) {
-            /* Simple case-insensitive substring match on callsign */
             char upper_call[16], upper_search[64];
             int j;
             for (j = 0; q->callsign[j]; j++)
@@ -2052,22 +2066,21 @@ static int PaintRecentQsos(HDC hdc, int y_start, int w, int bottom)
                   q->rst_sent, q->rst_rcvd, q->country, q->grid);
 
         if (selected) {
-            FillRect_Color(hdc, pad, y, w - pad * 2, row_h, CLR_HIGHLIGHT);
-            DrawText_A_BG(hdc, pad + cw, y + 2, CLR_HILITE_FG, CLR_HIGHLIGHT, row);
+            FillRect_Color(hdc, pad, y, w - pad * 2, list_row_h, CLR_HIGHLIGHT);
+            DrawText_A_BG(hdc, pad + lcw, y + 2, CLR_HILITE_FG, CLR_HIGHLIGHT, row);
         } else {
-            /* Callsign in bold, rest in normal text */
             char utc_part[24];
             snprintf(utc_part, sizeof(utc_part), "%-19s ", q->utc);
-            DrawText_A(hdc, pad + cw, y + 2, CLR_TEXT, utc_part);
+            DrawText_A(hdc, pad + lcw, y + 2, CLR_TEXT, utc_part);
 
-            int call_x = pad + cw + 20 * cw;
+            int call_x = pad + lcw + 20 * lcw;
             char call_part[16];
             snprintf(call_part, sizeof(call_part), "%-10s ", q->callsign);
-            SelectObject(hdc, g_state.hFontBold);
+            SelectObject(hdc, g_state.hFontSmallBold);
             DrawText_A(hdc, call_x, y + 2, CLR_HIGHLIGHT, call_part);
-            SelectObject(hdc, g_state.hFont);
+            SelectObject(hdc, g_state.hFontSmall);
 
-            int rest_x = call_x + 11 * cw;
+            int rest_x = call_x + 11 * lcw;
             char rest_part[128];
             snprintf(rest_part, sizeof(rest_part),
                       "%-5s %-5s %-4s %-4s %-16s %-6s",
@@ -2076,10 +2089,13 @@ static int PaintRecentQsos(HDC hdc, int y_start, int w, int bottom)
             DrawText_A(hdc, rest_x, y + 2, CLR_TEXT, rest_part);
         }
 
-        y += row_h;
+        y += list_row_h;
     }
 
-    if (g_state.recent_count == 0) {
+    /* Restore main font */
+    SelectObject(hdc, g_state.hFont);
+
+    if (g_state.recent_count == 0 && !g_state.qso_loading) {
         DrawText_A(hdc, pad + cw, y + 2, CLR_DARKGRAY, "No QSOs logged yet");
     }
 
@@ -2875,6 +2891,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         HDC hdc = GetDC(hwnd);
         int dpi = GetDeviceCaps(hdc, LOGPIXELSY);
         int fontHeight = -MulDiv(FONT_SIZE, dpi, 72);
+        int smallFontHeight = -MulDiv(9, dpi, 72);
 
         g_state.hFont = CreateFontW(
             fontHeight, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
@@ -2886,12 +2903,29 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
             CLEARTYPE_QUALITY, FIXED_PITCH | FF_MODERN, FONT_NAME);
 
-        /* Measure character size */
+        g_state.hFontSmall = CreateFontW(
+            smallFontHeight, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+            DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+            CLEARTYPE_QUALITY, FIXED_PITCH | FF_MODERN, FONT_NAME);
+
+        g_state.hFontSmallBold = CreateFontW(
+            smallFontHeight, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
+            DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+            CLEARTYPE_QUALITY, FIXED_PITCH | FF_MODERN, FONT_NAME);
+
+        /* Measure main font character size */
         HFONT old = (HFONT)SelectObject(hdc, g_state.hFont);
         TEXTMETRICW tm;
         GetTextMetricsW(hdc, &tm);
         g_state.char_w = tm.tmAveCharWidth;
         g_state.char_h = tm.tmHeight;
+
+        /* Measure small font character size */
+        SelectObject(hdc, g_state.hFontSmall);
+        GetTextMetricsW(hdc, &tm);
+        g_state.list_cw = tm.tmAveCharWidth;
+        g_state.list_ch = tm.tmHeight;
+
         SelectObject(hdc, old);
         ReleaseDC(hwnd, hdc);
 
@@ -2946,6 +2980,8 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         KillTimer(hwnd, TIMER_ID);
         if (g_state.hFont) DeleteObject(g_state.hFont);
         if (g_state.hFontBold) DeleteObject(g_state.hFontBold);
+        if (g_state.hFontSmall) DeleteObject(g_state.hFontSmall);
+        if (g_state.hFontSmallBold) DeleteObject(g_state.hFontSmallBold);
         free(g_state.recent_qsos);
         PostQuitMessage(0);
         break;
@@ -3185,10 +3221,11 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         }
         /* Click in QSO list area? */
         else if (my >= qso_list_start && g_state.recent_count > 0) {
-            int header_row_h = row_h + 2; /* header + separator */
+            int lrh = g_state.qso_list_row_h > 0 ? g_state.qso_list_row_h : (ch + 4);
+            int header_row_h = lrh + 2;
             int list_content_start = qso_list_start + ch + 4 + header_row_h;
             if (my >= list_content_start) {
-                int row_idx = (my - list_content_start) / row_h + g_state.qso_scroll;
+                int row_idx = (my - list_content_start) / lrh + g_state.qso_scroll;
                 if (row_idx >= 0 && row_idx < g_state.recent_count) {
                     g_state.qso_list_focused = 1;
                     g_state.search_focused = 0;
@@ -3202,6 +3239,42 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 if (g_state.qso_selected < 0 && g_state.recent_count > 0)
                     g_state.qso_selected = 0;
                 InvalidateRect(hwnd, NULL, FALSE);
+            }
+        }
+        break;
+    }
+
+    case WM_LBUTTONDBLCLK:
+    {
+        int mx = GET_X_LPARAM(lParam);
+        int my = GET_Y_LPARAM(lParam);
+        int cw = g_state.char_w;
+        int ch = g_state.char_h;
+        if (cw == 0 || ch == 0) break;
+        (void)mx;
+
+        int header_h = ch * 3 + 4;
+        int status_h = ch + 4;
+        int row_h = ch + 8;
+        int form_start = header_h + status_h;
+        int form_h = g_state.advanced_view
+            ? (row_h * 12 + ch + 10)
+            : (row_h * 9 + ch + 10);
+        int form_end = form_start + form_h;
+        int lookup_h = ch * 5 + 8;
+        int qso_list_start = form_end + lookup_h;
+
+        if (my >= qso_list_start && g_state.recent_count > 0) {
+            int lrh = g_state.qso_list_row_h > 0 ? g_state.qso_list_row_h : (ch + 4);
+            int header_row_h = lrh + 2;
+            int list_content_start = qso_list_start + ch + 4 + header_row_h;
+            if (my >= list_content_start) {
+                int row_idx = (my - list_content_start) / lrh + g_state.qso_scroll;
+                if (row_idx >= 0 && row_idx < g_state.recent_count) {
+                    g_state.qso_selected = row_idx;
+                    LoadSelectedQso();
+                    InvalidateRect(hwnd, NULL, FALSE);
+                }
             }
         }
         break;
@@ -3241,7 +3314,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
     /* Register window class */
     WNDCLASSEXW wc = {0};
     wc.cbSize        = sizeof(wc);
-    wc.style         = CS_HREDRAW | CS_VREDRAW;
+    wc.style         = CS_HREDRAW | CS_VREDRAW | CS_DBLCLKS;
     wc.lpfnWndProc   = WndProc;
     wc.hInstance      = hInstance;
     wc.hCursor       = LoadCursor(NULL, IDC_ARROW);
