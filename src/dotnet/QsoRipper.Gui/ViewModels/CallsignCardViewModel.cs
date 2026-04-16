@@ -171,6 +171,7 @@ internal sealed partial class CallsignCardViewModel : ObservableObject
                 }
 
                 IsLoaded = true;
+                RecordLoaded?.Invoke(this, record);
             }
             else if (result.State == LookupState.NotFound)
             {
@@ -206,6 +207,13 @@ internal sealed partial class CallsignCardViewModel : ObservableObject
     }
 
     internal event EventHandler? CloseRequested;
+
+    /// <summary>
+    /// Raised when a callsign record is successfully loaded, carrying the
+    /// resolved <see cref="CallsignRecord"/> so the QSO logger can use it
+    /// for enrichment.
+    /// </summary>
+    internal event EventHandler<CallsignRecord>? RecordLoaded;
 
     private void MapRecord(CallsignRecord record)
     {

@@ -32,6 +32,7 @@ internal sealed partial class QsoLoggerViewModel : ObservableObject
     private bool _rstManuallySet;
     private bool _bandManuallySet;
     private bool _modeManuallySet;
+    private CallsignRecord? _lastLookupRecord;
 
     // ── Observable properties ────────────────────────────────────────────
 
@@ -241,6 +242,8 @@ internal sealed partial class QsoLoggerViewModel : ObservableObject
             qso.Comment = Comment.Trim();
         }
 
+        EnrichFromLookup(qso, _lastLookupRecord);
+
         LogStatusText = "Logging\u2026";
         IsLogEnabled = false;
 
@@ -255,6 +258,69 @@ internal sealed partial class QsoLoggerViewModel : ObservableObject
         {
             LogStatusText = $"Error: {ex.Status.Detail}";
             IsLogEnabled = true;
+        }
+    }
+
+    /// <summary>
+    /// Copies cached callsign-lookup fields into the QSO record so the logged
+    /// contact includes operator name, grid, country, DXCC, and zone data.
+    /// </summary>
+    internal static void EnrichFromLookup(QsoRecord qso, CallsignRecord? record)
+    {
+        if (record is not { } rec)
+        {
+            return;
+        }
+
+        var name = BuildName(rec.FirstName, rec.LastName);
+        if (!string.IsNullOrEmpty(name))
+        {
+            qso.WorkedOperatorName = name;
+        }
+
+        if (!string.IsNullOrEmpty(rec.GridSquare))
+        {
+            qso.WorkedGrid = rec.GridSquare;
+        }
+
+        if (!string.IsNullOrEmpty(rec.Country))
+        {
+            qso.WorkedCountry = rec.Country;
+        }
+
+        if (rec.DxccEntityId != 0)
+        {
+            qso.WorkedDxcc = rec.DxccEntityId;
+        }
+
+        if (!string.IsNullOrEmpty(rec.State))
+        {
+            qso.WorkedState = rec.State;
+        }
+
+        if (rec.HasCqZone)
+        {
+            qso.WorkedCqZone = rec.CqZone;
+        }
+
+        if (rec.HasItuZone)
+        {
+            qso.WorkedItuZone = rec.ItuZone;
+        }
+
+        if (!string.IsNullOrEmpty(rec.County))
+        {
+            qso.WorkedCounty = rec.County;
+        }
+
+        if (!string.IsNullOrEmpty(rec.Iota))
+        {
+            qso.WorkedIota = rec.Iota;
+        }
+
+        if (!string.IsNullOrEmpty(rec.DxccContinent))
+        {
+            qso.WorkedContinent = rec.DxccContinent;
         }
     }
 
@@ -347,6 +413,26 @@ internal sealed partial class QsoLoggerViewModel : ObservableObject
         LoggerFocusRequested?.Invoke(this, EventArgs.Empty);
     }
 
+    /// <summary>
+    /// Accept a <see cref="CallsignRecord"/> resolved externally (e.g. from
+    /// the F8 callsign card) so the next logged QSO includes enrichment data.
+    /// Only applied when the callsign matches the current entry.
+    /// </summary>
+    public void AcceptLookupRecord(CallsignRecord record)
+    {
+        if (string.Equals(
+                record.Callsign,
+                Callsign.Trim(),
+                StringComparison.OrdinalIgnoreCase))
+        {
+            _lastLookupRecord = record;
+            LookupName = BuildName(record.FirstName, record.LastName);
+            LookupGrid = record.GridSquare ?? string.Empty;
+            LookupCountry = record.Country ?? string.Empty;
+            LookupStatusText = string.Empty;
+        }
+    }
+
     // ── Debounced callsign lookup ───────────────────────────────────────
 
     private async Task DebouncedLookupAsync(string callsign, CancellationToken ct)
@@ -381,6 +467,7 @@ internal sealed partial class QsoLoggerViewModel : ObservableObject
                 var record = result.Record;
                 if (record is not null)
                 {
+                    _lastLookupRecord = record;
                     LookupName = BuildName(record.FirstName, record.LastName);
                     LookupGrid = record.GridSquare ?? string.Empty;
                     LookupCountry = record.Country ?? string.Empty;
@@ -409,6 +496,7 @@ internal sealed partial class QsoLoggerViewModel : ObservableObject
 
     private void ClearLookupFields()
     {
+        _lastLookupRecord = null;
         LookupName = string.Empty;
         LookupGrid = string.Empty;
         LookupCountry = string.Empty;

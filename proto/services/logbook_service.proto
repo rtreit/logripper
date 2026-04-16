@@ -28,7 +28,7 @@ import "services/update_qso_response.proto";
 // Implementation status:
 //   LogQso        — implemented for local storage; optional QRZ sync still reports unimplemented
 //   UpdateQso     — implemented for local storage; optional QRZ sync still reports unimplemented
-//   DeleteQso     — implemented for local storage; optional QRZ delete still reports unimplemented
+//   DeleteQso     — implemented for local storage; QRZ delete supported when delete_from_qrz=true
 //   GetQso        — implemented for local storage
 //   ListQsos      — implemented for local storage
 //   SyncWithQrz  — planned (returns UNIMPLEMENTED)

@@ -53,6 +53,8 @@ internal sealed class RecentQsoItemViewModel : ObservableObject, IEditableObject
 
     public string LocalId => _sourceQso.LocalId;
 
+    public bool HasQrzLogid => !string.IsNullOrEmpty(_sourceQso.QrzLogid);
+
     public string UtcDisplay
     {
         get => _utcDisplay;

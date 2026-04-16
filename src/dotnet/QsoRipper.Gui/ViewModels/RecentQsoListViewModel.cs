@@ -291,6 +291,7 @@ internal sealed partial class RecentQsoListViewModel : ObservableObject
     private string _deleteConfirmCallsign = string.Empty;
 
     private string? _pendingDeleteLocalId;
+    private bool _pendingDeleteHasQrzLogid;
 
     internal void RequestDeleteSelectedQso()
     {
@@ -301,6 +302,7 @@ internal sealed partial class RecentQsoListViewModel : ObservableObject
         }
 
         _pendingDeleteLocalId = selected.LocalId;
+        _pendingDeleteHasQrzLogid = selected.HasQrzLogid;
         DeleteConfirmCallsign = selected.WorkedCallsign;
         IsDeletePending = true;
     }
@@ -314,15 +316,24 @@ internal sealed partial class RecentQsoListViewModel : ObservableObject
         }
 
         var localId = _pendingDeleteLocalId;
+        var deleteFromQrz = _pendingDeleteHasQrzLogid;
         IsDeletePending = false;
         _pendingDeleteLocalId = null;
+        _pendingDeleteHasQrzLogid = false;
         DeleteConfirmCallsign = string.Empty;
 
         try
         {
-            var response = await _engine.DeleteQsoAsync(localId);
+            var response = await _engine.DeleteQsoAsync(localId, deleteFromQrz);
             if (response.Success)
             {
+                if (deleteFromQrz && !response.QrzDeleteSuccess
+                    && !string.IsNullOrEmpty(response.QrzDeleteError))
+                {
+                    ErrorMessage = $"Deleted locally but QRZ delete failed: {response.QrzDeleteError}";
+                    NotifyStatusPropertiesChanged();
+                }
+
                 await RefreshAsync();
             }
             else
@@ -454,6 +465,21 @@ internal sealed partial class RecentQsoListViewModel : ObservableObject
         if (option is not null)
         {
             option.IsVisible = isVisible;
+        }
+    }
+
+    /// <summary>
+    /// Resets all column visibility flags to their factory defaults.
+    /// </summary>
+    internal void ResetColumnOptions()
+    {
+        var defaults = CreateColumnOptions().ToDictionary(o => o.Column, o => o.IsVisible);
+        foreach (var option in ColumnOptions)
+        {
+            if (defaults.TryGetValue(option.Column, out var defaultVisible))
+            {
+                option.IsVisible = defaultVisible;
+            }
         }
     }
 
