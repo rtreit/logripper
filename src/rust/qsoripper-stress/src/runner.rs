@@ -1611,10 +1611,8 @@ mod tests {
     fn workspace_root_resolves_repository_root() {
         let root = workspace_root()
             .unwrap_or_else(|| panic!("workspace root should resolve from cargo manifest dir"));
-        assert_eq!(
-            Some("qsoripper"),
-            root.file_name().and_then(|name| name.to_str())
-        );
+        assert!(root.join("README.md").exists());
+        assert!(root.join("src").join("rust").join("Cargo.toml").exists());
     }
 
     #[expect(

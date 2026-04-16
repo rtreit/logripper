@@ -49,7 +49,7 @@ Proto files under `proto/` are the **single source of truth** for all shared typ
 
 | Service | Purpose |
 |---|---|
-| **SetupService** | First-run setup, persisted config status, bootstrap storage/station defaults |
+| **SetupService** | First-run and shared engine settings, persisted config status, bootstrap storage/station defaults |
 | **StationProfileService** | Persisted station profile CRUD, active profile selection, bounded session overrides |
 | **LookupService** | Callsign lookups -- single, streaming, batch, cached, DXCC |
 | **LogbookService** | QSO CRUD, QRZ logbook sync, ADIF import/export |
@@ -357,7 +357,7 @@ In capture mode, QsoRipper builds the outgoing QRZ XML request and returns redac
 
 You can also set `QSORIPPER_STATION_*` values in `.env` to define the active station profile that the Rust engine snapshots into newly logged QSOs.
 
-For the new first-run bootstrap surface, `SetupService` persists the engine's log file path, initial station profile, and optional QRZ XML credentials to `config.toml`, then hot-applies those persisted values to the running engine. After setup, `StationProfileService` manages additional station profiles, persisted active-profile selection, and bounded in-memory session overrides for portable or event operation. The Debug Host `/engine` page now exposes setup and station-profile editor forms for these contract surfaces, so local bootstrap/profile lifecycle testing no longer requires `grpcurl`.
+For the bootstrap and shared engine-settings surface, `SetupService` persists the engine's log file path, initial station profile, optional QRZ XML credentials, QRZ sync settings, and shared rig-control defaults to `config.toml`, then hot-applies those persisted values to the running engine. Setup wizards can guide the common first-run subset, while settings screens can edit the broader shared engine configuration through the same service. After setup, `StationProfileService` manages additional station profiles, persisted active-profile selection, and bounded in-memory session overrides for portable or event operation. The Debug Host `/engine` page now exposes setup and station-profile editor forms for these contract surfaces, so local bootstrap/profile lifecycle testing no longer requires `grpcurl`.
 
 ### Local lookup debug workflow
 

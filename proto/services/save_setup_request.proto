@@ -6,6 +6,7 @@ option csharp_namespace = "QsoRipper.Services";
 
 import "domain/station_profile.proto";
 import "domain/sync_config.proto";
+import "services/rig_control_settings.proto";
 import "services/storage_backend.proto";
 
 message SaveSetupRequest {
@@ -21,4 +22,6 @@ message SaveSetupRequest {
   optional string qrz_logbook_api_key = 7;
   // Sync behaviour configuration. Omit to leave unchanged.
   optional qsoripper.domain.SyncConfig sync_config = 8;
+  // Engine-wide rig control configuration. Omit to leave unchanged.
+  optional RigControlSettings rig_control = 9;
 }

@@ -38,6 +38,14 @@ public class UxFixtureEngineClientTests
                     AutoSyncEnabled = true,
                     SyncIntervalSeconds = 600,
                     ConflictPolicy = ConflictPolicy.FlagForReview
+                },
+                RigControl = new RigControlSettings
+                {
+                    Enabled = true,
+                    Host = "127.0.0.1",
+                    Port = 4532,
+                    ReadTimeoutMs = 2500,
+                    StaleThresholdMs = 6000
                 }
             });
 
@@ -48,6 +56,12 @@ public class UxFixtureEngineClientTests
         Assert.True(response.Status.HasQrzLogbookApiKey);
         Assert.Equal(600u, response.Status.SyncConfig.SyncIntervalSeconds);
         Assert.Equal(ConflictPolicy.FlagForReview, response.Status.SyncConfig.ConflictPolicy);
+        Assert.NotNull(response.Status.RigControl);
+        Assert.True(response.Status.RigControl.Enabled);
+        Assert.Equal("127.0.0.1", response.Status.RigControl.Host);
+        Assert.Equal(4532u, response.Status.RigControl.Port);
+        Assert.Equal(2500ul, response.Status.RigControl.ReadTimeoutMs);
+        Assert.Equal(6000ul, response.Status.RigControl.StaleThresholdMs);
 
         var state = await client.GetWizardStateAsync();
         Assert.False(state.Status.IsFirstRun);
