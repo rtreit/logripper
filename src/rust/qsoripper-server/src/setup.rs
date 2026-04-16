@@ -611,6 +611,9 @@ impl PersistedSetupConfig {
         config.qrz_xml = PersistedQrzXmlConfig {
             username: qrz_xml_username,
             password: qrz_xml_password,
+            // Preserve any existing user_agent; the setup wizard does not set it
+            // directly, and runtime derives a default from the username when absent.
+            user_agent: existing.and_then(|c| c.qrz_xml.user_agent.clone()),
         };
 
         // QRZ logbook API key: update when explicitly provided, otherwise keep existing.
@@ -660,6 +663,9 @@ impl PersistedSetupConfig {
         }
         if let Some(password) = self.qrz_xml.password.as_deref() {
             values.insert(QRZ_XML_PASSWORD_ENV_VAR.to_string(), password.to_string());
+        }
+        if let Some(user_agent) = self.qrz_xml.user_agent.as_deref() {
+            values.insert(QRZ_USER_AGENT_ENV_VAR.to_string(), user_agent.to_string());
         }
 
         // QRZ logbook config
@@ -1061,6 +1067,7 @@ impl PersistedStationProfile {
 struct PersistedQrzXmlConfig {
     username: Option<String>,
     password: Option<String>,
+    user_agent: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]

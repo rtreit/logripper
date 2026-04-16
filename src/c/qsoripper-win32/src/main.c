@@ -143,6 +143,8 @@ typedef struct {
     char country[64];
     int  cq_zone;
     int  has_data;
+    int  not_found;
+    char error_msg[128];
 } LookupResultMsg;
 
 /* ── Rig poll message structs ──────────────────────────────────────────── */
@@ -250,6 +252,8 @@ typedef struct {
     int  lookup_cq_zone;
     int  has_lookup;
     int  lookup_in_progress;
+    int  lookup_not_found;
+    char lookup_error[128];
 
     /* Recent QSOs (heap-allocated; grows as needed) */
     RecentQso *recent_qsos;
@@ -1129,6 +1133,8 @@ static void ClearLookupDisplay(void)
 {
     g_state.has_lookup = 0;
     g_state.lookup_in_progress = 0;
+    g_state.lookup_not_found = 0;
+    g_state.lookup_error[0] = 0;
     g_state.lookup_name[0] = 0;
     g_state.lookup_qth[0] = 0;
     g_state.lookup_grid[0] = 0;
@@ -1150,6 +1156,23 @@ static unsigned __stdcall LookupThread(void *param)
     char *result = RunQrCommand(cmd);
 
     if (result) {
+        /* Check the lookup state first — error or not_found mean no record */
+        char *state = json_get_string(result, "state");
+        if (state) {
+            if (strstr(state, "NOT_FOUND")) {
+                res->not_found = 1;
+            } else if (strstr(state, "ERROR")) {
+                char *emsg = json_get_string(result, "errorMessage");
+                if (emsg) {
+                    safe_strcpy(res->error_msg, sizeof(res->error_msg), emsg);
+                    free(emsg);
+                } else {
+                    safe_strcpy(res->error_msg, sizeof(res->error_msg), "Lookup error");
+                }
+            }
+            free(state);
+        }
+
         const char *record_pos = strstr(result, "\"record\"");
         if (record_pos) {
             char *v;
@@ -1946,6 +1969,10 @@ static int PaintLookup(HDC hdc, int y_start, int w)
         char line[64];
         snprintf(line, sizeof(line), "Looking up%s", dots[frame]);
         DrawText_A(hdc, pad + cw, y + ch, CLR_CYAN, line);
+    } else if (g_state.lookup_not_found) {
+        DrawText_A(hdc, pad + cw, y + ch, CLR_YELLOW, "Callsign not found");
+    } else if (g_state.lookup_error[0]) {
+        DrawText_A(hdc, pad + cw, y + ch, CLR_RED, g_state.lookup_error);
     } else {
         DrawText_A(hdc, pad + cw, y + ch, CLR_DARKGRAY, "");
     }
@@ -2861,10 +2888,10 @@ static void OnTimer(HWND hwnd)
         }
     }
 
-    /* Rig poll: every 1000ms when enabled and no poll in flight */
+    /* Rig poll: every 500ms when enabled and no poll in flight */
     if (g_state.rig_enabled && !g_state.rig_poll_in_progress) {
         ULONGLONG now = GetTickCount64();
-        if (now - g_state.last_rig_poll >= 1000) {
+        if (now - g_state.last_rig_poll >= 500) {
             g_state.last_rig_poll = now;
             RigPollArg *rarg = (RigPollArg *)malloc(sizeof(RigPollArg));
             if (rarg) {
@@ -3053,17 +3080,27 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
     {
         LookupResultMsg *res = (LookupResultMsg *)lParam;
         if (res) {
-            if (_stricmp(res->callsign, g_state.callsign) == 0 && res->has_data) {
-                safe_strcpy(g_state.lookup_name, sizeof(g_state.lookup_name), res->name);
-                safe_strcpy(g_state.lookup_qth,  sizeof(g_state.lookup_qth),  res->qth);
-                safe_strcpy(g_state.lookup_grid, sizeof(g_state.lookup_grid), res->grid);
-                safe_strcpy(g_state.lookup_country, sizeof(g_state.lookup_country), res->country);
-                g_state.lookup_cq_zone = res->cq_zone;
-                g_state.has_lookup = 1;
-                if (g_state.worked_name[0] == 0)
-                    safe_strcpy(g_state.worked_name, sizeof(g_state.worked_name), res->name);
-                if (g_state.qth[0] == 0)
-                    safe_strcpy(g_state.qth, sizeof(g_state.qth), res->qth);
+            if (_stricmp(res->callsign, g_state.callsign) == 0) {
+                if (res->has_data) {
+                    safe_strcpy(g_state.lookup_name, sizeof(g_state.lookup_name), res->name);
+                    safe_strcpy(g_state.lookup_qth,  sizeof(g_state.lookup_qth),  res->qth);
+                    safe_strcpy(g_state.lookup_grid, sizeof(g_state.lookup_grid), res->grid);
+                    safe_strcpy(g_state.lookup_country, sizeof(g_state.lookup_country), res->country);
+                    g_state.lookup_cq_zone = res->cq_zone;
+                    g_state.has_lookup = 1;
+                    g_state.lookup_not_found = 0;
+                    g_state.lookup_error[0] = 0;
+                    if (g_state.worked_name[0] == 0)
+                        safe_strcpy(g_state.worked_name, sizeof(g_state.worked_name), res->name);
+                    if (g_state.qth[0] == 0)
+                        safe_strcpy(g_state.qth, sizeof(g_state.qth), res->qth);
+                } else if (res->not_found) {
+                    g_state.lookup_not_found = 1;
+                    g_state.lookup_error[0] = 0;
+                } else if (res->error_msg[0]) {
+                    g_state.lookup_not_found = 0;
+                    safe_strcpy(g_state.lookup_error, sizeof(g_state.lookup_error), res->error_msg);
+                }
                 safe_strcpy(g_state.last_looked_up, sizeof(g_state.last_looked_up), res->callsign);
             }
             g_state.lookup_in_progress = 0;
