@@ -305,6 +305,13 @@ async fn parse_adif_records_tolerantly(payload: &str) -> Vec<QsoRecord> {
     parsed
 }
 
+/// A remotely fetched QSO must have at minimum a callsign and timestamp to be
+/// usable for matching and storage. Records that fail this check are artefacts
+/// of ADIF header/trailer fragments and should be silently dropped.
+fn is_syncable_qso(qso: &QsoRecord) -> bool {
+    !qso.worked_callsign.trim().is_empty() && qso.utc_timestamp.is_some()
+}
+
 async fn parse_fetch_adif_payload(
     adif_payload: &str,
     expected_count: Option<usize>,
@@ -316,10 +323,14 @@ async fn parse_fetch_adif_payload(
     let strict_result = adif::parse_adi_qsos(normalized_adif.as_bytes()).await;
     let strict_parse_error = match strict_result {
         Ok(qsos) if !qsos.is_empty() => {
+            // Filter out ghost records (empty callsign / missing timestamp)
+            // *before* comparing against the expected count so that trailing
+            // ADIF artefacts don't needlessly trigger the tolerant fallback.
+            let valid: Vec<QsoRecord> = qsos.into_iter().filter(is_syncable_qso).collect();
             let over_parsed =
-                expected_count.is_some_and(|expected| expected > 0 && qsos.len() > expected);
-            if !over_parsed {
-                return Ok(qsos);
+                expected_count.is_some_and(|expected| expected > 0 && valid.len() > expected);
+            if !valid.is_empty() && !over_parsed {
+                return Ok(valid);
             }
             None
         }
@@ -328,8 +339,9 @@ async fn parse_fetch_adif_payload(
     };
 
     let tolerant = parse_adif_records_tolerantly(&normalized_adif).await;
-    if !tolerant.is_empty() {
-        return Ok(tolerant);
+    let valid_tolerant: Vec<QsoRecord> = tolerant.into_iter().filter(is_syncable_qso).collect();
+    if !valid_tolerant.is_empty() {
+        return Ok(valid_tolerant);
     }
 
     if let Some(err) = strict_parse_error {
@@ -1070,6 +1082,72 @@ mod tests {
         let payload = "<CALL:4>W1AW <eor>\n<eoh>\n";
         let normalized = normalize_adif_record_markers(payload);
         assert_eq!(normalized, "<CALL:4>W1AW <EOR>\n<EOH>\n");
+    }
+
+    // -- is_syncable_qso / ghost filtering -----------------------------------
+
+    #[test]
+    fn is_syncable_qso_rejects_empty_callsign() {
+        let ghost = QsoRecord::default();
+        assert!(!is_syncable_qso(&ghost));
+    }
+
+    #[test]
+    fn is_syncable_qso_rejects_missing_timestamp() {
+        let qso = QsoRecord {
+            worked_callsign: "W1AW".to_string(),
+            utc_timestamp: None,
+            ..Default::default()
+        };
+        assert!(!is_syncable_qso(&qso));
+    }
+
+    #[test]
+    fn is_syncable_qso_accepts_valid_record() {
+        let qso = QsoRecord {
+            worked_callsign: "W1AW".to_string(),
+            utc_timestamp: Some(prost_types::Timestamp {
+                seconds: 1_700_000_000,
+                nanos: 0,
+            }),
+            ..Default::default()
+        };
+        assert!(is_syncable_qso(&qso));
+    }
+
+    #[tokio::test]
+    async fn parse_fetch_adif_drops_ghost_records_from_trailing_content() {
+        // Simulate QRZ response with 2 real records + trailing junk after last <EOR>
+        let adif = "<CALL:4>W1AW <BAND:3>20M <MODE:3>SSB \
+                    <QSO_DATE:8>20250101 <TIME_ON:4>1200 <EOR>\n\
+                    <CALL:6>N0CALL <BAND:3>40M <MODE:2>CW \
+                    <QSO_DATE:8>20250102 <TIME_ON:4>1300 <EOR>\n\
+                    some trailing garbage\n";
+
+        let result = parse_fetch_adif_payload(adif, Some(2))
+            .await
+            .expect("parse");
+
+        assert_eq!(result.len(), 2, "ghost records should be filtered out");
+        assert_eq!(result[0].worked_callsign, "W1AW");
+        assert_eq!(result[1].worked_callsign, "N0CALL");
+    }
+
+    #[tokio::test]
+    async fn parse_fetch_adif_count_mismatch_does_not_trigger_tolerant_after_filtering() {
+        // Strict parser may produce 3 records (2 real + 1 ghost), but after
+        // filtering, the 2 real records match COUNT=2 and should be returned
+        // without falling through to the tolerant path.
+        let adif = "<CALL:4>W1AW <BAND:3>20M <MODE:3>SSB \
+                    <QSO_DATE:8>20250101 <TIME_ON:4>1200 <EOR>\n\
+                    <CALL:6>N0CALL <BAND:3>40M <MODE:2>CW \
+                    <QSO_DATE:8>20250102 <TIME_ON:4>1300 <EOR>\n";
+
+        let result = parse_fetch_adif_payload(adif, Some(2))
+            .await
+            .expect("parse");
+
+        assert_eq!(result.len(), 2);
     }
 
     // -- upload_qso integration ---------------------------------------------
