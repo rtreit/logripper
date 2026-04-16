@@ -222,21 +222,58 @@ function Get-UntrackedEngineProcesses {
         }
     }
 
+    $uniqueFragments = @($fragments | Select-Object -Unique)
+    if ($uniqueFragments.Count -eq 0) {
+        return @()
+    }
+
+    # Batch WMI query: get all processes with command lines in one call
+    $allProcs = if ($IsWindows) {
+        Get-CimInstance Win32_Process -Property ProcessId, CommandLine -ErrorAction SilentlyContinue
+    }
+    else {
+        @()
+    }
+
     $matches = [System.Collections.Generic.List[System.Diagnostics.Process]]::new()
-    foreach ($candidate in Get-Process -ErrorAction SilentlyContinue) {
-        if ($TrackedProcessId -gt 0 -and $candidate.Id -eq $TrackedProcessId) {
+    foreach ($proc in $allProcs) {
+        if ($TrackedProcessId -gt 0 -and $proc.ProcessId -eq $TrackedProcessId) {
             continue
         }
 
-        $commandLine = Get-ProcessCommandLine -ProcessId $candidate.Id
+        $commandLine = $proc.CommandLine
         if ([string]::IsNullOrWhiteSpace($commandLine)) {
             continue
         }
 
-        foreach ($fragment in $fragments | Select-Object -Unique) {
+        foreach ($fragment in $uniqueFragments) {
             if ($commandLine.Contains($fragment, [System.StringComparison]::OrdinalIgnoreCase)) {
-                $matches.Add($candidate)
+                $process = Get-Process -Id $proc.ProcessId -ErrorAction SilentlyContinue
+                if ($null -ne $process) {
+                    $matches.Add($process)
+                }
                 break
+            }
+        }
+    }
+
+    # Linux/macOS fallback: use /proc or ps
+    if (-not $IsWindows) {
+        foreach ($candidate in Get-Process -ErrorAction SilentlyContinue) {
+            if ($TrackedProcessId -gt 0 -and $candidate.Id -eq $TrackedProcessId) {
+                continue
+            }
+
+            $commandLine = Get-ProcessCommandLine -ProcessId $candidate.Id
+            if ([string]::IsNullOrWhiteSpace($commandLine)) {
+                continue
+            }
+
+            foreach ($fragment in $uniqueFragments) {
+                if ($commandLine.Contains($fragment, [System.StringComparison]::OrdinalIgnoreCase)) {
+                    $matches.Add($candidate)
+                    break
+                }
             }
         }
     }
