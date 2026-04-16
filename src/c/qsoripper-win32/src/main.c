@@ -1680,8 +1680,8 @@ static int PaintLogForm(HDC hdc, int y_start, int w)
     int row_h = ch + 8;
     int pad = cw * 2;
     int label_w = cw * 10;
-    /* 8 rows at main font + 1 chip row at small font + border */
-    int form_h = row_h * 8 + g_state.list_ch + 18;
+    /* 8 content rows + border padding */
+    int form_h = row_h * 8 + 10;
     int focused_form = !g_state.qso_list_focused && !g_state.search_focused;
 
     /* Form border */
@@ -1801,31 +1801,6 @@ static int PaintLogForm(HDC hdc, int y_start, int w)
     }
     y += row_h;
 
-    /* Row 7: padding */
-    y += 4;
-
-    /* Row 8: Hint chips (small font) */
-    {
-        int scw = g_state.list_cw;
-        int sch = g_state.list_ch;
-        SelectObject(hdc, g_state.hFontSmall);
-        int cx = pad;
-        const char *submit_label = g_state.editing_local_id[0]
-                                       ? "F10 Update QSO" : "F10 Log QSO";
-        DrawChip(hdc, cx, y, CLR_FOOTER_BG, CLR_FOOTER_FG, submit_label, scw, sch);
-        cx += ((int)strlen(submit_label) * scw + 10);
-
-        DrawChip(hdc, cx, y, CLR_FOOTER_BG, CLR_FOOTER_FG, "Esc Clear", scw, sch);
-        cx += (9 * scw + 10);
-
-        DrawChip(hdc, cx, y, CLR_FOOTER_BG, CLR_FOOTER_FG, "F3 QSO List", scw, sch);
-        cx += (11 * scw + 10);
-
-        DrawChip(hdc, cx, y, CLR_FOOTER_BG, CLR_FOOTER_FG, "F4 Search", scw, sch);
-        SelectObject(hdc, g_state.hFont);
-    }
-    y += row_h;
-
     return y_start + form_h;
 }
 
@@ -1919,8 +1894,8 @@ static int PaintAdvancedForm(HDC hdc, int y_start, int w)
 
     fields = AdvTabFields(tab, &field_count);
     num_rows = CountAdvancedRows(fields, field_count);
-    /* form_h: title + tab bar + field rows + padding + hint row + margin */
-    form_h = ch + 4 + row_h * (num_rows + 2) + 12;
+    /* form_h: title + tab bar + field rows + margin */
+    form_h = ch + 4 + row_h * (num_rows + 1) + 12;
 
     border_clr = focused_form ? CLR_MAGENTA : CLR_DARKGRAY;
     DrawBox(hdc, 4, y_start, w - 8, form_h, border_clr);
@@ -2021,33 +1996,6 @@ static int PaintAdvancedForm(HDC hdc, int y_start, int w)
 
             y += row_h;
         }
-    }
-
-    y += 4;
-
-    /* Hint chips (small font) */
-    {
-        int scw = g_state.list_cw;
-        int sch = g_state.list_ch;
-        SelectObject(hdc, g_state.hFontSmall);
-        int cx = pad;
-        const char *submit_label = g_state.editing_local_id[0]
-                                       ? "F10 Update QSO" : "F10 Log QSO";
-        DrawChip(hdc, cx, y, CLR_FOOTER_BG, CLR_FOOTER_FG, submit_label,
-                 scw, sch);
-        cx += ((int)strlen(submit_label) * scw + 10);
-
-        DrawChip(hdc, cx, y, CLR_FOOTER_BG, CLR_FOOTER_FG, "Esc Basic View",
-                 scw, sch);
-        cx += (14 * scw + 10);
-
-        DrawChip(hdc, cx, y, CLR_FOOTER_BG, CLR_FOOTER_FG, "F5/F6 Tabs",
-                 scw, sch);
-        cx += (10 * scw + 10);
-
-        DrawChip(hdc, cx, y, CLR_FOOTER_BG, CLR_FOOTER_FG, "F3 QSO List",
-                 scw, sch);
-        SelectObject(hdc, g_state.hFont);
     }
 
     return y_start + form_h;
