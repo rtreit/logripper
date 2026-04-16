@@ -1,47 +1,35 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:shared="using:QsoRipper.Shared.Persistence"
              xmlns:vm="using:QsoRipper.Gui.ViewModels"
-             xmlns:v="using:QsoRipper.Gui.Views"
              x:Class="QsoRipper.Gui.Views.LogFileStepView"
              x:DataType="vm:LogFileStepViewModel">
 
   <StackPanel Spacing="12">
-    <TextBlock Text="Log folder:" FontWeight="SemiBold" />
-    <DockPanel>
-      <Button DockPanel.Dock="Right" Content="Browse…"
-              Margin="8,0,0,0"
-              x:Name="BrowseButton"
-              AutomationProperties.AutomationId="BrowseButton" />
-      <TextBox x:Name="WizardLogFolderBox"
-               AutomationProperties.AutomationId="WizardLogFolderBox"
-                Text="{Binding LogFolder, Mode=TwoWay}"
-                PlaceholderText="e.g. C:\Users\you\QsoRipper" />
-    </DockPanel>
+    <ItemsControl ItemsSource="{Binding PersistenceFields}"
+                  IsVisible="{Binding HasPersistenceInputs}">
+      <ItemsControl.ItemTemplate>
+        <DataTemplate DataType="shared:PersistenceSetupField">
+          <StackPanel Spacing="4" Margin="0,0,0,12">
+            <TextBlock Text="{Binding Label}" FontWeight="SemiBold" />
+            <TextBlock Text="{Binding Description}"
+                       IsVisible="{Binding Description, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
+                       Opacity="0.7"
+                       TextWrapping="Wrap"
+                       FontSize="12" />
+            <ComboBox ItemsSource="{Binding AllowedValues}"
+                      SelectedItem="{Binding Value, Mode=TwoWay}"
+                      IsVisible="{Binding HasChoices}" />
+            <TextBox Text="{Binding Value, Mode=TwoWay}"
+                     IsVisible="{Binding !HasChoices}" />
+          </StackPanel>
+        </DataTemplate>
+      </ItemsControl.ItemTemplate>
+    </ItemsControl>
 
-    <StackPanel IsVisible="{Binding DirectoryMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
-                Spacing="4">
-      <TextBlock Text="{Binding DirectoryMessage}"
-                 TextWrapping="Wrap" FontSize="12"
-                 Foreground="{Binding OfferCreateDirectory, Converter={x:Static v:LogFileStepView.DirectoryColor}}" />
-      <Button x:Name="WizardCreateDirectoryButton"
-              AutomationProperties.AutomationId="WizardCreateDirectoryButton"
-              Content="Create Directory"
-              Command="{Binding CreateDirectoryCommand}"
-              IsVisible="{Binding OfferCreateDirectory}"
-              Classes="accent" />
-    </StackPanel>
-
-    <TextBlock Text="Log name:" FontWeight="SemiBold" Margin="0,4,0,0" />
-    <DockPanel>
-      <TextBlock DockPanel.Dock="Right" Text=".db"
-                 VerticalAlignment="Center" Opacity="0.5" Margin="4,0,0,0" />
-      <TextBox x:Name="WizardLogNameBox"
-               AutomationProperties.AutomationId="WizardLogNameBox"
-               Text="{Binding LogFileName, Mode=TwoWay}"
-               PlaceholderText="qsoripper" />
-    </DockPanel>
-
-    <TextBlock Text="QsoRipper stores your log in a local SQLite database. Pick a folder and name — we handle the rest."
-               Opacity="0.6" TextWrapping="Wrap" FontSize="12" />
+    <TextBlock Text="No additional persistence input is required for this engine."
+               IsVisible="{Binding ShowsInfoOnly}"
+               Opacity="0.8"
+               TextWrapping="Wrap" />
   </StackPanel>
 </UserControl>

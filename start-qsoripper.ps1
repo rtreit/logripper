@@ -1,7 +1,7 @@
 #!/usr/bin/env pwsh
 <#
 .SYNOPSIS
-    Starts the selected QsoRipper engine in the background.
+    Starts the selected QsoRipper engine profile in the background.
 
 .DESCRIPTION
     Builds the selected engine if needed, launches it as a background process,
@@ -9,12 +9,11 @@
 #>
 
 param(
-    [ValidateSet('rust', 'dotnet')]
-    [string]$Engine = 'rust',
+    [string]$Engine,
     [string]$ListenAddress,
-    [ValidateSet('sqlite', 'memory')]
     [string]$Storage,
-    [string]$SqlitePath,
+    [Alias('SqlitePath')]
+    [string]$PersistenceLocation,
     [string]$ConfigPath,
     [int]$StartupTimeoutSeconds = 30,
     [switch]$SkipBuild,
@@ -25,38 +24,10 @@ $ErrorActionPreference = 'Stop'
 
 $runtimeDirectory = Join-Path $PSScriptRoot 'artifacts' | Join-Path -ChildPath 'run'
 $statePath = Join-Path $runtimeDirectory 'qsoripper-engine.json'
-$stdoutPath = Join-Path $runtimeDirectory "qsoripper-$Engine.stdout.log"
-$stderrPath = Join-Path $runtimeDirectory "qsoripper-$Engine.stderr.log"
 $dotenvPath = Join-Path $PSScriptRoot '.env'
-$rustManifestPath = Join-Path $PSScriptRoot 'src' | Join-Path -ChildPath 'rust' | Join-Path -ChildPath 'Cargo.toml'
-$dotnetProjectPath = Join-Path $PSScriptRoot 'src' | Join-Path -ChildPath 'dotnet' | Join-Path -ChildPath 'QsoRipper.Engine.DotNet' | Join-Path -ChildPath 'QsoRipper.Engine.DotNet.csproj'
-$dotnetDebugDllPath = Join-Path $PSScriptRoot 'src' | Join-Path -ChildPath 'dotnet' | Join-Path -ChildPath 'QsoRipper.Engine.DotNet' | Join-Path -ChildPath 'bin' | Join-Path -ChildPath 'Debug' | Join-Path -ChildPath 'net10.0' | Join-Path -ChildPath 'QsoRipper.Engine.DotNet.dll'
-$dotnetReleaseDllPath = Join-Path $PSScriptRoot 'src' | Join-Path -ChildPath 'dotnet' | Join-Path -ChildPath 'QsoRipper.Engine.DotNet' | Join-Path -ChildPath 'bin' | Join-Path -ChildPath 'Release' | Join-Path -ChildPath 'net10.0' | Join-Path -ChildPath 'QsoRipper.Engine.DotNet.dll'
-$binaryName = if ($IsWindows) { 'qsoripper-server.exe' } else { 'qsoripper-server' }
-$serverBinaryPath = Join-Path $PSScriptRoot 'src' | Join-Path -ChildPath 'rust' | Join-Path -ChildPath 'target' | Join-Path -ChildPath 'debug' | Join-Path -ChildPath $binaryName
 
 function Write-Info([string]$Message) {
     Write-Host $Message -ForegroundColor Cyan
-}
-
-function Get-DefaultListenAddress([string]$SelectedEngine) {
-    if ($SelectedEngine -eq 'dotnet') {
-        return '127.0.0.1:50052'
-    }
-
-    return '127.0.0.1:50051'
-}
-
-function Resolve-DotNetEngineDllPath {
-    if (Test-Path -LiteralPath $dotnetDebugDllPath) {
-        return $dotnetDebugDllPath
-    }
-
-    if (Test-Path -LiteralPath $dotnetReleaseDllPath) {
-        return $dotnetReleaseDllPath
-    }
-
-    return $dotnetDebugDllPath
 }
 
 function Import-DotEnv([string]$Path) {
@@ -181,23 +152,176 @@ function Stop-TrackedProcess([int]$ProcessId) {
     throw "Timed out waiting for process $ProcessId to stop."
 }
 
+function Resolve-TemplateValue([string]$Template, [hashtable]$Tokens) {
+    if ([string]::IsNullOrWhiteSpace($Template)) {
+        return ''
+    }
+
+    $resolved = $Template
+    foreach ($token in $Tokens.GetEnumerator()) {
+        $resolved = $resolved.Replace("{$($token.Key)}", [string]$token.Value)
+    }
+
+    return $resolved
+}
+
+function Resolve-TemplateList([string[]]$Templates, [hashtable]$Tokens) {
+    $values = @()
+    foreach ($template in $Templates) {
+        $resolved = Resolve-TemplateValue -Template $template -Tokens $Tokens
+        if (-not [string]::IsNullOrWhiteSpace($resolved)) {
+            $values += $resolved
+        }
+    }
+
+    return $values
+}
+
+function Invoke-WithTemporaryEnvironment([hashtable]$EnvironmentOverrides, [scriptblock]$Action) {
+    $originalValues = @{}
+    try {
+        foreach ($entry in $EnvironmentOverrides.GetEnumerator()) {
+            $name = $entry.Key
+            $existing = [System.Environment]::GetEnvironmentVariable($name)
+            $originalValues[$name] = $existing
+
+            if ([string]::IsNullOrWhiteSpace($entry.Value)) {
+                Remove-Item -Path "Env:$name" -ErrorAction SilentlyContinue
+            }
+            else {
+                Set-Item -Path "Env:$name" -Value $entry.Value
+            }
+        }
+
+        & $Action
+    }
+    finally {
+        foreach ($entry in $originalValues.GetEnumerator()) {
+            if ($null -eq $entry.Value) {
+                Remove-Item -Path "Env:$($entry.Key)" -ErrorAction SilentlyContinue
+            }
+            else {
+                Set-Item -Path "Env:$($entry.Key)" -Value $entry.Value
+            }
+        }
+    }
+}
+
+function Get-EngineProfiles {
+    $rustManifestPath = Join-Path $PSScriptRoot 'src' | Join-Path -ChildPath 'rust' | Join-Path -ChildPath 'Cargo.toml'
+    $dotnetProjectPath = Join-Path $PSScriptRoot 'src' | Join-Path -ChildPath 'dotnet' | Join-Path -ChildPath 'QsoRipper.Engine.DotNet' | Join-Path -ChildPath 'QsoRipper.Engine.DotNet.csproj'
+    $dotnetDebugDllPath = Join-Path $PSScriptRoot 'src' | Join-Path -ChildPath 'dotnet' | Join-Path -ChildPath 'QsoRipper.Engine.DotNet' | Join-Path -ChildPath 'bin' | Join-Path -ChildPath 'Debug' | Join-Path -ChildPath 'net10.0' | Join-Path -ChildPath 'QsoRipper.Engine.DotNet.dll'
+    $dotnetReleaseDllPath = Join-Path $PSScriptRoot 'src' | Join-Path -ChildPath 'dotnet' | Join-Path -ChildPath 'QsoRipper.Engine.DotNet' | Join-Path -ChildPath 'bin' | Join-Path -ChildPath 'Release' | Join-Path -ChildPath 'net10.0' | Join-Path -ChildPath 'QsoRipper.Engine.DotNet.dll'
+    $dotnetDllPath = if (Test-Path -LiteralPath $dotnetDebugDllPath) {
+        $dotnetDebugDllPath
+    }
+    elseif (Test-Path -LiteralPath $dotnetReleaseDllPath) {
+        $dotnetReleaseDllPath
+    }
+    else {
+        $dotnetDebugDllPath
+    }
+    $binaryName = if ($IsWindows) { 'qsoripper-server.exe' } else { 'qsoripper-server' }
+    $rustBinaryPath = Join-Path $PSScriptRoot 'src' | Join-Path -ChildPath 'rust' | Join-Path -ChildPath 'target' | Join-Path -ChildPath 'debug' | Join-Path -ChildPath $binaryName
+
+    return @(
+        [pscustomobject]@{
+            ProfileId = 'local-rust'
+            EngineId = 'rust-tonic'
+            DisplayName = 'QsoRipper Rust Engine'
+            Aliases = @('local-rust', 'rust', 'rust-tonic')
+            DefaultListenAddress = '127.0.0.1:50051'
+            DefaultStorage = 'sqlite'
+            DefaultPersistenceLocation = '.\data\qsoripper.db'
+            DefaultConfigPath = Join-Path $runtimeDirectory 'rust-engine.json'
+            EnvironmentTemplates = @{
+                QSORIPPER_STORAGE_BACKEND = '{storageBackend}'
+                QSORIPPER_SQLITE_PATH = '{persistenceLocation}'
+            }
+            BuildFilePath = 'cargo'
+            BuildArguments = @('build', '--manifest-path', $rustManifestPath, '-p', 'qsoripper-server')
+            LaunchFilePath = $rustBinaryPath
+            LaunchArguments = @('--listen', '{listenAddress}', '--config', '{configPath}')
+            SupportsStorageSession = $true
+        },
+        [pscustomobject]@{
+            ProfileId = 'local-dotnet'
+            EngineId = 'dotnet-aspnet'
+            DisplayName = 'QsoRipper .NET Engine'
+            Aliases = @('local-dotnet', 'dotnet', 'dotnet-aspnet', 'managed')
+            DefaultListenAddress = '127.0.0.1:50052'
+            DefaultStorage = 'memory'
+            DefaultPersistenceLocation = '.\data\qsoripper.db'
+            DefaultConfigPath = Join-Path $runtimeDirectory 'dotnet-engine.json'
+            EnvironmentTemplates = @{}
+            BuildFilePath = 'dotnet'
+            BuildArguments = @('build', $dotnetProjectPath, '-c', 'Debug')
+            LaunchFilePath = 'dotnet'
+            LaunchArguments = @(
+                $dotnetDllPath,
+                '--listen',
+                '{listenAddress}',
+                '--config',
+                '{configPath}'
+            )
+            SupportsStorageSession = $false
+        }
+    )
+}
+
+function Resolve-EngineProfile([string]$RequestedEngine, [object[]]$Profiles) {
+    foreach ($profile in $Profiles) {
+        if (
+            $RequestedEngine -ieq $profile.ProfileId -or
+            $RequestedEngine -ieq $profile.EngineId -or
+            ($profile.Aliases | Where-Object { $_ -ieq $RequestedEngine })
+        ) {
+            return $profile
+        }
+    }
+
+    $knownProfiles = $Profiles |
+        ForEach-Object { @($_.ProfileId) + $_.Aliases } |
+        Select-Object -Unique
+
+    throw "Unknown engine profile '$RequestedEngine'. Known values: $($knownProfiles -join ', ')."
+}
+
 New-Item -ItemType Directory -Path $runtimeDirectory -Force | Out-Null
 Import-DotEnv -Path $dotenvPath
 
+if ([string]::IsNullOrWhiteSpace($Engine)) {
+    $Engine = if ([string]::IsNullOrWhiteSpace($env:QSORIPPER_ENGINE)) {
+        'rust'
+    }
+    else {
+        $env:QSORIPPER_ENGINE
+    }
+}
+
+$profiles = Get-EngineProfiles
+$profile = Resolve-EngineProfile -RequestedEngine $Engine -Profiles $profiles
+$stdoutPath = Join-Path $runtimeDirectory "qsoripper-$($profile.ProfileId).stdout.log"
+$stderrPath = Join-Path $runtimeDirectory "qsoripper-$($profile.ProfileId).stderr.log"
+
 if ([string]::IsNullOrWhiteSpace($ListenAddress)) {
-    $ListenAddress = Get-DefaultListenAddress -SelectedEngine $Engine
+    $ListenAddress = $profile.DefaultListenAddress
 }
 
 if ([string]::IsNullOrWhiteSpace($Storage)) {
-    $Storage = if ($Engine -eq 'dotnet') { 'memory' } else { 'sqlite' }
+    $Storage = $profile.DefaultStorage
 }
 
-if ($Engine -eq 'dotnet' -and $Storage -ne 'memory') {
-    throw 'The managed .NET engine helper currently supports only memory storage.'
+if (-not $profile.SupportsStorageSession -and $Storage -ne $profile.DefaultStorage) {
+    throw "$($profile.DisplayName) only supports its default storage backend '$($profile.DefaultStorage)' through the launcher helper."
 }
 
-if ($Engine -eq 'dotnet' -and [string]::IsNullOrWhiteSpace($ConfigPath)) {
-    $ConfigPath = Join-Path $runtimeDirectory 'dotnet-engine.json'
+if ([string]::IsNullOrWhiteSpace($PersistenceLocation)) {
+    $PersistenceLocation = $profile.DefaultPersistenceLocation
+}
+
+if ([string]::IsNullOrWhiteSpace($ConfigPath)) {
+    $ConfigPath = $profile.DefaultConfigPath
 }
 
 $existing = Get-TrackedProcess
@@ -237,54 +361,41 @@ if ($ForceRestart) {
 }
 
 if (-not $SkipBuild) {
-    if ($Engine -eq 'dotnet') {
-        Write-Info 'Building QsoRipper .NET engine.'
-        dotnet build $dotnetProjectPath -c Debug
-    }
-    else {
-        Write-Info 'Building qsoripper-server.'
-        cargo build --manifest-path $rustManifestPath -p qsoripper-server
-    }
-
+    Write-Info "Building $($profile.DisplayName)."
+    & $profile.BuildFilePath @($profile.BuildArguments)
     if ($LASTEXITCODE -ne 0) {
         throw "Build failed with exit code $LASTEXITCODE."
     }
 }
 
-if ($Engine -eq 'dotnet') {
-    $dotnetDllPath = Resolve-DotNetEngineDllPath
-    if (-not (Test-Path -LiteralPath $dotnetDllPath)) {
-        throw "Managed engine assembly not found at $dotnetDllPath."
-    }
-}
-elseif (-not (Test-Path -LiteralPath $serverBinaryPath)) {
-    throw "Server binary not found at $serverBinaryPath."
+$tokens = @{
+    configPath = $ConfigPath
+    exeExtension = if ($IsWindows) { '.exe' } else { '' }
+    listenAddress = $ListenAddress
+    persistenceLocation = if ($Storage -eq 'memory') { '' } else { $PersistenceLocation }
+    sqlitePath = if ($Storage -eq 'memory') { '' } else { $PersistenceLocation }
+    storageBackend = $Storage
 }
 
-if ($Engine -eq 'dotnet') {
-    $filePath = 'dotnet'
-    $argumentList = @(
-        $dotnetDllPath,
-        '--listen', $ListenAddress
-    )
-}
-else {
-    $filePath = $serverBinaryPath
-    $argumentList = @(
-        '--listen', $ListenAddress,
-        '--storage', $Storage
-    )
-
-    if ($Storage -eq 'sqlite' -and -not [string]::IsNullOrWhiteSpace($SqlitePath)) {
-        $argumentList += @('--sqlite-path', $SqlitePath)
+$filePath = Resolve-TemplateValue -Template $profile.LaunchFilePath -Tokens $tokens
+$argumentList = Resolve-TemplateList -Templates $profile.LaunchArguments -Tokens $tokens
+$environmentOverrides = @{}
+foreach ($entry in $profile.EnvironmentTemplates.GetEnumerator()) {
+    $resolvedValue = Resolve-TemplateValue -Template $entry.Value -Tokens $tokens
+    if (-not [string]::IsNullOrWhiteSpace($resolvedValue)) {
+        $environmentOverrides[$entry.Key] = $resolvedValue
     }
 }
 
-if (-not [string]::IsNullOrWhiteSpace($ConfigPath)) {
-    $argumentList += @('--config', $ConfigPath)
+if (-not (Test-Path -LiteralPath $filePath) -and $filePath -notin @('cargo', 'dotnet')) {
+    throw "Launch target not found at $filePath."
 }
 
-Write-Info "Starting $Engine QsoRipper engine on $ListenAddress."
+if ($filePath -eq 'dotnet' -and $argumentList.Count -gt 0 -and -not (Test-Path -LiteralPath $argumentList[0])) {
+    throw "Launch target not found at $($argumentList[0])."
+}
+
+Write-Info "Starting $($profile.DisplayName) on $ListenAddress."
 $startProcessParameters = @{
     FilePath = $filePath
     ArgumentList = $argumentList
@@ -298,18 +409,24 @@ if ($IsWindows) {
     $startProcessParameters.WindowStyle = 'Hidden'
 }
 
-$process = Start-Process @startProcessParameters
+$process = $null
+Invoke-WithTemporaryEnvironment -EnvironmentOverrides $environmentOverrides -Action {
+    $script:process = Start-Process @startProcessParameters
+}
 
 $state = [pscustomobject]@{
-    engine = $Engine
-    pid = $process.Id
-    listenAddress = $ListenAddress
-    storage = $Storage
-    sqlitePath = if ($Storage -eq 'sqlite') { $SqlitePath } else { $null }
     configPath = if ([string]::IsNullOrWhiteSpace($ConfigPath)) { $null } else { $ConfigPath }
+    displayName = $profile.DisplayName
+    engine = $profile.ProfileId
+    engineId = $profile.EngineId
+    listenAddress = $ListenAddress
+    pid = $process.Id
+    persistenceLocation = if ($Storage -eq 'memory' -or [string]::IsNullOrWhiteSpace($PersistenceLocation)) { $null } else { $PersistenceLocation }
+    sqlitePath = if ($Storage -eq 'memory' -or [string]::IsNullOrWhiteSpace($PersistenceLocation)) { $null } else { $PersistenceLocation }
     startedAtUtc = [DateTime]::UtcNow.ToString('O')
-    stdoutPath = $stdoutPath
     stderrPath = $stderrPath
+    stdoutPath = $stdoutPath
+    storage = $Storage
 }
 $state | ConvertTo-Json | Set-Content -LiteralPath $statePath
 
@@ -326,13 +443,13 @@ while ([DateTime]::UtcNow -lt $deadline) {
     }
 
     if (Test-TcpEndpoint -TargetHost $probeTarget.Host -Port $probeTarget.Port) {
-        Write-Host "QsoRipper $Engine engine started in the background (PID $($process.Id))." -ForegroundColor Green
+        Write-Host "$($profile.DisplayName) started in the background (PID $($process.Id))." -ForegroundColor Green
         Write-Host "Endpoint: http://$($probeTarget.Host):$($probeTarget.Port)" -ForegroundColor Green
-        if ($Storage -eq 'sqlite' -and -not [string]::IsNullOrWhiteSpace($SqlitePath)) {
-            Write-Host "SQLite file: $SqlitePath" -ForegroundColor Green
+        if ($Storage -ne 'memory' -and -not [string]::IsNullOrWhiteSpace($PersistenceLocation)) {
+            Write-Host "Persistence location: $PersistenceLocation" -ForegroundColor Green
         }
-        if ($Engine -eq 'dotnet' -and -not [string]::IsNullOrWhiteSpace($ConfigPath)) {
-            Write-Host "Managed config: $ConfigPath" -ForegroundColor Green
+        if (-not [string]::IsNullOrWhiteSpace($ConfigPath)) {
+            Write-Host "Config: $ConfigPath" -ForegroundColor Green
         }
         Write-Host "Logs: $stdoutPath" -ForegroundColor Green
         exit 0

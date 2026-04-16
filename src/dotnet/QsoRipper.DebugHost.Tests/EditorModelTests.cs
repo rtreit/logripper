@@ -1,6 +1,8 @@
 using System.ComponentModel.DataAnnotations;
+using System.Linq;
 using QsoRipper.DebugHost.Models;
 using QsoRipper.Domain;
+using QsoRipper.EngineSelection;
 using QsoRipper.Services;
 
 namespace QsoRipper.DebugHost.Tests;
@@ -34,6 +36,7 @@ public class EditorModelTests
             @".\data\fallback.db");
 
         Assert.Equal(@".\data\portable.db", model.LogFilePath);
+        Assert.True(model.RequiresLogFilePath);
         Assert.Equal("k7rnd", model.QrzXmlUsername);
         Assert.True(model.RigControlEnabled);
         Assert.Equal("127.0.0.1", model.RigControlHost);
@@ -50,6 +53,7 @@ public class EditorModelTests
     {
         var model = new SetupEditorModel
         {
+            RequiresLogFilePath = true,
             LogFilePath = @"  .\data\qsoripper.db  ",
             QrzXmlUsername = "  k7rnd  ",
             QrzXmlPassword = "  secret  ",
@@ -69,6 +73,9 @@ public class EditorModelTests
 
         Assert.True(request.HasLogFilePath);
         Assert.Equal(@".\data\qsoripper.db", request.LogFilePath);
+        var persistenceValue = Assert.Single(request.PersistenceValues);
+        Assert.Equal(PersistenceSetup.PathKey, persistenceValue.Key);
+        Assert.Equal(@".\data\qsoripper.db", persistenceValue.Value);
         Assert.True(request.HasQrzXmlUsername);
         Assert.True(request.HasQrzXmlPassword);
         Assert.Equal("k7rnd", request.QrzXmlUsername);
@@ -96,6 +103,7 @@ public class EditorModelTests
     {
         var model = new SetupEditorModel
         {
+            RequiresLogFilePath = true,
             LogFilePath = "   ",
             QrzXmlUsername = "k7rnd",
             StationCallsign = "K7RND"
@@ -105,6 +113,99 @@ public class EditorModelTests
 
         Assert.Contains(results, result => result.MemberNames.Contains(nameof(SetupEditorModel.LogFilePath), StringComparer.Ordinal));
         Assert.Contains(results, result => result.MemberNames.Contains(nameof(SetupEditorModel.QrzXmlPassword), StringComparer.Ordinal));
+    }
+
+    [Fact]
+    public void SetupEditorModel_validate_skips_log_file_when_persistence_is_not_required()
+    {
+        var model = new SetupEditorModel
+        {
+            RequiresLogFilePath = false,
+            LogFilePath = "   ",
+            StationCallsign = "K7RND"
+        };
+
+        var results = Validate(model);
+
+        Assert.DoesNotContain(
+            results,
+            result => result.MemberNames.Contains(nameof(SetupEditorModel.LogFilePath), StringComparer.Ordinal));
+    }
+
+    [Fact]
+    public void SetupEditorModel_create_skips_legacy_path_when_persistence_contract_explicitly_omits_inputs()
+    {
+        var model = SetupEditorModel.Create(
+            new SetupStatus
+            {
+                PersistenceContractExplicit = true,
+                PersistenceStepEnabled = false,
+                PersistenceLabel = "Storage",
+                PersistenceDescription = "No setup input required for this engine."
+            },
+            @".\data\fallback.db");
+
+        Assert.False(model.HasPersistenceInputs);
+        Assert.False(model.RequiresLogFilePath);
+        Assert.Equal(string.Empty, model.LogFilePath);
+    }
+
+    [Fact]
+    public void SetupEditorModel_to_request_preserves_multiple_persistence_fields()
+    {
+        var model = SetupEditorModel.Create(
+            new SetupStatus
+            {
+                PersistenceLabel = "Storage",
+                PersistenceDescription = "Configure persistent storage for the selected engine.",
+                PersistenceStepEnabled = true,
+                SuggestedLogFilePath = @".\data\portable.db",
+                PersistenceDefinitions =
+                {
+                    new RuntimeConfigDefinition
+                    {
+                        Key = PersistenceSetup.PathKey,
+                        Label = "Path",
+                        Kind = RuntimeConfigValueKind.Path,
+                        Required = true,
+                    },
+                    new RuntimeConfigDefinition
+                    {
+                        Key = "persistence.bucket",
+                        Label = "Bucket",
+                        Kind = RuntimeConfigValueKind.String,
+                        Required = true,
+                    }
+                },
+                PersistenceValues =
+                {
+                    new RuntimeConfigValue
+                    {
+                        Key = PersistenceSetup.PathKey,
+                        DisplayValue = @".\data\portable.db",
+                    },
+                    new RuntimeConfigValue
+                    {
+                        Key = "persistence.bucket",
+                        HasValue = true,
+                        DisplayValue = "portable"
+                    }
+                }
+            },
+            @".\data\fallback.db");
+
+        model.LogFilePath = @"  .\data\updated.db  ";
+        model.PersistenceFields.Single(field => field.Key == "persistence.bucket").Value = "  archive  ";
+        var request = model.ToRequest();
+
+        Assert.Equal(@".\data\updated.db", request.LogFilePath);
+        Assert.Equal(2, request.PersistenceValues.Count);
+        Assert.Contains(
+            request.PersistenceValues,
+            value => value.Key == PersistenceSetup.PathKey && value.Value == @".\data\updated.db");
+        Assert.Contains(
+            request.PersistenceValues,
+            value => value.Key == "persistence.bucket" && value.Value == "archive");
     }
 
     [Fact]

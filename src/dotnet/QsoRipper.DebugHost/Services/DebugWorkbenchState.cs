@@ -11,7 +11,6 @@ namespace QsoRipper.DebugHost.Services;
 
 internal sealed class DebugWorkbenchState
 {
-    private const string SuggestedManagedConfigPath = @".\artifacts\run\dotnet-engine.json";
     private readonly DebugWorkbenchOptions _options;
 
     public DebugWorkbenchState(IOptions<DebugWorkbenchOptions> options)
@@ -19,17 +18,20 @@ internal sealed class DebugWorkbenchState
         ArgumentNullException.ThrowIfNull(options);
 
         _options = options.Value;
-        EngineImplementation = EngineCatalog.ResolveImplementation(_options.DefaultEngineImplementation);
-        EngineEndpoint = EngineCatalog.ResolveEndpoint(EngineImplementation, _options.DefaultEngineEndpoint);
-        EngineStorageBackend = ParseStorageBackend(_options.DefaultEngineStorageBackend);
-        EngineSqlitePath = NormalizeSqlitePath(_options.DefaultEngineSqlitePath);
+        var configuredProfile = string.IsNullOrWhiteSpace(_options.DefaultEngineProfile)
+            ? _options.DefaultEngineImplementation
+            : _options.DefaultEngineProfile;
+        EngineProfile = EngineCatalog.ResolveProfile(configuredProfile);
+        EngineEndpoint = EngineCatalog.ResolveEndpoint(EngineProfile, _options.DefaultEngineEndpoint);
+        EngineStorageBackend = NormalizeStorageBackend(_options.DefaultEngineStorageBackend);
+        EngineSqlitePath = NormalizePersistenceLocation(_options.DefaultEngineSqlitePath);
     }
 
-    public EngineImplementation EngineImplementation { get; private set; }
+    public EngineTargetProfile EngineProfile { get; private set; }
 
     public string EngineEndpoint { get; private set; }
 
-    public EngineStorageBackend EngineStorageBackend { get; private set; }
+    public string EngineStorageBackend { get; private set; }
 
     public string EngineSqlitePath { get; private set; }
 
@@ -60,26 +62,34 @@ internal sealed class DebugWorkbenchState
         ReportedEngineInfo = null;
     }
 
-    public void UpdateEngineImplementation(EngineImplementation implementation)
+    public void UpdateEngineProfile(string profileId)
     {
-        var previousImplementation = EngineImplementation;
-        EngineImplementation = implementation;
+        UpdateEngineProfile(EngineCatalog.GetProfile(profileId));
+    }
+
+    public void UpdateEngineProfile(EngineTargetProfile profile)
+    {
+        ArgumentNullException.ThrowIfNull(profile);
+
+        var previousProfile = EngineProfile;
+        EngineProfile = profile;
         if (string.IsNullOrWhiteSpace(EngineEndpoint)
-            || EngineCatalog.IsDefaultEndpoint(EngineEndpoint, previousImplementation))
+            || EngineCatalog.IsDefaultEndpoint(EngineEndpoint, previousProfile))
         {
-            EngineEndpoint = EngineCatalog.GetDefaultEndpoint(implementation);
+            EngineEndpoint = profile.DefaultEndpoint;
         }
 
         LastProbe = null;
         ReportedEngineInfo = null;
     }
 
-    public void UpdateStorageOptions(EngineStorageBackend backend, string sqlitePath)
+    public void UpdateStorageOptions(string backend, string persistenceLocation)
     {
-        ArgumentNullException.ThrowIfNull(sqlitePath);
+        ArgumentNullException.ThrowIfNull(backend);
+        ArgumentNullException.ThrowIfNull(persistenceLocation);
 
-        EngineStorageBackend = backend;
-        EngineSqlitePath = NormalizeSqlitePath(sqlitePath);
+        EngineStorageBackend = NormalizeStorageBackend(backend);
+        EngineSqlitePath = NormalizePersistenceLocation(persistenceLocation);
     }
 
     public void UpdateRuntimeConfig(RuntimeConfigSnapshot snapshot)
@@ -88,13 +98,11 @@ internal sealed class DebugWorkbenchState
 
         RuntimeConfigSnapshot = snapshot;
         RuntimeConfigErrorMessage = null;
-        EngineStorageBackend = ParseStorageBackend(snapshot.ActiveStorageBackend);
+        EngineStorageBackend = NormalizeStorageBackend(snapshot.ActiveStorageBackend);
 
-        var sqlitePath = snapshot.Values.FirstOrDefault(value =>
-            string.Equals(value.Key, "QSORIPPER_SQLITE_PATH", StringComparison.OrdinalIgnoreCase));
-        if (sqlitePath is { HasValue: true })
+        if (!string.IsNullOrWhiteSpace(snapshot.PersistenceLocation))
         {
-            EngineSqlitePath = NormalizeSqlitePath(sqlitePath.DisplayValue);
+            EngineSqlitePath = NormalizePersistenceLocation(snapshot.PersistenceLocation);
         }
     }
 
@@ -119,8 +127,7 @@ internal sealed class DebugWorkbenchState
 #pragma warning restore CS0612
         if (!string.IsNullOrWhiteSpace(persistedLogFilePath))
         {
-            EngineStorageBackend = EngineStorageBackend.Sqlite;
-            EngineSqlitePath = NormalizeSqlitePath(persistedLogFilePath);
+            EngineSqlitePath = NormalizePersistenceLocation(persistedLogFilePath);
         }
     }
 
@@ -162,34 +169,45 @@ internal sealed class DebugWorkbenchState
 
     public string GetStorageBackendDisplayName()
     {
-        return EngineStorageBackend switch
+        if (!string.IsNullOrWhiteSpace(RuntimeConfigSnapshot?.PersistenceSummary))
         {
-            EngineStorageBackend.Sqlite => "SQLite",
-            _ => "Memory"
-        };
+            return RuntimeConfigSnapshot.PersistenceSummary;
+        }
+
+        return FormatStorageBackendDisplayName(EngineStorageBackend);
+    }
+
+    public string? GetPersistenceLocation()
+    {
+        if (!string.IsNullOrWhiteSpace(RuntimeConfigSnapshot?.PersistenceLocation))
+        {
+            return RuntimeConfigSnapshot.PersistenceLocation;
+        }
+
+        return string.IsNullOrWhiteSpace(EngineSqlitePath)
+            ? null
+            : EngineSqlitePath;
     }
 
     public string GetSelectedEngineDisplayName()
     {
-        return EngineCatalog.GetDisplayName(EngineImplementation);
+        return EngineProfile.DisplayName;
     }
 
     public string GetSelectedEngineId()
     {
-        return EngineCatalog.GetEngineId(EngineImplementation);
+        return EngineProfile.EngineId;
     }
 
     public string BuildEngineLaunchCommand()
     {
-        return EngineImplementation switch
+        var recipe = EngineProfile.LocalLaunchRecipe;
+        if (recipe is null)
         {
-            EngineImplementation.DotNet => $"dotnet run --project src\\dotnet\\QsoRipper.Engine.DotNet -- --listen {GetListenAddress()} --config {SuggestedManagedConfigPath}",
-            _ => EngineStorageBackend switch
-            {
-                EngineStorageBackend.Sqlite => $"cargo run -p qsoripper-server -- --storage sqlite --sqlite-path {EngineSqlitePath}",
-                _ => "cargo run -p qsoripper-server -- --storage memory"
-            }
-        };
+            return "No local launch recipe is registered for the selected engine profile.";
+        }
+
+        return BuildCommandPreview(recipe.LaunchCommand, BuildRecipeTokens(recipe));
     }
 
     public IReadOnlyDictionary<string, string> GetEngineEnvironmentOverrides()
@@ -204,14 +222,21 @@ internal sealed class DebugWorkbenchState
                     StringComparer.OrdinalIgnoreCase);
         }
 
-        var environment = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        var recipe = EngineProfile.LocalLaunchRecipe;
+        if (recipe is null)
         {
-            ["QSORIPPER_STORAGE_BACKEND"] = EngineStorageBackend == EngineStorageBackend.Sqlite ? "sqlite" : "memory"
-        };
+            return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        }
 
-        if (EngineStorageBackend == EngineStorageBackend.Sqlite)
+        var environment = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var tokens = BuildRecipeTokens(recipe);
+        foreach (var template in recipe.EnvironmentTemplates)
         {
-            environment["QSORIPPER_SQLITE_PATH"] = EngineSqlitePath;
+            var value = ExpandTemplate(template.Value, tokens);
+            if (!string.IsNullOrWhiteSpace(value))
+            {
+                environment[template.Key] = value;
+            }
         }
 
         return environment;
@@ -373,20 +398,32 @@ internal sealed class DebugWorkbenchState
         }
     }
 
-    private static EngineStorageBackend ParseStorageBackend(string? configuredBackend)
+    private static string NormalizeStorageBackend(string? configuredBackend)
     {
-        return configuredBackend?.Trim().ToUpperInvariant() switch
-        {
-            "SQLITE" => EngineStorageBackend.Sqlite,
-            _ => EngineStorageBackend.Memory
-        };
+        return string.IsNullOrWhiteSpace(configuredBackend)
+            ? "memory"
+            : configuredBackend.Trim();
     }
 
-    private static string NormalizeSqlitePath(string sqlitePath)
+    private static string NormalizePersistenceLocation(string persistenceLocation)
     {
-        return string.IsNullOrWhiteSpace(sqlitePath)
+        return string.IsNullOrWhiteSpace(persistenceLocation)
             ? @".\data\qsoripper.db"
-            : sqlitePath.Trim();
+            : persistenceLocation.Trim();
+    }
+
+    private static string FormatStorageBackendDisplayName(string storageBackend)
+    {
+        if (string.IsNullOrWhiteSpace(storageBackend))
+        {
+            return "Engine-managed";
+        }
+
+        return string.Join(
+            " ",
+            storageBackend
+                .Split(['-', '_', ' '], StringSplitOptions.RemoveEmptyEntries)
+                .Select(static segment => char.ToUpperInvariant(segment[0]) + segment[1..]));
     }
 
     private string GetListenAddress()
@@ -396,7 +433,71 @@ internal sealed class DebugWorkbenchState
             return $"{endpointUri.Host}:{endpointUri.Port}";
         }
 
-        var fallbackUri = new Uri(EngineCatalog.GetDefaultEndpoint(EngineImplementation), UriKind.Absolute);
+        var fallbackUri = new Uri(EngineProfile.DefaultEndpoint, UriKind.Absolute);
         return $"{fallbackUri.Host}:{fallbackUri.Port}";
+    }
+
+    private Dictionary<string, string> BuildRecipeTokens(EngineLaunchRecipe recipe)
+    {
+        var configPath = string.IsNullOrWhiteSpace(recipe.DefaultConfigPath)
+            ? string.Empty
+            : recipe.DefaultConfigPath;
+        var persistenceLocation = string.Equals(EngineStorageBackend, "memory", StringComparison.OrdinalIgnoreCase)
+            ? string.Empty
+            : EngineSqlitePath;
+
+        return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["configPath"] = configPath,
+            ["exeExtension"] = OperatingSystem.IsWindows() ? ".exe" : string.Empty,
+            ["listenAddress"] = GetListenAddress(),
+            ["persistenceLocation"] = persistenceLocation,
+            ["sqlitePath"] = persistenceLocation,
+            ["storageBackend"] = EngineStorageBackend,
+        };
+    }
+
+    private static string BuildCommandPreview(
+        EngineCommand command,
+        IReadOnlyDictionary<string, string> tokens)
+    {
+        var parts = new List<string>
+        {
+            QuoteIfNeeded(ExpandTemplate(command.FilePath, tokens))
+        };
+
+        foreach (var argument in command.Arguments)
+        {
+            var expanded = ExpandTemplate(argument, tokens);
+            if (!string.IsNullOrWhiteSpace(expanded))
+            {
+                parts.Add(QuoteIfNeeded(expanded));
+            }
+        }
+
+        return string.Join(" ", parts);
+    }
+
+    private static string ExpandTemplate(
+        string template,
+        IReadOnlyDictionary<string, string> tokens)
+    {
+        var expanded = template;
+        foreach (var token in tokens)
+        {
+            expanded = expanded.Replace($"{{{token.Key}}}", token.Value, StringComparison.Ordinal);
+        }
+
+        return expanded;
+    }
+
+    private static string QuoteIfNeeded(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value) || !value.Contains(' ', StringComparison.Ordinal))
+        {
+            return value;
+        }
+
+        return $"\"{value}\"";
     }
 }

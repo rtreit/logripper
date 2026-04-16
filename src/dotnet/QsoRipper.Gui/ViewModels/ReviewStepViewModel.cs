@@ -36,7 +36,10 @@ internal sealed partial class ReviewStepViewModel : WizardStepViewModel
 
     private static string FormatFieldName(string key)
     {
-        var upper = key.Replace('_', ' ').ToUpperInvariant();
+        var upper = key
+            .Replace('_', ' ')
+            .Replace('.', ' ')
+            .ToUpperInvariant();
         if (upper.StartsWith("QRZ", StringComparison.Ordinal))
         {
             return upper;

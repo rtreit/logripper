@@ -10,7 +10,7 @@ internal static class StatusCommand
     public static async Task<int> RunAsync(
         GrpcChannel channel,
         string endpoint,
-        EngineImplementation engineImplementation,
+        EngineTargetProfile engineProfile,
         bool jsonOutput = false)
     {
         var client = new LogbookService.LogbookServiceClient(channel);
@@ -33,7 +33,7 @@ internal static class StatusCommand
         }
 
         Console.WriteLine(
-            $"Engine:           {(engineInfo is null ? EngineCatalog.GetDisplayName(engineImplementation) : engineInfo.DisplayName)}{(string.IsNullOrWhiteSpace(engineInfo?.EngineId) ? string.Empty : $" ({engineInfo.EngineId})")}");
+            $"Engine:           {(engineInfo is null ? engineProfile.DisplayName : engineInfo.DisplayName)}{(string.IsNullOrWhiteSpace(engineInfo?.EngineId) ? string.Empty : $" ({engineInfo.EngineId})")}");
         Console.WriteLine($"Endpoint:         {endpoint}");
         if (!string.IsNullOrWhiteSpace(engineInfo?.Version))
         {

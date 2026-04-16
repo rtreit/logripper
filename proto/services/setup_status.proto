@@ -7,6 +7,8 @@ option csharp_namespace = "QsoRipper.Services";
 import "domain/station_profile.proto";
 import "domain/sync_config.proto";
 import "services/rig_control_settings.proto";
+import "services/runtime_config_definition.proto";
+import "services/runtime_config_value.proto";
 import "services/storage_backend.proto";
 
 message SetupStatus {
@@ -36,4 +38,17 @@ message SetupStatus {
   optional qsoripper.domain.SyncConfig sync_config = 18;
   // Current persisted rig control configuration, if set.
   optional RigControlSettings rig_control = 19;
+  // True when the engine wants the setup flow to render a persistence step.
+  bool persistence_step_enabled = 20;
+  // User-facing title for the persistence step.
+  string persistence_label = 21;
+  // User-facing description for the persistence step.
+  string persistence_description = 22;
+  // Engine-neutral persistence fields for the setup step.
+  repeated RuntimeConfigDefinition persistence_definitions = 23;
+  // Current or suggested values for the persistence step.
+  repeated RuntimeConfigValue persistence_values = 24;
+  // True when the engine explicitly uses the engine-neutral persistence contract.
+  // When false, clients may fall back to legacy log_file_path behavior for older engines.
+  bool persistence_contract_explicit = 25;
 }

@@ -314,15 +314,65 @@ internal sealed class ManagedLogbookGrpcService(ManagedEngineState state)
         IAsyncStreamReader<ImportAdifRequest> requestStream,
         ServerCallContext context)
     {
-        throw new RpcException(new Status(StatusCode.Unimplemented, "Managed engine ADIF import is not implemented in the first slice."));
+        try
+        {
+            return ImportAdifCoreAsync(requestStream, context);
+        }
+        catch (InvalidOperationException ex)
+        {
+            throw new RpcException(new Status(StatusCode.InvalidArgument, ex.Message));
+        }
     }
 
-    public override Task ExportAdif(
+    public override async Task ExportAdif(
         ExportAdifRequest request,
         IServerStreamWriter<ExportAdifResponse> responseStream,
         ServerCallContext context)
     {
-        throw new RpcException(new Status(StatusCode.Unimplemented, "Managed engine ADIF export is not implemented in the first slice."));
+        try
+        {
+            var payload = state.ExportAdif(request);
+            for (var offset = 0; offset < payload.Length; offset += ManagedAdifCodec.ChunkSize)
+            {
+                var chunkLength = Math.Min(ManagedAdifCodec.ChunkSize, payload.Length - offset);
+                await responseStream.WriteAsync(new ExportAdifResponse
+                {
+                    Chunk = new AdifChunk
+                    {
+                        Data = ByteString.CopyFrom(payload, offset, chunkLength)
+                    }
+                });
+            }
+        }
+        catch (InvalidOperationException ex)
+        {
+            throw new RpcException(new Status(StatusCode.InvalidArgument, ex.Message));
+        }
+    }
+
+    private async Task<ImportAdifResponse> ImportAdifCoreAsync(
+        IAsyncStreamReader<ImportAdifRequest> requestStream,
+        ServerCallContext context)
+    {
+        ArgumentNullException.ThrowIfNull(requestStream);
+        ArgumentNullException.ThrowIfNull(context);
+
+        using var buffer = new MemoryStream();
+        var refresh = false;
+
+        while (await requestStream.MoveNext(context.CancellationToken))
+        {
+            var request = requestStream.Current;
+            if (request.Chunk is null)
+            {
+                throw new InvalidOperationException("chunk is required.");
+            }
+
+            request.Chunk.Data.WriteTo(buffer);
+            refresh |= request.Refresh;
+        }
+
+        return state.ImportAdif(buffer.ToArray(), refresh);
     }
 }
 

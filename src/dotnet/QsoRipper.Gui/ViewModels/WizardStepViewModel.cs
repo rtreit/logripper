@@ -35,7 +35,7 @@ internal abstract partial class WizardStepViewModel : ObservableObject
         {
             if (!v.Valid)
             {
-                errors.Add($"{v.Field}: {v.Message}");
+                errors.Add($"{FormatFieldName(v.Field)}: {v.Message}");
             }
         }
 
@@ -45,5 +45,19 @@ internal abstract partial class WizardStepViewModel : ObservableObject
     public virtual void ClearErrors()
     {
         ValidationSummary = null;
+    }
+
+    private static string FormatFieldName(string key)
+    {
+        var upper = key
+            .Replace('_', ' ')
+            .Replace('.', ' ')
+            .ToUpperInvariant();
+        if (upper.StartsWith("QRZ", StringComparison.Ordinal))
+        {
+            return upper;
+        }
+
+        return System.Globalization.CultureInfo.InvariantCulture.TextInfo.ToTitleCase(upper.ToLowerInvariant());
     }
 }

@@ -1111,6 +1111,7 @@ fn build_snapshot(
                 .iter()
                 .map(|value| (*value).to_string())
                 .collect(),
+            required: false,
         })
         .collect();
     let values = SUPPORTED_FIELDS
@@ -1134,6 +1135,18 @@ fn build_snapshot(
         );
     }
 
+    let persistence_summary = match bindings.active_storage_backend.as_str() {
+        "memory" => "In-memory logbook".to_string(),
+        "sqlite" => "SQLite logbook".to_string(),
+        other if !other.is_empty() => other.to_string(),
+        _ => "Unspecified persistence".to_string(),
+    };
+    let persistence_location = if bindings.active_storage_backend == "sqlite" {
+        merged.get(SQLITE_PATH_ENV_VAR).cloned()
+    } else {
+        None
+    };
+
     RuntimeConfigSnapshot {
         definitions,
         values,
@@ -1141,6 +1154,8 @@ fn build_snapshot(
         lookup_provider_summary: bindings.lookup_provider_summary.clone(),
         warnings,
         active_station_profile: bindings.active_station_profile.clone(),
+        persistence_summary,
+        persistence_location,
     }
 }
 

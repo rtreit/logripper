@@ -16,10 +16,10 @@
 <div class="alert alert-secondary">
     <div><strong>Current engine endpoint:</strong> @WorkbenchState.EngineEndpoint</div>
     <div class="mt-1">
-        <strong>Active backend:</strong> @WorkbenchState.GetStorageBackendDisplayName()
-        @if (WorkbenchState.EngineStorageBackend == EngineStorageBackend.Sqlite)
+        <strong>Persistence:</strong> @WorkbenchState.GetStorageBackendDisplayName()
+        @if (!string.IsNullOrWhiteSpace(WorkbenchState.GetPersistenceLocation()))
         {
-            <span> using <code>@WorkbenchState.EngineSqlitePath</code></span>
+            <span> using <code>@WorkbenchState.GetPersistenceLocation()</code></span>
         }
     </div>
 </div>

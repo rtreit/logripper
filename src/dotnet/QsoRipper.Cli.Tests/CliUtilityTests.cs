@@ -1,6 +1,7 @@
 using System.Text;
 using Google.Protobuf.WellKnownTypes;
 using QsoRipper.Domain;
+using QsoRipper.EngineSelection;
 using QsoRipper.Services;
 namespace QsoRipper.Cli.Tests;
 
@@ -23,8 +24,8 @@ public sealed class CliUtilityTests
     [Fact]
     public void IsCommandHelp_detects_help_tokens_in_primary_or_remaining_args()
     {
-        var byPrimaryArg = new CliArguments("lookup", CliArgumentParser.DefaultEndpoint, Callsign: "-?");
-        var byRemainingArg = new CliArguments("log", CliArgumentParser.DefaultEndpoint, RemainingArgs: ["--help"]);
+        var byPrimaryArg = new CliArguments("lookup", CliArgumentParser.DefaultEndpoint, EngineCatalog.DefaultProfile, Callsign: "-?");
+        var byRemainingArg = new CliArguments("log", CliArgumentParser.DefaultEndpoint, EngineCatalog.DefaultProfile, RemainingArgs: ["--help"]);
 
         Assert.True(CliCommandMetadata.IsCommandHelp(byPrimaryArg));
         Assert.True(CliCommandMetadata.IsCommandHelp(byRemainingArg));

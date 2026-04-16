@@ -67,6 +67,12 @@ internal sealed record UxCaptureFixture
 
     public bool HasQrzLogbookApiKey { get; init; }
 
+    public bool PersistenceStepEnabled { get; init; } = true;
+
+    public string PersistenceLabel { get; init; } = "Storage";
+
+    public string PersistenceDescription { get; init; } = "Choose where the fixture engine stores its logbook data.";
+
     public DateTimeOffset? LastSyncUtc { get; init; } = new(2026, 4, 13, 22, 30, 0, TimeSpan.Zero);
 
     public bool AutoSyncEnabled { get; init; } = true;

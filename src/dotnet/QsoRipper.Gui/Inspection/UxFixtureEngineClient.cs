@@ -5,6 +5,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Google.Protobuf.WellKnownTypes;
 using QsoRipper.Domain;
+using QsoRipper.EngineSelection;
 using QsoRipper.Gui.Services;
 using QsoRipper.Services;
 
@@ -27,6 +28,9 @@ internal sealed class UxFixtureEngineClient : IEngineClient
     private bool _hasQrzXmlPassword;
     private bool _hasQrzLogbookApiKey;
     private bool _isSyncing;
+    private readonly bool _persistenceStepEnabled;
+    private readonly string _persistenceLabel;
+    private readonly string _persistenceDescription;
 
     public UxFixtureEngineClient(UxCaptureFixture fixture)
     {
@@ -46,7 +50,14 @@ internal sealed class UxFixtureEngineClient : IEngineClient
         _hasQrzXmlPassword = fixture.HasQrzXmlPassword;
         _hasQrzLogbookApiKey = fixture.HasQrzLogbookApiKey;
         _isSyncing = fixture.IsSyncing;
+        _persistenceStepEnabled = fixture.PersistenceStepEnabled;
+        _persistenceLabel = fixture.PersistenceLabel;
+        _persistenceDescription = fixture.PersistenceDescription;
     }
+
+    public SaveSetupRequest? LastSaveSetupRequest { get; private set; }
+
+    public ValidateSetupStepRequest? LastValidationRequest { get; private set; }
 
     public Task<GetSetupWizardStateResponse> GetWizardStateAsync(CancellationToken ct = default)
     {
@@ -76,16 +87,18 @@ internal sealed class UxFixtureEngineClient : IEngineClient
 
     public Task<ValidateSetupStepResponse> ValidateStepAsync(ValidateSetupStepRequest request, CancellationToken ct = default)
     {
+        LastValidationRequest = request.Clone();
         var response = new ValidateSetupStepResponse();
 
         switch (request.Step)
         {
             case SetupWizardStep.LogFile:
+                var requestedPath = ResolvePersistencePath(request.PersistenceValues, request.LogFilePath);
                 AddValidation(
                     response,
-                    "log_file_path",
-                    !string.IsNullOrWhiteSpace(request.LogFilePath),
-                    "Log file path is required.");
+                    PersistenceSetup.PathKey,
+                    !_persistenceStepEnabled || !string.IsNullOrWhiteSpace(requestedPath),
+                    "Persistence path is required.");
                 break;
 
             case SetupWizardStep.StationProfiles:
@@ -164,9 +177,12 @@ internal sealed class UxFixtureEngineClient : IEngineClient
     {
         lock (_gate)
         {
-            if (!string.IsNullOrWhiteSpace(request.LogFilePath))
+            LastSaveSetupRequest = request.Clone();
+
+            var requestedPath = ResolvePersistencePath(request.PersistenceValues, request.LogFilePath);
+            if (!string.IsNullOrWhiteSpace(requestedPath))
             {
-                _logFilePath = request.LogFilePath;
+                _logFilePath = requestedPath;
             }
 
             if (request.StationProfile is not null)
@@ -197,7 +213,8 @@ internal sealed class UxFixtureEngineClient : IEngineClient
 
             _configFileExists = true;
             _isFirstRun = false;
-            _setupComplete = !string.IsNullOrWhiteSpace(_logFilePath) && IsStationProfileComplete(_stationProfile);
+            _setupComplete = (!_persistenceStepEnabled || !string.IsNullOrWhiteSpace(_logFilePath))
+                && IsStationProfileComplete(_stationProfile);
 
             return Task.FromResult(
                 new SaveSetupResponse
@@ -444,22 +461,47 @@ internal sealed class UxFixtureEngineClient : IEngineClient
 
     private SetupStatus BuildSetupStatus()
     {
+        var suggestedPath = string.IsNullOrWhiteSpace(_logFilePath)
+            ? @"C:\Users\Public\QsoRipper\qsoripper.db"
+            : _logFilePath;
         var status = new SetupStatus
         {
             ConfigFileExists = _configFileExists,
             SetupComplete = _setupComplete,
             ConfigPath = _configPath,
             HasStationProfile = HasStationProfile(),
+            PersistenceDescription = _persistenceDescription,
+            PersistenceLabel = _persistenceLabel,
+            PersistenceStepEnabled = _persistenceStepEnabled,
+            PersistenceContractExplicit = true,
             StationProfile = _stationProfile.Clone(),
             StationProfileCount = HasStationProfile() ? 1u : 0u,
-            SuggestedLogFilePath = string.IsNullOrWhiteSpace(_logFilePath)
-                ? @"C:\Users\Public\QsoRipper\qsoripper.db"
-                : _logFilePath,
+            SuggestedLogFilePath = suggestedPath,
             IsFirstRun = _isFirstRun,
             HasQrzXmlPassword = _hasQrzXmlPassword,
             HasQrzLogbookApiKey = _hasQrzLogbookApiKey,
             SyncConfig = _syncConfig.Clone()
         };
+
+        if (_persistenceStepEnabled || !string.IsNullOrWhiteSpace(_logFilePath))
+        {
+            status.PersistenceDefinitions.Add(
+                new RuntimeConfigDefinition
+                {
+                    Key = PersistenceSetup.PathKey,
+                    Label = "Path",
+                    Description = _persistenceDescription,
+                    Kind = RuntimeConfigValueKind.Path,
+                    Required = _persistenceStepEnabled,
+                });
+            status.PersistenceValues.Add(
+                new RuntimeConfigValue
+                {
+                    Key = PersistenceSetup.PathKey,
+                    HasValue = !string.IsNullOrWhiteSpace(_logFilePath),
+                    DisplayValue = suggestedPath,
+                });
+        }
 
         if (!string.IsNullOrWhiteSpace(_logFilePath))
         {
@@ -489,7 +531,7 @@ internal sealed class UxFixtureEngineClient : IEngineClient
         new SetupWizardStepStatus
         {
             Step = SetupWizardStep.LogFile,
-            Complete = !string.IsNullOrWhiteSpace(_logFilePath)
+            Complete = !_persistenceStepEnabled || !string.IsNullOrWhiteSpace(_logFilePath)
         },
         new SetupWizardStepStatus
         {
@@ -528,6 +570,18 @@ internal sealed class UxFixtureEngineClient : IEngineClient
             && !string.IsNullOrWhiteSpace(profile.StationCallsign)
             && !string.IsNullOrWhiteSpace(profile.OperatorCallsign)
             && !string.IsNullOrWhiteSpace(profile.Grid);
+
+    private static string? ResolvePersistencePath(
+        Google.Protobuf.Collections.RepeatedField<SetupFieldValue> persistenceValues,
+        string? fallbackPath)
+    {
+        var explicitPath = persistenceValues
+            .FirstOrDefault(value => value.Key.Equals(PersistenceSetup.PathKey, StringComparison.OrdinalIgnoreCase))
+            ?.Value;
+        return string.IsNullOrWhiteSpace(explicitPath)
+            ? fallbackPath
+            : explicitPath;
+    }
 
     private bool HasStationProfile()
         => !string.IsNullOrWhiteSpace(_stationProfile.StationCallsign)

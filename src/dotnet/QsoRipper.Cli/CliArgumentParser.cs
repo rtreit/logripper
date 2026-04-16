@@ -4,14 +4,14 @@ namespace QsoRipper.Cli;
 
 internal static class CliArgumentParser
 {
-    public const string DefaultEndpoint = EngineCatalog.DefaultRustEndpoint;
+    public static string DefaultEndpoint => EngineCatalog.DefaultRustEndpoint;
 
     public static CliArguments Parse(string[] args)
     {
         ArgumentNullException.ThrowIfNull(args);
 
-        var engineImplementation = EngineCatalog.ResolveImplementation();
-        var endpoint = EngineCatalog.ResolveEndpoint(engineImplementation);
+        var engineProfile = EngineCatalog.ResolveProfile();
+        var endpoint = EngineCatalog.ResolveEndpoint(engineProfile);
         var hasExplicitEndpoint = false;
         string? command = null;
         string? callsign = null;
@@ -32,7 +32,7 @@ internal static class CliArgumentParser
             {
                 if (command is null)
                 {
-                    return new CliArguments("help", endpoint, ShowHelp: true);
+                    return new CliArguments("help", endpoint, engineProfile, ShowHelp: true);
                 }
 
                 remaining.Add(arg);
@@ -46,25 +46,25 @@ internal static class CliArgumentParser
                     return new CliArguments(
                         "help",
                         endpoint,
-                        engineImplementation,
+                        engineProfile,
                         ShowHelp: true,
                         Error: "Missing value for --engine.");
                 }
 
-                if (!EngineCatalog.TryParseImplementation(args[++i], out var parsedImplementation))
+                if (!EngineCatalog.TryResolveProfile(args[++i], out var parsedProfile))
                 {
                     return new CliArguments(
                         "help",
                         endpoint,
-                        engineImplementation,
+                        engineProfile,
                         ShowHelp: true,
-                        Error: $"Unknown engine implementation '{args[i]}'. Use 'rust' or 'dotnet'.");
+                        Error: $"Unknown engine profile '{args[i]}'. Known values: {EngineCatalog.GetKnownProfileList()}.");
                 }
 
-                engineImplementation = parsedImplementation.Value;
+                engineProfile = parsedProfile;
                 if (!hasExplicitEndpoint)
                 {
-                    endpoint = EngineCatalog.ResolveEndpoint(engineImplementation);
+                    endpoint = EngineCatalog.ResolveEndpoint(engineProfile);
                 }
 
                 continue;
@@ -77,7 +77,7 @@ internal static class CliArgumentParser
                     return new CliArguments(
                         "help",
                         endpoint,
-                        engineImplementation,
+                        engineProfile,
                         ShowHelp: true,
                         Error: "Missing value for --endpoint.");
                 }
@@ -143,7 +143,7 @@ internal static class CliArgumentParser
         return new CliArguments(
             command ?? "help",
             endpoint,
-            engineImplementation,
+            engineProfile,
             ShowHelp: command is null,
             Callsign: callsign,
             SkipCache: skipCache,

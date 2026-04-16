@@ -13,6 +13,7 @@ public class CliArgumentParserTests
 
         Assert.Equal("status", arguments.Command);
         Assert.Equal(CliArgumentParser.DefaultEndpoint, arguments.Endpoint);
+        Assert.Equal(KnownEngineProfiles.LocalRust, arguments.EngineProfile.ProfileId);
         Assert.False(arguments.ShowHelp);
     }
 
@@ -99,7 +100,7 @@ public class CliArgumentParserTests
         var arguments = CliArgumentParser.Parse(["--engine", "dotnet", "status"]);
 
         Assert.Equal("status", arguments.Command);
-        Assert.Equal(EngineImplementation.DotNet, arguments.EngineImplementation);
+        Assert.Equal(KnownEngineProfiles.LocalDotNet, arguments.EngineProfile.ProfileId);
         Assert.Equal(EngineCatalog.DefaultDotNetEndpoint, arguments.Endpoint);
     }
 
@@ -109,7 +110,9 @@ public class CliArgumentParserTests
         var arguments = CliArgumentParser.Parse(["--engine", "fortran", "status"]);
 
         Assert.True(arguments.ShowHelp);
-        Assert.Equal("Unknown engine implementation 'fortran'. Use 'rust' or 'dotnet'.", arguments.Error);
+        Assert.Equal(
+            $"Unknown engine profile 'fortran'. Known values: {EngineCatalog.GetKnownProfileList()}.",
+            arguments.Error);
     }
 
     [Fact]

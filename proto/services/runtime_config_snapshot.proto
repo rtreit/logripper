@@ -15,4 +15,6 @@ message RuntimeConfigSnapshot {
   string lookup_provider_summary = 4;
   repeated string warnings = 5;
   qsoripper.domain.StationProfile active_station_profile = 6;
+  string persistence_summary = 7;
+  optional string persistence_location = 8;
 }

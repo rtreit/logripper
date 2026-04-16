@@ -1,0 +1,10 @@
+syntax = "proto3";
+
+package qsoripper.services;
+
+option csharp_namespace = "QsoRipper.Services";
+
+message SetupFieldValue {
+  string key = 1;
+  optional string value = 2;
+}

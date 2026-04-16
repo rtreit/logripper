@@ -5,7 +5,7 @@ namespace QsoRipper.Cli;
 internal sealed record CliArguments(
     string Command,
     string Endpoint,
-    EngineImplementation EngineImplementation = EngineImplementation.Rust,
+    EngineTargetProfile EngineProfile,
     bool ShowHelp = false,
     string? Error = null,
     string? Callsign = null,

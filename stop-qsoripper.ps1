@@ -41,8 +41,16 @@ while ([DateTime]::UtcNow -lt $deadline) {
     Start-Sleep -Milliseconds 200
     if ($null -eq (Get-Process -Id $process.Id -ErrorAction SilentlyContinue)) {
         Remove-Item -LiteralPath $statePath -Force -ErrorAction SilentlyContinue
-        $engineLabel = if ([string]::IsNullOrWhiteSpace($state.engine)) { 'engine' } else { "$($state.engine) engine" }
-        Write-Host "Stopped QsoRipper $engineLabel (PID $($process.Id))." -ForegroundColor Green
+        $engineLabel = if (-not [string]::IsNullOrWhiteSpace($state.displayName)) {
+            $state.displayName
+        }
+        elseif (-not [string]::IsNullOrWhiteSpace($state.engine)) {
+            "$($state.engine) engine"
+        }
+        else {
+            'engine'
+        }
+        Write-Host "Stopped $engineLabel (PID $($process.Id))." -ForegroundColor Green
         Write-Host "Logs retained under $runtimeDirectory." -ForegroundColor Green
         exit 0
     }

@@ -1,125 +1,142 @@
 using System.Diagnostics.CodeAnalysis;
+using System.Linq;
 
 namespace QsoRipper.EngineSelection;
 
 public static class EngineCatalog
 {
-    public const string EngineImplementationEnvironmentVariable = "QSORIPPER_ENGINE_IMPLEMENTATION";
+    public const string EngineProfileEnvironmentVariable = "QSORIPPER_ENGINE";
+    public const string LegacyEngineProfileEnvironmentVariable = "QSORIPPER_ENGINE_IMPLEMENTATION";
     public const string EndpointEnvironmentVariable = "QSORIPPER_ENDPOINT";
-    public const string DefaultRustEndpoint = "http://127.0.0.1:50051";
-    public const string DefaultDotNetEndpoint = "http://127.0.0.1:50052";
+    private static readonly IReadOnlyList<EngineTargetProfile> BuiltInProfiles =
+    [
+        new(
+            KnownEngineProfiles.LocalRust,
+            "rust-tonic",
+            "QsoRipper Rust Engine",
+            "http://127.0.0.1:50051",
+            [KnownEngineProfiles.LocalRust, "rust", "rust-tonic"],
+                new EngineLaunchRecipe(
+                    @".\artifacts\run\rust-engine.json",
+                    SupportsStorageSession: true,
+                    new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+                    {
+                        ["QSORIPPER_STORAGE_BACKEND"] = "{storageBackend}",
+                        ["QSORIPPER_SQLITE_PATH"] = "{persistenceLocation}",
+                    },
+                new EngineCommand(
+                    "cargo",
+                    ["build", "--manifest-path", @"src\rust\Cargo.toml", "-p", "qsoripper-server"]),
+                new EngineCommand(
+                    @"src\rust\target\debug\qsoripper-server{exeExtension}",
+                    ["--listen", "{listenAddress}", "--config", "{configPath}"]))),
+        new(
+            KnownEngineProfiles.LocalDotNet,
+            "dotnet-aspnet",
+            "QsoRipper .NET Engine",
+            "http://127.0.0.1:50052",
+            [KnownEngineProfiles.LocalDotNet, "dotnet", "dotnet-aspnet", "managed"],
+            new EngineLaunchRecipe(
+                @".\artifacts\run\dotnet-engine.json",
+                SupportsStorageSession: false,
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                new EngineCommand(
+                    "dotnet",
+                    ["build", @"src\dotnet\QsoRipper.Engine.DotNet\QsoRipper.Engine.DotNet.csproj", "-c", "Debug"]),
+                new EngineCommand(
+                    "dotnet",
+                    [
+                        "run",
+                        "--project",
+                        @"src\dotnet\QsoRipper.Engine.DotNet\QsoRipper.Engine.DotNet.csproj",
+                        "--",
+                        "--listen",
+                        "{listenAddress}",
+                        "--config",
+                        "{configPath}"
+                    ]))),
+    ];
 
-    public static IReadOnlyList<EngineTargetProfile> GetLocalProfiles()
-    {
-        return
-        [
-            CreateLocalProfile(EngineImplementation.Rust),
-            CreateLocalProfile(EngineImplementation.DotNet),
-        ];
-    }
+    public static EngineTargetProfile DefaultProfile => RustProfile;
 
-    public static EngineTargetProfile CreateLocalProfile(
-        EngineImplementation implementation,
-        string? endpoint = null)
+    public static EngineTargetProfile RustProfile => GetProfile(KnownEngineProfiles.LocalRust);
+
+    public static EngineTargetProfile DotNetProfile => GetProfile(KnownEngineProfiles.LocalDotNet);
+
+    public static string DefaultRustEndpoint => RustProfile.DefaultEndpoint;
+
+    public static string DefaultDotNetEndpoint => DotNetProfile.DefaultEndpoint;
+
+    public static IReadOnlyList<EngineTargetProfile> LocalProfiles => BuiltInProfiles;
+
+    public static EngineTargetProfile GetProfile(string profileId)
     {
-        return implementation switch
+        if (TryResolveProfile(profileId, out var profile))
         {
-            EngineImplementation.DotNet => new EngineTargetProfile(
-                "local-dotnet",
-                implementation,
-                GetEngineId(implementation),
-                "Local .NET engine",
-                endpoint ?? GetDefaultEndpoint(implementation)),
-            _ => new EngineTargetProfile(
-                "local-rust",
-                implementation,
-                GetEngineId(implementation),
-                "Local Rust engine",
-                endpoint ?? GetDefaultEndpoint(implementation)),
-        };
+            return profile;
+        }
+
+        throw new ArgumentOutOfRangeException(nameof(profileId), profileId, "Unknown engine profile.");
     }
 
-    public static string GetEngineId(EngineImplementation implementation)
+    public static string GetKnownProfileList()
     {
-        return implementation switch
-        {
-            EngineImplementation.DotNet => "dotnet-aspnet",
-            _ => "rust-tonic",
-        };
+        return string.Join(
+            ", ",
+            BuiltInProfiles
+                .SelectMany(profile => profile.Aliases.Prepend(profile.ProfileId))
+                .Distinct(StringComparer.OrdinalIgnoreCase));
     }
 
-    public static string GetDisplayName(EngineImplementation implementation)
+    public static EngineTargetProfile ResolveProfile(string? value = null)
     {
-        return implementation switch
-        {
-            EngineImplementation.DotNet => "QsoRipper .NET Engine",
-            _ => "QsoRipper Rust Engine",
-        };
-    }
-
-    public static string GetDefaultEndpoint(EngineImplementation implementation)
-    {
-        return implementation switch
-        {
-            EngineImplementation.DotNet => DefaultDotNetEndpoint,
-            _ => DefaultRustEndpoint,
-        };
-    }
-
-    public static EngineImplementation ResolveImplementation(string? value = null)
-    {
-        return TryParseImplementation(
-            value ?? Environment.GetEnvironmentVariable(EngineImplementationEnvironmentVariable),
-            out var implementation)
-            ? implementation.Value
-            : EngineImplementation.Rust;
+        return TryResolveProfile(
+            value
+            ?? Environment.GetEnvironmentVariable(EngineProfileEnvironmentVariable)
+            ?? Environment.GetEnvironmentVariable(LegacyEngineProfileEnvironmentVariable),
+            out var profile)
+            ? profile
+            : DefaultProfile;
     }
 
     public static string ResolveEndpoint(
-        EngineImplementation implementation,
+        EngineTargetProfile profile,
         string? explicitEndpoint = null,
         string? environmentEndpoint = null)
     {
+        ArgumentNullException.ThrowIfNull(profile);
+
         var endpoint = string.IsNullOrWhiteSpace(explicitEndpoint)
             ? environmentEndpoint ?? Environment.GetEnvironmentVariable(EndpointEnvironmentVariable)
             : explicitEndpoint;
 
         return string.IsNullOrWhiteSpace(endpoint)
-            ? GetDefaultEndpoint(implementation)
+            ? profile.DefaultEndpoint
             : endpoint.Trim();
     }
 
-    public static bool IsDefaultEndpoint(string? endpoint, EngineImplementation implementation)
+    public static bool IsDefaultEndpoint(string? endpoint, EngineTargetProfile profile)
     {
+        ArgumentNullException.ThrowIfNull(profile);
+
         return string.Equals(
             endpoint?.Trim(),
-            GetDefaultEndpoint(implementation),
+            profile.DefaultEndpoint,
             StringComparison.OrdinalIgnoreCase);
     }
 
-    public static int GetDefaultPort(EngineImplementation implementation)
+    public static int GetDefaultPort(EngineTargetProfile profile)
     {
-        return new Uri(GetDefaultEndpoint(implementation), UriKind.Absolute).Port;
+        ArgumentNullException.ThrowIfNull(profile);
+
+        return new Uri(profile.DefaultEndpoint, UriKind.Absolute).Port;
     }
 
-    public static bool TryParseImplementation(
+    public static bool TryResolveProfile(
         string? value,
-        [NotNullWhen(true)] out EngineImplementation? implementation)
+        [NotNullWhen(true)] out EngineTargetProfile? profile)
     {
-        switch (value?.Trim().ToUpperInvariant())
-        {
-            case "RUST":
-            case "RUST-TONIC":
-                implementation = EngineImplementation.Rust;
-                return true;
-            case "DOTNET":
-            case "DOTNET-ASPNET":
-            case "MANAGED":
-                implementation = EngineImplementation.DotNet;
-                return true;
-            default:
-                implementation = null;
-                return false;
-        }
+        profile = BuiltInProfiles.FirstOrDefault(candidate => candidate.Matches(value));
+        return profile is not null;
     }
 }

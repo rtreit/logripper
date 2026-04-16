@@ -21,10 +21,11 @@ public class DebugWorkbenchStateTests
         }));
 
         Assert.Equal("http://localhost:60051", state.EngineEndpoint);
-        Assert.Equal(EngineStorageBackend.Sqlite, state.EngineStorageBackend);
+        Assert.Equal("sqlite", state.EngineStorageBackend);
         Assert.Equal(@".\data\test-qsoripper.db", state.EngineSqlitePath);
-        Assert.Contains("--storage sqlite", state.BuildEngineLaunchCommand(), StringComparison.Ordinal);
-        Assert.Contains("--sqlite-path .\\data\\test-qsoripper.db", state.BuildEngineLaunchCommand(), StringComparison.Ordinal);
+        Assert.Contains(@"src\rust\target\debug\qsoripper-server", state.BuildEngineLaunchCommand(), StringComparison.Ordinal);
+        Assert.Equal("sqlite", state.GetEngineEnvironmentOverrides()["QSORIPPER_STORAGE_BACKEND"]);
+        Assert.Equal(@".\data\test-qsoripper.db", state.GetEngineEnvironmentOverrides()["QSORIPPER_SQLITE_PATH"]);
     }
 
     [Fact]
@@ -33,13 +34,26 @@ public class DebugWorkbenchStateTests
         var state = new DebugWorkbenchState(Options.Create(new DebugWorkbenchOptions()));
 
         state.UpdateEngineEndpoint(" http://localhost:50061 ");
-        state.UpdateStorageOptions(EngineStorageBackend.Memory, "   ");
+        state.UpdateStorageOptions("memory", "   ");
 
         Assert.Equal("http://localhost:50061", state.EngineEndpoint);
-        Assert.Equal(EngineStorageBackend.Memory, state.EngineStorageBackend);
+        Assert.Equal("memory", state.EngineStorageBackend);
         Assert.Equal("memory", state.GetEngineEnvironmentOverrides()["QSORIPPER_STORAGE_BACKEND"]);
         Assert.DoesNotContain("QSORIPPER_SQLITE_PATH", state.GetEngineEnvironmentOverrides().Keys, StringComparer.Ordinal);
-        Assert.Equal("cargo run -p qsoripper-server -- --storage memory", state.BuildEngineLaunchCommand());
+        Assert.Contains(@"src\rust\target\debug\qsoripper-server", state.BuildEngineLaunchCommand(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Update_storage_options_preserves_custom_backend_identifier()
+    {
+        var state = new DebugWorkbenchState(Options.Create(new DebugWorkbenchOptions()));
+
+        state.UpdateStorageOptions("file-cache", @".\data\portable-store.db");
+
+        Assert.Equal("file-cache", state.EngineStorageBackend);
+        Assert.Equal("File Cache", state.GetStorageBackendDisplayName());
+        Assert.Equal("file-cache", state.GetEngineEnvironmentOverrides()["QSORIPPER_STORAGE_BACKEND"]);
+        Assert.Equal(@".\data\portable-store.db", state.GetEngineEnvironmentOverrides()["QSORIPPER_SQLITE_PATH"]);
     }
 
     [Fact]
@@ -47,26 +61,26 @@ public class DebugWorkbenchStateTests
     {
         var state = new DebugWorkbenchState(Options.Create(new DebugWorkbenchOptions
         {
-            DefaultEngineImplementation = "dotnet",
+            DefaultEngineProfile = "dotnet",
             DefaultEngineEndpoint = ""
         }));
 
-        Assert.Equal(EngineImplementation.DotNet, state.EngineImplementation);
+        Assert.Equal(KnownEngineProfiles.LocalDotNet, state.EngineProfile.ProfileId);
         Assert.Equal(EngineCatalog.DefaultDotNetEndpoint, state.EngineEndpoint);
         Assert.Contains(@"QsoRipper.Engine.DotNet", state.BuildEngineLaunchCommand(), StringComparison.Ordinal);
         Assert.Contains("--listen 127.0.0.1:50052", state.BuildEngineLaunchCommand(), StringComparison.Ordinal);
     }
 
     [Fact]
-    public void Update_engine_implementation_swaps_default_endpoint_but_preserves_custom_endpoint()
+    public void Update_engine_profile_swaps_default_endpoint_but_preserves_custom_endpoint()
     {
         var state = new DebugWorkbenchState(Options.Create(new DebugWorkbenchOptions()));
 
-        state.UpdateEngineImplementation(EngineImplementation.DotNet);
+        state.UpdateEngineProfile(KnownEngineProfiles.LocalDotNet);
         Assert.Equal(EngineCatalog.DefaultDotNetEndpoint, state.EngineEndpoint);
 
         state.UpdateEngineEndpoint("http://localhost:61234");
-        state.UpdateEngineImplementation(EngineImplementation.Rust);
+        state.UpdateEngineProfile(KnownEngineProfiles.LocalRust);
 
         Assert.Equal("http://localhost:61234", state.EngineEndpoint);
     }
@@ -79,6 +93,8 @@ public class DebugWorkbenchStateTests
         state.UpdateRuntimeConfig(new RuntimeConfigSnapshot
         {
             ActiveStorageBackend = "sqlite",
+            PersistenceSummary = "SQLite",
+            PersistenceLocation = @".\data\live-qsoripper.db",
             LookupProviderSummary = "QRZ XML capture-only via https://xmldata.qrz.com/xml/current/",
             Values =
             {
@@ -106,10 +122,10 @@ public class DebugWorkbenchStateTests
             }
         });
 
-        Assert.Equal(EngineStorageBackend.Sqlite, state.EngineStorageBackend);
+        Assert.Equal("sqlite", state.EngineStorageBackend);
         Assert.Equal(@".\data\live-qsoripper.db", state.EngineSqlitePath);
         Assert.Equal("<redacted>", state.GetEngineEnvironmentOverrides()["QSORIPPER_QRZ_XML_PASSWORD"]);
-        Assert.Contains("--storage sqlite", state.BuildEngineLaunchCommand(), StringComparison.Ordinal);
+        Assert.Contains(@"src\rust\target\debug\qsoripper-server", state.BuildEngineLaunchCommand(), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -150,7 +166,7 @@ public class DebugWorkbenchStateTests
 
         Assert.Equal("K7RND", state.GetEngineEnvironmentOverrides()["QSORIPPER_STATION_CALLSIGN"]);
         Assert.Equal("CN87", state.GetEngineEnvironmentOverrides()["QSORIPPER_STATION_GRID"]);
-        Assert.Equal(EngineStorageBackend.Memory, state.EngineStorageBackend);
+        Assert.Equal("memory", state.EngineStorageBackend);
     }
 
     [Fact]
@@ -176,7 +192,7 @@ public class DebugWorkbenchStateTests
 
         Assert.NotNull(state.SetupStatus);
         Assert.Null(state.SetupErrorMessage);
-        Assert.Equal(EngineStorageBackend.Sqlite, state.EngineStorageBackend);
+        Assert.Equal("memory", state.EngineStorageBackend);
         Assert.Equal(@".\data\portable-qsoripper.db", state.EngineSqlitePath);
     }
 

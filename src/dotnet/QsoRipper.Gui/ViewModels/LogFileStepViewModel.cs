@@ -1,116 +1,66 @@
 using System.Collections.Generic;
-using System.IO;
+using System.Collections.ObjectModel;
+using System.Linq;
 using CommunityToolkit.Mvvm.ComponentModel;
-using CommunityToolkit.Mvvm.Input;
+using QsoRipper.Services;
+using QsoRipper.Shared.Persistence;
 
 namespace QsoRipper.Gui.ViewModels;
 
 internal sealed partial class LogFileStepViewModel : WizardStepViewModel
 {
-    public override string Title => "Log File";
-    public override string Description => "Where should QsoRipper store your log?";
+    private string _description = "Where should QsoRipper store persisted logbook data?";
+    private string _title = "Storage";
 
-    [ObservableProperty]
-    private string? _logFolder;
+    public override string Title => _title;
 
-    [ObservableProperty]
-    private string _logFileName = "qsoripper";
+    public override string Description => _description;
 
-    [ObservableProperty]
-    private bool _offerCreateDirectory;
+    public ObservableCollection<PersistenceSetupField> PersistenceFields { get; } = [];
 
-    [ObservableProperty]
-    private string? _directoryMessage;
+    public bool HasPersistenceInputs => PersistenceFields.Count > 0;
 
-    /// <summary>
-    /// Computed full path: folder + name + .db extension.
-    /// </summary>
-    public string? LogFilePath
-    {
-        get
-        {
-            if (string.IsNullOrWhiteSpace(LogFolder))
-            {
-                return null;
-            }
-
-            var name = string.IsNullOrWhiteSpace(LogFileName) ? "qsoripper" : LogFileName.Trim();
-            if (!name.EndsWith(".db", System.StringComparison.OrdinalIgnoreCase))
-            {
-                name += ".db";
-            }
-
-            return Path.Combine(LogFolder.Trim(), name);
-        }
-        set
-        {
-            if (string.IsNullOrWhiteSpace(value))
-            {
-                LogFolder = null;
-                LogFileName = "qsoripper";
-                return;
-            }
-
-            var dir = Path.GetDirectoryName(value);
-            var file = Path.GetFileNameWithoutExtension(value);
-            LogFolder = dir ?? string.Empty;
-            LogFileName = string.IsNullOrWhiteSpace(file) ? "qsoripper" : file;
-        }
-    }
-
-    partial void OnLogFolderChanged(string? value)
-    {
-        CheckDirectory();
-    }
-
-    [RelayCommand]
-    private void CreateDirectory()
-    {
-        if (!string.IsNullOrWhiteSpace(LogFolder) && !Directory.Exists(LogFolder))
-        {
-            try
-            {
-                Directory.CreateDirectory(LogFolder);
-                DirectoryMessage = "✓ Directory created.";
-                OfferCreateDirectory = false;
-            }
-            catch (UnauthorizedAccessException ex)
-            {
-                DirectoryMessage = $"Failed to create directory: {ex.Message}";
-            }
-            catch (IOException ex)
-            {
-                DirectoryMessage = $"Failed to create directory: {ex.Message}";
-            }
-        }
-    }
-
-    private void CheckDirectory()
-    {
-        if (string.IsNullOrWhiteSpace(LogFolder))
-        {
-            OfferCreateDirectory = false;
-            DirectoryMessage = null;
-            return;
-        }
-
-        if (Directory.Exists(LogFolder))
-        {
-            OfferCreateDirectory = false;
-            DirectoryMessage = "✓ Directory exists.";
-        }
-        else
-        {
-            OfferCreateDirectory = true;
-            DirectoryMessage = $"Directory '{LogFolder}' does not exist.";
-        }
-    }
+    public bool ShowsInfoOnly => !HasPersistenceInputs;
 
     public override Dictionary<string, string> GetFields()
     {
-        return new Dictionary<string, string>
+        if (PersistenceFields.Count == 0)
         {
-            ["log_file_path"] = LogFilePath ?? string.Empty,
-        };
+            return [];
+        }
+
+        return PersistenceFields
+            .Where(field => !string.IsNullOrWhiteSpace(field.Value))
+            .ToDictionary(
+                field => string.IsNullOrWhiteSpace(field.Label) ? field.Key : field.Label,
+                field => field.Value.Trim(),
+                StringComparer.OrdinalIgnoreCase);
+    }
+
+    public void ConfigureFromSetupStatus(SetupStatus status)
+    {
+        ArgumentNullException.ThrowIfNull(status);
+
+        _title = string.IsNullOrWhiteSpace(status.PersistenceLabel)
+            ? "Storage"
+            : status.PersistenceLabel;
+        _description = string.IsNullOrWhiteSpace(status.PersistenceDescription)
+            ? "Where should QsoRipper store persisted logbook data?"
+            : status.PersistenceDescription;
+        ReplacePersistenceFields(PersistenceSetupFields.FromStatus(status, status.SuggestedLogFilePath ?? string.Empty));
+
+        OnPropertyChanged(nameof(Title));
+        OnPropertyChanged(nameof(Description));
+        OnPropertyChanged(nameof(HasPersistenceInputs));
+        OnPropertyChanged(nameof(ShowsInfoOnly));
+    }
+
+    private void ReplacePersistenceFields(IEnumerable<PersistenceSetupField> fields)
+    {
+        PersistenceFields.Clear();
+        foreach (var field in fields)
+        {
+            PersistenceFields.Add(field);
+        }
     }
 }

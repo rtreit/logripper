@@ -88,7 +88,7 @@ static MODE_TO_ADIF_MAP: LazyLock<HashMap<Mode, &'static str>> = LazyLock::new(|
 
 static SUBMODE_ALIAS_TO_MODE: LazyLock<HashMap<&'static str, (&'static str, Mode)>> =
     LazyLock::new(|| {
-        include_str!("../adif/data/submode_aliases.tsv")
+        include_str!(concat!(env!("OUT_DIR"), "/submode_aliases.tsv"))
             .lines()
             .filter_map(|line| {
                 let (submode, mode_name) = line.split_once('\t')?;

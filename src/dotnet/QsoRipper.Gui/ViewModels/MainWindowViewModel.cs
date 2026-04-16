@@ -10,8 +10,10 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Grpc.Net.Client;
 using QsoRipper.Domain;
+using QsoRipper.EngineSelection;
 using QsoRipper.Gui.Services;
 using QsoRipper.Gui.Utilities;
+using QsoRipper.Shared.Persistence;
 
 namespace QsoRipper.Gui.ViewModels;
 
@@ -740,19 +742,21 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
     {
         var activeProfile = state.StationProfiles.FirstOrDefault(profile => profile.IsActive)?.Profile
             ?? state.Status.StationProfile;
-        ActiveLogText = BuildLogText(state.Status.LogFilePath);
+        ActiveLogText = BuildLogText(state.Status);
         ActiveProfileText = BuildProfileText(activeProfile);
         ActiveStationText = BuildStationText(activeProfile);
     }
 
-    private static string BuildLogText(string? logFilePath)
+    private static string BuildLogText(QsoRipper.Services.SetupStatus status)
     {
-        if (string.IsNullOrWhiteSpace(logFilePath))
+        var persistenceFields = PersistenceSetupFields.FromStatus(status, status.SuggestedLogFilePath ?? string.Empty);
+        var pathValue = PersistenceSetupFields.GetPathValue(persistenceFields);
+        if (string.IsNullOrWhiteSpace(pathValue))
         {
-            return "Log: -";
+            return "Log: engine-managed";
         }
 
-        return $"Log: {Path.GetFileNameWithoutExtension(logFilePath.Trim())}";
+        return $"Log: {Path.GetFileNameWithoutExtension(pathValue.Trim())}";
     }
 
     private static string BuildProfileText(QsoRipper.Domain.StationProfile? profile)

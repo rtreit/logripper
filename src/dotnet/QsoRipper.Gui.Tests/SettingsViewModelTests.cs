@@ -1,3 +1,4 @@
+using QsoRipper.EngineSelection;
 using QsoRipper.Gui.Inspection;
 using QsoRipper.Gui.ViewModels;
 
@@ -33,5 +34,46 @@ public class SettingsViewModelTests
         Assert.NotNull(status.Status.RigControl);
         Assert.True(status.Status.RigControl.HasPort);
         Assert.Equal(4532u, status.Status.RigControl.Port);
+    }
+
+    [Fact]
+    public async Task LoadAsyncUsesEngineNeutralPersistenceMetadata()
+    {
+        var client = new UxFixtureEngineClient(
+            new UxCaptureFixture
+            {
+                ActiveLogFilePath = string.Empty,
+                PersistenceStepEnabled = false,
+                PersistenceLabel = "Storage",
+                PersistenceDescription = "In-memory logbook"
+            });
+        var viewModel = new SettingsViewModel(client);
+
+        await viewModel.LoadAsync();
+
+        Assert.False(viewModel.RequiresLogFilePath);
+        Assert.True(viewModel.ShowsPersistenceInfoOnly);
+        Assert.Equal("Storage", viewModel.PersistenceSectionTitle);
+        Assert.Equal("In-memory logbook", viewModel.PersistenceDescription);
+        Assert.Equal(string.Empty, viewModel.LogFilePath);
+    }
+
+    [Fact]
+    public async Task SaveCommandIncludesPersistencePathValueWhenRequired()
+    {
+        var client = new UxFixtureEngineClient(new UxCaptureFixture());
+        var viewModel = new SettingsViewModel(client);
+
+        await viewModel.LoadAsync();
+        viewModel.LogFilePath = @"C:\logs\portable.db";
+
+        await viewModel.SaveCommand.ExecuteAsync(null);
+
+        Assert.True(viewModel.DidSave);
+        Assert.NotNull(client.LastSaveSetupRequest);
+        Assert.Equal(@"C:\logs\portable.db", client.LastSaveSetupRequest.LogFilePath);
+        var persistenceValue = Assert.Single(client.LastSaveSetupRequest.PersistenceValues);
+        Assert.Equal(PersistenceSetup.PathKey, persistenceValue.Key);
+        Assert.Equal(@"C:\logs\portable.db", persistenceValue.Value);
     }
 }

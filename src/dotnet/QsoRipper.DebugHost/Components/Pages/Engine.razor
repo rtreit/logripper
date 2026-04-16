@@ -15,17 +15,17 @@
 
 <h1 class="mb-3">Engine Session</h1>
 <p class="text-muted">
-    Configure the engine implementation and endpoint the debug workbench should target. The probe checks TCP reachability, asks the endpoint to identify its engine implementation, then performs a live <code>GetSyncStatus</code> call to verify that the expected QsoRipper services are live. When the host is reachable, this page also lets you exercise setup and station-profile gRPC contracts directly without dropping to <code>grpcurl</code>.
+    Configure the engine profile and endpoint the debug workbench should target. The probe checks TCP reachability, asks the endpoint to identify its engine implementation, then performs a live <code>GetSyncStatus</code> call to verify that the expected QsoRipper services are live. When the host is reachable, this page also lets you exercise setup and station-profile gRPC contracts directly without dropping to <code>grpcurl</code>.
 </p>
 
 <EditForm Model="this" OnSubmit="SaveEndpointAsync">
     <div class="row g-3 align-items-end">
         <div class="col-lg-4">
-            <label class="form-label" for="engine-implementation">Engine implementation</label>
-            <InputSelect id="engine-implementation" class="form-select" @bind-Value="engineImplementation">
+            <label class="form-label" for="engine-profile">Engine profile</label>
+            <InputSelect id="engine-profile" class="form-select" @bind-Value="engineProfileId">
                 @foreach (var profile in localEngineProfiles)
                 {
-                    <option value="@profile.Implementation">@profile.DisplayName (@profile.EngineId)</option>
+                    <option value="@profile.ProfileId">@profile.DisplayName (@profile.EngineId)</option>
                 }
             </InputSelect>
         </div>
@@ -543,7 +543,7 @@
             </div>
             <div class="row g-3 mb-3">
                 <div class="col-lg-4">
-                    <strong>Persisted log file:</strong> @GetSetupLogFileSummary(setupStatus)
+                    <strong>Persistence:</strong> @GetSetupLogFileSummary(setupStatus)
                 </div>
                 <div class="col-lg-4">
                     <strong>QRZ XML:</strong>
@@ -565,7 +565,7 @@
         @if (WorkbenchState.SetupStatus?.SetupComplete == true && !isSetupExpanded)
         {
             <div class="small text-muted">
-                Bootstrap setup is complete. Expand this section if you want to inspect or edit the log file path, QRZ credentials, shared rig control settings, or the currently active persisted station profile.
+                Bootstrap setup is complete. Expand this section if you want to inspect or edit persisted storage, QRZ credentials, shared rig control settings, or the currently active persisted station profile.
             </div>
         }
         else
@@ -605,7 +605,7 @@
                     <div>
                         <h3 class="h6 mb-1">Setup editor</h3>
                         <div class="small text-muted">
-                            This form calls <code>SetupService.SaveSetup</code> to edit persisted engine-wide settings: the log file path, QRZ credentials, shared rig-control defaults, and the currently active bootstrap station profile. Use the station profile editor above to add additional profiles. If QRZ XML is enabled, the service requires both username and password on save.
+                            This form calls <code>SetupService.SaveSetup</code> to edit persisted engine-wide settings: storage bootstrap settings, QRZ credentials, shared rig-control defaults, and the currently active bootstrap station profile. Use the station profile editor above to add additional profiles. If QRZ XML is enabled, the service requires both username and password on save.
                         </div>
                     </div>
                     @if (WorkbenchState.SetupStatus?.HasQrzXmlPassword == true)
@@ -620,12 +620,42 @@
 
                     <div class="row g-3">
                         <div class="col-md-12">
-                            <label class="form-label" for="setup-log-file-path">Log file path</label>
-                            <InputText id="setup-log-file-path"
-                                       class="form-control"
-                                       @bind-Value="setupEditor.LogFilePath"
-                                       disabled="@isSetupBusy" />
-                            <ValidationMessage For="@(() => setupEditor.LogFilePath)" />
+                            <label class="form-label">@setupEditor.PersistenceLabel</label>
+                            @if (setupEditor.HasPersistenceInputs)
+                            {
+                                @foreach (var field in setupEditor.PersistenceFields)
+                                {
+                                    <div class="mb-3">
+                                        <label class="form-label">@field.Label</label>
+                                        @if (field.HasChoices)
+                                        {
+                                            <InputSelect class="form-select"
+                                                         @bind-Value="field.Value"
+                                                         disabled="@isSetupBusy">
+                                                @foreach (var allowedValue in field.AllowedValues)
+                                                {
+                                                    <option value="@allowedValue">@allowedValue</option>
+                                                }
+                                            </InputSelect>
+                                        }
+                                        else
+                                        {
+                                            <InputText class="form-control"
+                                                       @bind-Value="field.Value"
+                                                       disabled="@isSetupBusy" />
+                                        }
+
+                                        @if (!string.IsNullOrWhiteSpace(field.Description))
+                                        {
+                                            <div class="form-text">@field.Description</div>
+                                        }
+                                    </div>
+                                }
+                            }
+                            else
+                            {
+                                <div class="alert alert-secondary mb-0">@setupEditor.PersistenceDescription</div>
+                            }
                         </div>
 
                         <div class="col-md-6">
@@ -833,7 +863,12 @@
         else
         {
             <div class="mb-3">
-                <strong>Active storage:</strong> @WorkbenchState.GetStorageBackendDisplayName()<br />
+                <strong>Persistence:</strong> @WorkbenchState.GetStorageBackendDisplayName()
+                @if (!string.IsNullOrWhiteSpace(WorkbenchState.GetPersistenceLocation()))
+                {
+                    <span> using <code>@WorkbenchState.GetPersistenceLocation()</code></span>
+                }
+                <br />
                 <strong>Lookup provider:</strong> @WorkbenchState.RuntimeConfigSnapshot?.LookupProviderSummary
             </div>
 
@@ -949,7 +984,7 @@
     <div class="card-body">
         <h2 class="h5">Local launch preview</h2>
         <div class="small text-muted mb-2">
-            The command below matches the selected engine. Rust launch previews reflect the storage session configured in this page.
+            The command below matches the selected engine profile. Profiles that support storage-session overrides reflect the storage state configured on this page.
         </div>
         <pre class="payload-view">@WorkbenchState.BuildEngineLaunchCommand()</pre>
         <div class="small text-muted mt-2 mb-1">Equivalent environment</div>
@@ -961,7 +996,7 @@
 </div>
 
 @code {
-    private static readonly IReadOnlyList<EngineTargetProfile> localEngineProfiles = EngineCatalog.GetLocalProfiles();
+    private static readonly IReadOnlyList<EngineTargetProfile> localEngineProfiles = EngineCatalog.LocalProfiles;
     private string endpoint = string.Empty;
     private string? statusMessage;
     private IReadOnlyList<ToolAvailability> tools = Array.Empty<ToolAvailability>();
@@ -978,17 +1013,17 @@
     private bool isStationProfilesBusy;
     private bool isRuntimeConfigBusy;
 
-    private EngineImplementation engineImplementation
+    private string engineProfileId
     {
-        get => WorkbenchState.EngineImplementation;
+        get => WorkbenchState.EngineProfile.ProfileId;
         set
         {
-            if (WorkbenchState.EngineImplementation == value)
+            if (string.Equals(WorkbenchState.EngineProfile.ProfileId, value, StringComparison.OrdinalIgnoreCase))
             {
                 return;
             }
 
-            WorkbenchState.UpdateEngineImplementation(value);
+            WorkbenchState.UpdateEngineProfile(value);
             endpoint = WorkbenchState.EngineEndpoint;
         }
     }
@@ -1404,6 +1439,13 @@
 
     private static string GetSetupLogFileSummary(SetupStatus status)
     {
+        if (HasExplicitPersistenceMetadata(status) && !status.PersistenceStepEnabled)
+        {
+            return string.IsNullOrWhiteSpace(status.PersistenceDescription)
+                ? "No persisted storage input required."
+                : status.PersistenceDescription;
+        }
+
         if (!string.IsNullOrWhiteSpace(status.LogFilePath))
         {
             return status.LogFilePath;
@@ -1417,6 +1459,14 @@
         }
 
         return $"Not configured (suggested: {status.SuggestedLogFilePath})";
+    }
+
+    private static bool HasExplicitPersistenceMetadata(SetupStatus status)
+    {
+        return status.PersistenceStepEnabled
+            || !string.IsNullOrWhiteSpace(status.PersistenceLabel)
+            || !string.IsNullOrWhiteSpace(status.PersistenceDescription)
+            || status.PersistenceDefinitions.Count > 0;
     }
 
     private static string GetSetupRigControlSummary(SetupStatus status)

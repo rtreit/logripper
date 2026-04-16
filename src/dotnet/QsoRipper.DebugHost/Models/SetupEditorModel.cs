@@ -1,11 +1,15 @@
 using System.ComponentModel.DataAnnotations;
+using System.Linq;
 using QsoRipper.Services;
+using QsoRipper.Shared.Persistence;
 
 namespace QsoRipper.DebugHost.Models;
 
 internal sealed class SetupEditorModel : StationProfileEditorModelBase
 {
-    public string LogFilePath { get; set; } = @".\data\qsoripper.db";
+    public string PersistenceDescription { get; set; } = "Where should QsoRipper store persisted logbook data?";
+
+    public string PersistenceLabel { get; set; } = "Storage";
 
     public string? QrzXmlUsername { get; set; }
 
@@ -24,18 +28,66 @@ internal sealed class SetupEditorModel : StationProfileEditorModelBase
     [Range(1, long.MaxValue)]
     public long? RigControlStaleThresholdMs { get; set; }
 
+    public List<PersistenceSetupField> PersistenceFields { get; } = [];
+
     private bool HasPersistedRigControl { get; set; }
+
+    public bool HasPersistenceInputs => PersistenceFields.Count > 0;
+
+    public bool RequiresLogFilePath
+    {
+        get => PersistenceFields.Count == 1 && PersistenceFields[0].IsPath;
+        set
+        {
+            if (value)
+            {
+                if (PersistenceFields.Count == 0)
+                {
+                    ReplacePersistenceFields(
+                    [
+                        new PersistenceSetupField
+                        {
+                            Key = QsoRipper.EngineSelection.PersistenceSetup.PathKey,
+                            Label = "Path",
+                            Description = PersistenceDescription,
+                            Kind = RuntimeConfigValueKind.Path,
+                            Required = true,
+                            Value = LogFilePath,
+                        }
+                    ]);
+                }
+            }
+            else
+            {
+                PersistenceFields.Clear();
+            }
+        }
+    }
+
+    public string LogFilePath
+    {
+        get => PersistenceSetupFields.GetPathValue(PersistenceFields) ?? string.Empty;
+        set
+        {
+            if (PersistenceFields.FirstOrDefault(persistenceField => persistenceField.IsPath) is { } pathField)
+            {
+                pathField.Value = value;
+            }
+        }
+    }
 
     public static SetupEditorModel Create(SetupStatus? status, string fallbackLogFilePath)
     {
         var model = new SetupEditorModel
         {
-            LogFilePath = NormalizeOptional(status?.LogFilePath)
-                ?? NormalizeOptional(status?.SuggestedLogFilePath)
-                ?? fallbackLogFilePath,
+            PersistenceDescription = NormalizeOptional(status?.PersistenceDescription)
+                ?? "Where should QsoRipper store persisted logbook data?",
+            PersistenceLabel = NormalizeOptional(status?.PersistenceLabel)
+                ?? "Storage",
             QrzXmlUsername = NormalizeOptional(status?.QrzXmlUsername),
             HasPersistedRigControl = status?.RigControl is not null
         };
+        model.ReplacePersistenceFields(PersistenceSetupFields.FromStatus(status, fallbackLogFilePath));
 
         if (status?.RigControl is not null)
         {
@@ -65,10 +117,7 @@ internal sealed class SetupEditorModel : StationProfileEditorModelBase
             StationProfile = ToStationProfile()
         };
 
-        if (!string.IsNullOrWhiteSpace(LogFilePath))
-        {
-            request.LogFilePath = LogFilePath.Trim();
-        }
+        PersistenceSetupFields.ApplyTo(request, PersistenceFields);
 
         if (!string.IsNullOrWhiteSpace(QrzXmlUsername))
         {
@@ -138,11 +187,11 @@ internal sealed class SetupEditorModel : StationProfileEditorModelBase
             yield return result;
         }
 
-        if (string.IsNullOrWhiteSpace(LogFilePath))
+        foreach (var field in PersistenceFields.Where(static field => field.Required && string.IsNullOrWhiteSpace(field.Value)))
         {
             yield return new ValidationResult(
-                "Log file path is required.",
-                [nameof(LogFilePath)]);
+                $"{field.Label} is required.",
+                [field.IsPath && RequiresLogFilePath ? nameof(LogFilePath) : nameof(PersistenceFields)]);
         }
 
         if (string.IsNullOrWhiteSpace(QrzXmlUsername) != string.IsNullOrWhiteSpace(QrzXmlPassword))
@@ -151,5 +200,11 @@ internal sealed class SetupEditorModel : StationProfileEditorModelBase
                 "QRZ XML username and password must either both be set or both be blank.",
                 [nameof(QrzXmlUsername), nameof(QrzXmlPassword)]);
         }
+    }
+
+    private void ReplacePersistenceFields(IEnumerable<PersistenceSetupField> fields)
+    {
+        PersistenceFields.Clear();
+        PersistenceFields.AddRange(fields);
     }
 }

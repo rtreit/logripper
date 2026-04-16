@@ -4,7 +4,9 @@ internal sealed class DebugWorkbenchOptions
 {
     public const string SectionName = "DebugWorkbench";
 
-    public string DefaultEngineImplementation { get; set; } = "rust";
+    public string DefaultEngineProfile { get; set; } = "rust";
+
+    public string DefaultEngineImplementation { get; set; } = string.Empty;
 
     public string DefaultEngineEndpoint { get; set; } = string.Empty;
 

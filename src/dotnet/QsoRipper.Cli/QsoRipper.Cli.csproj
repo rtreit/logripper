@@ -35,4 +35,9 @@
     <ProjectReference Include="..\QsoRipper.EngineSelection\QsoRipper.EngineSelection.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <Compile Include="..\Shared\Persistence\*.cs"
+             Link="Shared\Persistence\%(Filename)%(Extension)" />
+  </ItemGroup>
+
 </Project>

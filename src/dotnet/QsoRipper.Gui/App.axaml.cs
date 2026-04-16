@@ -34,8 +34,8 @@ internal sealed partial class App : Application
             }
             else
             {
-                var engineImplementation = EngineCatalog.ResolveImplementation();
-                var endpoint = EngineCatalog.ResolveEndpoint(engineImplementation);
+                var engineProfile = EngineCatalog.ResolveProfile();
+                var endpoint = EngineCatalog.ResolveEndpoint(engineProfile);
 
                 var mainVm = new MainWindowViewModel(endpoint);
 

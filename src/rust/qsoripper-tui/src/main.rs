@@ -19,6 +19,11 @@ use app::App;
 use events::{spawn_clock_task, spawn_key_task, spawn_lookup_task, spawn_rig_poll_task, AppEvent};
 use form::{AdvancedTab, Field, LogForm, BANDS, MODES};
 
+const ENGINE_ENV_VAR: &str = "QSORIPPER_ENGINE";
+const ENDPOINT_ENV_VAR: &str = "QSORIPPER_ENDPOINT";
+const DEFAULT_RUST_ENDPOINT: &str = "http://127.0.0.1:50051";
+const DEFAULT_DOTNET_ENDPOINT: &str = "http://127.0.0.1:50052";
+
 /// Application entry point.
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -39,19 +44,54 @@ async fn main() -> anyhow::Result<()> {
     result
 }
 
-/// Parse `--endpoint <url>` from `argv`, defaulting to `http://127.0.0.1:50051`.
+/// Parse `--engine <id>` / `--endpoint <url>` from `argv`, using env overrides first.
 fn parse_endpoint_arg() -> String {
-    let args: Vec<String> = std::env::args().collect();
-    let mut endpoint = "http://127.0.0.1:50051".to_string();
-    let mut iter = args.iter().peekable();
+    resolve_endpoint_from_args_and_env(std::env::args(), |key| std::env::var(key).ok())
+}
+
+fn resolve_endpoint_from_args_and_env<I, F>(args: I, env_lookup: F) -> String
+where
+    I: IntoIterator<Item = String>,
+    F: Fn(&str) -> Option<String>,
+{
+    let mut engine = env_lookup(ENGINE_ENV_VAR).unwrap_or_else(|| "rust".to_string());
+    let mut endpoint = env_lookup(ENDPOINT_ENV_VAR);
+    let mut endpoint_explicit = endpoint.is_some();
+    let mut iter = args.into_iter();
+    let _ = iter.next();
     while let Some(arg) = iter.next() {
-        if arg == "--endpoint" {
-            if let Some(next) = iter.next() {
-                endpoint.clone_from(next);
+        match arg.as_str() {
+            "--engine" => {
+                if let Some(next) = iter.next() {
+                    engine = next;
+                    if !endpoint_explicit {
+                        endpoint = default_endpoint_for_engine(engine.as_str()).map(str::to_string);
+                    }
+                }
             }
+            "--endpoint" => {
+                if let Some(next) = iter.next() {
+                    endpoint = Some(next);
+                    endpoint_explicit = true;
+                }
+            }
+            _ => {}
         }
     }
-    endpoint
+
+    endpoint.unwrap_or_else(|| {
+        default_endpoint_for_engine(engine.as_str())
+            .unwrap_or(DEFAULT_RUST_ENDPOINT)
+            .to_string()
+    })
+}
+
+fn default_endpoint_for_engine(engine: &str) -> Option<&'static str> {
+    match engine.to_ascii_lowercase().as_str() {
+        "rust" | "rust-tonic" | "local-rust" => Some(DEFAULT_RUST_ENDPOINT),
+        "dotnet" | "dotnet-aspnet" | "local-dotnet" | "managed" => Some(DEFAULT_DOTNET_ENDPOINT),
+        _ => None,
+    }
 }
 
 /// Main run loop — creates the app, spawns background tasks, and drives the event loop.
@@ -892,10 +932,73 @@ mod tests {
         }
     }
 
+    fn resolve_endpoint_from<const ARG_COUNT: usize, const ENV_COUNT: usize>(
+        cli_args: [&str; ARG_COUNT],
+        env: [(&str, &str); ENV_COUNT],
+    ) -> String {
+        use std::collections::HashMap;
+
+        let resolved_args = cli_args.into_iter().map(str::to_string).collect::<Vec<_>>();
+        let env_map = env
+            .into_iter()
+            .map(|(key, value)| (key.to_string(), value.to_string()))
+            .collect::<HashMap<_, _>>();
+
+        resolve_endpoint_from_args_and_env(resolved_args, |key| env_map.get(key).cloned())
+    }
+
     #[test]
     fn parse_endpoint_arg_defaults() {
-        let ep = parse_endpoint_arg();
-        assert_eq!(ep, "http://127.0.0.1:50051");
+        let ep = resolve_endpoint_from(["qsoripper-tui"], []);
+        assert_eq!(ep, DEFAULT_RUST_ENDPOINT);
+    }
+
+    #[test]
+    fn parse_endpoint_arg_uses_dotnet_engine_default() {
+        let ep = resolve_endpoint_from(["qsoripper-tui", "--engine", "dotnet"], []);
+        assert_eq!(ep, DEFAULT_DOTNET_ENDPOINT);
+    }
+
+    #[test]
+    fn parse_endpoint_arg_uses_canonical_dotnet_engine_id_default() {
+        let ep = resolve_endpoint_from(["qsoripper-tui", "--engine", "dotnet-aspnet"], []);
+        assert_eq!(ep, DEFAULT_DOTNET_ENDPOINT);
+    }
+
+    #[test]
+    fn parse_endpoint_arg_uses_canonical_rust_engine_id_default() {
+        let ep = resolve_endpoint_from(["qsoripper-tui", "--engine", "rust-tonic"], []);
+        assert_eq!(ep, DEFAULT_RUST_ENDPOINT);
+    }
+
+    #[test]
+    fn parse_endpoint_arg_prefers_explicit_endpoint() {
+        let ep = resolve_endpoint_from(
+            [
+                "qsoripper-tui",
+                "--engine",
+                "dotnet",
+                "--endpoint",
+                "http://localhost:7777",
+            ],
+            [],
+        );
+        assert_eq!(ep, "http://localhost:7777");
+    }
+
+    #[test]
+    fn parse_endpoint_arg_prefers_endpoint_env() {
+        let ep = resolve_endpoint_from(
+            ["qsoripper-tui", "--engine", "dotnet"],
+            [(ENDPOINT_ENV_VAR, "http://localhost:9090")],
+        );
+        assert_eq!(ep, "http://localhost:9090");
+    }
+
+    #[test]
+    fn parse_endpoint_arg_uses_engine_env_default() {
+        let ep = resolve_endpoint_from(["qsoripper-tui"], [(ENGINE_ENV_VAR, "dotnet")]);
+        assert_eq!(ep, DEFAULT_DOTNET_ENDPOINT);
     }
 
     #[test]

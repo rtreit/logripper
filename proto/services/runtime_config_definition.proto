@@ -13,4 +13,5 @@ message RuntimeConfigDefinition {
   RuntimeConfigValueKind kind = 4;
   bool secret = 5;
   repeated string allowed_values = 6;
+  bool required = 7;
 }

@@ -1,7 +1,9 @@
 using Grpc.Net.Client;
 using QsoRipper.Cli;
 using QsoRipper.Domain;
+using QsoRipper.EngineSelection;
 using QsoRipper.Services;
+using QsoRipper.Shared.Persistence;
 
 namespace QsoRipper.Cli.Commands;
 
@@ -50,13 +52,11 @@ internal static class SetupCommand
 
         Console.WriteLine($"Setup complete:    {status.SetupComplete}");
         Console.WriteLine($"Config path:       {status.ConfigPath}");
+        Console.WriteLine($"Persistence:       {FormatPersistenceSummary(status)}");
         Console.WriteLine($"QRZ username:      {status.QrzXmlUsername ?? "(not set)"}");
         Console.WriteLine($"QRZ Logbook key:   {(status.HasQrzLogbookApiKey ? "(configured)" : "(not set)")}");
         Console.WriteLine($"Station profile:   {status.HasStationProfile}");
         Console.WriteLine($"Rig control:       {FormatRigControlSummary(status.RigControl)}");
-#pragma warning disable CS0612 // Type or member is obsolete
-        Console.WriteLine($"Storage backend:   {status.StorageBackend}");
-#pragma warning restore CS0612
 
         return status.SetupComplete ? 0 : 1;
     }
@@ -74,7 +74,7 @@ internal static class SetupCommand
             return 1;
         }
 
-        var logFilePath = Environment.GetEnvironmentVariable("QSORIPPER_LOG_FILE");
+        var legacyLogFilePath = Environment.GetEnvironmentVariable(PersistenceSetup.LegacyPathEnvironmentVariable);
         var operatorCallsign = Environment.GetEnvironmentVariable("QSORIPPER_OPERATOR_CALLSIGN") ?? stationCallsign;
         var profileName = Environment.GetEnvironmentVariable("QSORIPPER_PROFILE_NAME") ?? "Default";
         var grid = Environment.GetEnvironmentVariable("QSORIPPER_GRID");
@@ -118,11 +118,8 @@ internal static class SetupCommand
             return 1;
         }
 
-        // If no log file path, fetch the suggested one from the engine.
-        if (string.IsNullOrWhiteSpace(logFilePath))
-        {
-            logFilePath = currentStatus?.SuggestedLogFilePath;
-        }
+        var persistenceFields = BuildPersistenceFields(currentStatus);
+        ApplyPersistenceEnvironmentValues(persistenceFields, legacyLogFilePath);
 
         var profile = new StationProfile
         {
@@ -136,18 +133,21 @@ internal static class SetupCommand
             profile.Grid = grid;
         }
 
-        // Validate log file step.
-        var logValidation = await client.ValidateSetupStepAsync(new ValidateSetupStepRequest
+        if (persistenceFields.Count > 0)
         {
-            Step = SetupWizardStep.LogFile,
-            LogFilePath = logFilePath ?? "",
-        });
+            var logValidationRequest = new ValidateSetupStepRequest
+            {
+                Step = SetupWizardStep.LogFile,
+            };
+            PersistenceSetupFields.ApplyTo(logValidationRequest, persistenceFields);
+            var logValidation = await client.ValidateSetupStepAsync(logValidationRequest);
 
-        if (!logValidation.Valid)
-        {
-            Console.Error.WriteLine("Log file path validation failed:");
-            PrintFieldErrors(logValidation.Fields);
-            return 1;
+            if (!logValidation.Valid)
+            {
+                Console.Error.WriteLine("Persistence path validation failed:");
+                PrintFieldErrors(logValidation.Fields);
+                return 1;
+            }
         }
 
         // Validate station profile step.
@@ -194,9 +194,10 @@ internal static class SetupCommand
         // Save.
         var saveRequest = new SaveSetupRequest
         {
-            LogFilePath = logFilePath ?? "",
             StationProfile = profile,
         };
+
+        PersistenceSetupFields.ApplyTo(saveRequest, persistenceFields);
 
         if (!string.IsNullOrWhiteSpace(qrzUsername))
         {
@@ -281,41 +282,46 @@ internal static class SetupCommand
             : "QsoRipper Setup Wizard");
         Console.WriteLine(new string('=', 48));
 
-        // ── Step 1: Log File Path ──────────────────────────────────
+        // ── Step 1: Persistence ────────────────────────────────────
         Console.WriteLine();
-        Console.WriteLine("Step 1 of 5: Log File Path");
+        var persistenceTitle = string.IsNullOrWhiteSpace(status.PersistenceLabel)
+            ? "Storage"
+            : status.PersistenceLabel;
+        Console.WriteLine($"Step 1 of 5: {persistenceTitle}");
         Console.WriteLine(new string('-', 30));
-
-        var suggestedPath = status.SuggestedLogFilePath;
-        var currentLogPath = status.LogFilePath;
-        var defaultLogPath = !string.IsNullOrWhiteSpace(currentLogPath)
-            ? currentLogPath
-            : suggestedPath;
-
-        if (!string.IsNullOrWhiteSpace(currentLogPath))
+        if (!string.IsNullOrWhiteSpace(status.PersistenceDescription))
         {
-            Console.WriteLine($"  Current: {currentLogPath}");
+            Console.WriteLine(status.PersistenceDescription);
         }
 
-        string logFilePath;
-        while (true)
+        var persistenceFields = BuildPersistenceFields(status);
+        if (persistenceFields.Count > 0)
         {
-            Console.Write($"Log file path [{defaultLogPath}]: ");
-            var input = Console.ReadLine()?.Trim();
-            logFilePath = string.IsNullOrEmpty(input) ? defaultLogPath : input;
-
-            var validation = await client.ValidateSetupStepAsync(new ValidateSetupStepRequest
+            while (true)
             {
-                Step = SetupWizardStep.LogFile,
-                LogFilePath = logFilePath,
-            });
+                foreach (var field in persistenceFields)
+                {
+                    PromptPersistenceField(field);
+                }
 
-            if (validation.Valid)
-            {
-                break;
+                var validationRequest = new ValidateSetupStepRequest
+                {
+                    Step = SetupWizardStep.LogFile,
+                };
+                PersistenceSetupFields.ApplyTo(validationRequest, persistenceFields);
+                var validation = await client.ValidateSetupStepAsync(validationRequest);
+
+                if (validation.Valid)
+                {
+                    break;
+                }
+
+                PrintFieldErrors(validation.Fields);
             }
-
-            PrintFieldErrors(validation.Fields);
+        }
+        else
+        {
+            Console.WriteLine("No persistence input is required for this engine.");
         }
 
         // ── Step 2: Station Profile ────────────────────────────────
@@ -531,7 +537,14 @@ internal static class SetupCommand
         Console.WriteLine("Step 5 of 5: Review & Save");
         Console.WriteLine(new string('-', 30));
         Console.WriteLine();
-        Console.WriteLine($"  Log file path:       {logFilePath}");
+        foreach (var field in persistenceFields)
+        {
+            Console.WriteLine($"  {field.Label}:        {FormatPersistenceReviewValue(field)}");
+        }
+        if (persistenceFields.Count == 0)
+        {
+            Console.WriteLine($"  {persistenceTitle}:        (not required)");
+        }
         Console.WriteLine($"  Profile name:        {profileName}");
         Console.WriteLine($"  Station callsign:    {stationCallsign}");
         Console.WriteLine($"  Operator callsign:   {operatorCallsign}");
@@ -564,9 +577,10 @@ internal static class SetupCommand
 
         var saveRequest = new SaveSetupRequest
         {
-            LogFilePath = logFilePath,
             StationProfile = stationProfile,
         };
+
+        PersistenceSetupFields.ApplyTo(saveRequest, persistenceFields);
 
         if (!string.IsNullOrWhiteSpace(qrzUsername))
         {
@@ -701,6 +715,91 @@ internal static class SetupCommand
             : $"disabled ({host}:{port})";
     }
 
+    private static string FormatPersistenceSummary(SetupStatus status)
+    {
+        return PersistenceSetupFields.FormatSummary(status, status.SuggestedLogFilePath ?? string.Empty);
+    }
+
+    private static bool RequiresPersistenceInput(SetupStatus? status)
+    {
+        return BuildPersistenceFields(status).Count > 0;
+    }
+
+    private static List<PersistenceSetupField> BuildPersistenceFields(SetupStatus? status)
+    {
+        return PersistenceSetupFields
+            .FromStatus(status, status?.SuggestedLogFilePath ?? string.Empty)
+            .ToList();
+    }
+
+    private static void ApplyPersistenceEnvironmentValues(
+        IEnumerable<PersistenceSetupField> fields,
+        string? legacyPathOverride)
+    {
+        ArgumentNullException.ThrowIfNull(fields);
+
+        foreach (var field in fields)
+        {
+            var environmentValue = ResolvePersistenceEnvironmentValue(field, legacyPathOverride);
+            if (!string.IsNullOrWhiteSpace(environmentValue))
+            {
+                field.Value = environmentValue;
+            }
+        }
+    }
+
+    private static string? ResolvePersistenceEnvironmentValue(
+        PersistenceSetupField field,
+        string? legacyPathOverride)
+    {
+        ArgumentNullException.ThrowIfNull(field);
+
+        if (field.IsPath && !string.IsNullOrWhiteSpace(legacyPathOverride))
+        {
+            return legacyPathOverride.Trim();
+        }
+
+        var variableName = PersistenceSetup.GetEnvironmentVariableName(field.Key);
+        var value = Environment.GetEnvironmentVariable(variableName);
+        return string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+    }
+
+    private static void PromptPersistenceField(PersistenceSetupField field)
+    {
+        ArgumentNullException.ThrowIfNull(field);
+
+        if (!string.IsNullOrWhiteSpace(field.Description))
+        {
+            Console.WriteLine($"  {field.Description}");
+        }
+
+        if (field.HasChoices)
+        {
+            Console.WriteLine($"  Allowed values: {string.Join(", ", field.AllowedValues)}");
+        }
+
+        if (field.HasConfiguredValue && string.IsNullOrWhiteSpace(field.Value))
+        {
+            Console.WriteLine($"  Current: {FormatPersistenceReviewValue(field)}");
+        }
+
+        field.Value = PromptField(field.Label, field.Value);
+    }
+
+    private static string FormatPersistenceReviewValue(PersistenceSetupField field)
+    {
+        ArgumentNullException.ThrowIfNull(field);
+
+        if (field.Secret || field.IsRedacted)
+        {
+            return field.HasConfiguredValue ? "(configured)" : "(not set)";
+        }
+
+        return string.IsNullOrWhiteSpace(field.Value)
+            ? "(not set)"
+            : field.Value;
+    }
+
     private static bool TryParseOptionalBooleanEnv(
         string? rawValue,
         string variableName,
@@ -782,8 +881,23 @@ internal static class SetupCommand
         {
             if (!field.Valid)
             {
-                Console.WriteLine($"  {field.Field}: {field.Message}");
+                Console.WriteLine($"  {FormatFieldName(field.Field)}: {field.Message}");
             }
         }
+    }
+
+    private static string FormatFieldName(string fieldKey)
+    {
+        var normalized = fieldKey
+            .Replace('_', ' ')
+            .Replace('.', ' ');
+        var upper = normalized.ToUpperInvariant();
+        if (upper.StartsWith("QRZ", StringComparison.Ordinal))
+        {
+            return upper;
+        }
+
+        return System.Globalization.CultureInfo.InvariantCulture.TextInfo.ToTitleCase(
+            normalized.ToLowerInvariant());
     }
 }

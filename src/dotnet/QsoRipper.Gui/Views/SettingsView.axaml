@@ -361,20 +361,41 @@
 
         <Separator />
 
-        <!-- Log File Path (informational) -->
+        <!-- Persistence -->
         <StackPanel Spacing="8">
-          <TextBlock Text="Log File"
-                     FontSize="16" FontWeight="SemiBold" />
+          <TextBlock Text="{Binding PersistenceSectionTitle}"
+                      FontSize="16" FontWeight="SemiBold" />
+          <TextBlock Text="{Binding PersistenceDescription}"
+                     Opacity="0.6"
+                     TextWrapping="Wrap"
+                     IsVisible="{Binding PersistenceDescription, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
 
-          <Grid ColumnDefinitions="140,*"
-                ColumnSpacing="12">
-            <TextBlock Grid.Column="0"
-                       Text="Path:" VerticalAlignment="Center" />
-             <TextBox x:Name="SettingsLogFilePathBox"
-                      AutomationProperties.AutomationId="SettingsLogFilePathBox"
-                      Grid.Column="1"
-                      Text="{Binding LogFilePath, Mode=TwoWay}" />
-          </Grid>
+          <ItemsControl ItemsSource="{Binding PersistenceFields}"
+                        IsVisible="{Binding HasPersistenceInputs}">
+            <ItemsControl.ItemTemplate>
+              <DataTemplate>
+                <Grid ColumnDefinitions="140,*"
+                      ColumnSpacing="12"
+                      Margin="0,0,0,8">
+                  <TextBlock Grid.Column="0"
+                             Text="{Binding Label}"
+                             VerticalAlignment="Center" />
+                  <ComboBox Grid.Column="1"
+                            ItemsSource="{Binding AllowedValues}"
+                            SelectedItem="{Binding Value, Mode=TwoWay}"
+                            IsVisible="{Binding HasChoices}" />
+                  <TextBox Grid.Column="1"
+                           Text="{Binding Value, Mode=TwoWay}"
+                           IsVisible="{Binding !HasChoices}" />
+                </Grid>
+              </DataTemplate>
+            </ItemsControl.ItemTemplate>
+          </ItemsControl>
+
+          <TextBlock Text="No additional persistence input is required for this engine."
+                     IsVisible="{Binding ShowsPersistenceInfoOnly}"
+                     Opacity="0.8"
+                     TextWrapping="Wrap" />
         </StackPanel>
 
         <!-- Saving indicator -->

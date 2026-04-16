@@ -34,13 +34,13 @@ use qsoripper_core::proto::qsoripper::services::{
     GetCurrentSpaceWeatherRequest, GetCurrentSpaceWeatherResponse, GetDxccEntityRequest,
     GetDxccEntityResponse, GetEngineInfoRequest, GetEngineInfoResponse, GetQsoRequest,
     GetQsoResponse, GetRigSnapshotRequest, GetRigSnapshotResponse, GetRigStatusRequest,
-    GetRigStatusResponse, GetRuntimeConfigRequest, GetRuntimeConfigResponse,
-    GetSyncStatusRequest, GetSyncStatusResponse, ImportAdifRequest, ImportAdifResponse,
-    ListQsosRequest, ListQsosResponse, LogQsoRequest, LogQsoResponse, LookupRequest,
-    LookupResponse, QsoSortOrder as ProtoQsoSortOrder, RefreshSpaceWeatherRequest,
-    RefreshSpaceWeatherResponse, ResetRuntimeConfigRequest, ResetRuntimeConfigResponse,
-    StreamLookupRequest, StreamLookupResponse, SyncWithQrzRequest, SyncWithQrzResponse,
-    TestRigConnectionRequest, TestRigConnectionResponse, UpdateQsoRequest, UpdateQsoResponse,
+    GetRigStatusResponse, GetRuntimeConfigRequest, GetRuntimeConfigResponse, GetSyncStatusRequest,
+    GetSyncStatusResponse, ImportAdifRequest, ImportAdifResponse, ListQsosRequest,
+    ListQsosResponse, LogQsoRequest, LogQsoResponse, LookupRequest, LookupResponse,
+    QsoSortOrder as ProtoQsoSortOrder, RefreshSpaceWeatherRequest, RefreshSpaceWeatherResponse,
+    ResetRuntimeConfigRequest, ResetRuntimeConfigResponse, StreamLookupRequest,
+    StreamLookupResponse, SyncWithQrzRequest, SyncWithQrzResponse, TestRigConnectionRequest,
+    TestRigConnectionResponse, UpdateQsoRequest, UpdateQsoResponse,
 };
 use qsoripper_core::rig_control::{
     RigControlProvider, RigctldConfig, RigctldProvider, DEFAULT_RIGCTLD_HOST, DEFAULT_RIGCTLD_PORT,
@@ -80,7 +80,7 @@ where
     let logbook_service =
         DeveloperLogbookService::new(runtime_config.clone(), sync_scheduler.clone());
     let lookup_service = DeveloperLookupService::new(runtime_config.clone());
-    let engine_service = EngineControlSurface::default();
+    let engine_service = EngineControlSurface;
     let developer_control_service = DeveloperControlSurface::new(runtime_config.clone());
     let setup_service = SetupControlSurface::new(setup_state.clone(), runtime_config.clone());
     let station_profile_service =
@@ -676,6 +676,7 @@ impl DeveloperControlSurface {
 const RUST_ENGINE_ID: &str = "rust-tonic";
 const RUST_ENGINE_DISPLAY_NAME: &str = "QsoRipper Rust Engine";
 const RUST_ENGINE_CAPABILITIES: &[&str] = &[
+    "engine-info",
     "logbook",
     "lookup",
     "setup",

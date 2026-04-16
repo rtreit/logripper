@@ -12,7 +12,7 @@ struct DxccEntityInfo {
 }
 
 static DXCC_ENTITIES: LazyLock<HashMap<u32, DxccEntityInfo>> = LazyLock::new(|| {
-    include_str!("data/dxcc_entities.tsv")
+    include_str!(concat!(env!("OUT_DIR"), "/dxcc_entities.tsv"))
         .lines()
         .filter_map(|line| {
             let mut parts = line.split('\t');

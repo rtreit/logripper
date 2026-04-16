@@ -17,14 +17,14 @@ use qsoripper_core::proto::qsoripper::services::{
     DeleteStationProfileResponse, GetActiveStationContextRequest, GetActiveStationContextResponse,
     GetSetupStatusRequest, GetSetupStatusResponse, GetSetupWizardStateRequest,
     GetSetupWizardStateResponse, GetStationProfileRequest, GetStationProfileResponse,
-    ListStationProfilesRequest, ListStationProfilesResponse, RigControlSettings, SaveSetupRequest,
-    SaveSetupResponse, SaveStationProfileRequest, SaveStationProfileResponse,
-    SetActiveStationProfileRequest, SetActiveStationProfileResponse,
-    SetSessionStationProfileOverrideRequest, SetSessionStationProfileOverrideResponse,
-    SetupFieldValidation, SetupStatus, SetupWizardStep, SetupWizardStepStatus,
-    StationProfileRecord, StorageBackend, TestQrzCredentialsRequest, TestQrzCredentialsResponse,
-    TestQrzLogbookCredentialsRequest, TestQrzLogbookCredentialsResponse, ValidateSetupStepRequest,
-    ValidateSetupStepResponse,
+    ListStationProfilesRequest, ListStationProfilesResponse, RigControlSettings,
+    RuntimeConfigDefinition, RuntimeConfigValue, SaveSetupRequest, SaveSetupResponse,
+    SaveStationProfileRequest, SaveStationProfileResponse, SetActiveStationProfileRequest,
+    SetActiveStationProfileResponse, SetSessionStationProfileOverrideRequest,
+    SetSessionStationProfileOverrideResponse, SetupFieldValidation, SetupStatus, SetupWizardStep,
+    SetupWizardStepStatus, StationProfileRecord, StorageBackend, TestQrzCredentialsRequest,
+    TestQrzCredentialsResponse, TestQrzLogbookCredentialsRequest,
+    TestQrzLogbookCredentialsResponse, ValidateSetupStepRequest, ValidateSetupStepResponse,
 };
 use qsoripper_core::qrz_logbook::{QrzLogbookClient, QrzLogbookConfig};
 use qsoripper_core::rig_control::{
@@ -48,6 +48,10 @@ use crate::station_profile_support::{
 pub(crate) const CONFIG_PATH_ENV_VAR: &str = "QSORIPPER_CONFIG_PATH";
 const DEFAULT_CONFIG_FILE_NAME: &str = "config.toml";
 const DEFAULT_LOG_FILE_NAME: &str = "qsoripper.db";
+const PERSISTENCE_PATH_KEY: &str = "persistence.path";
+const PERSISTENCE_STEP_DESCRIPTION: &str =
+    "Choose where QsoRipper stores the local logbook used by this engine.";
+const PERSISTENCE_STEP_LABEL: &str = "Log storage";
 
 #[derive(Clone)]
 pub(crate) struct SetupControlSurface {
@@ -552,7 +556,8 @@ impl PersistedSetupConfig {
             );
         }
 
-        let requested_log_file_path = normalize_optional_string(request.log_file_path.as_deref());
+        let requested_log_file_path = setup_request_persistence_path(request)
+            .or_else(|| normalize_optional_string(request.log_file_path.as_deref()));
         #[allow(deprecated)]
         let legacy_sqlite_path = normalize_optional_string(request.sqlite_path.as_deref());
         #[allow(deprecated)]
@@ -1300,6 +1305,10 @@ fn build_status(
     let warnings = build_warnings(persisted_config);
     let station_profile = persisted_config.and_then(PersistedSetupConfig::station_profile);
     let log_file_path = persisted_config.and_then(PersistedSetupConfig::log_file_path);
+    let persistence_has_value = log_file_path.is_some();
+    let persistence_display_value = log_file_path
+        .clone()
+        .unwrap_or_else(|| suggested_log_file_path.display().to_string());
     let storage_backend = persisted_config.map_or(
         StorageBackend::Unspecified,
         PersistedSetupConfig::runtime_storage_backend,
@@ -1333,6 +1342,27 @@ fn build_status(
             .is_some(),
         sync_config: persisted_config.map(|config| config.sync.to_proto()),
         rig_control: persisted_config.and_then(|config| config.rig_control.to_proto()),
+        persistence_step_enabled: true,
+        persistence_label: PERSISTENCE_STEP_LABEL.to_string(),
+        persistence_description: PERSISTENCE_STEP_DESCRIPTION.to_string(),
+        persistence_definitions: vec![RuntimeConfigDefinition {
+            key: PERSISTENCE_PATH_KEY.to_string(),
+            label: "Log file path".to_string(),
+            description: "Path to the SQLite logbook file used by the Rust engine.".to_string(),
+            kind: qsoripper_core::proto::qsoripper::services::RuntimeConfigValueKind::Path.into(),
+            secret: false,
+            allowed_values: Vec::new(),
+            required: true,
+        }],
+        persistence_values: vec![RuntimeConfigValue {
+            key: PERSISTENCE_PATH_KEY.to_string(),
+            has_value: persistence_has_value,
+            display_value: persistence_display_value,
+            overridden: false,
+            secret: false,
+            redacted: false,
+        }],
+        persistence_contract_explicit: true,
     }
 }
 
@@ -1475,7 +1505,8 @@ fn validate_step(
 }
 
 fn validate_log_file_step(request: &ValidateSetupStepRequest) -> ValidateSetupStepResponse {
-    let path = normalize_optional_string(request.log_file_path.as_deref());
+    let path = setup_validation_persistence_path(request)
+        .or_else(|| normalize_optional_string(request.log_file_path.as_deref()));
     let (valid, message) = match &path {
         Some(p) => {
             let parent = Path::new(p.as_str()).parent();
@@ -1492,11 +1523,27 @@ fn validate_log_file_step(request: &ValidateSetupStepRequest) -> ValidateSetupSt
     ValidateSetupStepResponse {
         valid,
         fields: vec![SetupFieldValidation {
-            field: "log_file_path".to_string(),
+            field: PERSISTENCE_PATH_KEY.to_string(),
             valid,
             message,
         }],
     }
+}
+
+fn setup_request_persistence_path(request: &SaveSetupRequest) -> Option<String> {
+    request
+        .persistence_values
+        .iter()
+        .find(|field| field.key.eq_ignore_ascii_case(PERSISTENCE_PATH_KEY))
+        .and_then(|field| normalize_optional_string(field.value.as_deref()))
+}
+
+fn setup_validation_persistence_path(request: &ValidateSetupStepRequest) -> Option<String> {
+    request
+        .persistence_values
+        .iter()
+        .find(|field| field.key.eq_ignore_ascii_case(PERSISTENCE_PATH_KEY))
+        .and_then(|field| normalize_optional_string(field.value.as_deref()))
 }
 
 fn validate_station_profiles_step(request: &ValidateSetupStepRequest) -> ValidateSetupStepResponse {

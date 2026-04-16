@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.Collections.ObjectModel;
 using System.Globalization;
 using System.Linq;
 using System.Threading.Tasks;
@@ -7,6 +9,7 @@ using CommunityToolkit.Mvvm.Input;
 using QsoRipper.Domain;
 using QsoRipper.Gui.Services;
 using QsoRipper.Services;
+using QsoRipper.Shared.Persistence;
 
 namespace QsoRipper.Gui.ViewModels;
 
@@ -112,9 +115,11 @@ internal sealed partial class SettingsViewModel : ObservableObject
     [ObservableProperty]
     private string _rigControlStaleThresholdMs = string.Empty;
 
-    // Log file (read-only display)
     [ObservableProperty]
-    private string _logFilePath = string.Empty;
+    private string _persistenceDescription = "Where should QsoRipper store persisted logbook data?";
+
+    [ObservableProperty]
+    private string _persistenceSectionTitle = "Storage";
 
     // UI state
     [ObservableProperty]
@@ -133,6 +138,27 @@ internal sealed partial class SettingsViewModel : ObservableObject
     private bool _didSave;
 
     private bool _hasPersistedRigControl;
+
+    public ObservableCollection<PersistenceSetupField> PersistenceFields { get; } = [];
+
+    public bool HasPersistenceInputs => PersistenceFields.Count > 0;
+
+    public bool ShowsPersistenceInfoOnly => !HasPersistenceInputs;
+
+    public bool RequiresLogFilePath => PersistenceFields.Count == 1 && PersistenceFields[0].IsPath;
+
+    public string LogFilePath
+    {
+        get => PersistenceSetupFields.GetPathValue(PersistenceFields) ?? string.Empty;
+        set
+        {
+            if (PersistenceFields.FirstOrDefault(persistenceField => persistenceField.IsPath) is { } pathField)
+            {
+                pathField.Value = value;
+                OnPropertyChanged();
+            }
+        }
+    }
 
     /// <summary>
     /// Raised when the dialog should close. The bool parameter is true for save, false for cancel.
@@ -285,7 +311,13 @@ internal sealed partial class SettingsViewModel : ObservableObject
     private void ApplyStatus(SetupStatus status)
     {
         QrzXmlUsername = status.QrzXmlUsername ?? string.Empty;
-        LogFilePath = status.LogFilePath ?? string.Empty;
+        PersistenceSectionTitle = string.IsNullOrWhiteSpace(status.PersistenceLabel)
+            ? "Storage"
+            : status.PersistenceLabel;
+        PersistenceDescription = string.IsNullOrWhiteSpace(status.PersistenceDescription)
+            ? "Where should QsoRipper store persisted logbook data?"
+            : status.PersistenceDescription;
+        ReplacePersistenceFields(PersistenceSetupFields.FromStatus(status, status.SuggestedLogFilePath ?? string.Empty));
         _hasPersistedRigControl = status.RigControl is not null;
 
         if (status.SyncConfig is not null)
@@ -373,7 +405,6 @@ internal sealed partial class SettingsViewModel : ObservableObject
         var request = new SaveSetupRequest
         {
             StationProfile = profile,
-            LogFilePath = LogFilePath.Trim(),
             SyncConfig = new SyncConfig
             {
                 AutoSyncEnabled = AutoSyncEnabled,
@@ -382,6 +413,8 @@ internal sealed partial class SettingsViewModel : ObservableObject
                 ConflictPolicy = ConflictPolicy,
             },
         };
+
+        PersistenceSetupFields.ApplyTo(request, PersistenceFields);
 
         if (!string.IsNullOrWhiteSpace(QrzXmlUsername))
         {
@@ -430,6 +463,21 @@ internal sealed partial class SettingsViewModel : ObservableObject
         SetUInt64Field(RigControlReadTimeoutMs, value => settings.ReadTimeoutMs = value);
         SetUInt64Field(RigControlStaleThresholdMs, value => settings.StaleThresholdMs = value);
         return settings;
+    }
+
+    private void ReplacePersistenceFields(IReadOnlyList<PersistenceSetupField> fields)
+    {
+        PersistenceFields.Clear();
+        foreach (var field in fields)
+        {
+            PersistenceFields.Add(field);
+        }
+
+        OnPropertyChanged(nameof(PersistenceFields));
+        OnPropertyChanged(nameof(HasPersistenceInputs));
+        OnPropertyChanged(nameof(ShowsPersistenceInfoOnly));
+        OnPropertyChanged(nameof(RequiresLogFilePath));
+        OnPropertyChanged(nameof(LogFilePath));
     }
 
     private bool TryValidateRigControlInputs(out string? validationError)
@@ -544,4 +592,5 @@ internal sealed partial class SettingsViewModel : ObservableObject
             setter(value);
         }
     }
+
 }

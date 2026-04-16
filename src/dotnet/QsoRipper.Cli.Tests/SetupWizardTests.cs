@@ -1,4 +1,5 @@
 using QsoRipper.Cli.Commands;
+using QsoRipper.EngineSelection;
 
 namespace QsoRipper.Cli.Tests;
 
@@ -84,7 +85,7 @@ public class SetupWizardTests
     [Fact]
     public void CliArguments_defaults_setup_flags_to_false()
     {
-        var args = new CliArguments("setup", "http://localhost:50051");
+        var args = new CliArguments("setup", "http://localhost:50051", EngineCatalog.DefaultProfile);
 
         Assert.False(args.SetupStatus);
         Assert.False(args.SetupFromEnv);
@@ -93,7 +94,7 @@ public class SetupWizardTests
     [Fact]
     public void CliArguments_can_set_setup_status()
     {
-        var args = new CliArguments("setup", "http://localhost:50051", SetupStatus: true);
+        var args = new CliArguments("setup", "http://localhost:50051", EngineCatalog.DefaultProfile, SetupStatus: true);
 
         Assert.True(args.SetupStatus);
         Assert.False(args.SetupFromEnv);
@@ -102,7 +103,7 @@ public class SetupWizardTests
     [Fact]
     public void CliArguments_can_set_setup_from_env()
     {
-        var args = new CliArguments("setup", "http://localhost:50051", SetupFromEnv: true);
+        var args = new CliArguments("setup", "http://localhost:50051", EngineCatalog.DefaultProfile, SetupFromEnv: true);
 
         Assert.False(args.SetupStatus);
         Assert.True(args.SetupFromEnv);

@@ -60,6 +60,13 @@ internal sealed class DebugCommandService
                 "test src\\dotnet\\QsoRipper.slnx",
                 _repositoryPaths.RepoRoot),
             new(
+                "engine-conformance",
+                "Run engine conformance scenario",
+                "Starts the Rust and managed .NET engines one at a time and drives the same CLI setup/log/export scenario against both to verify client-visible parity.",
+                "pwsh",
+                "-File tests\\Run-EngineConformance.ps1",
+                _repositoryPaths.RepoRoot),
+            new(
                 "buf-lint",
                 "Run buf lint",
                 "Runs the repository's protobuf linting command if buf is available on the machine.",

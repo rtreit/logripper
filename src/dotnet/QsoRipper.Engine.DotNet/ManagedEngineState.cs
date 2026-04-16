@@ -11,8 +11,12 @@ namespace QsoRipper.Engine.DotNet;
 
 internal sealed class ManagedEngineState
 {
+    private const string PersistencePathKey = "persistence.path";
+    private const string PersistenceStepDescription = "The managed .NET engine uses an in-memory logbook. No persisted log path is required during setup.";
+    private const string PersistenceStepLabel = "Storage";
+    private const string PersistenceSummary = "In-memory logbook";
+
     private const string StorageBackendKey = "QSORIPPER_STORAGE_BACKEND";
-    private const string SqlitePathKey = "QSORIPPER_SQLITE_PATH";
     private const string QrzXmlUsernameKey = "QSORIPPER_QRZ_XML_USERNAME";
     private const string QrzXmlPasswordKey = "QSORIPPER_QRZ_XML_PASSWORD";
     private const string QrzLogbookApiKeyKey = "QSORIPPER_QRZ_LOGBOOK_API_KEY";
@@ -76,18 +80,18 @@ internal sealed class ManagedEngineState
     {
         return new EngineInfo
         {
-            EngineId = EngineCatalog.GetEngineId(EngineImplementation.DotNet),
-            DisplayName = EngineCatalog.GetDisplayName(EngineImplementation.DotNet),
+            EngineId = EngineCatalog.DotNetProfile.EngineId,
+            DisplayName = EngineCatalog.DotNetProfile.DisplayName,
             Version = typeof(ManagedEngineState).Assembly.GetName().Version?.ToString() ?? "0.0.0",
             Capabilities =
             {
                 "engine-info",
+                "logbook",
+                "lookup",
                 "setup",
                 "station-profiles",
                 "runtime-config",
-                "logbook-crud",
-                "lookup-sample",
-                "rig-status",
+                "rig-control",
                 "space-weather",
             }
         };
@@ -123,7 +127,7 @@ internal sealed class ManagedEngineState
         switch (request.Step)
         {
             case SetupWizardStep.LogFile:
-                AddValidation(response, "log_file_path", !string.IsNullOrWhiteSpace(request.LogFilePath), "Log file path is required.");
+                ValidateOptionalPersistencePath(response, request);
                 break;
             case SetupWizardStep.StationProfiles:
                 var profile = request.StationProfile ?? new StationProfile();
@@ -210,9 +214,12 @@ internal sealed class ManagedEngineState
 
         lock (_gate)
         {
-            if (!string.IsNullOrWhiteSpace(request.LogFilePath))
+            var requestedPersistencePath =
+                NormalizeOptional(FindPersistenceValue(request.PersistenceValues))
+                ?? NormalizeOptional(request.LogFilePath);
+            if (!string.IsNullOrWhiteSpace(requestedPersistencePath))
             {
-                _logFilePath = request.LogFilePath.Trim();
+                _logFilePath = requestedPersistencePath;
             }
 
             if (request.StationProfile is not null)
@@ -251,7 +258,6 @@ internal sealed class ManagedEngineState
             }
 
             _runtimeOverrides[StorageBackendKey] = ManagedStorageBackend;
-            _runtimeOverrides[SqlitePathKey] = _logFilePath;
             if (!string.IsNullOrWhiteSpace(_qrzXmlUsername))
             {
                 _runtimeOverrides[QrzXmlUsernameKey] = _qrzXmlUsername;
@@ -398,6 +404,7 @@ internal sealed class ManagedEngineState
         {
             var qso = request.Qso?.Clone() ?? throw new InvalidOperationException("qso is required.");
             ApplyStationContextNoLock(qso);
+            ManagedQsoParity.NormalizeQsoForPersistence(qso);
             ValidateQsoNoLock(qso);
             FinalizeQsoForWrite(qso, isNew: true);
 
@@ -430,7 +437,8 @@ internal sealed class ManagedEngineState
                 return new UpdateQsoResponse { Success = false, Error = $"QSO '{qso.LocalId}' was not found." };
             }
 
-            ApplyStationContextNoLock(qso);
+            ApplyStationContextNoLock(qso, _recentQsos[index]);
+            ManagedQsoParity.NormalizeQsoForPersistence(qso);
             ValidateQsoNoLock(qso);
             FinalizeQsoForWrite(qso, isNew: false);
 
@@ -596,6 +604,112 @@ internal sealed class ManagedEngineState
         }
     }
 
+    public ImportAdifResponse ImportAdif(byte[] adifBytes, bool refresh)
+    {
+        ArgumentNullException.ThrowIfNull(adifBytes);
+
+        var qsos = ManagedAdifCodec.ParseAdiQsos(adifBytes);
+        lock (_gate)
+        {
+            var response = new ImportAdifResponse();
+            var activeStationProfile = GetEffectiveActiveProfileNoLock();
+
+            for (var index = 0; index < qsos.Count; index++)
+            {
+                var recordNumber = index + 1;
+                var qso = qsos[index].Clone();
+                var hadImportedStationContext = ManagedQsoParity.QsoHasStationContext(qso);
+
+                if (hadImportedStationContext)
+                {
+                    ManagedQsoParity.MaterializeStationSnapshotForCreate(qso, null);
+                }
+                else if (activeStationProfile is not null)
+                {
+                    ManagedQsoParity.MaterializeStationSnapshotForCreate(qso, activeStationProfile);
+                    response.Warnings.Add(
+                        $"Record {recordNumber}: local-station history was absent in ADIF; applied active station profile '{ManagedQsoParity.StationProfileLabel(activeStationProfile)}'.");
+                }
+                else
+                {
+                    response.RecordsSkipped++;
+                    response.Warnings.Add(
+                        $"Record {recordNumber}: local-station history was absent in ADIF and no active station profile is configured; skipped.");
+                    continue;
+                }
+
+                ManagedQsoParity.NormalizeQsoForPersistence(qso);
+                if (ManagedQsoParity.InvalidImportReason(qso) is { } reason)
+                {
+                    response.RecordsSkipped++;
+                    response.Warnings.Add($"Record {recordNumber}: {reason} Skipped.");
+                    continue;
+                }
+
+                var existingIndex = _recentQsos.FindIndex(existing => ManagedQsoParity.QsosMatchForDuplicate(existing, qso));
+                if (existingIndex >= 0)
+                {
+                    if (refresh)
+                    {
+                        var merged = ManagedQsoParity.MergeQsoForRefresh(_recentQsos[existingIndex], qso);
+                        _recentQsos[existingIndex] = merged;
+                        response.RecordsUpdated++;
+                        response.Warnings.Add($"Record {recordNumber}: refreshed existing record '{merged.LocalId}'.");
+                    }
+                    else
+                    {
+                        response.RecordsSkipped++;
+                        response.Warnings.Add(
+                            $"Record {recordNumber}: duplicate skipped; matched an existing QSO on station_callsign, worked_callsign, utc_timestamp, band, mode, and compatible submode/frequency.");
+                    }
+
+                    continue;
+                }
+
+                ValidateQsoNoLock(qso);
+                FinalizeQsoForWrite(qso, isNew: true);
+                qso.SyncStatus = SyncStatus.LocalOnly;
+                _recentQsos.Insert(0, qso);
+                response.RecordsImported++;
+            }
+
+            return response;
+        }
+    }
+
+    public byte[] ExportAdif(ExportAdifRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        lock (_gate)
+        {
+            IEnumerable<QsoRecord> query = _recentQsos.Select(item => item.Clone());
+
+            if (request.After is not null)
+            {
+                var after = request.After.ToDateTimeOffset();
+                query = query.Where(item => item.UtcTimestamp is not null && item.UtcTimestamp.ToDateTimeOffset() > after);
+            }
+
+            if (request.Before is not null)
+            {
+                var before = request.Before.ToDateTimeOffset();
+                query = query.Where(item => item.UtcTimestamp is not null && item.UtcTimestamp.ToDateTimeOffset() < before);
+            }
+
+            if (!string.IsNullOrWhiteSpace(request.ContestId))
+            {
+                query = query.Where(item => string.Equals(item.ContestId, request.ContestId, StringComparison.OrdinalIgnoreCase));
+            }
+
+            query = query
+                .OrderBy(item => item.UtcTimestamp?.ToDateTimeOffset() ?? DateTimeOffset.MinValue)
+                .ThenBy(item => item.LocalId, StringComparer.Ordinal);
+
+            return ManagedAdifCodec.SerializeAdiQsos(query, request.IncludeHeader);
+        }
+    }
+
     public LookupResponse Lookup(string callsign, bool cacheOnly = false, bool skipCache = false)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(callsign);
@@ -750,19 +864,6 @@ internal sealed class ManagedEngineState
 
                         _runtimeOverrides[StorageBackendKey] = ManagedStorageBackend;
                         break;
-                    case SqlitePathKey:
-                        if (mutation.Kind == RuntimeConfigMutationKind.Clear)
-                        {
-                            _logFilePath = _suggestedLogFilePath;
-                            _runtimeOverrides.Remove(SqlitePathKey);
-                        }
-                        else if (!string.IsNullOrWhiteSpace(mutation.Value))
-                        {
-                            _logFilePath = mutation.Value.Trim();
-                            _runtimeOverrides[SqlitePathKey] = _logFilePath;
-                        }
-
-                        break;
                     case QrzXmlUsernameKey:
                         ApplyStringOverrideNoLock(QrzXmlUsernameKey, mutation, value => _qrzXmlUsername = NormalizeOptional(value));
                         break;
@@ -831,7 +932,6 @@ internal sealed class ManagedEngineState
             if (normalizedKeys.Length == 0)
             {
                 _runtimeOverrides.Clear();
-                _logFilePath = _suggestedLogFilePath;
                 _qrzXmlUsername = null;
                 _hasQrzXmlPassword = false;
                 _hasQrzLogbookApiKey = false;
@@ -848,10 +948,6 @@ internal sealed class ManagedEngineState
                     {
                         case StorageBackendKey:
                             _runtimeOverrides[StorageBackendKey] = ManagedStorageBackend;
-                            break;
-                        case SqlitePathKey:
-                            _logFilePath = _suggestedLogFilePath;
-                            _runtimeOverrides.Remove(SqlitePathKey);
                             break;
                         case QrzXmlUsernameKey:
                             _qrzXmlUsername = null;
@@ -953,11 +1049,15 @@ internal sealed class ManagedEngineState
             IsFirstRun = !File.Exists(_configPath),
             HasQrzXmlPassword = _hasQrzXmlPassword,
             HasQrzLogbookApiKey = _hasQrzLogbookApiKey,
+            PersistenceDescription = PersistenceStepDescription,
+            PersistenceLabel = PersistenceStepLabel,
+            PersistenceContractExplicit = true,
             SyncConfig = _syncConfig.Clone(),
         };
 #pragma warning disable CS0612
         status.StorageBackend = StorageBackend.Memory;
 #pragma warning restore CS0612
+        status.PersistenceStepEnabled = false;
 
         if (!string.IsNullOrWhiteSpace(_logFilePath))
         {
@@ -990,7 +1090,7 @@ internal sealed class ManagedEngineState
             new SetupWizardStepStatus
             {
                 Step = SetupWizardStep.LogFile,
-                Complete = !string.IsNullOrWhiteSpace(_logFilePath),
+                Complete = true,
             },
             new SetupWizardStepStatus
             {
@@ -1089,36 +1189,20 @@ internal sealed class ManagedEngineState
         return _sessionOverrideProfile?.Clone() ?? GetPersistedActiveProfileNoLock();
     }
 
-    private void ApplyStationContextNoLock(QsoRecord qso)
+    private void ApplyStationContextNoLock(QsoRecord qso, QsoRecord? existing = null)
     {
-        var active = GetEffectiveActiveProfileNoLock();
-        if (active is null)
+        if (existing is null)
         {
+            ManagedQsoParity.MaterializeStationSnapshotForCreate(qso, GetEffectiveActiveProfileNoLock());
             return;
         }
 
-        if (string.IsNullOrWhiteSpace(qso.StationCallsign))
-        {
-            qso.StationCallsign = active.StationCallsign;
-        }
-
-        if (qso.StationSnapshot is null)
-        {
-            qso.StationSnapshot = BuildStationSnapshot(active);
-        }
+        ManagedQsoParity.MaterializeStationSnapshotForUpdate(qso, existing);
     }
 
     private static void ValidateQsoNoLock(QsoRecord qso)
     {
-        if (string.IsNullOrWhiteSpace(qso.StationCallsign))
-        {
-            throw new InvalidOperationException("An active station profile is required before logging a QSO.");
-        }
-
-        if (string.IsNullOrWhiteSpace(qso.WorkedCallsign))
-        {
-            throw new InvalidOperationException("worked_callsign is required.");
-        }
+        ManagedQsoParity.ValidateQsoForPersistence(qso);
     }
 
     private static void FinalizeQsoForWrite(QsoRecord qso, bool isNew)
@@ -1276,13 +1360,6 @@ internal sealed class ManagedEngineState
             },
             new RuntimeConfigDefinition
             {
-                Key = SqlitePathKey,
-                Label = "Log file path",
-                Description = "Persisted managed-engine log file path shown in setup and settings.",
-                Kind = RuntimeConfigValueKind.Path,
-            },
-            new RuntimeConfigDefinition
-            {
                 Key = QrzXmlUsernameKey,
                 Label = "QRZ XML username",
                 Description = "Managed-engine sample QRZ XML username.",
@@ -1321,6 +1398,7 @@ internal sealed class ManagedEngineState
         {
             ActiveStorageBackend = ManagedStorageBackend,
             LookupProviderSummary = ManagedLookupProviderSummary,
+            PersistenceSummary = PersistenceSummary,
         };
 
         if (GetEffectiveActiveProfileNoLock() is { } activeProfile)
@@ -1339,7 +1417,6 @@ internal sealed class ManagedEngineState
         return
         [
             BuildRuntimeValue(StorageBackendKey, ManagedStorageBackend, overridden: true, secret: false, redacted: false),
-            BuildRuntimeValue(SqlitePathKey, _logFilePath, overridden: _runtimeOverrides.ContainsKey(SqlitePathKey), secret: false, redacted: false),
             BuildRuntimeValue(QrzXmlUsernameKey, _qrzXmlUsername, overridden: _runtimeOverrides.ContainsKey(QrzXmlUsernameKey), secret: false, redacted: false),
             BuildRuntimeValue(QrzXmlPasswordKey, _hasQrzXmlPassword ? "***" : null, overridden: _runtimeOverrides.ContainsKey(QrzXmlPasswordKey), secret: true, redacted: _hasQrzXmlPassword),
             BuildRuntimeValue(QrzLogbookApiKeyKey, _hasQrzLogbookApiKey ? "***" : null, overridden: _runtimeOverrides.ContainsKey(QrzLogbookApiKeyKey), secret: true, redacted: _hasQrzLogbookApiKey),
@@ -1384,82 +1461,35 @@ internal sealed class ManagedEngineState
     private bool IsSetupCompleteNoLock()
     {
         var active = GetEffectiveActiveProfileNoLock();
-        return !string.IsNullOrWhiteSpace(_logFilePath) && active is not null && IsStationProfileComplete(active);
+        return active is not null && IsStationProfileComplete(active);
     }
 
-    private static StationSnapshot BuildStationSnapshot(StationProfile profile)
+    private static string? FindPersistenceValue(IEnumerable<SetupFieldValue> values)
     {
-        var snapshot = new StationSnapshot
-        {
-            StationCallsign = profile.StationCallsign,
-        };
+        return values
+            .FirstOrDefault(value => string.Equals(value.Key, PersistencePathKey, StringComparison.OrdinalIgnoreCase))
+            ?.Value;
+    }
 
-        if (!string.IsNullOrWhiteSpace(profile.ProfileName))
+    private static void ValidateOptionalPersistencePath(
+        ValidateSetupStepResponse response,
+        ValidateSetupStepRequest request)
+    {
+        var path = NormalizeOptional(FindPersistenceValue(request.PersistenceValues))
+            ?? NormalizeOptional(request.LogFilePath);
+        if (string.IsNullOrWhiteSpace(path))
         {
-            snapshot.ProfileName = profile.ProfileName;
+            response.Valid = true;
+            return;
         }
 
-        if (!string.IsNullOrWhiteSpace(profile.OperatorCallsign))
-        {
-            snapshot.OperatorCallsign = profile.OperatorCallsign;
-        }
-
-        if (!string.IsNullOrWhiteSpace(profile.OperatorName))
-        {
-            snapshot.OperatorName = profile.OperatorName;
-        }
-
-        if (!string.IsNullOrWhiteSpace(profile.Grid))
-        {
-            snapshot.Grid = profile.Grid;
-        }
-
-        if (!string.IsNullOrWhiteSpace(profile.County))
-        {
-            snapshot.County = profile.County;
-        }
-
-        if (!string.IsNullOrWhiteSpace(profile.State))
-        {
-            snapshot.State = profile.State;
-        }
-
-        if (!string.IsNullOrWhiteSpace(profile.Country))
-        {
-            snapshot.Country = profile.Country;
-        }
-
-        if (profile.Dxcc != 0)
-        {
-            snapshot.Dxcc = profile.Dxcc;
-        }
-
-        if (profile.CqZone != 0)
-        {
-            snapshot.CqZone = profile.CqZone;
-        }
-
-        if (profile.ItuZone != 0)
-        {
-            snapshot.ItuZone = profile.ItuZone;
-        }
-
-        if (profile.Latitude != 0)
-        {
-            snapshot.Latitude = profile.Latitude;
-        }
-
-        if (profile.Longitude != 0)
-        {
-            snapshot.Longitude = profile.Longitude;
-        }
-
-        if (!string.IsNullOrWhiteSpace(profile.ArrlSection))
-        {
-            snapshot.ArrlSection = profile.ArrlSection;
-        }
-
-        return snapshot;
+        var parent = Path.GetDirectoryName(path);
+        var valid = string.IsNullOrWhiteSpace(parent) || Directory.Exists(parent);
+        AddValidation(
+            response,
+            PersistencePathKey,
+            valid,
+            valid ? string.Empty : $"Parent directory '{parent}' does not exist.");
     }
 
     private static void AddValidation(ValidateSetupStepResponse response, string field, bool valid, string message)

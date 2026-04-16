@@ -29,6 +29,13 @@
   </ItemGroup>
 
   <ItemGroup>
+    <EmbeddedResource Include="..\..\..\shared\adif-data\submode_aliases.tsv"
+                      LogicalName="QsoRipper.Engine.DotNet.submode_aliases.tsv" />
+    <EmbeddedResource Include="..\..\..\shared\adif-data\dxcc_entities.tsv"
+                      LogicalName="QsoRipper.Engine.DotNet.dxcc_entities.tsv" />
+  </ItemGroup>
+
+  <ItemGroup>
     <InternalsVisibleTo Include="QsoRipper.Engine.DotNet.Tests" />
   </ItemGroup>
 

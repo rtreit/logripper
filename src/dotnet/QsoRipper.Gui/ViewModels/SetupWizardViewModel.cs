@@ -7,6 +7,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using QsoRipper.Gui.Services;
 using QsoRipper.Services;
+using QsoRipper.Shared.Persistence;
 
 namespace QsoRipper.Gui.ViewModels;
 
@@ -64,14 +65,7 @@ internal sealed partial class SetupWizardViewModel : ObservableObject
 
             if (Steps[0] is LogFileStepViewModel logStep)
             {
-                logStep.LogFilePath = state.Status.SuggestedLogFilePath;
-                foreach (var ss in state.Steps)
-                {
-                    if (ss.Step == SetupWizardStep.LogFile && ss.Complete)
-                    {
-                        logStep.LogFilePath = state.Status.LogFilePath;
-                    }
-                }
+                logStep.ConfigureFromSetupStatus(state.Status);
             }
 
             if (Steps[1] is StationProfileStepViewModel stationStep)
@@ -273,9 +267,10 @@ internal sealed partial class SetupWizardViewModel : ObservableObject
 
             var request = new SaveSetupRequest
             {
-                LogFilePath = logStep.LogFilePath ?? string.Empty,
                 StationProfile = BuildStationProfile(stationStep),
             };
+
+            PersistenceSetupFields.ApplyTo(request, logStep.PersistenceFields);
 
             if (!string.IsNullOrWhiteSpace(qrzStep.Username))
             {
@@ -318,7 +313,10 @@ internal sealed partial class SetupWizardViewModel : ObservableObject
         switch (Steps[stepIndex])
         {
             case LogFileStepViewModel logStep:
-                request.LogFilePath = logStep.LogFilePath ?? string.Empty;
+                if (logStep.HasPersistenceInputs)
+                {
+                    PersistenceSetupFields.ApplyTo(request, logStep.PersistenceFields);
+                }
                 break;
             case StationProfileStepViewModel stationStep:
                 request.StationProfile = BuildStationProfile(stationStep);
