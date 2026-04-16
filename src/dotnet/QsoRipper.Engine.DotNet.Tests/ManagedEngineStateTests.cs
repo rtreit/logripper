@@ -2,6 +2,7 @@ using System.Text;
 using Google.Protobuf.WellKnownTypes;
 using QsoRipper.Domain;
 using QsoRipper.Engine.DotNet;
+using QsoRipper.Engine.QrzLogbook;
 using QsoRipper.Engine.Storage.Memory;
 using QsoRipper.EngineSelection;
 using QsoRipper.Services;
@@ -94,7 +95,7 @@ public sealed class ManagedEngineStateTests : IDisposable
     [Fact]
     public void Log_qso_uses_active_station_context_and_sync_updates_status()
     {
-        var state = CreateState();
+        var state = CreateStateWithSync();
         state.SaveSetup(new SaveSetupRequest
         {
             QrzLogbookApiKey = "api-key",
@@ -129,6 +130,7 @@ public sealed class ManagedEngineStateTests : IDisposable
         Assert.Equal("K7RND", stored.StationSnapshot.StationCallsign);
         Assert.Equal("CN87", stored.StationSnapshot.Grid);
         Assert.Equal(1u, beforeSync.PendingUpload);
+        Assert.True(string.IsNullOrEmpty(syncResult.Error), $"Sync error: [{syncResult.Error}]");
         Assert.Equal(1u, syncResult.UploadedRecords);
         Assert.True(syncResult.Complete);
         Assert.Equal(0u, afterSync.PendingUpload);
@@ -349,9 +351,40 @@ public sealed class ManagedEngineStateTests : IDisposable
         return new ManagedEngineState(Path.Combine(_tempDirectory, "managed-engine.json"), new MemoryStorage());
     }
 
+    private ManagedEngineState CreateStateWithSync()
+    {
+        var storage = new MemoryStorage();
+        var fakeApi = new FakeQrzLogbookApi();
+        var syncEngine = new QrzSyncEngine(fakeApi);
+        return new ManagedEngineState(
+            Path.Combine(_tempDirectory, "managed-engine.json"),
+            storage,
+            lookupCoordinator: null,
+            rigControlMonitor: null,
+            spaceWeatherMonitor: null,
+            syncEngine: syncEngine);
+    }
+
     private static byte[] Utf8(string value)
     {
         return Encoding.UTF8.GetBytes(value);
+    }
+
+    /// <summary>
+    /// Minimal in-memory fake for <see cref="IQrzLogbookApi"/> that records uploads and returns empty fetches.
+    /// </summary>
+    private sealed class FakeQrzLogbookApi : IQrzLogbookApi
+    {
+        private int _logIdCounter;
+
+        public Task<List<QsoRecord>> FetchQsosAsync(string? sinceDateYmd) =>
+            Task.FromResult(new List<QsoRecord>());
+
+        public Task<string> UploadQsoAsync(QsoRecord qso)
+        {
+            var logId = $"FAKE-{Interlocked.Increment(ref _logIdCounter)}";
+            return Task.FromResult(logId);
+        }
     }
 }
 #pragma warning restore CA1707

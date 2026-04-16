@@ -1,6 +1,7 @@
 using System.Diagnostics.CodeAnalysis;
 using Google.Protobuf;
 using Grpc.Core;
+using QsoRipper.Engine.Lookup;
 using QsoRipper.Services;
 
 namespace QsoRipper.Engine.DotNet;
@@ -300,7 +301,7 @@ internal sealed class ManagedLogbookGrpcService(ManagedEngineState state)
         IServerStreamWriter<SyncWithQrzResponse> responseStream,
         ServerCallContext context)
     {
-        await responseStream.WriteAsync(state.SyncWithQrz());
+        await responseStream.WriteAsync(state.SyncWithQrz(request.FullSync));
     }
 
     public override Task<GetSyncStatusResponse> GetSyncStatus(
@@ -377,7 +378,7 @@ internal sealed class ManagedLogbookGrpcService(ManagedEngineState state)
 }
 
 [SuppressMessage("Performance", "CA1812:Avoid uninstantiated internal classes", Justification = "Activated by ASP.NET Core gRPC.")]
-internal sealed class ManagedLookupGrpcService(ManagedEngineState state)
+internal sealed class ManagedLookupGrpcService(ManagedEngineState state, ILookupCoordinator coordinator)
     : LookupService.LookupServiceBase
 {
     public override Task<LookupResponse> Lookup(LookupRequest request, ServerCallContext context)
@@ -410,14 +411,32 @@ internal sealed class ManagedLookupGrpcService(ManagedEngineState state)
         GetDxccEntityRequest request,
         ServerCallContext context)
     {
-        throw new RpcException(new Status(StatusCode.Unimplemented, "Managed engine DXCC lookup is not implemented in the first slice."));
+        return request.QueryCase switch
+        {
+            GetDxccEntityRequest.QueryOneofCase.DxccCode
+                => DxccEntityTable.TryGetByCode(request.DxccCode, out var entity)
+                    ? Task.FromResult(new GetDxccEntityResponse { Entity = entity })
+                    : throw new RpcException(new Status(StatusCode.NotFound, $"DXCC entity {request.DxccCode} not found.")),
+
+            GetDxccEntityRequest.QueryOneofCase.Prefix
+                => throw new RpcException(new Status(StatusCode.Unimplemented, "Prefix-based DXCC lookup is not yet supported.")),
+
+            _ => throw new RpcException(new Status(StatusCode.InvalidArgument, "Either dxcc_code or prefix must be specified.")),
+        };
     }
 
-    public override Task<BatchLookupResponse> BatchLookup(
+    public override async Task<BatchLookupResponse> BatchLookup(
         BatchLookupRequest request,
         ServerCallContext context)
     {
-        throw new RpcException(new Status(StatusCode.Unimplemented, "Managed engine batch lookup is not implemented in the first slice."));
+        var results = await BatchLookupOrchestrator.ExecuteAsync(
+            coordinator,
+            (IReadOnlyList<string>)request.Callsigns,
+            ct: context.CancellationToken);
+
+        var response = new BatchLookupResponse();
+        response.Results.AddRange(results);
+        return response;
     }
 }
 

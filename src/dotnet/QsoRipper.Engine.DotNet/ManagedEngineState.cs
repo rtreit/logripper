@@ -5,6 +5,7 @@ using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using QsoRipper.Domain;
 using QsoRipper.Engine.Lookup;
+using QsoRipper.Engine.QrzLogbook;
 using QsoRipper.Engine.RigControl;
 using QsoRipper.Engine.SpaceWeather;
 using QsoRipper.Engine.Storage;
@@ -55,28 +56,34 @@ internal sealed class ManagedEngineState
     private string? _activeProfileId;
     private StationProfile? _sessionOverrideProfile;
     private readonly Dictionary<string, string> _runtimeOverrides;
+    private readonly QrzSyncEngine? _syncEngine;
 
     public ManagedEngineState(string configPath)
-        : this(configPath, new MemoryStorage(), null, null, null)
+        : this(configPath, new MemoryStorage(), null, null, null, null)
     {
     }
 
     public ManagedEngineState(string configPath, IEngineStorage storage)
-        : this(configPath, storage, null, null, null)
+        : this(configPath, storage, null, null, null, null)
     {
     }
 
     public ManagedEngineState(string configPath, IEngineStorage storage, ILookupCoordinator? lookupCoordinator)
-        : this(configPath, storage, lookupCoordinator, null, null)
+        : this(configPath, storage, lookupCoordinator, null, null, null)
     {
     }
 
     public ManagedEngineState(string configPath, IEngineStorage storage, ILookupCoordinator? lookupCoordinator, RigControlMonitor? rigControlMonitor)
-        : this(configPath, storage, lookupCoordinator, rigControlMonitor, null)
+        : this(configPath, storage, lookupCoordinator, rigControlMonitor, null, null)
     {
     }
 
     public ManagedEngineState(string configPath, IEngineStorage storage, ILookupCoordinator? lookupCoordinator, RigControlMonitor? rigControlMonitor, SpaceWeatherMonitor? spaceWeatherMonitor)
+        : this(configPath, storage, lookupCoordinator, rigControlMonitor, spaceWeatherMonitor, null)
+    {
+    }
+
+    public ManagedEngineState(string configPath, IEngineStorage storage, ILookupCoordinator? lookupCoordinator, RigControlMonitor? rigControlMonitor, SpaceWeatherMonitor? spaceWeatherMonitor, QrzSyncEngine? syncEngine)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(configPath);
         ArgumentNullException.ThrowIfNull(storage);
@@ -86,6 +93,7 @@ internal sealed class ManagedEngineState
         _lookupCoordinator = lookupCoordinator ?? CreateDefaultCoordinator(storage);
         _rigControlMonitor = rigControlMonitor;
         _spaceWeatherMonitor = spaceWeatherMonitor;
+        _syncEngine = syncEngine;
         var persisted = LoadPersistedState(_configPath);
         _qrzXmlUsername = NormalizeOptional(persisted.QrzXmlUsername);
         _hasQrzXmlPassword = persisted.HasQrzXmlPassword;
@@ -516,11 +524,11 @@ internal sealed class ManagedEngineState
         }
     }
 
-    public SyncWithQrzResponse SyncWithQrz()
+    public SyncWithQrzResponse SyncWithQrz(bool fullSync = false)
     {
         lock (_gate)
         {
-            if (!_hasQrzLogbookApiKey)
+            if (_syncEngine is null)
             {
                 return new SyncWithQrzResponse
                 {
@@ -529,41 +537,38 @@ internal sealed class ManagedEngineState
                 };
             }
 
-            var allQsos = Sync(_storage.Logbook.ListQsosAsync(new QsoListQuery { Sort = Storage.QsoSortOrder.OldestFirst }));
-            var uploadedCount = 0u;
-            var counter = 0;
-
-            foreach (var qso in allQsos)
+            try
             {
-                counter++;
-                if (qso.SyncStatus != SyncStatus.Synced)
+                var result = Sync(_syncEngine.ExecuteSyncAsync(_storage.Logbook, fullSync));
+
+                var syncResponse = new SyncWithQrzResponse
                 {
-                    qso.SyncStatus = SyncStatus.Synced;
-                    if (!qso.HasQrzLogid)
-                    {
-                        qso.QrzLogid = $"managed-{counter}";
-                    }
+                    DownloadedRecords = result.DownloadedCount,
+                    UploadedRecords = result.UploadedCount,
+                    ConflictRecords = result.ConflictCount,
+                    TotalRecords = result.DownloadedCount + result.UploadedCount,
+                    ProcessedRecords = result.DownloadedCount + result.UploadedCount,
+                    CurrentAction = "Sync completed.",
+                    Complete = true,
+                };
 
-                    Sync(_storage.Logbook.UpdateQsoAsync(qso));
-                    uploadedCount++;
+                if (result.ErrorSummary is not null)
+                {
+                    syncResponse.Error = result.ErrorSummary;
                 }
+
+                return syncResponse;
             }
-
-            Sync(_storage.Logbook.UpsertSyncMetadataAsync(new SyncMetadata
+#pragma warning disable CA1031 // Do not catch general exception types — sync must not crash the engine
+            catch (Exception ex)
+#pragma warning restore CA1031
             {
-                LastSync = DateTimeOffset.UtcNow,
-            }));
-
-            return new SyncWithQrzResponse
-            {
-                TotalRecords = (uint)allQsos.Count,
-                ProcessedRecords = (uint)allQsos.Count,
-                UploadedRecords = uploadedCount,
-                DownloadedRecords = 0,
-                ConflictRecords = 0,
-                CurrentAction = "Managed engine sync completed.",
-                Complete = true,
-            };
+                return new SyncWithQrzResponse
+                {
+                    Complete = true,
+                    Error = $"{ex.Message}\n{ex.StackTrace}",
+                };
+            }
         }
     }
 
@@ -1474,4 +1479,7 @@ internal sealed class ManagedEngineState
 
     /// <summary>Synchronously awaits a completed <see cref="ValueTask"/>.</summary>
     private static void Sync(ValueTask task) => task.GetAwaiter().GetResult();
+
+    /// <summary>Synchronously extracts the result of a <see cref="Task{T}"/>.</summary>
+    private static T Sync<T>(Task<T> task) => task.GetAwaiter().GetResult();
 }

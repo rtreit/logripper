@@ -18,6 +18,8 @@
   <Project Path="QsoRipper.Engine.Storage.Memory.Tests/QsoRipper.Engine.Storage.Memory.Tests.csproj" />
   <Project Path="QsoRipper.Engine.Storage.Sqlite/QsoRipper.Engine.Storage.Sqlite.csproj" />
   <Project Path="QsoRipper.Engine.Storage.Sqlite.Tests/QsoRipper.Engine.Storage.Sqlite.Tests.csproj" />
+  <Project Path="QsoRipper.Engine.QrzLogbook/QsoRipper.Engine.QrzLogbook.csproj" />
+  <Project Path="QsoRipper.Engine.QrzLogbook.Tests/QsoRipper.Engine.QrzLogbook.Tests.csproj" />
   <Project Path="QsoRipper.EngineSelection/QsoRipper.EngineSelection.csproj" />
   <Project Path="QsoRipper.Gui/QsoRipper.Gui.csproj" />
   <Project Path="QsoRipper.Gui.Tests/QsoRipper.Gui.Tests.csproj" />

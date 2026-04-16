@@ -18,6 +18,8 @@ Recommended local startup:
 .\start-qsoripper.ps1 -Engine local-dotnet
 ```
 
+`-ForceRestart` is scoped to the requested profile, so restarting `local-rust` does not stop `local-dotnet` (and vice versa).
+
 Direct engine-host startup is also available when you want to work on a specific implementation:
 
 ```

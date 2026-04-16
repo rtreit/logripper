@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Server.Kestrel.Core;
 using QsoRipper.Engine.DotNet;
 using QsoRipper.Engine.Lookup;
 using QsoRipper.Engine.Lookup.Qrz;
+using QsoRipper.Engine.QrzLogbook;
 using QsoRipper.Engine.RigControl;
 using QsoRipper.Engine.SpaceWeather;
 using QsoRipper.Engine.Storage;
@@ -23,13 +24,15 @@ builder.Services.AddSingleton(lookupCoordinator);
 
 var rigControlMonitor = CreateRigControlMonitor();
 var spaceWeatherMonitor = CreateSpaceWeatherMonitor();
+var syncEngine = CreateSyncEngine();
 
 builder.Services.AddSingleton(provider => new ManagedEngineState(
     options.ConfigPath,
     provider.GetRequiredService<IEngineStorage>(),
     provider.GetRequiredService<ILookupCoordinator>(),
     rigControlMonitor,
-    spaceWeatherMonitor));
+    spaceWeatherMonitor,
+    syncEngine));
 
 var app = builder.Build();
 app.MapGrpcService<ManagedEngineInfoGrpcService>();
@@ -44,6 +47,23 @@ app.MapGet("/", () => "QsoRipper .NET engine host. Use a gRPC client.");
 
 Console.WriteLine($"Starting QsoRipper .NET engine on {options.ListenAddress} using config {options.ConfigPath} (storage: {storage.BackendName})");
 await app.RunAsync();
+
+static QrzSyncEngine? CreateSyncEngine()
+{
+    var apiKey = Environment.GetEnvironmentVariable("QSORIPPER_QRZ_LOGBOOK_API_KEY")?.Trim();
+    if (string.IsNullOrWhiteSpace(apiKey))
+    {
+        Console.WriteLine("QRZ Logbook sync: disabled (QSORIPPER_QRZ_LOGBOOK_API_KEY not set)");
+        return null;
+    }
+
+    // HttpClient is intentionally not disposed — it is a singleton owned by the client for the app lifetime.
+#pragma warning disable CA2000 // Dispose objects before losing scope
+    var client = new QrzLogbookClient(new HttpClient { Timeout = TimeSpan.FromSeconds(30) }, apiKey);
+#pragma warning restore CA2000
+    Console.WriteLine("QRZ Logbook sync: enabled");
+    return new QrzSyncEngine(client);
+}
 
 static IEngineStorage CreateStorage()
 {
