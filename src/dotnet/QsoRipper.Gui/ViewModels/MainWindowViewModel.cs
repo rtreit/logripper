@@ -10,6 +10,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Grpc.Net.Client;
 using QsoRipper.Gui.Services;
+using QsoRipper.Gui.Utilities;
 
 namespace QsoRipper.Gui.ViewModels;
 
@@ -616,6 +617,43 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
             disposable.Dispose();
         }
     }
+
+    /// <summary>
+    /// Restores persisted UI preferences (rig control, space weather, inspector).
+    /// Call after construction but before or during <see cref="ActivateDashboardAsync"/>.
+    /// </summary>
+    internal void ApplyPreferences(UiPreferences? prefs)
+    {
+        if (prefs is null)
+        {
+            return;
+        }
+
+        if (prefs.IsRigEnabled)
+        {
+            ToggleRigControl();
+        }
+
+        if (prefs.IsSpaceWeatherVisible)
+        {
+            IsSpaceWeatherVisible = true;
+        }
+
+        if (prefs.IsInspectorOpen)
+        {
+            IsInspectorOpen = true;
+        }
+    }
+
+    /// <summary>
+    /// Captures current UI toggle state for persistence across restarts.
+    /// </summary>
+    internal UiPreferences CapturePreferences() => new()
+    {
+        IsRigEnabled = IsRigEnabled,
+        IsSpaceWeatherVisible = IsSpaceWeatherVisible,
+        IsInspectorOpen = IsInspectorOpen,
+    };
 
     private async Task ActivateDashboardAsync(bool focusSearch)
     {

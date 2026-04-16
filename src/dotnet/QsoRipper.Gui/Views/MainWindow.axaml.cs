@@ -17,6 +17,7 @@ namespace QsoRipper.Gui.Views;
 internal sealed partial class MainWindow : Window
 {
     private readonly RecentQsoGridLayoutStore _gridLayoutStore = new();
+    private readonly UiPreferencesStore _preferencesStore = new();
     private readonly MenuItem? _fileMenuItem;
     private readonly TextBox? _recentQsoSearchBox;
     private readonly DataGrid? _recentQsoGrid;
@@ -59,6 +60,7 @@ internal sealed partial class MainWindow : Window
             ApplyPersistedGridLayout();
             if (DataContext is MainWindowViewModel vm)
             {
+                vm.ApplyPreferences(_preferencesStore.Load());
                 await vm.CheckFirstRunAsync();
             }
         }
@@ -67,6 +69,7 @@ internal sealed partial class MainWindow : Window
     protected override void OnClosed(EventArgs e)
     {
         SaveGridLayout();
+        SavePreferences();
 
         if (_viewModel is not null)
         {
@@ -713,6 +716,16 @@ internal sealed partial class MainWindow : Window
         }
 
         _gridLayoutStore.Save(state);
+    }
+
+    private void SavePreferences()
+    {
+        if (IsInspectionMode || _viewModel is null)
+        {
+            return;
+        }
+
+        _preferencesStore.Save(_viewModel.CapturePreferences());
     }
 
     private static bool HandleZoomAction(Action handler, KeyEventArgs e)
