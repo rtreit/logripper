@@ -865,6 +865,7 @@ static void InitState(void)
     g_state.mode_idx = 0;
     g_state.qso_selected = -1;
     g_state.running = 1;
+    g_state.rig_enabled = 1;
     safe_strcpy(g_state.rst_sent, sizeof(g_state.rst_sent), "59");
     safe_strcpy(g_state.rst_rcvd, sizeof(g_state.rst_rcvd), "59");
 
