@@ -49,6 +49,11 @@ pub(crate) async fn log_qso(
     let (mode, submode) = resolve_mode(mode_str);
 
     let utc_timestamp = parse_timestamp(&form.date, &form.time).ok();
+    let utc_end_timestamp = if form.time_off.is_empty() {
+        None
+    } else {
+        parse_timestamp(&form.date, &form.time_off).ok()
+    };
 
     let frequency_khz = form.frequency_mhz.parse::<f64>().ok().map(mhz_to_khz);
 
@@ -60,6 +65,7 @@ pub(crate) async fn log_qso(
         band: i32::from(band),
         mode: i32::from(mode),
         utc_timestamp,
+        utc_end_timestamp,
         frequency_khz,
         submode: if form.submode_override.is_empty() {
             submode.map(str::to_string)
@@ -306,6 +312,11 @@ pub(crate) async fn update_qso(
     let (mode, submode) = resolve_mode(mode_str);
 
     let utc_timestamp = parse_timestamp(&form.date, &form.time).ok();
+    let utc_end_timestamp = if form.time_off.is_empty() {
+        None
+    } else {
+        parse_timestamp(&form.date, &form.time_off).ok()
+    };
     let frequency_khz = form.frequency_mhz.parse::<f64>().ok().map(mhz_to_khz);
 
     let (worked_grid, worked_country, worked_cq_zone, worked_dxcc) =
@@ -317,6 +328,7 @@ pub(crate) async fn update_qso(
         band: i32::from(band),
         mode: i32::from(mode),
         utc_timestamp,
+        utc_end_timestamp,
         frequency_khz,
         submode: if form.submode_override.is_empty() {
             submode.map(str::to_string)

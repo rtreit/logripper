@@ -854,6 +854,14 @@
                   </ItemsControl.ItemTemplate>
                 </ItemsControl>
               </ScrollViewer>
+              <Separator Margin="0,2" />
+              <Button Content="Reset Layout"
+                      Command="{Binding ResetColumnLayoutCommand}"
+                      HorizontalAlignment="Stretch"
+                      HorizontalContentAlignment="Center"
+                      MinHeight="28"
+                      FontSize="11.5"
+                      ToolTip.Tip="Reset column order, widths, and visibility to defaults" />
             </StackPanel>
           </Border>
 

@@ -906,8 +906,16 @@ static void LogQso(void)
         return;
     }
 
-    char cmd[4096];
+    /* Auto-fill time_off with current UTC when logging a new QSO */
     int is_update = g_state.editing_local_id[0] != 0;
+    if (!is_update && !g_state.time_off[0]) {
+        SYSTEMTIME st;
+        GetSystemTime(&st);
+        snprintf(g_state.time_off, sizeof(g_state.time_off),
+                  "%02d:%02d", st.wHour, st.wMinute);
+    }
+
+    char cmd[4096];
 
     if (is_update) {
         snprintf(cmd, sizeof(cmd),

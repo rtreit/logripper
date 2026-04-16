@@ -172,6 +172,29 @@ if ($null -ne $existing) {
     Remove-Item -LiteralPath $statePath -Force -ErrorAction SilentlyContinue
 }
 
+if ($ForceRestart) {
+    # Kill any untracked qsoripper-server processes (e.g. started outside this script)
+    $orphans = Get-Process -Name 'qsoripper-server' -ErrorAction SilentlyContinue
+    foreach ($orphan in $orphans) {
+        Write-Info "Stopping untracked qsoripper-server process $($orphan.Id)."
+        Stop-TrackedProcess -ProcessId $orphan.Id
+    }
+
+    # On Windows the OS may briefly hold a file lock after process exit; wait for the
+    # binary to become writable before starting the build.
+    if ((Test-Path -LiteralPath $serverBinaryPath) -and $orphans) {
+        for ($lockAttempt = 0; $lockAttempt -lt 20; $lockAttempt++) {
+            try {
+                [System.IO.File]::Open($serverBinaryPath, 'Open', 'ReadWrite', 'None').Dispose()
+                break
+            }
+            catch {
+                Start-Sleep -Milliseconds 250
+            }
+        }
+    }
+}
+
 if (-not $SkipBuild) {
     Write-Info 'Building qsoripper-server.'
     cargo build --manifest-path $rustManifestPath -p qsoripper-server
