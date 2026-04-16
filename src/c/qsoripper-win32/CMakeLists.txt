@@ -19,7 +19,6 @@ endif()
 target_include_directories(qsoripper-win32 PRIVATE ${FFI_INCLUDE})
 target_link_libraries(qsoripper-win32 PRIVATE
     user32 gdi32 shell32 comctl32
-    "${FFI_LIB_DIR}/qsoripper_ffi.dll.lib"
 )
 
 # Enable Unicode

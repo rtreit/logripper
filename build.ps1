@@ -208,16 +208,13 @@ function Build-Win32 {
         return
     }
 
-    # Verify FFI library is available (built by Build-Rust)
+    # Verify FFI library is available (built by Build-Rust) — optional with dynamic loading
     $ffiLibDir = Join-Path $PSScriptRoot 'src' 'rust' 'target' $RustTargetProfile
-    $ffiDllLib = Join-Path $ffiLibDir 'qsoripper_ffi.dll.lib'
     $ffiDll    = Join-Path $ffiLibDir 'qsoripper_ffi.dll'
     $ffiInclude = Join-Path $Win32SourceDir 'include'
 
-    if (-not (Test-Path $ffiDllLib)) {
-        Write-Step 'Win32 GUI'
-        Write-Host "FFI import library not found at $ffiDllLib. Build Rust first (./build.ps1 rust)." -ForegroundColor Red
-        exit 1
+    if (-not (Test-Path $ffiDll)) {
+        Write-Host "FFI DLL not found at $ffiDll — Win32 app will run in CLI-only mode." -ForegroundColor Yellow
     }
 
     # cppcheck static analysis — fails the build on error-severity findings
@@ -250,7 +247,7 @@ function Build-Win32 {
     @"
 @echo off
 call "$vcvars" $arch >nul 2>&1
-cl /W4 /WX /analyze $optFlags /DUNICODE /D_UNICODE /I"$ffiInclude" "$Win32Source" /Fe:"$exe" /link user32.lib gdi32.lib shell32.lib comctl32.lib "$ffiDllLib"
+cl /W4 /WX /analyze $optFlags /DUNICODE /D_UNICODE /I"$ffiInclude" "$Win32Source" /Fe:"$exe" /link user32.lib gdi32.lib shell32.lib comctl32.lib
 "@ | Set-Content -LiteralPath $buildScript -Encoding ASCII
 
     Push-Location $Win32PublishDir
