@@ -1,5 +1,7 @@
 using QsoRipper.Domain;
+using QsoRipper.Gui.Services;
 using QsoRipper.Gui.ViewModels;
+using QsoRipper.Services;
 
 namespace QsoRipper.Gui.Tests;
 
@@ -67,5 +69,99 @@ public sealed class QsoLoggerEnrichmentTests
         Assert.False(qso.HasWorkedGrid);
         Assert.False(qso.HasWorkedState);
         Assert.Equal(0u, qso.WorkedDxcc);
+    }
+
+    [Fact]
+    public void AcceptLookupRecordUpdatesDisplayFieldsWhenCallsignMatches()
+    {
+        var engine = new FakeEngineClient();
+        var logger = new QsoLoggerViewModel(engine);
+        logger.Callsign = "KD9SU";
+
+        var record = new CallsignRecord
+        {
+            Callsign = "KD9SU",
+            FirstName = "Richard",
+            LastName = "Smith",
+            GridSquare = "EN52",
+            Country = "United States",
+        };
+
+        logger.AcceptLookupRecord(record);
+
+        Assert.Equal("Richard Smith", logger.LookupName);
+        Assert.Equal("EN52", logger.LookupGrid);
+        Assert.Equal("United States", logger.LookupCountry);
+    }
+
+    [Fact]
+    public void AcceptLookupRecordIgnoresMismatchedCallsign()
+    {
+        var engine = new FakeEngineClient();
+        var logger = new QsoLoggerViewModel(engine);
+        logger.Callsign = "W1AW";
+
+        var record = new CallsignRecord
+        {
+            Callsign = "KD9SU",
+            FirstName = "Richard",
+            GridSquare = "EN52",
+        };
+
+        logger.AcceptLookupRecord(record);
+
+        Assert.Equal(string.Empty, logger.LookupName);
+        Assert.Equal(string.Empty, logger.LookupGrid);
+    }
+
+    private sealed class FakeEngineClient : IEngineClient
+    {
+        public Task<GetSetupWizardStateResponse> GetWizardStateAsync(CancellationToken ct = default) =>
+            throw new NotImplementedException();
+
+        public Task<ValidateSetupStepResponse> ValidateStepAsync(ValidateSetupStepRequest request, CancellationToken ct = default) =>
+            throw new NotImplementedException();
+
+        public Task<TestQrzCredentialsResponse> TestQrzCredentialsAsync(string username, string password, CancellationToken ct = default) =>
+            throw new NotImplementedException();
+
+        public Task<SaveSetupResponse> SaveSetupAsync(SaveSetupRequest request, CancellationToken ct = default) =>
+            throw new NotImplementedException();
+
+        public Task<GetSetupStatusResponse> GetSetupStatusAsync(CancellationToken ct = default) =>
+            throw new NotImplementedException();
+
+        public Task<TestQrzLogbookCredentialsResponse> TestQrzLogbookCredentialsAsync(string apiKey, CancellationToken ct = default) =>
+            throw new NotImplementedException();
+
+        public Task<IReadOnlyList<QsoRecord>> ListRecentQsosAsync(int limit = 200, CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<QsoRecord>>([]);
+
+        public Task<UpdateQsoResponse> UpdateQsoAsync(QsoRecord qso, bool syncToQrz = false, CancellationToken ct = default) =>
+            throw new NotImplementedException();
+
+        public Task<SyncWithQrzResponse> SyncWithQrzAsync(CancellationToken ct = default) =>
+            throw new NotImplementedException();
+
+        public Task<GetSyncStatusResponse> GetSyncStatusAsync(CancellationToken ct = default) =>
+            throw new NotImplementedException();
+
+        public Task<LookupResponse> LookupCallsignAsync(string callsign, CancellationToken ct = default) =>
+            throw new NotImplementedException();
+
+        public Task<DeleteQsoResponse> DeleteQsoAsync(string localId, bool deleteFromQrz = false, CancellationToken ct = default) =>
+            throw new NotImplementedException();
+
+        public Task<LogQsoResponse> LogQsoAsync(QsoRecord qso, bool syncToQrz = false, CancellationToken ct = default) =>
+            throw new NotImplementedException();
+
+        public Task<GetRigSnapshotResponse> GetRigSnapshotAsync(CancellationToken ct = default) =>
+            throw new NotImplementedException();
+
+        public Task<GetRigStatusResponse> GetRigStatusAsync(CancellationToken ct = default) =>
+            throw new NotImplementedException();
+
+        public Task<GetCurrentSpaceWeatherResponse> GetCurrentSpaceWeatherAsync(CancellationToken ct = default) =>
+            throw new NotImplementedException();
     }
 }

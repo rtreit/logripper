@@ -413,6 +413,26 @@ internal sealed partial class QsoLoggerViewModel : ObservableObject
         LoggerFocusRequested?.Invoke(this, EventArgs.Empty);
     }
 
+    /// <summary>
+    /// Accept a <see cref="CallsignRecord"/> resolved externally (e.g. from
+    /// the F8 callsign card) so the next logged QSO includes enrichment data.
+    /// Only applied when the callsign matches the current entry.
+    /// </summary>
+    public void AcceptLookupRecord(CallsignRecord record)
+    {
+        if (string.Equals(
+                record.Callsign,
+                Callsign.Trim(),
+                StringComparison.OrdinalIgnoreCase))
+        {
+            _lastLookupRecord = record;
+            LookupName = BuildName(record.FirstName, record.LastName);
+            LookupGrid = record.GridSquare ?? string.Empty;
+            LookupCountry = record.Country ?? string.Empty;
+            LookupStatusText = string.Empty;
+        }
+    }
+
     // ── Debounced callsign lookup ───────────────────────────────────────
 
     private async Task DebouncedLookupAsync(string callsign, CancellationToken ct)

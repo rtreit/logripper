@@ -9,6 +9,7 @@ using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Grpc.Net.Client;
+using QsoRipper.Domain;
 using QsoRipper.Gui.Services;
 using QsoRipper.Gui.Utilities;
 
@@ -422,6 +423,7 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
 
         var vm = new CallsignCardViewModel(_engine);
         vm.CloseRequested += OnCallsignCardCloseRequested;
+        vm.RecordLoaded += OnCallsignCardRecordLoaded;
         CallsignCard = vm;
         IsCallsignCardOpen = true;
         _ = vm.LoadAsync(callsign);
@@ -433,6 +435,7 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
         if (CallsignCard is { } card)
         {
             card.CloseRequested -= OnCallsignCardCloseRequested;
+            card.RecordLoaded -= OnCallsignCardRecordLoaded;
         }
 
         var wasLoggerFocused = IsLoggerFocused;
@@ -452,6 +455,11 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
     private void OnCallsignCardCloseRequested(object? sender, EventArgs e)
     {
         CloseCallsignCard();
+    }
+
+    private void OnCallsignCardRecordLoaded(object? sender, CallsignRecord record)
+    {
+        Logger.AcceptLookupRecord(record);
     }
 
     private void CloseHelp()
