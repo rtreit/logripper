@@ -57,7 +57,13 @@
       <Setter Property="IsReadOnly" Value="False" />
     </Style>
 
+    <!-- Compact density: override Fluent theme MinHeight so RowHeight/ColumnHeaderHeight bindings control sizing -->
+    <Style Selector="DataGrid#RecentQsoGrid DataGridRow">
+      <Setter Property="MinHeight" Value="0" />
+    </Style>
+
     <Style Selector="DataGrid#RecentQsoGrid DataGridColumnHeader">
+      <Setter Property="MinHeight" Value="0" />
       <Setter Property="Padding" Value="2,0" />
       <Setter Property="FontWeight" Value="SemiBold" />
     </Style>
