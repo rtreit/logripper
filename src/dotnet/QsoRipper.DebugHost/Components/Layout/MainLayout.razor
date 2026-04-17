@@ -1,4 +1,5 @@
 @inherits LayoutComponentBase
+@implements IDisposable
 @inject RepositoryPaths RepositoryPaths
 @inject DebugWorkbenchState WorkbenchState
 
@@ -33,6 +34,21 @@
 </div>
 
 @code {
+    protected override void OnInitialized()
+    {
+        WorkbenchState.StateChanged += HandleWorkbenchStateChanged;
+    }
+
+    public void Dispose()
+    {
+        WorkbenchState.StateChanged -= HandleWorkbenchStateChanged;
+    }
+
+    private void HandleWorkbenchStateChanged()
+    {
+        _ = InvokeAsync(StateHasChanged);
+    }
+
     private string ProbeStatusCss => WorkbenchState.LastProbe switch
     {
         { IsSuccess: true } => "dot-connected",

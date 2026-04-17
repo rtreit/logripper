@@ -249,5 +249,23 @@ public class DebugWorkbenchStateTests
         Assert.Equal("K7RND/P", state.ActiveStationContext.EffectiveActiveProfile.StationCallsign);
         Assert.True(state.ActiveStationContext.HasSessionOverride);
     }
+
+    [Fact]
+    public async Task ProbeAsync_invalid_endpoint_updates_state_and_notifies_listeners()
+    {
+        var state = new DebugWorkbenchState(Options.Create(new DebugWorkbenchOptions
+        {
+            DefaultEngineEndpoint = "not-a-valid-uri"
+        }));
+        var notifications = 0;
+        state.StateChanged += () => notifications++;
+
+        var result = await state.ProbeAsync();
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(EngineProbeStage.InvalidEndpoint, result.Stage);
+        Assert.Same(result, state.LastProbe);
+        Assert.Equal(1, notifications);
+    }
 }
 #pragma warning restore CA1707

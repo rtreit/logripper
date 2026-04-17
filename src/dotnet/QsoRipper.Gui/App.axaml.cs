@@ -37,7 +37,7 @@ internal sealed partial class App : Application
                 var engineProfile = EngineCatalog.ResolveProfile();
                 var endpoint = EngineCatalog.ResolveEndpoint(engineProfile);
 
-                var mainVm = new MainWindowViewModel(endpoint);
+                var mainVm = new MainWindowViewModel(engineProfile, endpoint);
 
                 desktop.MainWindow = new MainWindow
                 {

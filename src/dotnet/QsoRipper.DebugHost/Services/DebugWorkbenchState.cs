@@ -53,6 +53,8 @@ internal sealed class DebugWorkbenchState
 
     public string? StationProfileErrorMessage { get; private set; }
 
+    public event Action? StateChanged;
+
     public void UpdateEngineEndpoint(string endpoint)
     {
         ArgumentNullException.ThrowIfNull(endpoint);
@@ -60,6 +62,7 @@ internal sealed class DebugWorkbenchState
         EngineEndpoint = endpoint.Trim();
         LastProbe = null;
         ReportedEngineInfo = null;
+        NotifyStateChanged();
     }
 
     public void UpdateEngineProfile(string profileId)
@@ -81,6 +84,7 @@ internal sealed class DebugWorkbenchState
 
         LastProbe = null;
         ReportedEngineInfo = null;
+        NotifyStateChanged();
     }
 
     public void UpdateStorageOptions(string backend, string persistenceLocation)
@@ -90,6 +94,7 @@ internal sealed class DebugWorkbenchState
 
         EngineStorageBackend = NormalizeStorageBackend(backend);
         EnginePersistenceLocation = NormalizePersistenceLocation(persistenceLocation);
+        NotifyStateChanged();
     }
 
     public void UpdateRuntimeConfig(RuntimeConfigSnapshot snapshot)
@@ -104,6 +109,8 @@ internal sealed class DebugWorkbenchState
         {
             EnginePersistenceLocation = NormalizePersistenceLocation(snapshot.PersistenceLocation);
         }
+
+        NotifyStateChanged();
     }
 
     public void UpdateRuntimeConfigError(string? message)
@@ -111,6 +118,7 @@ internal sealed class DebugWorkbenchState
         RuntimeConfigErrorMessage = string.IsNullOrWhiteSpace(message)
             ? null
             : message.Trim();
+        NotifyStateChanged();
     }
 
     public void UpdateSetupStatus(SetupStatus status)
@@ -129,6 +137,8 @@ internal sealed class DebugWorkbenchState
         {
             EnginePersistenceLocation = NormalizePersistenceLocation(persistedLogFilePath);
         }
+
+        NotifyStateChanged();
     }
 
     public void UpdateSetupError(string? message)
@@ -136,11 +146,13 @@ internal sealed class DebugWorkbenchState
         SetupErrorMessage = string.IsNullOrWhiteSpace(message)
             ? null
             : message.Trim();
+        NotifyStateChanged();
     }
 
     public void ClearSetupError()
     {
         SetupErrorMessage = null;
+        NotifyStateChanged();
     }
 
     public void UpdateStationProfiles(
@@ -153,6 +165,7 @@ internal sealed class DebugWorkbenchState
         StationProfileCatalog = catalog;
         ActiveStationContext = context;
         StationProfileErrorMessage = null;
+        NotifyStateChanged();
     }
 
     public void UpdateStationProfileError(string? message)
@@ -160,11 +173,13 @@ internal sealed class DebugWorkbenchState
         StationProfileErrorMessage = string.IsNullOrWhiteSpace(message)
             ? null
             : message.Trim();
+        NotifyStateChanged();
     }
 
     public void ClearStationProfileError()
     {
         StationProfileErrorMessage = null;
+        NotifyStateChanged();
     }
 
     public string GetStorageBackendDisplayName()
@@ -244,18 +259,31 @@ internal sealed class DebugWorkbenchState
 
     public async Task<TransportProbeResult> ProbeAsync(CancellationToken cancellationToken = default)
     {
+        TransportProbeResult CompleteProbe(
+            TransportProbeResult probe,
+            EngineInfo? engineInfo = null,
+            bool preserveReportedEngineInfo = false)
+        {
+            if (!preserveReportedEngineInfo)
+            {
+                ReportedEngineInfo = engineInfo?.Clone();
+            }
+
+            LastProbe = probe;
+            NotifyStateChanged();
+            return probe;
+        }
+
         var attemptedAt = DateTimeOffset.UtcNow;
         if (!Uri.TryCreate(EngineEndpoint, UriKind.Absolute, out var endpointUri))
         {
-            ReportedEngineInfo = null;
-            LastProbe = new TransportProbeResult(
+            return CompleteProbe(new TransportProbeResult(
                 false,
                 EngineProbeStage.InvalidEndpoint,
                 "Endpoint is not a valid absolute URI.",
                 "Correct the endpoint format to an absolute http:// or https:// URI.",
                 attemptedAt,
-                EngineEndpoint);
-            return LastProbe;
+                EngineEndpoint));
         }
 
         var port = endpointUri.IsDefaultPort
@@ -272,39 +300,33 @@ internal sealed class DebugWorkbenchState
         }
         catch (OperationCanceledException ex)
         {
-            ReportedEngineInfo = null;
-            LastProbe = new TransportProbeResult(
+            return CompleteProbe(new TransportProbeResult(
                 false,
                 EngineProbeStage.TcpUnreachable,
                 $"TCP connection timed out: {ex.Message}",
                 "Check that the engine host is running and reachable on the network.",
                 attemptedAt,
-                EngineEndpoint);
-            return LastProbe;
+                EngineEndpoint));
         }
         catch (SocketException ex)
         {
-            ReportedEngineInfo = null;
-            LastProbe = new TransportProbeResult(
+            return CompleteProbe(new TransportProbeResult(
                 false,
                 EngineProbeStage.TcpUnreachable,
                 $"TCP connection failed: {ex.Message}",
                 "Check that the engine host is running and reachable on the network.",
                 attemptedAt,
-                EngineEndpoint);
-            return LastProbe;
+                EngineEndpoint));
         }
         catch (IOException ex)
         {
-            ReportedEngineInfo = null;
-            LastProbe = new TransportProbeResult(
+            return CompleteProbe(new TransportProbeResult(
                 false,
                 EngineProbeStage.TcpUnreachable,
                 $"TCP connection failed: {ex.Message}",
                 "Check that the engine host is running and reachable on the network.",
                 attemptedAt,
-                EngineEndpoint);
-            return LastProbe;
+                EngineEndpoint));
         }
 
         // TCP succeeded; now probe gRPC capability via EngineService and GetSyncStatus.
@@ -325,77 +347,77 @@ internal sealed class DebugWorkbenchState
             {
             }
 
-            ReportedEngineInfo = engineInfo?.Clone();
             var client = new LogbookService.LogbookServiceClient(grpcChannel);
             await client.GetSyncStatusAsync(new GetSyncStatusRequest(), callOptions);
             var engineLabel = engineInfo is null
                 ? "Engine"
                 : $"{engineInfo.DisplayName} ({engineInfo.EngineId})";
 
-            LastProbe = new TransportProbeResult(
+            return CompleteProbe(
+                new TransportProbeResult(
                 true,
                 EngineProbeStage.MethodSucceeded,
                 $"{engineLabel} is reachable and GetSyncStatus succeeded. Baseline service is live.",
                 "The engine is operational. Proceed with logbook and lookup workflows.",
                 attemptedAt,
-                EngineEndpoint);
-            return LastProbe;
+                EngineEndpoint),
+                engineInfo);
         }
         catch (RpcException ex) when (ex.StatusCode == StatusCode.Unimplemented)
         {
             var engineLabel = ReportedEngineInfo is null
                 ? "The selected engine"
                 : $"{ReportedEngineInfo.DisplayName} ({ReportedEngineInfo.EngineId})";
-            LastProbe = new TransportProbeResult(
+            return CompleteProbe(
+                new TransportProbeResult(
                 false,
                 EngineProbeStage.MethodUnimplemented,
                 $"{engineLabel} is reachable, but GetSyncStatus is not implemented.",
                 "Implement GetSyncStatus in the selected engine host to enable baseline service health checks.",
                 attemptedAt,
-                EngineEndpoint);
-            return LastProbe;
+                EngineEndpoint),
+                preserveReportedEngineInfo: true);
         }
         catch (RpcException ex) when (ex.StatusCode == StatusCode.Unavailable)
         {
-            ReportedEngineInfo = null;
-            LastProbe = new TransportProbeResult(
+            return CompleteProbe(new TransportProbeResult(
                 false,
                 EngineProbeStage.GrpcUnavailable,
                 $"TCP is reachable but gRPC is unavailable: {ex.Status.Detail}",
                 "Start the selected gRPC engine host. The port is open but no gRPC service is responding.",
                 attemptedAt,
-                EngineEndpoint);
-            return LastProbe;
+                EngineEndpoint));
         }
         catch (RpcException ex)
         {
-            ReportedEngineInfo = null;
-            LastProbe = new TransportProbeResult(
+            return CompleteProbe(new TransportProbeResult(
                 false,
                 EngineProbeStage.GrpcUnavailable,
                 $"gRPC call failed ({ex.StatusCode}): {ex.Status.Detail}",
                 "Investigate the gRPC service error. Check engine logs for details.",
                 attemptedAt,
-                EngineEndpoint);
-            return LastProbe;
+                EngineEndpoint));
         }
         catch (OperationCanceledException)
         {
-            ReportedEngineInfo = null;
-            LastProbe = new TransportProbeResult(
+            return CompleteProbe(new TransportProbeResult(
                 false,
                 EngineProbeStage.GrpcUnavailable,
                 "gRPC call timed out. TCP is reachable but the gRPC service did not respond in time.",
                 "Start the selected gRPC engine host. The port is open but no gRPC service is responding.",
                 attemptedAt,
-                EngineEndpoint);
-            return LastProbe;
+                EngineEndpoint));
         }
         finally
         {
             await grpcChannel.ShutdownAsync();
             grpcChannel.Dispose();
         }
+    }
+
+    private void NotifyStateChanged()
+    {
+        StateChanged?.Invoke();
     }
 
     private static string NormalizeStorageBackend(string? configuredBackend)

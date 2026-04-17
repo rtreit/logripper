@@ -133,6 +133,13 @@
       <MenuItem Header="_Tools">
         <MenuItem Header="Sync _Now" InputGesture="F6"
                   Command="{Binding SyncNowCommand}" />
+        <Separator />
+        <MenuItem Header="Use _Rust Engine"
+                  Command="{Binding SwitchToRustEngineCommand}" />
+        <MenuItem Header="Use _.NET Engine"
+                  Command="{Binding SwitchToDotNetEngineCommand}" />
+        <MenuItem Header="_Refresh Engine Status"
+                  Command="{Binding RefreshEngineAvailabilityCommand}" />
       </MenuItem>
     </Menu>
 
@@ -147,6 +154,8 @@
           <StackPanel Grid.Column="0"
                       Orientation="Horizontal"
                       Spacing="10"
+                      MaxWidth="520"
+                      ClipToBounds="True"
                       VerticalAlignment="Center">
             <TextBlock Text="QsoRipper"
                        FontSize="13"
@@ -154,18 +163,27 @@
                        VerticalAlignment="Center" />
             <TextBlock Classes="commandCaption"
                        Text="{Binding ActiveLogText}"
-                       ToolTip.Tip="{Binding ActiveLogText}" />
+                       ToolTip.Tip="{Binding ActiveLogText}"
+                       MaxWidth="120" />
             <TextBlock Classes="commandCaption"
                        Text="{Binding ActiveProfileText}"
-                       ToolTip.Tip="{Binding ActiveProfileText}" />
+                       ToolTip.Tip="{Binding ActiveProfileText}"
+                       MaxWidth="120" />
             <TextBlock Classes="commandCaption"
                        Text="{Binding ActiveStationText}"
-                       ToolTip.Tip="{Binding ActiveStationText}" />
+                       ToolTip.Tip="{Binding ActiveStationText}"
+                       MaxWidth="120" />
+            <TextBlock Classes="commandCaption"
+                       Text="{Binding ActiveEngineText}"
+                       ToolTip.Tip="{Binding ActiveEngineText}"
+                       MaxWidth="220" />
           </StackPanel>
 
           <Grid Grid.Column="1"
                 ColumnDefinitions="Auto,*"
                 ColumnSpacing="8"
+                MinWidth="0"
+                ClipToBounds="True"
                 VerticalAlignment="Center">
              <TextBox x:Name="RecentQsoSearchBox"
                       Grid.Column="0"
@@ -178,6 +196,7 @@
                      Text="{Binding RecentQsos.SearchText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
 
             <ScrollViewer Grid.Column="1"
+                          MinWidth="0"
                           HorizontalScrollBarVisibility="Hidden"
                           VerticalScrollBarVisibility="Disabled"
                           IsVisible="{Binding RecentQsos.HasActiveFilterTokens}">
@@ -843,7 +862,7 @@
               <TextBlock Text="Visible columns"
                          FontSize="12.5"
                          FontWeight="SemiBold" />
-              <ScrollViewer MaxHeight="400"
+              <ScrollViewer MaxHeight="280"
                             VerticalScrollBarVisibility="Auto">
                 <ItemsControl ItemsSource="{Binding RecentQsos.ColumnOptions}">
                   <ItemsControl.ItemTemplate>
@@ -907,6 +926,17 @@
                          FontSize="11.5"
                          TextTrimming="CharacterEllipsis"
                          MaxWidth="140" />
+              <TextBlock Text="|" Opacity="0.45" />
+              <TextBlock Text="{Binding AvailableEnginesText}"
+                         FontSize="11.5"
+                         TextTrimming="CharacterEllipsis"
+                         MaxWidth="170" />
+              <TextBlock Text="|" Opacity="0.45" />
+              <TextBlock Text="{Binding EngineSwitchStatusText}"
+                         FontSize="11.5"
+                         TextTrimming="CharacterEllipsis"
+                         ToolTip.Tip="{Binding EngineSwitchStatusText}"
+                         MaxWidth="220" />
             </StackPanel>
 
             <TextBlock Grid.Column="1"

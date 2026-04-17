@@ -20,6 +20,23 @@ Recommended local startup:
 
 `-ForceRestart` is scoped to the requested profile, so restarting `local-rust` does not stop `local-dotnet` (and vice versa).
 
+## Shared Selector and Runtime Switching
+
+All .NET clients use the shared selector rules from `QsoRipper.EngineSelection`:
+
+1. explicit runtime/profile choice (when supported by the client)
+2. `QSORIPPER_ENGINE` (legacy `QSORIPPER_ENGINE_IMPLEMENTATION`)
+3. `QSORIPPER_ENDPOINT`
+4. built-in profile defaults
+
+Local running-engine discovery is based on launcher state under `artifacts\run\` (`qsoripper-*.state.json` plus legacy `qsoripper-engine*.json`) and validates entries with PID + transport checks before presenting them as active.
+
+Current client behavior:
+
+- `QsoRipper.Cli`: per-invocation `--engine` / `--endpoint` plus shared env fallback.
+- `QsoRipper.DebugHost`: runtime profile/endpoint picker with probe/apply flow.
+- `QsoRipper.Gui`: runtime switching from **Tools → Use Rust Engine / Use .NET Engine** and **Refresh Engine Status**.
+
 Direct engine-host startup is also available when you want to work on a specific implementation:
 
 ```

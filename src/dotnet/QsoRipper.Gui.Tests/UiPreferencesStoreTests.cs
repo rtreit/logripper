@@ -24,6 +24,8 @@ public sealed class UiPreferencesStoreTests
             IsRigEnabled = true,
             IsSpaceWeatherVisible = true,
             IsInspectorOpen = false,
+            EngineProfileId = "local-dotnet",
+            EngineEndpoint = "http://127.0.0.1:50052",
         };
 
         try
@@ -36,6 +38,8 @@ public sealed class UiPreferencesStoreTests
             Assert.True(actual.IsRigEnabled);
             Assert.True(actual.IsSpaceWeatherVisible);
             Assert.False(actual.IsInspectorOpen);
+            Assert.Equal("local-dotnet", actual.EngineProfileId);
+            Assert.Equal("http://127.0.0.1:50052", actual.EngineEndpoint);
         }
         finally
         {

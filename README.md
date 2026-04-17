@@ -295,6 +295,8 @@ To stop a specific profile (or all tracked profiles):
 
 The shared client-side engine selector uses `QSORIPPER_ENGINE` (legacy `QSORIPPER_ENGINE_IMPLEMENTATION`) and `QSORIPPER_ENDPOINT`. The built-in profiles are `local-rust` and `local-dotnet`.
 
+In the Avalonia GUI, you can switch between running local engines at runtime from **Tools → Use Rust Engine** / **Use .NET Engine**. The GUI also shows active/available engine status in the top/status chrome.
+
 **Stress host and dashboard:**
 
 ```powershell

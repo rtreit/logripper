@@ -68,4 +68,8 @@ internal sealed class UiPreferences
     public bool IsSpaceWeatherVisible { get; set; }
 
     public bool IsInspectorOpen { get; set; }
+
+    public string? EngineProfileId { get; set; }
+
+    public string? EngineEndpoint { get; set; }
 }

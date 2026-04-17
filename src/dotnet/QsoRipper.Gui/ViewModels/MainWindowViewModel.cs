@@ -2,13 +2,13 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
-using Grpc.Net.Client;
 using QsoRipper.Domain;
 using QsoRipper.EngineSelection;
 using QsoRipper.Gui.Services;
@@ -20,10 +20,13 @@ namespace QsoRipper.Gui.ViewModels;
 internal sealed partial class MainWindowViewModel : ObservableObject, IDisposable
 {
     private readonly IEngineClient _engine;
+    private readonly SwitchableEngineClient? _switchableEngine;
     private readonly DispatcherTimer _utcTimer;
     private readonly DispatcherTimer _rigTimer;
     private readonly DispatcherTimer _spaceWeatherTimer;
     private bool _setupCompleteBeforeWizard;
+    private string? _preferredEngineProfileId;
+    private string? _preferredEngineEndpoint;
 
     [ObservableProperty]
     private bool _isSettingsOpen;
@@ -48,6 +51,21 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
 
     [ObservableProperty]
     private string _activeStationText = "Station: -";
+
+    [ObservableProperty]
+    private string _activeEngineText = "Engine: -";
+
+    [ObservableProperty]
+    private string _availableEnginesText = "Engines: unknown";
+
+    [ObservableProperty]
+    private string _engineSwitchStatusText = "Switch: idle";
+
+    [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(SwitchToRustEngineCommand))]
+    [NotifyCanExecuteChangedFor(nameof(SwitchToDotNetEngineCommand))]
+    [NotifyCanExecuteChangedFor(nameof(RefreshEngineAvailabilityCommand))]
+    private bool _isEngineSwitching;
 
     [ObservableProperty]
     private bool _isInspectorOpen;
@@ -103,16 +121,19 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
     [ObservableProperty]
     private bool _isLoggerFocused;
 
-    internal MainWindowViewModel(string endpoint)
+    internal MainWindowViewModel(EngineTargetProfile engineProfile, string endpoint)
     {
+        ArgumentNullException.ThrowIfNull(engineProfile);
         ArgumentException.ThrowIfNullOrWhiteSpace(endpoint);
 
-        _engine = new EngineGrpcService(GrpcChannel.ForAddress(endpoint));
+        _switchableEngine = new SwitchableEngineClient(engineProfile, endpoint);
+        _engine = _switchableEngine;
         RecentQsos = new RecentQsoListViewModel(_engine);
         RecentQsos.PropertyChanged += OnRecentQsosPropertyChanged;
         Logger = new QsoLoggerViewModel(_engine);
         Logger.QsoLogged += OnQsoLogged;
         Logger.LoggerFocusRequested += OnLoggerFocusRequested;
+        ActiveEngineText = BuildEngineText(engineProfile, endpoint);
         UpdateUtcClock();
         _utcTimer = CreateUtcTimer();
         _rigTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
@@ -123,12 +144,25 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
 
     internal MainWindowViewModel(IEngineClient engine)
     {
+        ArgumentNullException.ThrowIfNull(engine);
+
+        _switchableEngine = engine as SwitchableEngineClient;
         _engine = engine;
         RecentQsos = new RecentQsoListViewModel(engine);
         RecentQsos.PropertyChanged += OnRecentQsosPropertyChanged;
         Logger = new QsoLoggerViewModel(engine);
         Logger.QsoLogged += OnQsoLogged;
         Logger.LoggerFocusRequested += OnLoggerFocusRequested;
+        if (_switchableEngine is not null)
+        {
+            ActiveEngineText = BuildEngineText(_switchableEngine.CurrentProfile, _switchableEngine.CurrentEndpoint);
+        }
+        else
+        {
+            ActiveEngineText = "Engine: fixture";
+            AvailableEnginesText = "Engines: unavailable";
+        }
+
         UpdateUtcClock();
         _utcTimer = CreateUtcTimer();
         _rigTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
@@ -168,6 +202,8 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
     {
         try
         {
+            await ApplyPreferredEngineSelectionAsync();
+            UpdateAvailableEngineSummary();
             var state = await _engine.GetWizardStateAsync();
             ApplySetupContext(state);
             IsSetupIncomplete = !state.Status.SetupComplete;
@@ -244,6 +280,152 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
     partial void OnIsWizardOpenChanged(bool value)
     {
         SyncNowCommand.NotifyCanExecuteChanged();
+        SwitchToRustEngineCommand.NotifyCanExecuteChanged();
+        SwitchToDotNetEngineCommand.NotifyCanExecuteChanged();
+    }
+
+    [RelayCommand(CanExecute = nameof(CanSwitchEngines))]
+    private Task SwitchToRustEngineAsync()
+    {
+        return SwitchEngineProfileAsync(KnownEngineProfiles.LocalRust);
+    }
+
+    [RelayCommand(CanExecute = nameof(CanSwitchEngines))]
+    private Task SwitchToDotNetEngineAsync()
+    {
+        return SwitchEngineProfileAsync(KnownEngineProfiles.LocalDotNet);
+    }
+
+    [RelayCommand(CanExecute = nameof(CanRefreshEngineAvailability))]
+    private void RefreshEngineAvailability()
+    {
+        UpdateAvailableEngineSummary();
+    }
+
+    private bool CanSwitchEngines()
+    {
+        return _switchableEngine is not null && !IsWizardOpen && !IsEngineSwitching;
+    }
+
+    private bool CanRefreshEngineAvailability()
+    {
+        return _switchableEngine is not null && !IsEngineSwitching;
+    }
+
+    private async Task SwitchEngineProfileAsync(string profileId)
+    {
+        if (_switchableEngine is null)
+        {
+            return;
+        }
+
+        var targetProfile = EngineCatalog.GetProfile(profileId);
+        var targetEndpoint = ResolveSwitchEndpoint(targetProfile);
+        IsEngineSwitching = true;
+        EngineSwitchStatusText = $"Switching to {targetProfile.DisplayName}\u2026";
+        try
+        {
+            using var timeoutSource = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            var result = await _switchableEngine.SwitchAsync(targetProfile, targetEndpoint, timeoutSource.Token);
+            EngineSwitchStatusText = string.IsNullOrWhiteSpace(result.Message)
+                ? "Switch: ready"
+                : result.Message;
+            if (!result.Success)
+            {
+                return;
+            }
+
+            ActiveEngineText = BuildEngineText(result.Profile, result.Endpoint);
+            await RefreshSetupContextAsync();
+            await RecentQsos.RefreshAsync();
+            await RefreshSyncStatusAsync();
+        }
+        finally
+        {
+            IsEngineSwitching = false;
+            UpdateAvailableEngineSummary();
+        }
+    }
+
+    private async Task ApplyPreferredEngineSelectionAsync()
+    {
+        if (_switchableEngine is null)
+        {
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(_preferredEngineProfileId)
+            && string.IsNullOrWhiteSpace(_preferredEngineEndpoint))
+        {
+            return;
+        }
+
+        var targetProfile = EngineCatalog.ResolveProfile(_preferredEngineProfileId);
+        var targetEndpoint = EngineCatalog.ResolveEndpoint(targetProfile, _preferredEngineEndpoint);
+        if (string.Equals(targetProfile.ProfileId, _switchableEngine.CurrentProfile.ProfileId, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(targetEndpoint, _switchableEngine.CurrentEndpoint, StringComparison.OrdinalIgnoreCase))
+        {
+            _preferredEngineProfileId = null;
+            _preferredEngineEndpoint = null;
+            return;
+        }
+
+        using var timeoutSource = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var result = await _switchableEngine.SwitchAsync(targetProfile, targetEndpoint, timeoutSource.Token);
+        if (result.Success)
+        {
+            ActiveEngineText = BuildEngineText(result.Profile, result.Endpoint);
+        }
+        else
+        {
+            EngineSwitchStatusText = string.IsNullOrWhiteSpace(result.Message)
+                ? "Switch: ready"
+                : result.Message;
+        }
+
+        _preferredEngineProfileId = null;
+        _preferredEngineEndpoint = null;
+    }
+
+    private void UpdateAvailableEngineSummary()
+    {
+        if (_switchableEngine is null)
+        {
+            AvailableEnginesText = "Engines: unavailable";
+            return;
+        }
+
+        var runtimeEntries = EngineRuntimeDiscovery.DiscoverLocalEngines(new EngineRuntimeDiscoveryOptions
+        {
+            ValidateTcpReachability = true
+        });
+        var runningLabels = runtimeEntries
+            .Where(static entry => entry.IsRunning)
+            .Select(static entry => entry.Profile.DisplayName.Replace("QsoRipper ", string.Empty, StringComparison.Ordinal))
+            .ToArray();
+
+        AvailableEnginesText = runningLabels.Length == 0
+            ? "Engines: none running"
+            : $"Engines: {string.Join(", ", runningLabels)}";
+    }
+
+    private static string ResolveSwitchEndpoint(EngineTargetProfile targetProfile)
+    {
+        var runtimeEntries = EngineRuntimeDiscovery.DiscoverLocalEngines(new EngineRuntimeDiscoveryOptions
+        {
+            ValidateTcpReachability = true
+        });
+        var runningEntry = runtimeEntries.FirstOrDefault(entry =>
+            entry.IsRunning
+            && string.Equals(entry.Profile.ProfileId, targetProfile.ProfileId, StringComparison.OrdinalIgnoreCase));
+        return runningEntry?.Endpoint ?? targetProfile.DefaultEndpoint;
+    }
+
+    private static string BuildEngineText(EngineTargetProfile profile, string endpoint)
+    {
+        ArgumentNullException.ThrowIfNull(profile);
+        ArgumentException.ThrowIfNullOrWhiteSpace(endpoint);
+        return $"Engine: {profile.DisplayName} @ {endpoint.Trim()}";
     }
 
     /// <summary>
@@ -635,7 +817,11 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
         _spaceWeatherTimer.Stop();
         _spaceWeatherTimer.Tick -= OnSpaceWeatherTimerTick;
 
-        if (_engine is IDisposable disposable)
+        if (_switchableEngine is not null)
+        {
+            _switchableEngine.Dispose();
+        }
+        else if (_engine is IDisposable disposable)
         {
             disposable.Dispose();
         }
@@ -666,6 +852,13 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
         {
             IsInspectorOpen = true;
         }
+
+        _preferredEngineProfileId = string.IsNullOrWhiteSpace(prefs.EngineProfileId)
+            ? null
+            : prefs.EngineProfileId.Trim();
+        _preferredEngineEndpoint = string.IsNullOrWhiteSpace(prefs.EngineEndpoint)
+            ? null
+            : prefs.EngineEndpoint.Trim();
     }
 
     /// <summary>
@@ -676,6 +869,8 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
         IsRigEnabled = IsRigEnabled,
         IsSpaceWeatherVisible = IsSpaceWeatherVisible,
         IsInspectorOpen = IsInspectorOpen,
+        EngineProfileId = _switchableEngine?.CurrentProfile.ProfileId,
+        EngineEndpoint = _switchableEngine?.CurrentEndpoint,
     };
 
     private async Task ActivateDashboardAsync(bool focusSearch)
