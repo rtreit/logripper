@@ -1,4 +1,5 @@
 using System.Net;
+using System.Text.Json;
 using Microsoft.AspNetCore.Server.Kestrel.Core;
 using QsoRipper.Engine.DotNet;
 using QsoRipper.Engine.Lookup;
@@ -19,7 +20,7 @@ builder.Services.AddGrpc();
 var storage = CreateStorage();
 builder.Services.AddSingleton(storage);
 
-var lookupCoordinator = CreateLookupCoordinator(storage);
+var lookupCoordinator = CreateLookupCoordinator(storage, options.ConfigPath);
 builder.Services.AddSingleton(lookupCoordinator);
 
 var rigControlMonitor = CreateRigControlMonitor();
@@ -83,10 +84,27 @@ static IEngineStorage CreateStorage()
     return new MemoryStorage();
 }
 
-static ILookupCoordinator CreateLookupCoordinator(IEngineStorage storage)
+static ILookupCoordinator CreateLookupCoordinator(IEngineStorage storage, string? configPath = null)
 {
     var username = Environment.GetEnvironmentVariable("QSORIPPER_QRZ_XML_USERNAME")?.Trim();
     var password = Environment.GetEnvironmentVariable("QSORIPPER_QRZ_XML_PASSWORD")?.Trim();
+
+    if ((string.IsNullOrWhiteSpace(username) || string.IsNullOrWhiteSpace(password)) && configPath is not null)
+    {
+        var persisted = TryLoadPersistedConfig(configPath);
+        if (persisted is not null)
+        {
+            if (string.IsNullOrWhiteSpace(username))
+            {
+                username = persisted.QrzXmlUsername?.Trim();
+            }
+
+            if (string.IsNullOrWhiteSpace(password))
+            {
+                password = persisted.QrzXmlPassword?.Trim();
+            }
+        }
+    }
 
     ICallsignProvider provider;
     if (!string.IsNullOrWhiteSpace(username) && !string.IsNullOrWhiteSpace(password))
@@ -182,6 +200,29 @@ static void ConfigureListenEndpoint(KestrelServerOptions options, string listenA
     }
 
     options.ListenAnyIP(port, configure => configure.Protocols = HttpProtocols.Http2);
+}
+
+static ManagedEnginePersistedState? TryLoadPersistedConfig(string configPath)
+{
+    try
+    {
+        if (!File.Exists(configPath))
+        {
+            return null;
+        }
+
+        var json = File.ReadAllText(configPath);
+        return JsonSerializer.Deserialize<ManagedEnginePersistedState>(json, new JsonSerializerOptions
+        {
+            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        });
+    }
+#pragma warning disable CA1031 // Do not catch general exception types
+    catch
+#pragma warning restore CA1031
+    {
+        return null;
+    }
 }
 
 internal sealed record ManagedEngineHostOptions(string ListenAddress, string ConfigPath)

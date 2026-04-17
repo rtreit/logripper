@@ -43,11 +43,12 @@ internal sealed class ManagedEngineState
 
     private readonly Lock _gate = new();
     private readonly IEngineStorage _storage;
-    private readonly ILookupCoordinator _lookupCoordinator;
+    private ILookupCoordinator _lookupCoordinator;
     private readonly RigControlMonitor? _rigControlMonitor;
     private readonly SpaceWeatherMonitor? _spaceWeatherMonitor;
     private readonly string _configPath;
     private string? _qrzXmlUsername;
+    private string? _qrzXmlPassword;
     private bool _hasQrzXmlPassword;
     private bool _hasQrzLogbookApiKey;
     private SyncConfig _syncConfig;
@@ -96,6 +97,7 @@ internal sealed class ManagedEngineState
         _syncEngine = syncEngine;
         var persisted = LoadPersistedState(_configPath);
         _qrzXmlUsername = NormalizeOptional(persisted.QrzXmlUsername);
+        _qrzXmlPassword = NormalizeOptional(persisted.QrzXmlPassword);
         _hasQrzXmlPassword = persisted.HasQrzXmlPassword;
         _hasQrzLogbookApiKey = persisted.HasQrzLogbookApiKey;
         _syncConfig = ParseProtoOrDefault<SyncConfig>(persisted.SyncConfigJson);
@@ -267,8 +269,10 @@ internal sealed class ManagedEngineState
 
             if (!string.IsNullOrWhiteSpace(request.QrzXmlPassword))
             {
+                _qrzXmlPassword = request.QrzXmlPassword.Trim();
                 _hasQrzXmlPassword = true;
                 _runtimeOverrides[QrzXmlPasswordKey] = "***";
+                RebuildLookupCoordinatorNoLock();
             }
 
             if (!string.IsNullOrWhiteSpace(request.QrzLogbookApiKey))
@@ -884,12 +888,21 @@ internal sealed class ManagedEngineState
                     case QrzXmlPasswordKey:
                         if (mutation.Kind == RuntimeConfigMutationKind.Clear)
                         {
+                            _qrzXmlPassword = null;
                             _hasQrzXmlPassword = false;
                             _runtimeOverrides.Remove(QrzXmlPasswordKey);
+                            RebuildLookupCoordinatorNoLock();
                         }
                         else
                         {
-                            _hasQrzXmlPassword = !string.IsNullOrWhiteSpace(mutation.Value);
+                            var newPassword = string.IsNullOrWhiteSpace(mutation.Value) ? null : mutation.Value.Trim();
+                            if (newPassword is not null && newPassword != "***")
+                            {
+                                _qrzXmlPassword = newPassword;
+                                RebuildLookupCoordinatorNoLock();
+                            }
+
+                            _hasQrzXmlPassword = _qrzXmlPassword is not null;
                             _runtimeOverrides[QrzXmlPasswordKey] = "***";
                         }
 
@@ -947,12 +960,15 @@ internal sealed class ManagedEngineState
             {
                 _runtimeOverrides.Clear();
                 _qrzXmlUsername = null;
+                _qrzXmlPassword = null;
                 _hasQrzXmlPassword = false;
                 _hasQrzLogbookApiKey = false;
                 if (_rigControl is not null)
                 {
                     _rigControl.Enabled = false;
                 }
+
+                RebuildLookupCoordinatorNoLock();
             }
             else
             {
@@ -968,8 +984,10 @@ internal sealed class ManagedEngineState
                             _runtimeOverrides.Remove(QrzXmlUsernameKey);
                             break;
                         case QrzXmlPasswordKey:
+                            _qrzXmlPassword = null;
                             _hasQrzXmlPassword = false;
                             _runtimeOverrides.Remove(QrzXmlPasswordKey);
+                            RebuildLookupCoordinatorNoLock();
                             break;
                         case QrzLogbookApiKeyKey:
                             _hasQrzLogbookApiKey = false;
@@ -1023,6 +1041,7 @@ internal sealed class ManagedEngineState
         var persisted = new ManagedEnginePersistedState
         {
             QrzXmlUsername = _qrzXmlUsername,
+            QrzXmlPassword = _qrzXmlPassword,
             HasQrzXmlPassword = _hasQrzXmlPassword,
             HasQrzLogbookApiKey = _hasQrzLogbookApiKey,
             SyncConfigJson = ProtoJsonFormatter.Format(_syncConfig),
@@ -1291,6 +1310,31 @@ internal sealed class ManagedEngineState
         }
 
         response.SyncSuccess = true;
+    }
+
+    private void RebuildLookupCoordinatorNoLock()
+    {
+        var username = Environment.GetEnvironmentVariable(QrzXmlUsernameKey)?.Trim()
+            ?? _qrzXmlUsername;
+        var password = Environment.GetEnvironmentVariable(QrzXmlPasswordKey)?.Trim()
+            ?? _qrzXmlPassword;
+
+        if (!string.IsNullOrWhiteSpace(username) && !string.IsNullOrWhiteSpace(password))
+        {
+            // HttpClient is intentionally not disposed — it is a singleton owned by the provider for the app lifetime.
+#pragma warning disable CA2000 // Dispose objects before losing scope
+            var httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(8) };
+#pragma warning restore CA2000
+            _lookupCoordinator = new LookupCoordinator(
+                new Lookup.Qrz.QrzXmlProvider(httpClient, username, password),
+                _storage.LookupSnapshots);
+        }
+        else
+        {
+            _lookupCoordinator = new LookupCoordinator(
+                new Lookup.Qrz.DisabledCallsignProvider(),
+                _storage.LookupSnapshots);
+        }
     }
 
     private static LookupCoordinator CreateDefaultCoordinator(IEngineStorage storage)
