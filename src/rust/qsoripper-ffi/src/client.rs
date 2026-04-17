@@ -361,33 +361,33 @@ fn build_qso_record(req: &QsrLogQsoRequest) -> Result<QsoRecord, String> {
     set_optional_str(&req.comment, |s| qso.comment = Some(s.to_string()));
     set_optional_str(&req.notes, |s| qso.notes = Some(s.to_string()));
     set_optional_str(&req.worked_name, |s| {
-        qso.worked_operator_name = Some(s.to_string())
+        qso.worked_operator_name = Some(s.to_string());
     });
     set_optional_str(&req.tx_power, |s| qso.tx_power = Some(s.to_string()));
     set_optional_str(&req.submode, |s| qso.submode = Some(s.to_string()));
     set_optional_str(&req.contest_id, |s| qso.contest_id = Some(s.to_string()));
     set_optional_str(&req.serial_sent, |s| qso.serial_sent = Some(s.to_string()));
     set_optional_str(&req.serial_rcvd, |s| {
-        qso.serial_received = Some(s.to_string())
+        qso.serial_received = Some(s.to_string());
     });
     set_optional_str(&req.exchange_sent, |s| {
-        qso.exchange_sent = Some(s.to_string())
+        qso.exchange_sent = Some(s.to_string());
     });
     set_optional_str(&req.exchange_rcvd, |s| {
-        qso.exchange_received = Some(s.to_string())
+        qso.exchange_received = Some(s.to_string());
     });
     set_optional_str(&req.prop_mode, |s| qso.prop_mode = Some(s.to_string()));
     set_optional_str(&req.sat_name, |s| qso.sat_name = Some(s.to_string()));
     set_optional_str(&req.sat_mode, |s| qso.sat_mode = Some(s.to_string()));
     set_optional_str(&req.iota, |s| qso.worked_iota = Some(s.to_string()));
     set_optional_str(&req.arrl_section, |s| {
-        qso.worked_arrl_section = Some(s.to_string())
+        qso.worked_arrl_section = Some(s.to_string());
     });
     set_optional_str(&req.worked_state, |s| {
-        qso.worked_state = Some(s.to_string())
+        qso.worked_state = Some(s.to_string());
     });
     set_optional_str(&req.worked_county, |s| {
-        qso.worked_county = Some(s.to_string())
+        qso.worked_county = Some(s.to_string());
     });
     set_optional_str(&req.skcc, |s| qso.skcc = Some(s.to_string()));
 
@@ -579,6 +579,63 @@ fn format_rst(rst: &RstReport) -> String {
     }
 }
 
+fn populate_qso_optional_fields(qso: &QsoRecord, out: &mut QsrQsoDetail) {
+    if let Some(v) = &qso.comment {
+        str_to_buf(v, &mut out.comment);
+    }
+    if let Some(v) = &qso.notes {
+        str_to_buf(v, &mut out.notes);
+    }
+    if let Some(v) = &qso.worked_operator_name {
+        str_to_buf(v, &mut out.worked_name);
+    }
+    if let Some(v) = &qso.tx_power {
+        str_to_buf(v, &mut out.tx_power);
+    }
+    if let Some(v) = &qso.submode {
+        str_to_buf(v, &mut out.submode);
+    }
+    if let Some(v) = &qso.contest_id {
+        str_to_buf(v, &mut out.contest_id);
+    }
+    if let Some(v) = &qso.serial_sent {
+        str_to_buf(v, &mut out.serial_sent);
+    }
+    if let Some(v) = &qso.serial_received {
+        str_to_buf(v, &mut out.serial_rcvd);
+    }
+    if let Some(v) = &qso.exchange_sent {
+        str_to_buf(v, &mut out.exchange_sent);
+    }
+    if let Some(v) = &qso.exchange_received {
+        str_to_buf(v, &mut out.exchange_rcvd);
+    }
+    if let Some(v) = &qso.prop_mode {
+        str_to_buf(v, &mut out.prop_mode);
+    }
+    if let Some(v) = &qso.sat_name {
+        str_to_buf(v, &mut out.sat_name);
+    }
+    if let Some(v) = &qso.sat_mode {
+        str_to_buf(v, &mut out.sat_mode);
+    }
+    if let Some(v) = &qso.worked_iota {
+        str_to_buf(v, &mut out.iota);
+    }
+    if let Some(v) = &qso.worked_arrl_section {
+        str_to_buf(v, &mut out.arrl_section);
+    }
+    if let Some(v) = &qso.worked_state {
+        str_to_buf(v, &mut out.worked_state);
+    }
+    if let Some(v) = &qso.worked_county {
+        str_to_buf(v, &mut out.worked_county);
+    }
+    if let Some(v) = &qso.skcc {
+        str_to_buf(v, &mut out.skcc);
+    }
+}
+
 /// Populate a `QsrQsoDetail` from a proto `QsoRecord`.
 fn populate_qso_detail(qso: &QsoRecord, out: &mut QsrQsoDetail) {
     *out = QsrQsoDetail {
@@ -667,60 +724,7 @@ fn populate_qso_detail(qso: &QsoRecord, out: &mut QsrQsoDetail) {
     }
 
     // Optional string fields
-    if let Some(v) = &qso.comment {
-        str_to_buf(v, &mut out.comment);
-    }
-    if let Some(v) = &qso.notes {
-        str_to_buf(v, &mut out.notes);
-    }
-    if let Some(v) = &qso.worked_operator_name {
-        str_to_buf(v, &mut out.worked_name);
-    }
-    if let Some(v) = &qso.tx_power {
-        str_to_buf(v, &mut out.tx_power);
-    }
-    if let Some(v) = &qso.submode {
-        str_to_buf(v, &mut out.submode);
-    }
-    if let Some(v) = &qso.contest_id {
-        str_to_buf(v, &mut out.contest_id);
-    }
-    if let Some(v) = &qso.serial_sent {
-        str_to_buf(v, &mut out.serial_sent);
-    }
-    if let Some(v) = &qso.serial_received {
-        str_to_buf(v, &mut out.serial_rcvd);
-    }
-    if let Some(v) = &qso.exchange_sent {
-        str_to_buf(v, &mut out.exchange_sent);
-    }
-    if let Some(v) = &qso.exchange_received {
-        str_to_buf(v, &mut out.exchange_rcvd);
-    }
-    if let Some(v) = &qso.prop_mode {
-        str_to_buf(v, &mut out.prop_mode);
-    }
-    if let Some(v) = &qso.sat_name {
-        str_to_buf(v, &mut out.sat_name);
-    }
-    if let Some(v) = &qso.sat_mode {
-        str_to_buf(v, &mut out.sat_mode);
-    }
-    if let Some(v) = &qso.worked_iota {
-        str_to_buf(v, &mut out.iota);
-    }
-    if let Some(v) = &qso.worked_arrl_section {
-        str_to_buf(v, &mut out.arrl_section);
-    }
-    if let Some(v) = &qso.worked_state {
-        str_to_buf(v, &mut out.worked_state);
-    }
-    if let Some(v) = &qso.worked_county {
-        str_to_buf(v, &mut out.worked_county);
-    }
-    if let Some(v) = &qso.skcc {
-        str_to_buf(v, &mut out.skcc);
-    }
+    populate_qso_optional_fields(qso, out);
 
     // Time off
     if let Some(ts) = &qso.utc_end_timestamp {
