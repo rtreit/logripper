@@ -7,6 +7,8 @@ internal sealed class ManagedEnginePersistedState
 {
     public string? QrzXmlUsername { get; set; }
 
+    public string? QrzXmlPassword { get; set; }
+
     public bool HasQrzXmlPassword { get; set; }
 
     public bool HasQrzLogbookApiKey { get; set; }
