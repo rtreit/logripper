@@ -447,17 +447,18 @@ static char *json_extract_object(const char *start)
 
 /* ── CLI runner: execute `qr <args>` and capture stdout ────────────────── */
 
-static char g_cli_path[MAX_PATH];
+static WCHAR g_cli_path[MAX_PATH];
 
-static int TryCliCandidate(const char *base, const char *config, int versioned)
+static int TryCliCandidate(const WCHAR *base, const WCHAR *config, int versioned)
 {
     if (versioned)
-        snprintf(g_cli_path, MAX_PATH,
-                 "%s\\QsoRipper.Cli\\%s\\net10.0\\QsoRipper.Cli.exe", base, config);
+        _snwprintf(g_cli_path, MAX_PATH,
+                   L"%s\\QsoRipper.Cli\\%s\\net10.0\\QsoRipper.Cli.exe", base, config);
     else
-        snprintf(g_cli_path, MAX_PATH,
-                 "%s\\QsoRipper.Cli\\%s\\QsoRipper.Cli.exe", base, config);
-    return GetFileAttributesA(g_cli_path) != INVALID_FILE_ATTRIBUTES;
+        _snwprintf(g_cli_path, MAX_PATH,
+                   L"%s\\QsoRipper.Cli\\%s\\QsoRipper.Cli.exe", base, config);
+    g_cli_path[MAX_PATH - 1] = L'\0';
+    return GetFileAttributesW(g_cli_path) != INVALID_FILE_ATTRIBUTES;
 }
 
 static void FindCliPath(void)
@@ -465,35 +466,35 @@ static void FindCliPath(void)
     /* Try to find QsoRipper.Cli.exe relative to our own exe:
        We're at: .../artifacts/publish/qsoripper-win32/Release/qsoripper-win32.exe
        CLI is at: .../artifacts/publish/QsoRipper.Cli/{Debug|Release}[/net10.0]/QsoRipper.Cli.exe */
-    char module[MAX_PATH];
-    GetModuleFileNameA(NULL, module, MAX_PATH);
+    WCHAR module[MAX_PATH];
+    GetModuleFileNameW(NULL, module, MAX_PATH);
 
     /* Walk up to artifacts/publish */
-    char *p = strrchr(module, '\\');
+    WCHAR *p = wcsrchr(module, L'\\');
     if (p) *p = 0; /* strip exe name */
-    p = strrchr(module, '\\');
+    p = wcsrchr(module, L'\\');
     if (p) *p = 0; /* strip Release|Debug */
-    p = strrchr(module, '\\');
+    p = wcsrchr(module, L'\\');
     if (p) *p = 0; /* strip qsoripper-win32 */
 
     /* Probe sibling directory — Debug first (more likely during development),
        then Release.  For each configuration try both the versioned TFM
        sub-directory (net10.0) and the unversioned output path. */
-    if (TryCliCandidate(module, "Debug",   1)) return;
-    if (TryCliCandidate(module, "Debug",   0)) return;
-    if (TryCliCandidate(module, "Release", 1)) return;
-    if (TryCliCandidate(module, "Release", 0)) return;
+    if (TryCliCandidate(module, L"Debug",   1)) return;
+    if (TryCliCandidate(module, L"Debug",   0)) return;
+    if (TryCliCandidate(module, L"Release", 1)) return;
+    if (TryCliCandidate(module, L"Release", 0)) return;
 
     /* Try QSORIPPER_CLI_PATH env var */
-    if (GetEnvironmentVariableA("QSORIPPER_CLI_PATH", g_cli_path, MAX_PATH) > 0)
-        if (GetFileAttributesA(g_cli_path) != INVALID_FILE_ATTRIBUTES)
+    if (GetEnvironmentVariableW(L"QSORIPPER_CLI_PATH", g_cli_path, MAX_PATH) > 0)
+        if (GetFileAttributesW(g_cli_path) != INVALID_FILE_ATTRIBUTES)
             return;
 
     /* Fallback: assume on PATH — log a diagnostic so developers can tell
        the launcher didn't find a local build artifact. */
-    OutputDebugStringA("FindCliPath: no local CLI artifact found; "
-                       "falling back to PATH lookup for QsoRipper.Cli.exe\n");
-    safe_strcpy(g_cli_path, MAX_PATH, "QsoRipper.Cli.exe");
+    OutputDebugStringW(L"FindCliPath: no local CLI artifact found; "
+                       L"falling back to PATH lookup for QsoRipper.Cli.exe\n");
+    wcscpy_s(g_cli_path, MAX_PATH, L"QsoRipper.Cli.exe");
 }
 
 static char *RunQrCommand(const char *args)
@@ -507,10 +508,29 @@ static char *RunQrCommand(const char *args)
         return NULL;
     SetHandleInformation(hReadPipe, HANDLE_FLAG_INHERIT, 0);
 
-    char cmdline[8192];
-    snprintf(cmdline, sizeof(cmdline), "\"%s\" %s", g_cli_path, args);
+    /* Build wide command line: "<g_cli_path>" <args>
+       g_cli_path is already wide; args is ASCII — widen it in place.
+       Heap-allocate to avoid a 16 KB stack frame (C6262). */
+    enum { CMD_CHARS = 8192 };
+    WCHAR *wcmdline = (WCHAR *)malloc(CMD_CHARS * sizeof(WCHAR));
+    if (!wcmdline) {
+        CloseHandle(hReadPipe);
+        CloseHandle(hWritePipe);
+        return NULL;
+    }
+    int pos = _snwprintf(wcmdline, CMD_CHARS, L"\"%s\" ", g_cli_path);
+    if (pos < 0 || pos >= CMD_CHARS) { /* overflow */
+        free(wcmdline);
+        CloseHandle(hReadPipe);
+        CloseHandle(hWritePipe);
+        return NULL;
+    }
+    /* Convert the narrow args to wide and append */
+    MultiByteToWideChar(CP_UTF8, 0, args, -1,
+                        wcmdline + pos, CMD_CHARS - pos);
+    wcmdline[CMD_CHARS - 1] = L'\0';
 
-    STARTUPINFOA si = {0};
+    STARTUPINFOW si = {0};
     si.cb = sizeof(si);
     si.dwFlags = STARTF_USESTDHANDLES | STARTF_USESHOWWINDOW;
     si.hStdOutput = hWritePipe;
@@ -520,15 +540,17 @@ static char *RunQrCommand(const char *args)
 
     PROCESS_INFORMATION pi = {0};
 
-    if (!CreateProcessA(NULL, cmdline, NULL, NULL, TRUE,
+    if (!CreateProcessW(NULL, wcmdline, NULL, NULL, TRUE,
                         CREATE_NO_WINDOW, NULL, NULL, &si, &pi)) {
+        free(wcmdline);
         CloseHandle(hReadPipe);
         CloseHandle(hWritePipe);
         return NULL;
     }
+    free(wcmdline);
     CloseHandle(hWritePipe);
 
-    /* Read all stdout */
+    /* Read all stdout (byte stream — CLI outputs UTF-8) */
     char *output = (char *)malloc(8192);
     if (!output) {
         WaitForSingleObject(pi.hProcess, 5000);
