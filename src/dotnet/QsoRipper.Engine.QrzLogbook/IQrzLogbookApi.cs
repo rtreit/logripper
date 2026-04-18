@@ -18,4 +18,12 @@ public interface IQrzLogbookApi
     /// Returns the QRZ-assigned LOGID on success.
     /// </summary>
     Task<string> UploadQsoAsync(QsoRecord qso);
+
+    /// <summary>
+    /// Update an existing QSO on QRZ via the REPLACE action.
+    /// The <paramref name="qso"/> must have a non-empty <see cref="QsoRecord.QrzLogid"/>
+    /// that identifies the remote record to overwrite.
+    /// Returns the QRZ LOGID on success.
+    /// </summary>
+    Task<string> UpdateQsoAsync(QsoRecord qso);
 }

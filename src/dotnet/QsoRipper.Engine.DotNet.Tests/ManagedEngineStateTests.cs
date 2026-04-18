@@ -494,6 +494,12 @@ public sealed class ManagedEngineStateTests : IDisposable
             var logId = $"FAKE-{Interlocked.Increment(ref _logIdCounter)}";
             return Task.FromResult(logId);
         }
+
+        public Task<string> UpdateQsoAsync(QsoRecord qso)
+        {
+            var logId = $"FAKE-{Interlocked.Increment(ref _logIdCounter)}";
+            return Task.FromResult(logId);
+        }
     }
 }
 #pragma warning restore CA1707

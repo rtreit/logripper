@@ -194,7 +194,9 @@ public sealed class QrzSyncEngine
         {
             try
             {
-                var logid = await _client.UploadQsoAsync(qso).ConfigureAwait(false);
+                var logid = qso.SyncStatus == SyncStatus.Modified && !string.IsNullOrWhiteSpace(qso.QrzLogid)
+                    ? await _client.UpdateQsoAsync(qso).ConfigureAwait(false)
+                    : await _client.UploadQsoAsync(qso).ConfigureAwait(false);
                 var synced = qso.Clone();
                 synced.QrzLogid = logid;
                 synced.SyncStatus = SyncStatus.Synced;
