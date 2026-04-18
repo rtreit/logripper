@@ -776,6 +776,7 @@
                   BorderBrush="{DynamicResource SystemControlForegroundBaseMediumLowBrush}"
                   BorderThickness="1"
                   IsVisible="{Binding IsSortChooserOpen}">
+            <ScrollViewer MaxHeight="480" VerticalScrollBarVisibility="Auto">
             <StackPanel Spacing="6">
               <TextBlock Text="Sort recent QSOs"
                          FontSize="12.5"
@@ -807,9 +808,33 @@
               <Button Content="9  Note"
                       Command="{Binding RecentQsos.SortByColumnCommand}"
                       CommandParameter="{x:Static vm:RecentQsoSortColumn.Note}" />
+              <Separator Margin="0,2" />
+              <Button Content="A  Comment"
+                      Command="{Binding RecentQsos.SortByColumnCommand}"
+                      CommandParameter="{x:Static vm:RecentQsoSortColumn.Comment}" />
+              <Button Content="B  Grid"
+                      Command="{Binding RecentQsos.SortByColumnCommand}"
+                      CommandParameter="{x:Static vm:RecentQsoSortColumn.Grid}" />
+              <Button Content="C  RST Sent"
+                      Command="{Binding RecentQsos.SortByColumnCommand}"
+                      CommandParameter="{x:Static vm:RecentQsoSortColumn.RstSent}" />
+              <Button Content="D  RST Rcvd"
+                      Command="{Binding RecentQsos.SortByColumnCommand}"
+                      CommandParameter="{x:Static vm:RecentQsoSortColumn.RstReceived}" />
+              <Button Content="E  Name"
+                      Command="{Binding RecentQsos.SortByColumnCommand}"
+                      CommandParameter="{x:Static vm:RecentQsoSortColumn.Name}" />
+              <Button Content="F  Station"
+                      Command="{Binding RecentQsos.SortByColumnCommand}"
+                      CommandParameter="{x:Static vm:RecentQsoSortColumn.Station}" />
+              <Button Content="G  Exchange"
+                      Command="{Binding RecentQsos.SortByColumnCommand}"
+                      CommandParameter="{x:Static vm:RecentQsoSortColumn.Exchange}" />
+              <Separator Margin="0,2" />
               <Button Content="0  Reverse direction"
                       Command="{Binding RecentQsos.ReverseSortDirectionCommand}" />
             </StackPanel>
+            </ScrollViewer>
           </Border>
 
           <Border x:Name="ColumnChooserPanel"

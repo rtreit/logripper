@@ -62,7 +62,7 @@
 
           <TextBlock Grid.Row="7" Grid.Column="0" Text="Notes" Opacity="0.6" VerticalAlignment="Center" />
           <TextBox Grid.Row="7" Grid.Column="1"
-                   Text="{Binding Notes, Mode=TwoWay}" AcceptsReturn="True"
+                   Text="{Binding Logger.Notes, Mode=TwoWay}" AcceptsReturn="True"
                    Height="48" TextWrapping="Wrap" />
 
           <!-- Right column -->
@@ -84,11 +84,11 @@
 
           <TextBlock Grid.Row="4" Grid.Column="3" Text="Contest" Opacity="0.6" VerticalAlignment="Center" />
           <TextBox Grid.Row="4" Grid.Column="4"
-                   Text="{Binding Contest, Mode=TwoWay}" />
+                   Text="{Binding Logger.ContestId, Mode=TwoWay}" />
 
           <TextBlock Grid.Row="5" Grid.Column="3" Text="Exchange" Opacity="0.6" VerticalAlignment="Center" />
           <TextBox Grid.Row="5" Grid.Column="4"
-                   Text="{Binding Exchange, Mode=TwoWay}" />
+                   Text="{Binding Logger.ExchangeSent, Mode=TwoWay}" />
         </Grid>
       </ScrollViewer>
     </DockPanel>

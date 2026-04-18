@@ -58,6 +58,15 @@ internal sealed partial class QsoLoggerViewModel : ObservableObject
     private string _comment = string.Empty;
 
     [ObservableProperty]
+    private string _notes = string.Empty;
+
+    [ObservableProperty]
+    private string _contestId = string.Empty;
+
+    [ObservableProperty]
+    private string _exchangeSent = string.Empty;
+
+    [ObservableProperty]
     private string _elapsedTimeText = "00:00";
 
     [ObservableProperty]
@@ -249,6 +258,21 @@ internal sealed partial class QsoLoggerViewModel : ObservableObject
             qso.Comment = Comment.Trim();
         }
 
+        if (!string.IsNullOrWhiteSpace(Notes))
+        {
+            qso.Notes = Notes.Trim();
+        }
+
+        if (!string.IsNullOrWhiteSpace(ContestId))
+        {
+            qso.ContestId = ContestId.Trim();
+        }
+
+        if (!string.IsNullOrWhiteSpace(ExchangeSent))
+        {
+            qso.ExchangeSent = ExchangeSent.Trim();
+        }
+
         EnrichFromLookup(qso, _lastLookupRecord);
 
         LogStatusText = "Logging\u2026";
@@ -339,6 +363,9 @@ internal sealed partial class QsoLoggerViewModel : ObservableObject
         _lookupCts?.Cancel();
         Callsign = string.Empty;
         Comment = string.Empty;
+        Notes = string.Empty;
+        ContestId = string.Empty;
+        ExchangeSent = string.Empty;
         LogStatusText = string.Empty;
         ClearLookupFields();
         _frequencyManuallySet = false;

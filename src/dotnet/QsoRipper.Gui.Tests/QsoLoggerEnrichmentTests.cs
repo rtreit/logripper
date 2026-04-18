@@ -115,6 +115,43 @@ public sealed class QsoLoggerEnrichmentTests
     }
 
     [Fact]
+    public async Task LogQsoAsyncIncludesNotesAndContestFields()
+    {
+        var engine = new CapturingEngineClient();
+        var logger = new QsoLoggerViewModel(engine);
+        logger.Callsign = "W1AW";
+        logger.Notes = "Worked on 20m dipole";
+        logger.ContestId = "CQWW-CW";
+        logger.ExchangeSent = "599 05";
+        logger.Comment = "Strong signal";
+
+        await logger.LogQsoCommand.ExecuteAsync(null);
+
+        Assert.NotNull(engine.LastLoggedQso);
+        Assert.Equal("W1AW", engine.LastLoggedQso!.WorkedCallsign);
+        Assert.Equal("Worked on 20m dipole", engine.LastLoggedQso.Notes);
+        Assert.Equal("CQWW-CW", engine.LastLoggedQso.ContestId);
+        Assert.Equal("599 05", engine.LastLoggedQso.ExchangeSent);
+        Assert.Equal("Strong signal", engine.LastLoggedQso.Comment);
+    }
+
+    [Fact]
+    public async Task LogQsoAsyncOmitsBlankNotesAndContestFields()
+    {
+        var engine = new CapturingEngineClient();
+        var logger = new QsoLoggerViewModel(engine);
+        logger.Callsign = "VK3ABC";
+        // Leave Notes, ContestId, ExchangeSent at their defaults (empty)
+
+        await logger.LogQsoCommand.ExecuteAsync(null);
+
+        Assert.NotNull(engine.LastLoggedQso);
+        Assert.False(engine.LastLoggedQso!.HasNotes);
+        Assert.False(engine.LastLoggedQso.HasContestId);
+        Assert.False(engine.LastLoggedQso.HasExchangeSent);
+    }
+
+    [Fact]
     public void CallsignSetterNormalizesTypedInputToUppercase()
     {
         var engine = new FakeEngineClient();
@@ -165,6 +202,62 @@ public sealed class QsoLoggerEnrichmentTests
             throw new NotImplementedException();
 
         public Task<LogQsoResponse> LogQsoAsync(QsoRecord qso, bool syncToQrz = false, CancellationToken ct = default) =>
+            throw new NotImplementedException();
+
+        public Task<GetRigSnapshotResponse> GetRigSnapshotAsync(CancellationToken ct = default) =>
+            throw new NotImplementedException();
+
+        public Task<GetRigStatusResponse> GetRigStatusAsync(CancellationToken ct = default) =>
+            throw new NotImplementedException();
+
+        public Task<GetCurrentSpaceWeatherResponse> GetCurrentSpaceWeatherAsync(CancellationToken ct = default) =>
+            throw new NotImplementedException();
+    }
+
+    private sealed class CapturingEngineClient : IEngineClient
+    {
+        public QsoRecord? LastLoggedQso { get; private set; }
+
+        public Task<LogQsoResponse> LogQsoAsync(QsoRecord qso, bool syncToQrz = false, CancellationToken ct = default)
+        {
+            LastLoggedQso = qso;
+            return Task.FromResult(new LogQsoResponse { LocalId = "test-id" });
+        }
+
+        public Task<GetSetupWizardStateResponse> GetWizardStateAsync(CancellationToken ct = default) =>
+            throw new NotImplementedException();
+
+        public Task<ValidateSetupStepResponse> ValidateStepAsync(ValidateSetupStepRequest request, CancellationToken ct = default) =>
+            throw new NotImplementedException();
+
+        public Task<TestQrzCredentialsResponse> TestQrzCredentialsAsync(string username, string password, CancellationToken ct = default) =>
+            throw new NotImplementedException();
+
+        public Task<SaveSetupResponse> SaveSetupAsync(SaveSetupRequest request, CancellationToken ct = default) =>
+            throw new NotImplementedException();
+
+        public Task<GetSetupStatusResponse> GetSetupStatusAsync(CancellationToken ct = default) =>
+            throw new NotImplementedException();
+
+        public Task<TestQrzLogbookCredentialsResponse> TestQrzLogbookCredentialsAsync(string apiKey, CancellationToken ct = default) =>
+            throw new NotImplementedException();
+
+        public Task<IReadOnlyList<QsoRecord>> ListRecentQsosAsync(int limit = 200, CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<QsoRecord>>([]);
+
+        public Task<UpdateQsoResponse> UpdateQsoAsync(QsoRecord qso, bool syncToQrz = false, CancellationToken ct = default) =>
+            throw new NotImplementedException();
+
+        public Task<SyncWithQrzResponse> SyncWithQrzAsync(CancellationToken ct = default) =>
+            throw new NotImplementedException();
+
+        public Task<GetSyncStatusResponse> GetSyncStatusAsync(CancellationToken ct = default) =>
+            throw new NotImplementedException();
+
+        public Task<LookupResponse> LookupCallsignAsync(string callsign, CancellationToken ct = default) =>
+            throw new NotImplementedException();
+
+        public Task<DeleteQsoResponse> DeleteQsoAsync(string localId, bool deleteFromQrz = false, CancellationToken ct = default) =>
             throw new NotImplementedException();
 
         public Task<GetRigSnapshotResponse> GetRigSnapshotAsync(CancellationToken ct = default) =>

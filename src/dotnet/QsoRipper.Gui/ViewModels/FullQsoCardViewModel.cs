@@ -31,15 +31,6 @@ internal sealed partial class FullQsoCardViewModel : ObservableObject
     [ObservableProperty]
     private string _state = string.Empty;
 
-    [ObservableProperty]
-    private string _contest = string.Empty;
-
-    [ObservableProperty]
-    private string _exchange = string.Empty;
-
-    [ObservableProperty]
-    private string _notes = string.Empty;
-
     public event EventHandler? CloseRequested;
 
     [RelayCommand]

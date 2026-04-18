@@ -860,7 +860,7 @@ internal sealed partial class RecentQsoListViewModel : ObservableObject
         yield return new RecentQsoColumnOptionViewModel(RecentQsoGridColumn.Contest, "Contest", true);
         yield return new RecentQsoColumnOptionViewModel(RecentQsoGridColumn.Station, "Station", true);
         yield return new RecentQsoColumnOptionViewModel(RecentQsoGridColumn.Note, "Note", true);
-        yield return new RecentQsoColumnOptionViewModel(RecentQsoGridColumn.Comment, "Comment", false);
+        yield return new RecentQsoColumnOptionViewModel(RecentQsoGridColumn.Comment, "Comment", true);
         yield return new RecentQsoColumnOptionViewModel(RecentQsoGridColumn.UtcEnd, "End", false);
         yield return new RecentQsoColumnOptionViewModel(RecentQsoGridColumn.CqZone, "CQ", false);
         yield return new RecentQsoColumnOptionViewModel(RecentQsoGridColumn.ItuZone, "ITU", false);

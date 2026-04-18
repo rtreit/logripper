@@ -857,6 +857,7 @@ internal sealed partial class MainWindow : Window
         }
 
         // Digit shortcuts: 1-9 select a sort column, 0 reverses direction.
+        // Letter shortcuts A-G select additional columns.
         RecentQsoSortColumn? column = e.Key switch
         {
             Key.D1 or Key.NumPad1 => RecentQsoSortColumn.Utc,
@@ -868,6 +869,13 @@ internal sealed partial class MainWindow : Window
             Key.D7 or Key.NumPad7 => RecentQsoSortColumn.Country,
             Key.D8 or Key.NumPad8 => RecentQsoSortColumn.Contest,
             Key.D9 or Key.NumPad9 => RecentQsoSortColumn.Note,
+            Key.A => RecentQsoSortColumn.Comment,
+            Key.B => RecentQsoSortColumn.Grid,
+            Key.C => RecentQsoSortColumn.RstSent,
+            Key.D => RecentQsoSortColumn.RstReceived,
+            Key.E => RecentQsoSortColumn.Name,
+            Key.F => RecentQsoSortColumn.Station,
+            Key.G => RecentQsoSortColumn.Exchange,
             _ => null
         };
 
