@@ -906,13 +906,50 @@ static void SetStatus(const char *msg, int is_error)
 
 /* ── CLI integration: Log QSO ──────────────────────────────────────────── */
 
+/* Append a properly quoted Windows command-line argument to cmd.
+   Follows the Microsoft C/C++ argument parsing rules:
+     - Wrap the value in double quotes.
+     - Escape every embedded " as \".
+     - Before each " (including the closing one), double any immediately
+       preceding run of backslashes so they are not mis-parsed as escapes.
+   See: https://learn.microsoft.com/en-us/cpp/c-language/parsing-c-command-line-arguments */
 static void AppendArg(char *cmd, size_t cmd_sz, const char *flag, const char *val)
 {
     if (!val || !val[0]) return;
     safe_strcat(cmd, cmd_sz, " ");
     safe_strcat(cmd, cmd_sz, flag);
     safe_strcat(cmd, cmd_sz, " \"");
-    safe_strcat(cmd, cmd_sz, val);
+
+    size_t cur = strlen(cmd);
+    const char *s = val;
+    while (*s) {
+        /* Count consecutive backslashes */
+        size_t num_bs = 0;
+        while (*s == '\\') { num_bs++; s++; }
+
+        if (*s == '"') {
+            /* Double backslashes before an embedded quote, then escape the quote */
+            for (size_t i = 0; i < num_bs * 2 + 1; i++) {
+                if (cur + 1 < cmd_sz) cmd[cur++] = '\\';
+            }
+            if (cur + 1 < cmd_sz) cmd[cur++] = '"';
+            s++;
+        } else if (*s == '\0') {
+            /* End of string: double trailing backslashes before the closing quote */
+            for (size_t i = 0; i < num_bs * 2; i++) {
+                if (cur + 1 < cmd_sz) cmd[cur++] = '\\';
+            }
+        } else {
+            /* Backslashes not before a quote are literal */
+            for (size_t i = 0; i < num_bs; i++) {
+                if (cur + 1 < cmd_sz) cmd[cur++] = '\\';
+            }
+            if (cur + 1 < cmd_sz) cmd[cur++] = *s;
+            s++;
+        }
+    }
+    cmd[cur] = '\0';
+
     safe_strcat(cmd, cmd_sz, "\"");
 }
 
