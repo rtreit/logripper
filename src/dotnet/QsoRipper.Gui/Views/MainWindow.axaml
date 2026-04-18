@@ -59,12 +59,12 @@
     </Style>
 
     <Style Selector="DataGrid#RecentQsoGrid DataGridColumnHeader">
-      <Setter Property="Padding" Value="4,1" />
+      <Setter Property="Padding" Value="4,0" />
       <Setter Property="FontWeight" Value="SemiBold" />
     </Style>
 
     <Style Selector="DataGrid#RecentQsoGrid DataGridCell">
-      <Setter Property="Padding" Value="4,1" />
+      <Setter Property="Padding" Value="4,0" />
       <Setter Property="BorderThickness" Value="0" />
     </Style>
 
@@ -82,7 +82,7 @@
 
     <!-- Prevent text clipping when editing cells -->
     <Style Selector="DataGrid#RecentQsoGrid DataGridCell:editing TextBox">
-      <Setter Property="Padding" Value="4,2" />
+      <Setter Property="Padding" Value="4,1" />
       <Setter Property="VerticalContentAlignment" Value="Center" />
     </Style>
 
