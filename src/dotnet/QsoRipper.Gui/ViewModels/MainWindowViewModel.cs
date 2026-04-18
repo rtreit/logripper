@@ -458,7 +458,10 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
     /// Creates a <see cref="SettingsViewModel"/> wired to the shared engine client.
     /// Called by the View layer when handling <see cref="SettingsRequested"/>.
     /// </summary>
-    internal SettingsViewModel CreateSettingsViewModel() => new(_engine);
+    internal SettingsViewModel CreateSettingsViewModel() => new(_engine)
+    {
+        IsSpaceWeatherVisible = IsSpaceWeatherVisible
+    };
 
     /// <summary>
     /// Called by the View layer after the Settings dialog closes.
@@ -470,6 +473,15 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
         {
             await RefreshSetupContextAsync();
             await ActivateDashboardAsync(focusSearch: false);
+        }
+    }
+
+    internal void ApplySettingsUiPreferences(bool isSpaceWeatherVisible)
+    {
+        IsSpaceWeatherVisible = isSpaceWeatherVisible;
+        if (IsSpaceWeatherVisible && string.IsNullOrEmpty(SpaceWeatherText))
+        {
+            _ = FetchSpaceWeatherAsync();
         }
     }
 

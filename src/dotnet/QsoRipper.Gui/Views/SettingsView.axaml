@@ -14,7 +14,38 @@
 
   <Window.KeyBindings>
     <KeyBinding Gesture="Escape" Command="{Binding CancelCommand}" />
+    <KeyBinding Gesture="Ctrl+1" Command="{Binding SelectStationSectionCommand}" />
+    <KeyBinding Gesture="Ctrl+2" Command="{Binding SelectDisplaySectionCommand}" />
+    <KeyBinding Gesture="Ctrl+3" Command="{Binding SelectStorageSyncSectionCommand}" />
+    <KeyBinding Gesture="Ctrl+4" Command="{Binding SelectQrzSectionCommand}" />
+    <KeyBinding Gesture="Ctrl+5" Command="{Binding SelectRigSectionCommand}" />
+    <KeyBinding Gesture="Ctrl+Tab" Command="{Binding SelectNextSectionCommand}" />
+    <KeyBinding Gesture="Ctrl+Shift+Tab" Command="{Binding SelectPreviousSectionCommand}" />
   </Window.KeyBindings>
+
+  <Window.Styles>
+    <Style Selector="TabControl#SettingsSectionTabs TabItem">
+      <Setter Property="FontSize" Value="13" />
+      <Setter Property="Padding" Value="12,8" />
+      <Setter Property="MinWidth" Value="184" />
+    </Style>
+
+    <Style Selector="TextBlock.settingsSectionHeader">
+      <Setter Property="FontSize" Value="14" />
+      <Setter Property="FontWeight" Value="SemiBold" />
+    </Style>
+
+    <Style Selector="TextBlock.settingsSectionHint">
+      <Setter Property="FontSize" Value="12" />
+      <Setter Property="Opacity" Value="0.68" />
+      <Setter Property="TextWrapping" Value="Wrap" />
+    </Style>
+
+    <Style Selector="TextBlock.settingsTabShortcut">
+      <Setter Property="FontSize" Value="11" />
+      <Setter Property="Opacity" Value="0.65" />
+    </Style>
+  </Window.Styles>
 
   <DockPanel>
     <!-- Footer: Save / Cancel -->
@@ -23,13 +54,18 @@
             BorderThickness="0,1,0,0"
             BorderBrush="{DynamicResource SystemControlForegroundBaseMediumLowBrush}">
       <DockPanel>
-        <TextBlock DockPanel.Dock="Left"
-                   Text="{Binding ErrorMessage}"
-                   Foreground="IndianRed"
-                   FontWeight="SemiBold"
-                   TextWrapping="Wrap"
-                   VerticalAlignment="Center"
-                   IsVisible="{Binding ErrorMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+        <StackPanel DockPanel.Dock="Left"
+                    Spacing="2"
+                    VerticalAlignment="Center">
+          <TextBlock Text="{Binding ErrorMessage}"
+                     Foreground="IndianRed"
+                     FontWeight="SemiBold"
+                     TextWrapping="Wrap"
+                     IsVisible="{Binding ErrorMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+          <TextBlock Classes="settingsSectionHint"
+                     Text="Sections: Ctrl+1 Station  Ctrl+2 Display  Ctrl+3 Storage  Ctrl+4 QRZ  Ctrl+5 Rig  Ctrl+Tab Next"
+                     IsVisible="{Binding ErrorMessage, Converter={x:Static StringConverters.IsNullOrEmpty}}" />
+        </StackPanel>
 
         <StackPanel DockPanel.Dock="Right"
                     Orientation="Horizontal"
@@ -57,20 +93,24 @@
                  IsVisible="{Binding IsLoading}"
                  Margin="0,0,0,4" />
 
-    <TabControl Margin="16,12,16,16"
-                TabStripPlacement="Left">
-      <TabItem Header="Station"
-               AutomationProperties.AutomationId="SettingsStationTab">
+    <TabControl x:Name="SettingsSectionTabs"
+                Margin="16,12,16,16"
+                TabStripPlacement="Left"
+                SelectedIndex="{Binding SelectedSectionIndex, Mode=TwoWay}">
+      <TabItem AutomationProperties.AutomationId="SettingsStationTab">
+        <TabItem.Header>
+          <StackPanel Spacing="1">
+            <TextBlock Text="Station" />
+            <TextBlock Classes="settingsTabShortcut" Text="Ctrl+1" />
+          </StackPanel>
+        </TabItem.Header>
         <ScrollViewer VerticalScrollBarVisibility="Auto"
                       HorizontalScrollBarVisibility="Disabled"
                       Padding="16">
           <StackPanel Spacing="16">
-            <TextBlock Text="Station"
-                       FontSize="16"
-                       FontWeight="SemiBold" />
-            <TextBlock Text="Core station identity and location details used across logging and exports."
-                       Opacity="0.6"
-                       TextWrapping="Wrap" />
+            <TextBlock Classes="settingsSectionHeader" Text="Station" />
+            <TextBlock Classes="settingsSectionHint"
+                       Text="Core station identity and location details used across logging and exports." />
 
             <Grid ColumnDefinitions="120,*,120,*"
                   RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto"
@@ -172,16 +212,39 @@
         </ScrollViewer>
       </TabItem>
 
-      <TabItem Header="Storage + Sync"
-               AutomationProperties.AutomationId="SettingsStorageSyncTab">
+      <TabItem AutomationProperties.AutomationId="SettingsDisplayTab">
+        <TabItem.Header>
+          <StackPanel Spacing="1">
+            <TextBlock Text="Display" />
+            <TextBlock Classes="settingsTabShortcut" Text="Ctrl+2" />
+          </StackPanel>
+        </TabItem.Header>
         <StackPanel Margin="16"
                     Spacing="16">
-          <TextBlock Text="{Binding PersistenceSectionTitle}"
-                     FontSize="16"
-                     FontWeight="SemiBold" />
-          <TextBlock Text="{Binding PersistenceDescription}"
-                     Opacity="0.6"
-                     TextWrapping="Wrap"
+          <TextBlock Classes="settingsSectionHeader" Text="Display" />
+          <TextBlock Classes="settingsSectionHint"
+                     Text="Operator-facing status panels and live overlays for the main window." />
+
+          <CheckBox x:Name="SettingsSpaceWeatherVisibleCheckBox"
+                    AutomationProperties.AutomationId="SettingsSpaceWeatherVisibleCheckBox"
+                    Content="Show space weather in the status bar"
+                    IsChecked="{Binding IsSpaceWeatherVisible, Mode=TwoWay}" />
+        </StackPanel>
+      </TabItem>
+
+      <TabItem AutomationProperties.AutomationId="SettingsStorageSyncTab">
+        <TabItem.Header>
+          <StackPanel Spacing="1">
+            <TextBlock Text="Storage + Sync" />
+            <TextBlock Classes="settingsTabShortcut" Text="Ctrl+3" />
+          </StackPanel>
+        </TabItem.Header>
+        <StackPanel Margin="16"
+                    Spacing="16">
+          <TextBlock Classes="settingsSectionHeader"
+                     Text="{Binding PersistenceSectionTitle}" />
+          <TextBlock Classes="settingsSectionHint"
+                     Text="{Binding PersistenceDescription}"
                      IsVisible="{Binding PersistenceDescription, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
 
           <ItemsControl ItemsSource="{Binding PersistenceFields}"
@@ -216,9 +279,7 @@
 
           <Separator />
 
-          <TextBlock Text="Sync Settings"
-                     FontSize="16"
-                     FontWeight="SemiBold" />
+          <TextBlock Classes="settingsSectionHeader" Text="Sync Settings" />
           <CheckBox x:Name="SettingsAutoSyncCheckBox"
                     AutomationProperties.AutomationId="SettingsAutoSyncCheckBox"
                     Content="Enable automatic sync"
@@ -259,16 +320,18 @@
         </StackPanel>
       </TabItem>
 
-      <TabItem Header="QRZ"
-               AutomationProperties.AutomationId="SettingsQrzTab">
+      <TabItem AutomationProperties.AutomationId="SettingsQrzTab">
+        <TabItem.Header>
+          <StackPanel Spacing="1">
+            <TextBlock Text="QRZ" />
+            <TextBlock Classes="settingsTabShortcut" Text="Ctrl+4" />
+          </StackPanel>
+        </TabItem.Header>
         <StackPanel Margin="16"
                     Spacing="16">
-          <TextBlock Text="QRZ XML Lookup"
-                     FontSize="16"
-                     FontWeight="SemiBold" />
-          <TextBlock Text="Used for callsign lookups. Leave blank to disable."
-                     Opacity="0.6"
-                     TextWrapping="Wrap" />
+          <TextBlock Classes="settingsSectionHeader" Text="QRZ XML Lookup" />
+          <TextBlock Classes="settingsSectionHint"
+                     Text="Used for callsign lookups. Leave blank to disable." />
 
           <Grid ColumnDefinitions="120,*"
                 RowDefinitions="Auto,Auto"
@@ -309,12 +372,9 @@
 
           <Separator />
 
-          <TextBlock Text="QRZ Logbook Sync"
-                     FontSize="16"
-                     FontWeight="SemiBold" />
-          <TextBlock Text="API key for bidirectional sync with logbook.qrz.com."
-                     Opacity="0.6"
-                     TextWrapping="Wrap" />
+          <TextBlock Classes="settingsSectionHeader" Text="QRZ Logbook Sync" />
+          <TextBlock Classes="settingsSectionHint"
+                     Text="API key for bidirectional sync with logbook.qrz.com." />
 
           <Grid ColumnDefinitions="120,*"
                 ColumnSpacing="12">
@@ -347,16 +407,18 @@
         </StackPanel>
       </TabItem>
 
-      <TabItem Header="Rig Control"
-               AutomationProperties.AutomationId="SettingsRigTab">
+      <TabItem AutomationProperties.AutomationId="SettingsRigTab">
+        <TabItem.Header>
+          <StackPanel Spacing="1">
+            <TextBlock Text="Rig Control" />
+            <TextBlock Classes="settingsTabShortcut" Text="Ctrl+5" />
+          </StackPanel>
+        </TabItem.Header>
         <StackPanel Margin="16"
                     Spacing="16">
-          <TextBlock Text="Rig Control"
-                     FontSize="16"
-                     FontWeight="SemiBold" />
-          <TextBlock Text="Engine-wide rigctld settings shared by every client connected to this engine."
-                     Opacity="0.6"
-                     TextWrapping="Wrap" />
+          <TextBlock Classes="settingsSectionHeader" Text="Rig Control" />
+          <TextBlock Classes="settingsSectionHint"
+                     Text="Engine-wide rigctld settings shared by every client connected to this engine." />
 
           <CheckBox x:Name="SettingsRigControlEnabledCheckBox"
                     AutomationProperties.AutomationId="SettingsRigControlEnabledCheckBox"

@@ -542,6 +542,12 @@ internal sealed partial class MainWindow : Window
 
         var dialog = new SettingsView { DataContext = settingsVm };
         await dialog.ShowDialog(this);
+        if (settingsVm.DidSave)
+        {
+            _viewModel.ApplySettingsUiPreferences(settingsVm.IsSpaceWeatherVisible);
+            SavePreferences();
+        }
+
         await _viewModel.OnSettingsClosedAsync(settingsVm.DidSave);
     }
     private void CommitAndSaveGridEdits()

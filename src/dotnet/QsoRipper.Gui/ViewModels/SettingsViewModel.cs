@@ -121,6 +121,12 @@ internal sealed partial class SettingsViewModel : ObservableObject
     [ObservableProperty]
     private string _persistenceSectionTitle = "Storage";
 
+    [ObservableProperty]
+    private bool _isSpaceWeatherVisible;
+
+    [ObservableProperty]
+    private int _selectedSectionIndex;
+
     // UI state
     [ObservableProperty]
     private bool _isLoading;
@@ -234,6 +240,27 @@ internal sealed partial class SettingsViewModel : ObservableObject
     {
         CloseRequested?.Invoke(this, false);
     }
+
+    [RelayCommand]
+    private void SelectStationSection() => SelectedSectionIndex = 0;
+
+    [RelayCommand]
+    private void SelectDisplaySection() => SelectedSectionIndex = 1;
+
+    [RelayCommand]
+    private void SelectStorageSyncSection() => SelectedSectionIndex = 2;
+
+    [RelayCommand]
+    private void SelectQrzSection() => SelectedSectionIndex = 3;
+
+    [RelayCommand]
+    private void SelectRigSection() => SelectedSectionIndex = 4;
+
+    [RelayCommand]
+    private void SelectNextSection() => SelectedSectionIndex = (SelectedSectionIndex + 1) % 5;
+
+    [RelayCommand]
+    private void SelectPreviousSection() => SelectedSectionIndex = (SelectedSectionIndex + 4) % 5;
 
     [RelayCommand]
     private async Task TestQrzXmlAsync()
