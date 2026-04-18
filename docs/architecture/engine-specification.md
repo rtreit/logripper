@@ -1161,18 +1161,26 @@ Every engine must implement `GetEngineInfo` to report its identity and capabilit
 
 > **Note:** Earlier drafts of this spec referenced `engine_language` and `storage_backend` fields. These were never added to the `EngineInfo` proto message. Use `engine_id` to infer the implementation language if needed.
 
-**Capability strings** indicate which optional features the engine supports. Clients use these to enable or disable UI features. Examples:
+**Capability strings** indicate which optional features the engine supports. Clients use these to enable or disable UI features.
 
-- `logbook` — core QSO CRUD
-- `lookup` — callsign lookup
-- `sync` — QRZ logbook sync
-- `rig_control` — rigctld integration
-- `space_weather` — NOAA space weather
-- `stress` — stress testing control plane
-- `adif_import` — ADIF file import
-- `adif_export` — ADIF file export
+Both engines currently report the following capabilities:
 
-Engines should report capabilities accurately based on their current configuration. An engine with no QRZ credentials should not report `lookup` as a capability.
+| Capability | Description |
+|---|---|
+| `engine-info` | Engine metadata / health check |
+| `logbook` | Core QSO CRUD |
+| `lookup-cache` | Cached callsign lookup |
+| `lookup-callsign` | Live callsign lookup |
+| `lookup-stream` | Streaming callsign lookup |
+| `setup` | First-run setup wizard |
+| `station-profiles` | Station profile management |
+| `runtime-config` | Runtime configuration updates |
+| `rig-control` | rigctld integration |
+| `space-weather` | NOAA space weather data |
+
+> **Note:** Earlier drafts listed aspirational names (`sync`, `rig_control`, `stress`, `adif_import`, `adif_export`) that were never adopted. The canonical names above use kebab-case and match what both engines actually report. New capabilities should follow this convention.
+
+Engines currently report a static set of capabilities. Configuration-gated capability reporting (e.g., hiding `lookup-callsign` when no QRZ credentials are configured) is a planned enhancement.
 
 ---
 
