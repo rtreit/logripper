@@ -61,6 +61,7 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
     private string _availableEnginesText = "Engines: unknown";
 
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasEngineSwitchStatus))]
     private string _engineSwitchStatusText = "Switch: idle";
 
     [ObservableProperty]
@@ -177,6 +178,10 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
     public RecentQsoListViewModel RecentQsos { get; }
 
     public QsoLoggerViewModel Logger { get; }
+
+    public bool HasEngineSwitchStatus =>
+        !string.IsNullOrWhiteSpace(EngineSwitchStatusText)
+        && !string.Equals(EngineSwitchStatusText, "Switch: idle", StringComparison.Ordinal);
 
     /// <summary>
     /// Proxy for <see cref="RecentQsoListViewModel.SelectedQso"/> so the Inspector

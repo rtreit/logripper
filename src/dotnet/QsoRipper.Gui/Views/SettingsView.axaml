@@ -7,7 +7,7 @@
         x:DataType="vm:SettingsViewModel"
         AutomationProperties.AutomationId="SettingsWindow"
         Title="Settings"
-        Width="560" Height="720"
+        Width="560" Height="800"
         MinWidth="480" MinHeight="520"
         MaxHeight="1080"
         WindowStartupLocation="CenterOwner"
@@ -61,7 +61,7 @@
     <!-- Scrollable settings form -->
     <ScrollViewer VerticalScrollBarVisibility="Auto"
                   HorizontalScrollBarVisibility="Disabled"
-                  Padding="24,16">
+                  Padding="24,16,24,160">
       <StackPanel Spacing="20">
 
         <!-- Station Profile -->

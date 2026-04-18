@@ -890,6 +890,12 @@
             <TextBlock Text="{Binding ActiveProfileText}" FontSize="11.5" TextTrimming="CharacterEllipsis" MaxWidth="180" />
             <TextBlock Text="|" Opacity="0.45" />
             <TextBlock Text="{Binding ActiveEngineText}" FontSize="11.5" TextTrimming="CharacterEllipsis" MaxWidth="260" />
+            <TextBlock Text="|" Opacity="0.45" IsVisible="{Binding HasEngineSwitchStatus}" />
+            <TextBlock Text="{Binding EngineSwitchStatusText}"
+                       FontSize="11.5"
+                       TextTrimming="CharacterEllipsis"
+                       MaxWidth="240"
+                       IsVisible="{Binding HasEngineSwitchStatus}" />
           </StackPanel>
         </Border>
       </Grid>
