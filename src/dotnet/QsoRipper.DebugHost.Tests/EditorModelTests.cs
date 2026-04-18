@@ -279,6 +279,40 @@ public class EditorModelTests
     }
 
     [Fact]
+    public void StationProfileEditorModel_roundtrips_arrl_section()
+    {
+        var original = new StationProfile
+        {
+            StationCallsign = "K7RND",
+            ArrlSection = "WWA"
+        };
+
+        var model = new StationProfileEditorModel();
+        model.LoadFrom("test-id", original);
+
+        Assert.Equal("WWA", model.ArrlSection);
+
+        var roundTripped = model.ToStationProfile();
+
+        Assert.True(roundTripped.HasArrlSection);
+        Assert.Equal("WWA", roundTripped.ArrlSection);
+    }
+
+    [Fact]
+    public void StationProfileEditorModel_clears_arrl_section_when_blank()
+    {
+        var model = new StationProfileEditorModel
+        {
+            StationCallsign = "K7RND",
+            ArrlSection = "   "
+        };
+
+        var roundTripped = model.ToStationProfile();
+
+        Assert.False(roundTripped.HasArrlSection);
+    }
+
+    [Fact]
     public void AdifExportEditorModel_to_request_trims_values_and_parses_utc_filters()
     {
         var model = new AdifExportEditorModel

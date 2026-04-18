@@ -31,6 +31,8 @@ internal abstract class StationProfileEditorModelBase : IValidatableObject
 
     public double? Longitude { get; set; }
 
+    public string? ArrlSection { get; set; }
+
     public void LoadFrom(StationProfile? profile)
     {
         if (profile is null)
@@ -52,6 +54,7 @@ internal abstract class StationProfileEditorModelBase : IValidatableObject
         ItuZone = profile.HasItuZone ? checked((int)profile.ItuZone) : null;
         Latitude = profile.HasLatitude ? profile.Latitude : null;
         Longitude = profile.HasLongitude ? profile.Longitude : null;
+        ArrlSection = NormalizeOptional(profile.ArrlSection);
     }
 
     public StationProfile ToStationProfile()
@@ -94,6 +97,10 @@ internal abstract class StationProfileEditorModelBase : IValidatableObject
         SetOptionalValue(ItuZone, value => profile.ItuZone = checked((uint)value), profile.ClearItuZone);
         SetOptionalValue(Latitude, value => profile.Latitude = value, profile.ClearLatitude);
         SetOptionalValue(Longitude, value => profile.Longitude = value, profile.ClearLongitude);
+        SetOptionalString(
+            NormalizeOptional(ArrlSection),
+            value => profile.ArrlSection = value,
+            profile.ClearArrlSection);
 
         return profile;
     }
@@ -158,6 +165,7 @@ internal abstract class StationProfileEditorModelBase : IValidatableObject
         ItuZone = null;
         Latitude = null;
         Longitude = null;
+        ArrlSection = null;
     }
 
     protected static string? NormalizeOptional(string? value)

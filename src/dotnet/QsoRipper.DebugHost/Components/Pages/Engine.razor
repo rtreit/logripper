@@ -365,6 +365,13 @@
                                        disabled="@isStationProfilesBusy" />
                         </div>
                         <div class="col-md-4">
+                            <label class="form-label" for="station-arrl-section">ARRL section</label>
+                            <InputText id="station-arrl-section"
+                                       class="form-control"
+                                       @bind-Value="stationProfileEditor.ArrlSection"
+                                       disabled="@isStationProfilesBusy" />
+                        </div>
+                        <div class="col-md-4">
                             <label class="form-label" for="station-dxcc">DXCC</label>
                             <InputNumber id="station-dxcc"
                                          class="form-control"
