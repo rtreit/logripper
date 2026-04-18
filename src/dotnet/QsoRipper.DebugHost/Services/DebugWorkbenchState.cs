@@ -423,7 +423,7 @@ internal sealed class DebugWorkbenchState
     private static string NormalizeStorageBackend(string? configuredBackend)
     {
         return string.IsNullOrWhiteSpace(configuredBackend)
-            ? "memory"
+            ? string.Empty
             : configuredBackend.Trim();
     }
 
@@ -465,7 +465,8 @@ internal sealed class DebugWorkbenchState
             ? string.Empty
             : recipe.DefaultConfigPath;
         var persistenceLocation = EnginePersistenceLocation;
-        var enginePersistenceLocation = string.Equals(EngineStorageBackend, "memory", StringComparison.OrdinalIgnoreCase)
+        var enginePersistenceLocation = string.IsNullOrWhiteSpace(EngineStorageBackend)
+            || string.Equals(EngineStorageBackend, "memory", StringComparison.OrdinalIgnoreCase)
             ? string.Empty
             : EnginePersistenceLocation;
 

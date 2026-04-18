@@ -11,12 +11,13 @@ namespace QsoRipper.Engine.Lookup.Qrz;
 public sealed class QrzXmlProvider : ICallsignProvider
 {
     private const string DefaultBaseUrl = "https://xmldata.qrz.com/xml/current/";
-    private const string AgentName = "qsoripper-dotnet";
+    private const string DefaultAgentName = "qsoripper-dotnet";
 
     private readonly HttpClient _httpClient;
     private readonly string _username;
     private readonly string _password;
     private readonly string _baseUrl;
+    private readonly string _userAgent;
     private readonly Lock _sessionLock = new();
     private string? _sessionKey;
 
@@ -24,7 +25,7 @@ public sealed class QrzXmlProvider : ICallsignProvider
 
     /// <summary>Create a new QRZ XML provider.</summary>
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1054:URI parameters should not be strings", Justification = "URL is built from env config, not user-facing API")]
-    public QrzXmlProvider(HttpClient httpClient, string username, string password, string? baseUrl = null)
+    public QrzXmlProvider(HttpClient httpClient, string username, string password, string? baseUrl = null, string? userAgent = null)
     {
         ArgumentNullException.ThrowIfNull(httpClient);
         ArgumentException.ThrowIfNullOrWhiteSpace(username);
@@ -34,6 +35,7 @@ public sealed class QrzXmlProvider : ICallsignProvider
         _username = username;
         _password = password;
         _baseUrl = NormalizeBaseUrl(baseUrl ?? DefaultBaseUrl);
+        _userAgent = NormalizeUserAgent(userAgent);
     }
 
     /// <inheritdoc/>
@@ -187,7 +189,7 @@ public sealed class QrzXmlProvider : ICallsignProvider
 
     private async Task<string?> LoginAsync(CancellationToken ct)
     {
-        var url = new Uri($"{_baseUrl}?username={Uri.EscapeDataString(_username)}&password={Uri.EscapeDataString(_password)}&agent={Uri.EscapeDataString(AgentName)}");
+        var url = new Uri($"{_baseUrl}?username={Uri.EscapeDataString(_username)}&password={Uri.EscapeDataString(_password)}&agent={Uri.EscapeDataString(_userAgent)}");
 
         string body;
         try
@@ -544,5 +546,12 @@ public sealed class QrzXmlProvider : ICallsignProvider
     private static string NormalizeBaseUrl(string baseUrl)
     {
         return baseUrl.EndsWith('/') ? baseUrl : baseUrl + '/';
+    }
+
+    private static string NormalizeUserAgent(string? userAgent)
+    {
+        return string.IsNullOrWhiteSpace(userAgent)
+            ? DefaultAgentName
+            : userAgent.Trim();
     }
 }

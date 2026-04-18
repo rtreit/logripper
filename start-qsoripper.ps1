@@ -61,6 +61,26 @@ function Import-DotEnv([string]$Path) {
     }
 }
 
+function Get-DefaultSharedConfigPath {
+    if ($IsWindows) {
+        if ([string]::IsNullOrWhiteSpace($env:APPDATA)) {
+            throw 'APPDATA is not set; cannot resolve the default shared config path.'
+        }
+
+        return Join-Path (Join-Path $env:APPDATA 'qsoripper') 'config.toml'
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($env:XDG_CONFIG_HOME)) {
+        return Join-Path (Join-Path $env:XDG_CONFIG_HOME 'qsoripper') 'config.toml'
+    }
+
+    if ([string]::IsNullOrWhiteSpace($env:HOME)) {
+        throw 'HOME is not set; cannot resolve the default shared config path.'
+    }
+
+    return Join-Path (Join-Path (Join-Path $env:HOME '.config') 'qsoripper') 'config.toml'
+}
+
 function Get-StatePathForProfile([string]$ProfileId) {
     if ([string]::IsNullOrWhiteSpace($ProfileId)) {
         throw 'ProfileId is required.'
@@ -453,6 +473,7 @@ function Invoke-WithTemporaryEnvironment([hashtable]$EnvironmentOverrides, [scri
 }
 
 function Get-EngineProfiles {
+    $defaultConfigPath = Get-DefaultSharedConfigPath
     $rustManifestPath = Join-Path $PSScriptRoot 'src' | Join-Path -ChildPath 'rust' | Join-Path -ChildPath 'Cargo.toml'
     $dotnetProjectPath = Join-Path $PSScriptRoot 'src' | Join-Path -ChildPath 'dotnet' | Join-Path -ChildPath 'QsoRipper.Engine.DotNet' | Join-Path -ChildPath 'QsoRipper.Engine.DotNet.csproj'
     $dotnetDebugDllPath = Join-Path $PSScriptRoot 'src' | Join-Path -ChildPath 'dotnet' | Join-Path -ChildPath 'QsoRipper.Engine.DotNet' | Join-Path -ChildPath 'bin' | Join-Path -ChildPath 'Debug' | Join-Path -ChildPath 'net10.0' | Join-Path -ChildPath 'QsoRipper.Engine.DotNet.dll'
@@ -478,7 +499,7 @@ function Get-EngineProfiles {
             DefaultListenAddress = '127.0.0.1:50051'
             DefaultStorage = 'sqlite'
             DefaultPersistenceLocation = $defaultPersistenceLocation
-            DefaultConfigPath = Join-Path $runtimeDirectory 'rust-engine.json'
+            DefaultConfigPath = $defaultConfigPath
             EnvironmentTemplates = @{
                 QSORIPPER_STORAGE_BACKEND = '{storageBackend}'
                 QSORIPPER_SQLITE_PATH = '{persistenceLocation}'
@@ -497,7 +518,7 @@ function Get-EngineProfiles {
             DefaultListenAddress = '127.0.0.1:50052'
             DefaultStorage = 'memory'
             DefaultPersistenceLocation = $defaultPersistenceLocation
-            DefaultConfigPath = Join-Path $runtimeDirectory 'dotnet-engine.json'
+            DefaultConfigPath = $defaultConfigPath
             EnvironmentTemplates = @{
                 QSORIPPER_STORAGE_BACKEND = '{storageBackend}'
                 QSORIPPER_STORAGE_PATH = '{persistenceLocation}'
@@ -557,20 +578,47 @@ if ([string]::IsNullOrWhiteSpace($ListenAddress)) {
     $ListenAddress = $profile.DefaultListenAddress
 }
 
-if ([string]::IsNullOrWhiteSpace($Storage)) {
+$resolvedConfigPath = if ([string]::IsNullOrWhiteSpace($ConfigPath)) {
+    $profile.DefaultConfigPath
+}
+else {
+    $ConfigPath
+}
+
+$storageSpecified = $PSBoundParameters.ContainsKey('Storage')
+$persistenceSpecified = $PSBoundParameters.ContainsKey('PersistenceLocation') -or $PSBoundParameters.ContainsKey('SqlitePath')
+
+if (-not $storageSpecified -and $persistenceSpecified) {
+    $Storage = 'sqlite'
+    $storageSpecified = $true
+}
+
+if ($storageSpecified) {
+    if ([string]::IsNullOrWhiteSpace($Storage)) {
+        $Storage = $profile.DefaultStorage
+    }
+
+    if (-not $profile.SupportsStorageSession -and $Storage -ne $profile.DefaultStorage) {
+        throw "$($profile.DisplayName) only supports its default storage backend '$($profile.DefaultStorage)' through the launcher helper."
+    }
+
+    if ($Storage -ne 'memory' -and [string]::IsNullOrWhiteSpace($PersistenceLocation)) {
+        $PersistenceLocation = $profile.DefaultPersistenceLocation
+    }
+}
+elseif (-not (Test-Path -LiteralPath $resolvedConfigPath)) {
     $Storage = $profile.DefaultStorage
+    if ($Storage -ne 'memory' -and [string]::IsNullOrWhiteSpace($PersistenceLocation)) {
+        $PersistenceLocation = $profile.DefaultPersistenceLocation
+    }
 }
-
-if (-not $profile.SupportsStorageSession -and $Storage -ne $profile.DefaultStorage) {
-    throw "$($profile.DisplayName) only supports its default storage backend '$($profile.DefaultStorage)' through the launcher helper."
-}
-
-if ([string]::IsNullOrWhiteSpace($PersistenceLocation)) {
-    $PersistenceLocation = $profile.DefaultPersistenceLocation
+else {
+    $Storage = ''
+    $PersistenceLocation = ''
 }
 
 if ([string]::IsNullOrWhiteSpace($ConfigPath)) {
-    $ConfigPath = $profile.DefaultConfigPath
+    $ConfigPath = $resolvedConfigPath
 }
 
 $existing = Get-TrackedProcess -Path $statePath
@@ -676,7 +724,7 @@ if (-not $SkipBuild) {
 $tokens = @{
     configPath = $ConfigPath
     listenAddress = $ListenAddress
-    persistenceLocation = if ($Storage -eq 'memory') { '' } else { $PersistenceLocation }
+    persistenceLocation = if ($Storage -eq 'memory' -or [string]::IsNullOrWhiteSpace($Storage)) { '' } else { $PersistenceLocation }
     storageBackend = $Storage
 }
 
@@ -728,7 +776,7 @@ $state = [pscustomobject]@{
     startedAtUtc = [DateTime]::UtcNow.ToString('O')
     stderrPath = $stderrPath
     stdoutPath = $stdoutPath
-    storage = $Storage
+    storage = if ([string]::IsNullOrWhiteSpace($Storage)) { $null } else { $Storage }
 }
 $state | ConvertTo-Json | Set-Content -LiteralPath $statePath
 $state | ConvertTo-Json | Set-Content -LiteralPath $legacyStatePath

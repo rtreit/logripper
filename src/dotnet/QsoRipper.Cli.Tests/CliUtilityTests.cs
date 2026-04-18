@@ -180,5 +180,16 @@ public sealed class CliUtilityTests
 
         Assert.Contains("space-weather [--refresh]", help, StringComparison.Ordinal);
     }
+
+    [Fact]
+    public void GetCommandHelp_setup_uses_qrz_xml_environment_names()
+    {
+        var help = CliHelpText.GetCommandHelp("setup");
+
+        Assert.Contains("QSORIPPER_QRZ_XML_USERNAME", help, StringComparison.Ordinal);
+        Assert.Contains("QSORIPPER_QRZ_XML_PASSWORD", help, StringComparison.Ordinal);
+        Assert.DoesNotContain("QSORIPPER_QRZ_USERNAME", help, StringComparison.Ordinal);
+        Assert.DoesNotContain("QSORIPPER_QRZ_PASSWORD", help, StringComparison.Ordinal);
+    }
 }
 #pragma warning restore CA1707

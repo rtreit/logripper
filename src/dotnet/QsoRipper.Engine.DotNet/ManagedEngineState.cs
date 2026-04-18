@@ -1,5 +1,3 @@
-using System.Text.Json;
-using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
@@ -18,25 +16,19 @@ namespace QsoRipper.Engine.DotNet;
 internal sealed class ManagedEngineState
 {
     private const string PersistenceStepDescription = "The managed .NET engine keeps its logbook in memory. No persistence input is required during setup.";
-    private const string PersistenceStepDescriptionSqlite = "The managed .NET engine stores its logbook in a local SQLite database.";
+    private const string PersistenceStepDescriptionSqlite = "The managed .NET engine stores its logbook in a local SQLite database backed by shared setup.";
     private const string PersistenceStepLabel = "Storage";
-    private const string PersistenceSummary = "In-memory logbook";
+    private const string InMemoryPersistenceSummary = "In-memory logbook";
+    private const string SqlitePersistenceSummary = "SQLite logbook";
 
     private const string StorageBackendKey = "QSORIPPER_STORAGE_BACKEND";
     private const string QrzXmlUsernameKey = "QSORIPPER_QRZ_XML_USERNAME";
     private const string QrzXmlPasswordKey = "QSORIPPER_QRZ_XML_PASSWORD";
+    private const string QrzUserAgentKey = "QSORIPPER_QRZ_USER_AGENT";
     private const string QrzLogbookApiKeyKey = "QSORIPPER_QRZ_LOGBOOK_API_KEY";
     private const string RigEnabledKey = "QSORIPPER_RIGCTLD_ENABLED";
 
     private const string ManagedLookupProviderSummary = "Managed sample provider";
-    private const string ManagedStorageBackend = "memory";
-
-    private static readonly JsonSerializerOptions SerializerOptions = new()
-    {
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-        WriteIndented = true,
-        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
-    };
 
     private static readonly JsonFormatter ProtoJsonFormatter = new(JsonFormatter.Settings.Default.WithFormatDefaultValues(true));
     private static readonly JsonParser ProtoJsonParser = new(JsonParser.Settings.Default.WithIgnoreUnknownFields(true));
@@ -47,9 +39,12 @@ internal sealed class ManagedEngineState
     private readonly RigControlMonitor? _rigControlMonitor;
     private readonly SpaceWeatherMonitor? _spaceWeatherMonitor;
     private readonly string _configPath;
+    private readonly SharedPersistedSetupConfig _persistedSetup;
+    private readonly string? _currentPersistenceLocation;
     private string? _qrzXmlUsername;
     private string? _qrzXmlPassword;
     private bool _hasQrzXmlPassword;
+    private string? _qrzLogbookApiKey;
     private bool _hasQrzLogbookApiKey;
     private SyncConfig _syncConfig;
     private RigControlSettings? _rigControl;
@@ -57,7 +52,9 @@ internal sealed class ManagedEngineState
     private string? _activeProfileId;
     private StationProfile? _sessionOverrideProfile;
     private readonly Dictionary<string, string> _runtimeOverrides;
-    private readonly QrzSyncEngine? _syncEngine;
+    private readonly bool _ownsSyncEngine;
+    private QrzLogbookClient? _ownedSyncClient;
+    private QrzSyncEngine? _syncEngine;
 
     public ManagedEngineState(string configPath)
         : this(configPath, new MemoryStorage(), null, null, null, null)
@@ -80,11 +77,16 @@ internal sealed class ManagedEngineState
     }
 
     public ManagedEngineState(string configPath, IEngineStorage storage, ILookupCoordinator? lookupCoordinator, RigControlMonitor? rigControlMonitor, SpaceWeatherMonitor? spaceWeatherMonitor)
-        : this(configPath, storage, lookupCoordinator, rigControlMonitor, spaceWeatherMonitor, null)
+        : this(configPath, storage, lookupCoordinator, rigControlMonitor, spaceWeatherMonitor, null, null, null)
     {
     }
 
     public ManagedEngineState(string configPath, IEngineStorage storage, ILookupCoordinator? lookupCoordinator, RigControlMonitor? rigControlMonitor, SpaceWeatherMonitor? spaceWeatherMonitor, QrzSyncEngine? syncEngine)
+        : this(configPath, storage, lookupCoordinator, rigControlMonitor, spaceWeatherMonitor, syncEngine, null, null)
+    {
+    }
+
+    public ManagedEngineState(string configPath, IEngineStorage storage, ILookupCoordinator? lookupCoordinator, RigControlMonitor? rigControlMonitor, SpaceWeatherMonitor? spaceWeatherMonitor, QrzSyncEngine? syncEngine, string? currentPersistenceLocation, LoadedSharedSetupConfig? loadedPersistedSetup)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(configPath);
         ArgumentNullException.ThrowIfNull(storage);
@@ -94,20 +96,43 @@ internal sealed class ManagedEngineState
         _lookupCoordinator = lookupCoordinator ?? CreateDefaultCoordinator(storage);
         _rigControlMonitor = rigControlMonitor;
         _spaceWeatherMonitor = spaceWeatherMonitor;
+        _ownsSyncEngine = syncEngine is null;
         _syncEngine = syncEngine;
-        var persisted = LoadPersistedState(_configPath);
-        _qrzXmlUsername = NormalizeOptional(persisted.QrzXmlUsername);
-        _qrzXmlPassword = NormalizeOptional(persisted.QrzXmlPassword);
-        _hasQrzXmlPassword = persisted.HasQrzXmlPassword;
-        _hasQrzLogbookApiKey = persisted.HasQrzLogbookApiKey;
-        _syncConfig = ParseProtoOrDefault<SyncConfig>(persisted.SyncConfigJson);
-        _rigControl = ParseOptionalProto<RigControlSettings>(persisted.RigControlJson);
-        _stationProfiles = persisted.StationProfiles.ToList();
-        _activeProfileId = NormalizeOptional(persisted.ActiveProfileId);
-        _sessionOverrideProfile = ParseOptionalProto<StationProfile>(persisted.SessionOverrideProfileJson);
-        _runtimeOverrides = new Dictionary<string, string>(persisted.RuntimeOverrides, StringComparer.OrdinalIgnoreCase);
+        var loadedSetup = loadedPersistedSetup ?? SharedSetupConfigPersistence.Load(_configPath);
+        _persistedSetup = loadedSetup.Config;
+        _currentPersistenceLocation = NormalizeOptional(currentPersistenceLocation)
+            ?? (_storage.BackendName.Equals("sqlite", StringComparison.OrdinalIgnoreCase)
+                ? NormalizeOptional(_persistedSetup.GetPersistedLogFilePath())
+                : null);
+        _qrzXmlUsername = NormalizeOptional(_persistedSetup.QrzXmlUsername);
+        _qrzXmlPassword = NormalizeOptional(_persistedSetup.QrzXmlPassword);
+        _hasQrzXmlPassword = _qrzXmlPassword is not null;
+        _qrzLogbookApiKey = NormalizeOptional(_persistedSetup.QrzLogbookApiKey);
+        _hasQrzLogbookApiKey = _qrzLogbookApiKey is not null;
+        _syncConfig = _persistedSetup.SyncConfig.Clone();
+        _rigControl = _persistedSetup.RigControl?.Clone();
+        _stationProfiles = _persistedSetup.StationProfiles
+            .Select(static entry => new ManagedPersistedStationProfile
+            {
+                ProfileId = entry.ProfileId,
+                ProfileJson = entry.ProfileJson,
+            })
+            .ToList();
+        _activeProfileId = NormalizeOptional(_persistedSetup.ActiveProfileId);
+        _sessionOverrideProfile = null;
+        _runtimeOverrides = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
-        if (persisted.LastSyncUtc is { } lastSync)
+        if (lookupCoordinator is null)
+        {
+            RebuildLookupCoordinatorNoLock();
+        }
+
+        if (_ownsSyncEngine)
+        {
+            RebuildSyncEngineNoLock();
+        }
+
+        if (loadedSetup.LastSyncUtc is { } lastSync)
         {
             Sync(_storage.Logbook.UpsertSyncMetadataAsync(new SyncMetadata { LastSync = lastSync }));
         }
@@ -265,37 +290,47 @@ internal sealed class ManagedEngineState
             if (!string.IsNullOrWhiteSpace(request.QrzXmlUsername))
             {
                 _qrzXmlUsername = request.QrzXmlUsername.Trim();
+                _persistedSetup.QrzXmlUsername = _qrzXmlUsername;
+                _runtimeOverrides.Remove(QrzXmlUsernameKey);
+                RebuildLookupCoordinatorNoLock();
             }
 
             if (!string.IsNullOrWhiteSpace(request.QrzXmlPassword))
             {
                 _qrzXmlPassword = request.QrzXmlPassword.Trim();
                 _hasQrzXmlPassword = true;
-                _runtimeOverrides[QrzXmlPasswordKey] = "***";
+                _persistedSetup.QrzXmlPassword = _qrzXmlPassword;
+                _runtimeOverrides.Remove(QrzXmlPasswordKey);
                 RebuildLookupCoordinatorNoLock();
             }
 
             if (!string.IsNullOrWhiteSpace(request.QrzLogbookApiKey))
             {
+                _qrzLogbookApiKey = request.QrzLogbookApiKey.Trim();
                 _hasQrzLogbookApiKey = true;
-                _runtimeOverrides[QrzLogbookApiKeyKey] = "***";
+                _persistedSetup.QrzLogbookApiKey = _qrzLogbookApiKey;
+                _runtimeOverrides.Remove(QrzLogbookApiKeyKey);
+                if (_ownsSyncEngine)
+                {
+                    RebuildSyncEngineNoLock();
+                }
             }
 
             if (request.SyncConfig is not null)
             {
                 _syncConfig = request.SyncConfig.Clone();
+                _persistedSetup.SyncConfig = _syncConfig.Clone();
             }
 
             if (request.RigControl is not null)
             {
                 _rigControl = request.RigControl.Clone();
+                _persistedSetup.RigControl = _rigControl.Clone();
             }
 
-            _runtimeOverrides[StorageBackendKey] = ManagedStorageBackend;
-            if (!string.IsNullOrWhiteSpace(_qrzXmlUsername))
-            {
-                _runtimeOverrides[QrzXmlUsernameKey] = _qrzXmlUsername;
-            }
+            UpdatePersistedStorageSettingsNoLock(request);
+            SyncPersistedProfilesNoLock();
+            _runtimeOverrides.Remove(StorageBackendKey);
 
             PersistNoLock();
             return new SaveSetupResponse
@@ -345,6 +380,7 @@ internal sealed class ManagedEngineState
             var profile = request.Profile ?? throw new InvalidOperationException("profile is required.");
             var profileId = NormalizeProfileIdOrDefault(request.ProfileId, profile.ProfileName, profile.StationCallsign);
             var record = SaveStationProfileNoLock(profileId, profile, request.MakeActive);
+            SyncPersistedProfilesNoLock();
             PersistNoLock();
 
             var response = new SaveStationProfileResponse
@@ -373,6 +409,7 @@ internal sealed class ManagedEngineState
             }
 
             _activeProfileId = stored.ProfileId;
+            SyncPersistedProfilesNoLock();
             PersistNoLock();
             return BuildStationProfileRecordNoLock(stored);
         }
@@ -392,6 +429,7 @@ internal sealed class ManagedEngineState
             var removed = _stationProfiles.RemoveAll(entry => string.Equals(entry.ProfileId, profileId.Trim(), StringComparison.Ordinal));
             if (removed > 0)
             {
+                SyncPersistedProfilesNoLock();
                 PersistNoLock();
                 return true;
             }
@@ -415,7 +453,6 @@ internal sealed class ManagedEngineState
         lock (_gate)
         {
             _sessionOverrideProfile = profile.Clone();
-            PersistNoLock();
             return BuildActiveStationContextNoLock();
         }
     }
@@ -425,7 +462,6 @@ internal sealed class ManagedEngineState
         lock (_gate)
         {
             _sessionOverrideProfile = null;
-            PersistNoLock();
             return BuildActiveStationContextNoLock();
         }
     }
@@ -875,22 +911,24 @@ internal sealed class ManagedEngineState
                 {
                     case StorageBackendKey:
                         if (mutation.Kind == RuntimeConfigMutationKind.Set
-                            && !string.Equals(mutation.Value, ManagedStorageBackend, StringComparison.OrdinalIgnoreCase))
+                            && !string.Equals(mutation.Value, _storage.BackendName, StringComparison.OrdinalIgnoreCase))
                         {
-                            throw new InvalidOperationException("The managed .NET engine currently supports only memory storage.");
+                            throw new InvalidOperationException(
+                                $"The managed .NET engine storage backend is fixed at startup. Restart the engine to use '{mutation.Value}'.");
                         }
 
-                        _runtimeOverrides[StorageBackendKey] = ManagedStorageBackend;
+                        _runtimeOverrides.Remove(StorageBackendKey);
                         break;
                     case QrzXmlUsernameKey:
                         ApplyStringOverrideNoLock(QrzXmlUsernameKey, mutation, value => _qrzXmlUsername = NormalizeOptional(value));
+                        RebuildLookupCoordinatorNoLock();
                         break;
                     case QrzXmlPasswordKey:
                         if (mutation.Kind == RuntimeConfigMutationKind.Clear)
                         {
                             _qrzXmlPassword = null;
                             _hasQrzXmlPassword = false;
-                            _runtimeOverrides.Remove(QrzXmlPasswordKey);
+                            _runtimeOverrides[QrzXmlPasswordKey] = string.Empty;
                             RebuildLookupCoordinatorNoLock();
                         }
                         else
@@ -910,22 +948,28 @@ internal sealed class ManagedEngineState
                     case QrzLogbookApiKeyKey:
                         if (mutation.Kind == RuntimeConfigMutationKind.Clear)
                         {
+                            _qrzLogbookApiKey = null;
                             _hasQrzLogbookApiKey = false;
-                            _runtimeOverrides.Remove(QrzLogbookApiKeyKey);
+                            _runtimeOverrides[QrzLogbookApiKeyKey] = string.Empty;
                         }
                         else
                         {
-                            _hasQrzLogbookApiKey = !string.IsNullOrWhiteSpace(mutation.Value);
-                            _runtimeOverrides[QrzLogbookApiKeyKey] = "***";
+                            _qrzLogbookApiKey = string.IsNullOrWhiteSpace(mutation.Value) ? null : mutation.Value.Trim();
+                            _hasQrzLogbookApiKey = _qrzLogbookApiKey is not null;
+                            _runtimeOverrides[QrzLogbookApiKeyKey] = _hasQrzLogbookApiKey ? "***" : string.Empty;
                         }
 
+                        if (_ownsSyncEngine)
+                        {
+                            RebuildSyncEngineNoLock();
+                        }
                         break;
                     case RigEnabledKey:
                         if (mutation.Kind == RuntimeConfigMutationKind.Clear)
                         {
                             _rigControl ??= new RigControlSettings();
                             _rigControl.Enabled = false;
-                            _runtimeOverrides.Remove(RigEnabledKey);
+                            _runtimeOverrides[RigEnabledKey] = string.Empty;
                         }
                         else if (bool.TryParse(mutation.Value, out var enabled))
                         {
@@ -944,7 +988,6 @@ internal sealed class ManagedEngineState
                 }
             }
 
-            PersistNoLock();
             return BuildRuntimeConfigSnapshotNoLock();
         }
     }
@@ -959,16 +1002,17 @@ internal sealed class ManagedEngineState
             if (normalizedKeys.Length == 0)
             {
                 _runtimeOverrides.Clear();
-                _qrzXmlUsername = null;
-                _qrzXmlPassword = null;
-                _hasQrzXmlPassword = false;
-                _hasQrzLogbookApiKey = false;
-                if (_rigControl is not null)
-                {
-                    _rigControl.Enabled = false;
-                }
-
+                _qrzXmlUsername = NormalizeOptional(_persistedSetup.QrzXmlUsername);
+                _qrzXmlPassword = NormalizeOptional(_persistedSetup.QrzXmlPassword);
+                _hasQrzXmlPassword = _qrzXmlPassword is not null;
+                _qrzLogbookApiKey = NormalizeOptional(_persistedSetup.QrzLogbookApiKey);
+                _hasQrzLogbookApiKey = _qrzLogbookApiKey is not null;
+                _rigControl = _persistedSetup.RigControl?.Clone();
                 RebuildLookupCoordinatorNoLock();
+                if (_ownsSyncEngine)
+                {
+                    RebuildSyncEngineNoLock();
+                }
             }
             else
             {
@@ -977,25 +1021,30 @@ internal sealed class ManagedEngineState
                     switch (key)
                     {
                         case StorageBackendKey:
-                            _runtimeOverrides[StorageBackendKey] = ManagedStorageBackend;
+                            _runtimeOverrides.Remove(StorageBackendKey);
                             break;
                         case QrzXmlUsernameKey:
-                            _qrzXmlUsername = null;
+                            _qrzXmlUsername = NormalizeOptional(_persistedSetup.QrzXmlUsername);
                             _runtimeOverrides.Remove(QrzXmlUsernameKey);
+                            RebuildLookupCoordinatorNoLock();
                             break;
                         case QrzXmlPasswordKey:
-                            _qrzXmlPassword = null;
-                            _hasQrzXmlPassword = false;
+                            _qrzXmlPassword = NormalizeOptional(_persistedSetup.QrzXmlPassword);
+                            _hasQrzXmlPassword = _qrzXmlPassword is not null;
                             _runtimeOverrides.Remove(QrzXmlPasswordKey);
                             RebuildLookupCoordinatorNoLock();
                             break;
                         case QrzLogbookApiKeyKey:
-                            _hasQrzLogbookApiKey = false;
+                            _qrzLogbookApiKey = NormalizeOptional(_persistedSetup.QrzLogbookApiKey);
+                            _hasQrzLogbookApiKey = _qrzLogbookApiKey is not null;
                             _runtimeOverrides.Remove(QrzLogbookApiKeyKey);
+                            if (_ownsSyncEngine)
+                            {
+                                RebuildSyncEngineNoLock();
+                            }
                             break;
                         case RigEnabledKey:
-                            _rigControl ??= new RigControlSettings();
-                            _rigControl.Enabled = false;
+                            _rigControl = _persistedSetup.RigControl?.Clone();
                             _runtimeOverrides.Remove(RigEnabledKey);
                             break;
                         default:
@@ -1004,107 +1053,81 @@ internal sealed class ManagedEngineState
                 }
             }
 
-            PersistNoLock();
             return BuildRuntimeConfigSnapshotNoLock();
         }
     }
 
-    private static ManagedEnginePersistedState LoadPersistedState(string configPath)
-    {
-        if (!File.Exists(configPath))
-        {
-            return new ManagedEnginePersistedState
-            {
-                SyncConfigJson = ProtoJsonFormatter.Format(new SyncConfig
-                {
-                    AutoSyncEnabled = false,
-                    SyncIntervalSeconds = 300,
-                    ConflictPolicy = ConflictPolicy.LastWriteWins,
-                })
-            };
-        }
-
-        var json = File.ReadAllText(configPath);
-        return JsonSerializer.Deserialize<ManagedEnginePersistedState>(json, SerializerOptions)
-            ?? new ManagedEnginePersistedState();
-    }
-
     private void PersistNoLock()
     {
-        var directory = Path.GetDirectoryName(_configPath);
-        if (!string.IsNullOrWhiteSpace(directory))
-        {
-            Directory.CreateDirectory(directory);
-        }
-
-        var syncMeta = Sync(_storage.Logbook.GetSyncMetadataAsync());
-        var persisted = new ManagedEnginePersistedState
-        {
-            QrzXmlUsername = _qrzXmlUsername,
-            QrzXmlPassword = _qrzXmlPassword,
-            HasQrzXmlPassword = _hasQrzXmlPassword,
-            HasQrzLogbookApiKey = _hasQrzLogbookApiKey,
-            SyncConfigJson = ProtoJsonFormatter.Format(_syncConfig),
-            RigControlJson = _rigControl is null ? null : ProtoJsonFormatter.Format(_rigControl),
-            ActiveProfileId = _activeProfileId,
-            SessionOverrideProfileJson = _sessionOverrideProfile is null ? null : ProtoJsonFormatter.Format(_sessionOverrideProfile),
-            LastSyncUtc = syncMeta.LastSync,
-        };
-
-        foreach (var entry in _stationProfiles)
-        {
-            persisted.StationProfiles.Add(new ManagedPersistedStationProfile
-            {
-                ProfileId = entry.ProfileId,
-                ProfileJson = entry.ProfileJson,
-            });
-        }
-
-        foreach (var entry in _runtimeOverrides)
-        {
-            persisted.RuntimeOverrides[entry.Key] = entry.Value;
-        }
-
-        File.WriteAllText(_configPath, JsonSerializer.Serialize(persisted, SerializerOptions));
+        SharedSetupConfigPersistence.Save(_configPath, _persistedSetup);
     }
 
     private SetupStatus BuildSetupStatusNoLock()
     {
-        var isSqlite = string.Equals(_storage.BackendName, "sqlite", StringComparison.OrdinalIgnoreCase);
+        var isSqlite = IsSqliteBackendNoLock();
+        var persistedProfile = GetPersistedActiveProfileNoLock() ?? new StationProfile();
+        var persistedPath = NormalizeOptional(_persistedSetup.GetPersistedLogFilePath())
+            ?? (isSqlite ? NormalizeOptional(_currentPersistenceLocation) : null);
         var status = new SetupStatus
         {
             ConfigFileExists = File.Exists(_configPath),
             SetupComplete = IsSetupCompleteNoLock(),
             ConfigPath = _configPath,
             HasStationProfile = _stationProfiles.Count > 0,
-            StationProfile = GetEffectiveActiveProfileNoLock() ?? new StationProfile(),
+            StationProfile = persistedProfile,
             StationProfileCount = (uint)_stationProfiles.Count,
             IsFirstRun = !File.Exists(_configPath),
-            HasQrzXmlPassword = _hasQrzXmlPassword,
-            HasQrzLogbookApiKey = _hasQrzLogbookApiKey,
+            HasQrzXmlPassword = !string.IsNullOrWhiteSpace(_persistedSetup.QrzXmlPassword),
+            HasQrzLogbookApiKey = !string.IsNullOrWhiteSpace(_persistedSetup.QrzLogbookApiKey),
             PersistenceDescription = isSqlite ? PersistenceStepDescriptionSqlite : PersistenceStepDescription,
             PersistenceLabel = PersistenceStepLabel,
             PersistenceContractExplicit = true,
-            SyncConfig = _syncConfig.Clone(),
+            SyncConfig = _persistedSetup.SyncConfig.Clone(),
         };
 #pragma warning disable CS0612
         status.StorageBackend = isSqlite ? StorageBackend.Sqlite : StorageBackend.Memory;
 #pragma warning restore CS0612
         status.PersistenceStepEnabled = isSqlite;
 
-        if (!string.IsNullOrWhiteSpace(_qrzXmlUsername))
+        if (!string.IsNullOrWhiteSpace(_persistedSetup.QrzXmlUsername))
         {
-            status.QrzXmlUsername = _qrzXmlUsername;
+            status.QrzXmlUsername = _persistedSetup.QrzXmlUsername;
         }
 
-        if (!string.IsNullOrWhiteSpace(_activeProfileId))
+        if (!string.IsNullOrWhiteSpace(_persistedSetup.ActiveProfileId))
         {
-            status.ActiveStationProfileId = _activeProfileId;
+            status.ActiveStationProfileId = _persistedSetup.ActiveProfileId;
         }
 
-        if (_rigControl is not null)
+        if (_persistedSetup.RigControl is not null)
         {
-            status.RigControl = _rigControl.Clone();
+            status.RigControl = _persistedSetup.RigControl.Clone();
+        }
+
+        if (isSqlite)
+        {
+            status.PersistenceDefinitions.Add(
+                new RuntimeConfigDefinition
+                {
+                    Key = PersistenceSetup.PathKey,
+                    Label = PersistenceStepLabel,
+                    Description = "SQLite logbook path for the shared durable setup.",
+                    Kind = RuntimeConfigValueKind.Path,
+                    Required = true,
+                });
+
+            if (!string.IsNullOrWhiteSpace(persistedPath))
+            {
+                status.LogFilePath = persistedPath;
+                status.SuggestedLogFilePath = persistedPath;
+                status.PersistenceValues.Add(
+                    new RuntimeConfigValue
+                    {
+                        Key = PersistenceSetup.PathKey,
+                        HasValue = true,
+                        DisplayValue = persistedPath,
+                    });
+            }
         }
 
         if (!isSqlite)
@@ -1122,17 +1145,18 @@ internal sealed class ManagedEngineState
             new SetupWizardStepStatus
             {
                 Step = SetupWizardStep.LogFile,
-                Complete = true,
+                Complete = !IsSqliteBackendNoLock() || !string.IsNullOrWhiteSpace(_persistedSetup.GetPersistedLogFilePath()) || !string.IsNullOrWhiteSpace(_currentPersistenceLocation),
             },
             new SetupWizardStepStatus
             {
                 Step = SetupWizardStep.StationProfiles,
-                Complete = GetEffectiveActiveProfileNoLock() is { } active && IsStationProfileComplete(active),
+                Complete = GetPersistedActiveProfileNoLock() is { } active && IsStationProfileComplete(active),
             },
             new SetupWizardStepStatus
             {
                 Step = SetupWizardStep.QrzIntegration,
-                Complete = !string.IsNullOrWhiteSpace(_qrzXmlUsername) && _hasQrzXmlPassword,
+                Complete = !string.IsNullOrWhiteSpace(_persistedSetup.QrzXmlUsername)
+                    && !string.IsNullOrWhiteSpace(_persistedSetup.QrzXmlPassword),
             },
             new SetupWizardStepStatus
             {
@@ -1219,6 +1243,57 @@ internal sealed class ManagedEngineState
     private StationProfile? GetEffectiveActiveProfileNoLock()
     {
         return _sessionOverrideProfile?.Clone() ?? GetPersistedActiveProfileNoLock();
+    }
+
+    private void SyncPersistedProfilesNoLock()
+    {
+        _persistedSetup.ActiveProfileId = _activeProfileId;
+        _persistedSetup.StationProfiles.Clear();
+
+        foreach (var entry in _stationProfiles)
+        {
+            _persistedSetup.StationProfiles.Add(
+                new ManagedPersistedStationProfile
+                {
+                    ProfileId = entry.ProfileId,
+                    ProfileJson = entry.ProfileJson,
+                });
+        }
+    }
+
+    private void UpdatePersistedStorageSettingsNoLock(SaveSetupRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        var requestedPath = request.PersistenceValues
+            .FirstOrDefault(static value => PersistenceSetup.IsPathKey(value.Key))
+            ?.Value;
+
+        requestedPath = NormalizeOptional(requestedPath)
+            ?? NormalizeOptional(request.LogFilePath);
+
+#pragma warning disable CS0612
+        requestedPath ??= NormalizeOptional(request.SqlitePath);
+#pragma warning restore CS0612
+
+        if (IsSqliteBackendNoLock())
+        {
+            _persistedSetup.LogbookFilePath = requestedPath
+                ?? NormalizeOptional(_currentPersistenceLocation)
+                ?? NormalizeOptional(_persistedSetup.GetPersistedLogFilePath());
+            _persistedSetup.StorageBackend = null;
+            _persistedSetup.StorageSqlitePath = null;
+            return;
+        }
+
+        _persistedSetup.LogbookFilePath = null;
+        _persistedSetup.StorageBackend = "memory";
+        _persistedSetup.StorageSqlitePath = null;
+    }
+
+    private bool IsSqliteBackendNoLock()
+    {
+        return string.Equals(_storage.BackendName, "sqlite", StringComparison.OrdinalIgnoreCase);
     }
 
     private void ApplyStationContextNoLock(QsoRecord qso, QsoRecord? existing = null)
@@ -1318,6 +1393,8 @@ internal sealed class ManagedEngineState
             ?? _qrzXmlUsername;
         var password = Environment.GetEnvironmentVariable(QrzXmlPasswordKey)?.Trim()
             ?? _qrzXmlPassword;
+        var userAgent = Environment.GetEnvironmentVariable(QrzUserAgentKey)?.Trim()
+            ?? NormalizeOptional(_persistedSetup.QrzXmlUserAgent);
 
         if (!string.IsNullOrWhiteSpace(username) && !string.IsNullOrWhiteSpace(password))
         {
@@ -1326,7 +1403,7 @@ internal sealed class ManagedEngineState
             var httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(8) };
 #pragma warning restore CA2000
             _lookupCoordinator = new LookupCoordinator(
-                new Lookup.Qrz.QrzXmlProvider(httpClient, username, password),
+                new Lookup.Qrz.QrzXmlProvider(httpClient, username, password, userAgent: userAgent),
                 _storage.LookupSnapshots);
         }
         else
@@ -1337,11 +1414,48 @@ internal sealed class ManagedEngineState
         }
     }
 
+    private void RebuildSyncEngineNoLock()
+    {
+        var apiKey = Environment.GetEnvironmentVariable(QrzLogbookApiKeyKey)?.Trim()
+            ?? _qrzLogbookApiKey;
+        if (string.IsNullOrWhiteSpace(apiKey))
+        {
+            DisposeOwnedSyncResourcesNoLock();
+            return;
+        }
+
+        var baseUrl = Environment.GetEnvironmentVariable("QSORIPPER_QRZ_LOGBOOK_BASE_URL")?.Trim()
+            ?? NormalizeOptional(_persistedSetup.QrzLogbookBaseUrl);
+        Uri? apiUri = null;
+        if (!string.IsNullOrWhiteSpace(baseUrl))
+        {
+            apiUri = Uri.TryCreate(baseUrl, UriKind.Absolute, out var parsedUri)
+                ? parsedUri
+                : throw new InvalidOperationException($"Invalid QRZ logbook base URL '{baseUrl}'.");
+        }
+
+        var nextClient = apiUri is null
+            ? new QrzLogbookClient(apiKey)
+            : new QrzLogbookClient(apiKey, apiUri);
+        var previousOwnedSyncClient = _ownedSyncClient;
+        _ownedSyncClient = nextClient;
+        _syncEngine = new QrzSyncEngine(nextClient);
+        previousOwnedSyncClient?.Dispose();
+    }
+
+    private void DisposeOwnedSyncResourcesNoLock()
+    {
+        _ownedSyncClient?.Dispose();
+        _ownedSyncClient = null;
+        _syncEngine = null;
+    }
+
     private static LookupCoordinator CreateDefaultCoordinator(IEngineStorage storage)
     {
         ICallsignProvider provider;
         var username = Environment.GetEnvironmentVariable("QSORIPPER_QRZ_XML_USERNAME")?.Trim();
         var password = Environment.GetEnvironmentVariable("QSORIPPER_QRZ_XML_PASSWORD")?.Trim();
+        var userAgent = Environment.GetEnvironmentVariable(QrzUserAgentKey)?.Trim();
 
         if (!string.IsNullOrWhiteSpace(username) && !string.IsNullOrWhiteSpace(password))
         {
@@ -1349,7 +1463,7 @@ internal sealed class ManagedEngineState
 #pragma warning disable CA2000 // Dispose objects before losing scope
             var httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(8) };
 #pragma warning restore CA2000
-            provider = new Lookup.Qrz.QrzXmlProvider(httpClient, username, password);
+            provider = new Lookup.Qrz.QrzXmlProvider(httpClient, username, password, userAgent: userAgent);
         }
         else
         {
@@ -1367,9 +1481,9 @@ internal sealed class ManagedEngineState
             {
                 Key = StorageBackendKey,
                 Label = "Storage backend",
-                Description = "Managed engine storage backend. The current implementation supports only memory.",
+                Description = "Active storage backend for this engine process. Change it through startup configuration rather than runtime mutations.",
                 Kind = RuntimeConfigValueKind.String,
-                AllowedValues = { ManagedStorageBackend },
+                AllowedValues = { "memory", "sqlite" },
             },
             new RuntimeConfigDefinition
             {
@@ -1407,11 +1521,12 @@ internal sealed class ManagedEngineState
 
     private RuntimeConfigSnapshot BuildRuntimeConfigSnapshotNoLock()
     {
+        var isSqlite = IsSqliteBackendNoLock();
         var snapshot = new RuntimeConfigSnapshot
         {
-            ActiveStorageBackend = ManagedStorageBackend,
+            ActiveStorageBackend = _storage.BackendName,
             LookupProviderSummary = ManagedLookupProviderSummary,
-            PersistenceSummary = PersistenceSummary,
+            PersistenceSummary = isSqlite ? SqlitePersistenceSummary : InMemoryPersistenceSummary,
         };
 
         if (GetEffectiveActiveProfileNoLock() is { } activeProfile)
@@ -1419,7 +1534,16 @@ internal sealed class ManagedEngineState
             snapshot.ActiveStationProfile = activeProfile.Clone();
         }
 
-        snapshot.Warnings.Add("Managed .NET engine currently uses an in-memory logbook.");
+        if (isSqlite && !string.IsNullOrWhiteSpace(_currentPersistenceLocation))
+        {
+            snapshot.PersistenceLocation = _currentPersistenceLocation;
+        }
+
+        if (!isSqlite)
+        {
+            snapshot.Warnings.Add("Managed .NET engine currently uses an in-memory logbook.");
+        }
+
         snapshot.Definitions.AddRange(BuildRuntimeConfigDefinitionsNoLock());
         snapshot.Values.AddRange(BuildRuntimeConfigValuesNoLock());
         return snapshot;
@@ -1429,7 +1553,7 @@ internal sealed class ManagedEngineState
     {
         return
         [
-            BuildRuntimeValue(StorageBackendKey, ManagedStorageBackend, overridden: true, secret: false, redacted: false),
+            BuildRuntimeValue(StorageBackendKey, _storage.BackendName, overridden: _runtimeOverrides.ContainsKey(StorageBackendKey), secret: false, redacted: false),
             BuildRuntimeValue(QrzXmlUsernameKey, _qrzXmlUsername, overridden: _runtimeOverrides.ContainsKey(QrzXmlUsernameKey), secret: false, redacted: false),
             BuildRuntimeValue(QrzXmlPasswordKey, _hasQrzXmlPassword ? "***" : null, overridden: _runtimeOverrides.ContainsKey(QrzXmlPasswordKey), secret: true, redacted: _hasQrzXmlPassword),
             BuildRuntimeValue(QrzLogbookApiKeyKey, _hasQrzLogbookApiKey ? "***" : null, overridden: _runtimeOverrides.ContainsKey(QrzLogbookApiKeyKey), secret: true, redacted: _hasQrzLogbookApiKey),
@@ -1455,7 +1579,7 @@ internal sealed class ManagedEngineState
         if (mutation.Kind == RuntimeConfigMutationKind.Clear)
         {
             setter(null);
-            _runtimeOverrides.Remove(key);
+            _runtimeOverrides[key] = string.Empty;
             return;
         }
 
@@ -1473,7 +1597,7 @@ internal sealed class ManagedEngineState
 
     private bool IsSetupCompleteNoLock()
     {
-        var active = GetEffectiveActiveProfileNoLock();
+        var active = GetPersistedActiveProfileNoLock();
         return active is not null && IsStationProfileComplete(active);
     }
 
@@ -1533,7 +1657,9 @@ internal sealed class ManagedEngineState
                 continue;
             }
 
-            var normalized = Regex.Replace(candidate.Trim().ToUpperInvariant(), "[^A-Z0-9]+", "-").Trim('-');
+#pragma warning disable CA1308 // Profile IDs intentionally match Rust's lowercase normalization.
+            var normalized = Regex.Replace(candidate.Trim().ToLowerInvariant(), "[^a-z0-9]+", "-").Trim('-');
+#pragma warning restore CA1308
             if (!string.IsNullOrWhiteSpace(normalized))
             {
                 return normalized;

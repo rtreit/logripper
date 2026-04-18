@@ -976,7 +976,7 @@ The engine must start and function even when external integrations are unavailab
 
 ### 6.3 Configuration Persistence
 
-- Configuration is persisted as a TOML or JSON file in `QSORIPPER_CONFIG_PATH`.
+- Configuration is persisted as a shared TOML file in `QSORIPPER_CONFIG_PATH`.
 - The `SaveSetup` RPC writes configuration to this path.
 - On startup, the engine loads persisted configuration and overlays environment variable overrides (env vars take precedence).
 - Runtime config mutations (via `DeveloperControlService`) are ephemeral and do not persist across restarts unless explicitly saved.

@@ -114,6 +114,18 @@ public sealed class QsoLoggerEnrichmentTests
         Assert.Equal(string.Empty, logger.LookupGrid);
     }
 
+    [Fact]
+    public void CallsignSetterNormalizesTypedInputToUppercase()
+    {
+        var engine = new FakeEngineClient();
+        var logger = new QsoLoggerViewModel(engine);
+
+        logger.Callsign = "w1aw/p";
+
+        Assert.Equal("W1AW/P", logger.Callsign);
+        Assert.True(logger.IsLogEnabled);
+    }
+
     private sealed class FakeEngineClient : IEngineClient
     {
         public Task<GetSetupWizardStateResponse> GetWizardStateAsync(CancellationToken ct = default) =>

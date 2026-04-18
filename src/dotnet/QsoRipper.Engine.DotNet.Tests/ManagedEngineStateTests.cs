@@ -1,3 +1,5 @@
+using System.Net.Http;
+using System.Reflection;
 using System.Text;
 using Google.Protobuf.WellKnownTypes;
 using QsoRipper.Domain;
@@ -69,7 +71,7 @@ public sealed class ManagedEngineStateTests : IDisposable
 
         var runtime = state.GetRuntimeConfigSnapshot();
         var profiles = state.ListStationProfiles();
-        var persistedJson = File.ReadAllText(Path.Combine(_tempDirectory, "managed-engine.json"));
+        var persistedConfig = File.ReadAllText(Path.Combine(_tempDirectory, "config.toml"));
 
         Assert.True(response.Status.SetupComplete);
         Assert.True(response.Status.ConfigFileExists);
@@ -90,7 +92,7 @@ public sealed class ManagedEngineStateTests : IDisposable
         Assert.Equal("***", passwordValue.DisplayValue);
         Assert.True(passwordValue.Secret);
         Assert.True(passwordValue.Redacted);
-        Assert.DoesNotContain("\"logFilePath\"", persistedJson, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("log_file_path", persistedConfig, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -154,7 +156,134 @@ public sealed class ManagedEngineStateTests : IDisposable
             }
         ]));
 
-        Assert.Equal("The managed .NET engine currently supports only memory storage.", exception.Message);
+        Assert.Equal("The managed .NET engine storage backend is fixed at startup. Restart the engine to use 'sqlite'.", exception.Message);
+    }
+
+    [Fact]
+    public void Runtime_overrides_and_session_override_do_not_persist_across_restart()
+    {
+        var state = CreateState();
+        state.SaveSetup(new SaveSetupRequest
+        {
+            QrzXmlUsername = "k7rnd",
+            QrzXmlPassword = "secret",
+            QrzLogbookApiKey = "api-key",
+            StationProfile = new StationProfile
+            {
+                ProfileName = "Home",
+                StationCallsign = "K7RND",
+                OperatorCallsign = "K7RND",
+                Grid = "CN87"
+            }
+        });
+
+        state.ApplyRuntimeConfig(
+        [
+            new RuntimeConfigMutation
+            {
+                Key = "QSORIPPER_QRZ_XML_USERNAME",
+                Kind = RuntimeConfigMutationKind.Set,
+                Value = "runtime-user"
+            },
+            new RuntimeConfigMutation
+            {
+                Key = "QSORIPPER_QRZ_XML_PASSWORD",
+                Kind = RuntimeConfigMutationKind.Set,
+                Value = "runtime-secret"
+            },
+            new RuntimeConfigMutation
+            {
+                Key = "QSORIPPER_QRZ_LOGBOOK_API_KEY",
+                Kind = RuntimeConfigMutationKind.Clear
+            }
+        ]);
+
+        state.SetSessionStationProfileOverride(new StationProfile
+        {
+            ProfileName = "Field Day",
+            StationCallsign = "W7FD",
+            OperatorCallsign = "W7FD",
+            Grid = "CN85"
+        });
+
+        var restarted = CreateState();
+        var status = restarted.GetSetupStatus();
+        var runtime = restarted.GetRuntimeConfigSnapshot();
+        var context = restarted.GetActiveStationContext();
+
+        Assert.Equal("k7rnd", status.QrzXmlUsername);
+        Assert.True(status.HasQrzXmlPassword);
+        Assert.True(status.HasQrzLogbookApiKey);
+        Assert.False(context.HasSessionOverride);
+        Assert.Equal("K7RND", context.EffectiveActiveProfile.StationCallsign);
+        Assert.Equal(
+            "k7rnd",
+            runtime.Values.Single(value => value.Key == "QSORIPPER_QRZ_XML_USERNAME").DisplayValue);
+        Assert.True(
+            runtime.Values.Single(value => value.Key == "QSORIPPER_QRZ_LOGBOOK_API_KEY").HasValue);
+    }
+
+    [Fact]
+    public void Save_setup_rebuilds_owned_sync_client_without_leaking_previous_http_client()
+    {
+        var state = CreateState();
+        state.SaveSetup(new SaveSetupRequest
+        {
+            QrzLogbookApiKey = "api-key"
+        });
+
+        var originalSyncEngine = GetRequiredPrivateField<QrzSyncEngine>(state, "_syncEngine");
+        var originalHttpClient = GetOwnedSyncHttpClient(originalSyncEngine);
+        Assert.False(IsHttpClientDisposed(originalHttpClient));
+
+        state.SaveSetup(new SaveSetupRequest
+        {
+            QrzLogbookApiKey = "replacement-key"
+        });
+
+        Assert.True(IsHttpClientDisposed(originalHttpClient));
+    }
+
+    [Fact]
+    public void Migrates_legacy_json_config_to_shared_toml()
+    {
+        var legacyPath = Path.Combine(_tempDirectory, "dotnet-engine.json");
+        var configPath = Path.Combine(_tempDirectory, "config.toml");
+        File.WriteAllText(
+            legacyPath,
+            """
+            {
+              "qrzXmlUsername": "k7rnd",
+              "qrzXmlPassword": "secret",
+              "hasQrzXmlPassword": true,
+              "activeProfileId": "home",
+              "stationProfiles": [
+                {
+                  "profileId": "home",
+                  "profileJson": "{ \"profileName\": \"Home\", \"stationCallsign\": \"K7RND\", \"operatorCallsign\": \"K7RND\", \"grid\": \"CN87\" }"
+                }
+              ],
+              "runtimeOverrides": {
+                "QSORIPPER_QRZ_XML_USERNAME": "runtime-user"
+              },
+              "sessionOverrideProfileJson": "{ \"profileName\": \"Field\", \"stationCallsign\": \"W7FD\", \"operatorCallsign\": \"W7FD\", \"grid\": \"CN85\" }"
+            }
+            """);
+
+        var state = CreateState();
+        var status = state.GetSetupStatus();
+        var context = state.GetActiveStationContext();
+        var persistedConfig = File.ReadAllText(configPath);
+
+        Assert.True(File.Exists(configPath));
+        Assert.Contains("active_profile_id = \"home\"", persistedConfig, StringComparison.Ordinal);
+        Assert.Contains("station_callsign = \"K7RND\"", persistedConfig, StringComparison.Ordinal);
+        Assert.DoesNotContain("runtimeOverrides", persistedConfig, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("sessionOverrideProfileJson", persistedConfig, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal("k7rnd", status.QrzXmlUsername);
+        Assert.True(status.HasQrzXmlPassword);
+        Assert.Equal("K7RND", status.StationProfile.StationCallsign);
+        Assert.False(context.HasSessionOverride);
     }
 
     [Fact]
@@ -437,7 +566,7 @@ public sealed class ManagedEngineStateTests : IDisposable
 
     private ManagedEngineState CreateState()
     {
-        return new ManagedEngineState(Path.Combine(_tempDirectory, "managed-engine.json"), new MemoryStorage());
+        return new ManagedEngineState(Path.Combine(_tempDirectory, "config.toml"), new MemoryStorage());
     }
 
     private ManagedEngineState CreateStateWithSync()
@@ -446,7 +575,7 @@ public sealed class ManagedEngineStateTests : IDisposable
         var fakeApi = new FakeQrzLogbookApi();
         var syncEngine = new QrzSyncEngine(fakeApi);
         return new ManagedEngineState(
-            Path.Combine(_tempDirectory, "managed-engine.json"),
+            Path.Combine(_tempDirectory, "config.toml"),
             storage,
             lookupCoordinator: null,
             rigControlMonitor: null,
@@ -461,7 +590,7 @@ public sealed class ManagedEngineStateTests : IDisposable
             new FakeRigControlProvider(() => snapshot.Clone()),
             TimeSpan.Zero);
         return new ManagedEngineState(
-            Path.Combine(_tempDirectory, "managed-engine.json"),
+            Path.Combine(_tempDirectory, "config.toml"),
             storage,
             lookupCoordinator: null,
             rigControlMonitor: monitor,
@@ -472,6 +601,40 @@ public sealed class ManagedEngineStateTests : IDisposable
     private static byte[] Utf8(string value)
     {
         return Encoding.UTF8.GetBytes(value);
+    }
+
+    private static HttpClient GetOwnedSyncHttpClient(QrzSyncEngine syncEngine)
+    {
+        var api = GetRequiredPrivateFieldValue(syncEngine, "_client");
+        return GetRequiredPrivateField<HttpClient>(api, "_httpClient");
+    }
+
+    private static bool IsHttpClientDisposed(HttpClient client)
+    {
+        var disposedField = typeof(HttpMessageInvoker).GetField("_disposed", BindingFlags.Instance | BindingFlags.NonPublic)
+            ?? throw new InvalidOperationException("Could not locate HttpMessageInvoker._disposed.");
+
+        return disposedField.GetValue(client) is true;
+    }
+
+    private static T GetRequiredPrivateField<T>(object instance, string fieldName)
+        where T : class
+    {
+        return Assert.IsType<T>(GetRequiredPrivateFieldValue(instance, fieldName));
+    }
+
+    private static object GetRequiredPrivateFieldValue(object instance, string fieldName)
+    {
+        ArgumentNullException.ThrowIfNull(instance);
+        ArgumentException.ThrowIfNullOrWhiteSpace(fieldName);
+
+        var field = instance.GetType().GetField(fieldName, BindingFlags.Instance | BindingFlags.NonPublic)
+            ?? throw new InvalidOperationException(
+                $"Could not locate field '{fieldName}' on {instance.GetType().FullName}.");
+
+        return field.GetValue(instance)
+            ?? throw new InvalidOperationException(
+                $"Field '{fieldName}' on {instance.GetType().FullName} was null.");
     }
 
     private sealed class FakeRigControlProvider(Func<RigSnapshot> factory) : IRigControlProvider

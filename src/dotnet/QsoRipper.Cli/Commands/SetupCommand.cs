@@ -78,8 +78,8 @@ internal static class SetupCommand
         var operatorCallsign = Environment.GetEnvironmentVariable("QSORIPPER_OPERATOR_CALLSIGN") ?? stationCallsign;
         var profileName = Environment.GetEnvironmentVariable("QSORIPPER_PROFILE_NAME") ?? "Default";
         var grid = Environment.GetEnvironmentVariable("QSORIPPER_GRID");
-        var qrzUsername = Environment.GetEnvironmentVariable("QSORIPPER_QRZ_USERNAME");
-        var qrzPassword = Environment.GetEnvironmentVariable("QSORIPPER_QRZ_PASSWORD");
+        var qrzUsername = Environment.GetEnvironmentVariable("QSORIPPER_QRZ_XML_USERNAME");
+        var qrzPassword = Environment.GetEnvironmentVariable("QSORIPPER_QRZ_XML_PASSWORD");
         var qrzLogbookApiKey = Environment.GetEnvironmentVariable("QSORIPPER_QRZ_LOGBOOK_API_KEY");
         var autoSyncEnv = Environment.GetEnvironmentVariable("QSORIPPER_AUTO_SYNC");
         var syncIntervalEnv = Environment.GetEnvironmentVariable("QSORIPPER_SYNC_INTERVAL");

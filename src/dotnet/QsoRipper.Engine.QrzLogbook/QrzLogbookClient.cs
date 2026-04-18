@@ -25,6 +25,14 @@ public sealed class QrzLogbookClient : IQrzLogbookApi, IDisposable
     }
 
     /// <summary>
+    /// Create a client using the provided API key and explicit QRZ API URL.
+    /// </summary>
+    public QrzLogbookClient(string apiKey, Uri apiUri)
+        : this(new HttpClient { Timeout = TimeSpan.FromSeconds(30) }, apiKey, apiUri, ownsHttpClient: true)
+    {
+    }
+
+    /// <summary>
     /// Create a client with a caller-supplied <see cref="HttpClient"/> and optional API URL override (for testing).
     /// </summary>
     public QrzLogbookClient(HttpClient httpClient, string apiKey, Uri? apiUri = null)

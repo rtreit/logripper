@@ -182,8 +182,8 @@ internal static class CliHelpText
                   QSORIPPER_OPERATOR_CALLSIGN     Operator callsign (defaults to station)
                   QSORIPPER_PROFILE_NAME          Profile name (defaults to "Default")
                   QSORIPPER_GRID                  Grid square
-                  QSORIPPER_QRZ_USERNAME          QRZ XML username (optional)
-                  QSORIPPER_QRZ_PASSWORD          QRZ XML password (optional)
+                  QSORIPPER_QRZ_XML_USERNAME      QRZ XML username (optional)
+                  QSORIPPER_QRZ_XML_PASSWORD      QRZ XML password (optional)
 
                 Examples:
                   setup                           Start the interactive wizard

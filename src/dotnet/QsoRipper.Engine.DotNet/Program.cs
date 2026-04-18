@@ -1,31 +1,30 @@
 using System.Net;
-using System.Text.Json;
 using Microsoft.AspNetCore.Server.Kestrel.Core;
 using QsoRipper.Engine.DotNet;
 using QsoRipper.Engine.Lookup;
 using QsoRipper.Engine.Lookup.Qrz;
-using QsoRipper.Engine.QrzLogbook;
 using QsoRipper.Engine.RigControl;
 using QsoRipper.Engine.SpaceWeather;
 using QsoRipper.Engine.Storage;
 using QsoRipper.Engine.Storage.Memory;
 using QsoRipper.Engine.Storage.Sqlite;
+using QsoRipper.EngineSelection;
 
 var options = ManagedEngineHostOptions.Parse(args);
+var persistedSetup = SharedSetupConfigPersistence.Load(options.ConfigPath);
 
 var builder = WebApplication.CreateBuilder(args);
 builder.WebHost.ConfigureKestrel(kestrel => ConfigureListenEndpoint(kestrel, options.ListenAddress));
 builder.Services.AddGrpc();
 
-var storage = CreateStorage();
-builder.Services.AddSingleton(storage);
+var resolvedStorage = CreateStorage(persistedSetup.Config);
+builder.Services.AddSingleton(resolvedStorage.Storage);
 
-var lookupCoordinator = CreateLookupCoordinator(storage, options.ConfigPath);
+var lookupCoordinator = CreateLookupCoordinator(resolvedStorage.Storage, persistedSetup.Config);
 builder.Services.AddSingleton(lookupCoordinator);
 
 var rigControlMonitor = CreateRigControlMonitor();
 var spaceWeatherMonitor = CreateSpaceWeatherMonitor();
-var syncEngine = CreateSyncEngine();
 
 builder.Services.AddSingleton(provider => new ManagedEngineState(
     options.ConfigPath,
@@ -33,7 +32,9 @@ builder.Services.AddSingleton(provider => new ManagedEngineState(
     provider.GetRequiredService<ILookupCoordinator>(),
     rigControlMonitor,
     spaceWeatherMonitor,
-    syncEngine));
+    null,
+    resolvedStorage.PersistenceLocation,
+    persistedSetup));
 
 var app = builder.Build();
 app.MapGrpcService<ManagedEngineInfoGrpcService>();
@@ -46,64 +47,59 @@ app.MapGrpcService<ManagedRigControlGrpcService>();
 app.MapGrpcService<ManagedSpaceWeatherGrpcService>();
 app.MapGet("/", () => "QsoRipper .NET engine host. Use a gRPC client.");
 
-Console.WriteLine($"Starting QsoRipper .NET engine on {options.ListenAddress} using config {options.ConfigPath} (storage: {storage.BackendName})");
+Console.WriteLine($"Starting QsoRipper .NET engine on {options.ListenAddress} using config {options.ConfigPath} (storage: {resolvedStorage.Storage.BackendName})");
 await app.RunAsync();
 
-static QrzSyncEngine? CreateSyncEngine()
-{
-    var apiKey = Environment.GetEnvironmentVariable("QSORIPPER_QRZ_LOGBOOK_API_KEY")?.Trim();
-    if (string.IsNullOrWhiteSpace(apiKey))
-    {
-        Console.WriteLine("QRZ Logbook sync: disabled (QSORIPPER_QRZ_LOGBOOK_API_KEY not set)");
-        return null;
-    }
-
-    // HttpClient is intentionally not disposed — it is a singleton owned by the client for the app lifetime.
-#pragma warning disable CA2000 // Dispose objects before losing scope
-    var client = new QrzLogbookClient(new HttpClient { Timeout = TimeSpan.FromSeconds(30) }, apiKey);
-#pragma warning restore CA2000
-    Console.WriteLine("QRZ Logbook sync: enabled");
-    return new QrzSyncEngine(client);
-}
-
-static IEngineStorage CreateStorage()
+static ResolvedStorageSettings CreateStorage(SharedPersistedSetupConfig persistedSetup)
 {
     var backend = Environment.GetEnvironmentVariable("QSORIPPER_STORAGE_BACKEND")?.Trim();
-    if (string.Equals(backend, "sqlite", StringComparison.OrdinalIgnoreCase))
+    var path = Environment.GetEnvironmentVariable("QSORIPPER_STORAGE_PATH")?.Trim();
+    if (string.IsNullOrWhiteSpace(backend) && !string.IsNullOrWhiteSpace(path))
     {
-        var path = Environment.GetEnvironmentVariable("QSORIPPER_STORAGE_PATH")?.Trim();
-        var storageBuilder = new SqliteStorageBuilder();
-        if (!string.IsNullOrWhiteSpace(path))
-        {
-            storageBuilder.Path(path);
-        }
-
-        return storageBuilder.Build();
+        backend = "sqlite";
     }
 
-    return new MemoryStorage();
+    var persistedPath = persistedSetup.GetPersistedLogFilePath();
+    backend = string.IsNullOrWhiteSpace(backend)
+        ? (string.IsNullOrWhiteSpace(persistedPath) ? persistedSetup.StorageBackend?.Trim() : "sqlite")
+        : backend;
+
+    if (string.Equals(backend, "sqlite", StringComparison.OrdinalIgnoreCase))
+    {
+        var storageBuilder = new SqliteStorageBuilder();
+        var resolvedPath = string.IsNullOrWhiteSpace(path) ? persistedPath : path;
+        if (!string.IsNullOrWhiteSpace(resolvedPath))
+        {
+            storageBuilder.Path(resolvedPath);
+        }
+
+        return new ResolvedStorageSettings(
+            storageBuilder.Build(),
+            string.IsNullOrWhiteSpace(resolvedPath) ? null : Path.GetFullPath(resolvedPath));
+    }
+
+    return new ResolvedStorageSettings(new MemoryStorage(), null);
 }
 
-static ILookupCoordinator CreateLookupCoordinator(IEngineStorage storage, string? configPath = null)
+static ILookupCoordinator CreateLookupCoordinator(IEngineStorage storage, SharedPersistedSetupConfig persistedSetup)
 {
     var username = Environment.GetEnvironmentVariable("QSORIPPER_QRZ_XML_USERNAME")?.Trim();
     var password = Environment.GetEnvironmentVariable("QSORIPPER_QRZ_XML_PASSWORD")?.Trim();
+    var userAgent = Environment.GetEnvironmentVariable("QSORIPPER_QRZ_USER_AGENT")?.Trim();
 
-    if ((string.IsNullOrWhiteSpace(username) || string.IsNullOrWhiteSpace(password)) && configPath is not null)
+    if (string.IsNullOrWhiteSpace(username))
     {
-        var persisted = TryLoadPersistedConfig(configPath);
-        if (persisted is not null)
-        {
-            if (string.IsNullOrWhiteSpace(username))
-            {
-                username = persisted.QrzXmlUsername?.Trim();
-            }
+        username = persistedSetup.QrzXmlUsername?.Trim();
+    }
 
-            if (string.IsNullOrWhiteSpace(password))
-            {
-                password = persisted.QrzXmlPassword?.Trim();
-            }
-        }
+    if (string.IsNullOrWhiteSpace(password))
+    {
+        password = persistedSetup.QrzXmlPassword?.Trim();
+    }
+
+    if (string.IsNullOrWhiteSpace(userAgent))
+    {
+        userAgent = persistedSetup.QrzXmlUserAgent?.Trim();
     }
 
     ICallsignProvider provider;
@@ -113,7 +109,7 @@ static ILookupCoordinator CreateLookupCoordinator(IEngineStorage storage, string
 #pragma warning disable CA2000 // Dispose objects before losing scope
         var httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(8) };
 #pragma warning restore CA2000
-        provider = new QrzXmlProvider(httpClient, username, password);
+        provider = new QrzXmlProvider(httpClient, username, password, userAgent: userAgent);
     }
     else
     {
@@ -202,29 +198,6 @@ static void ConfigureListenEndpoint(KestrelServerOptions options, string listenA
     options.ListenAnyIP(port, configure => configure.Protocols = HttpProtocols.Http2);
 }
 
-static ManagedEnginePersistedState? TryLoadPersistedConfig(string configPath)
-{
-    try
-    {
-        if (!File.Exists(configPath))
-        {
-            return null;
-        }
-
-        var json = File.ReadAllText(configPath);
-        return JsonSerializer.Deserialize<ManagedEnginePersistedState>(json, new JsonSerializerOptions
-        {
-            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-        });
-    }
-#pragma warning disable CA1031 // Do not catch general exception types
-    catch
-#pragma warning restore CA1031
-    {
-        return null;
-    }
-}
-
 internal sealed record ManagedEngineHostOptions(string ListenAddress, string ConfigPath)
 {
     public const string DefaultListenAddress = "127.0.0.1:50052";
@@ -271,22 +244,23 @@ internal sealed record ManagedEngineHostOptions(string ListenAddress, string Con
 
     private static string GetDefaultConfigPath()
     {
-        var baseDirectory = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-        return Path.Combine(baseDirectory, "QsoRipper", "dotnet-engine.json");
+        return SharedSetupPaths.GetDefaultConfigPath();
     }
 
     private static void PrintHelp()
     {
         Console.WriteLine(
             """
-            QsoRipper .NET engine host
+              QsoRipper .NET engine host
 
-            Usage:
-              dotnet run --project src\dotnet\QsoRipper.Engine.DotNet -- [--listen 127.0.0.1:50052] [--config path\to\dotnet-engine.json]
+             Usage:
+              dotnet run --project src\dotnet\QsoRipper.Engine.DotNet -- [--listen 127.0.0.1:50052] [--config path\to\config.toml]
 
-            Environment:
+             Environment:
               QSORIPPER_SERVER_ADDR   Overrides the bind address
-              QSORIPPER_CONFIG_PATH   Overrides the managed-engine config path
-            """);
+              QSORIPPER_CONFIG_PATH   Overrides the shared engine config path
+             """);
     }
 }
+
+internal sealed record ResolvedStorageSettings(IEngineStorage Storage, string? PersistenceLocation);

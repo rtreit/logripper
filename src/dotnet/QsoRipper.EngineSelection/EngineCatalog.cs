@@ -11,6 +11,7 @@ public static class EngineCatalog
     public const string EndpointEnvironmentVariable = "QSORIPPER_ENDPOINT";
 
     private static readonly string StartScriptPath = Path.Combine(".", "start-qsoripper.ps1");
+    private static readonly string DefaultConfigPath = SharedSetupPaths.GetDefaultConfigPath();
 
     private static readonly IReadOnlyList<EngineTargetProfile> BuiltInProfiles =
     [
@@ -21,7 +22,7 @@ public static class EngineCatalog
             "http://127.0.0.1:50051",
             [KnownEngineProfiles.LocalRust, "rust", "rust-tonic"],
             new EngineLaunchRecipe(
-                Path.Combine(".", "artifacts", "run", "rust-engine.json"),
+                DefaultConfigPath,
                 SupportsStorageSession: true,
                 new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
                 {
@@ -37,10 +38,6 @@ public static class EngineCatalog
                         KnownEngineProfiles.LocalRust,
                         "-ListenAddress",
                         "{listenAddress}",
-                        "-Storage",
-                        "{storageBackend}",
-                        "-PersistenceLocation",
-                        "{persistenceLocation}",
                         "-ConfigPath",
                         "{configPath}"
                     ]))),
@@ -51,7 +48,7 @@ public static class EngineCatalog
             "http://127.0.0.1:50052",
             [KnownEngineProfiles.LocalDotNet, "dotnet", "dotnet-aspnet", "managed"],
             new EngineLaunchRecipe(
-                Path.Combine(".", "artifacts", "run", "dotnet-engine.json"),
+                DefaultConfigPath,
                 SupportsStorageSession: true,
                 new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
                 {
@@ -67,10 +64,6 @@ public static class EngineCatalog
                         KnownEngineProfiles.LocalDotNet,
                         "-ListenAddress",
                         "{listenAddress}",
-                        "-Storage",
-                        "{storageBackend}",
-                        "-PersistenceLocation",
-                        "{persistenceLocation}",
                         "-ConfigPath",
                         "{configPath}"
                     ]))),
