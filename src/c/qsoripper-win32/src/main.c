@@ -449,11 +449,22 @@ static char *json_extract_object(const char *start)
 
 static char g_cli_path[MAX_PATH];
 
+static int TryCliCandidate(const char *base, const char *config, int versioned)
+{
+    if (versioned)
+        snprintf(g_cli_path, MAX_PATH,
+                 "%s\\QsoRipper.Cli\\%s\\net10.0\\QsoRipper.Cli.exe", base, config);
+    else
+        snprintf(g_cli_path, MAX_PATH,
+                 "%s\\QsoRipper.Cli\\%s\\QsoRipper.Cli.exe", base, config);
+    return GetFileAttributesA(g_cli_path) != INVALID_FILE_ATTRIBUTES;
+}
+
 static void FindCliPath(void)
 {
     /* Try to find QsoRipper.Cli.exe relative to our own exe:
        We're at: .../artifacts/publish/qsoripper-win32/Release/qsoripper-win32.exe
-       CLI is at: .../artifacts/publish/QsoRipper.Cli/Release/QsoRipper.Cli.exe */
+       CLI is at: .../artifacts/publish/QsoRipper.Cli/{Debug|Release}[/net10.0]/QsoRipper.Cli.exe */
     char module[MAX_PATH];
     GetModuleFileNameA(NULL, module, MAX_PATH);
 
@@ -461,21 +472,27 @@ static void FindCliPath(void)
     char *p = strrchr(module, '\\');
     if (p) *p = 0; /* strip exe name */
     p = strrchr(module, '\\');
-    if (p) *p = 0; /* strip Release */
+    if (p) *p = 0; /* strip Release|Debug */
     p = strrchr(module, '\\');
     if (p) *p = 0; /* strip qsoripper-win32 */
 
-    /* Try sibling directory */
-    snprintf(g_cli_path, MAX_PATH, "%s\\QsoRipper.Cli\\Release\\QsoRipper.Cli.exe", module);
-    if (GetFileAttributesA(g_cli_path) != INVALID_FILE_ATTRIBUTES)
-        return;
+    /* Probe sibling directory — Debug first (more likely during development),
+       then Release.  For each configuration try both the versioned TFM
+       sub-directory (net10.0) and the unversioned output path. */
+    if (TryCliCandidate(module, "Debug",   1)) return;
+    if (TryCliCandidate(module, "Debug",   0)) return;
+    if (TryCliCandidate(module, "Release", 1)) return;
+    if (TryCliCandidate(module, "Release", 0)) return;
 
     /* Try QSORIPPER_CLI_PATH env var */
     if (GetEnvironmentVariableA("QSORIPPER_CLI_PATH", g_cli_path, MAX_PATH) > 0)
         if (GetFileAttributesA(g_cli_path) != INVALID_FILE_ATTRIBUTES)
             return;
 
-    /* Fallback: assume on PATH */
+    /* Fallback: assume on PATH — log a diagnostic so developers can tell
+       the launcher didn't find a local build artifact. */
+    OutputDebugStringA("FindCliPath: no local CLI artifact found; "
+                       "falling back to PATH lookup for QsoRipper.Cli.exe\n");
     safe_strcpy(g_cli_path, MAX_PATH, "QsoRipper.Cli.exe");
 }
 
