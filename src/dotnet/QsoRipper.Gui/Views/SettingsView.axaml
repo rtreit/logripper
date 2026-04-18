@@ -57,423 +57,346 @@
                  IsVisible="{Binding IsLoading}"
                  Margin="0,0,0,4" />
 
-    <Grid Margin="24,16,24,24"
-          ColumnDefinitions="*,24,*">
-      <StackPanel Grid.Column="0"
-                  Spacing="20">
-        <Border Padding="16"
-                BorderThickness="1"
-                CornerRadius="8"
-                BorderBrush="{DynamicResource SystemControlForegroundBaseMediumLowBrush}">
-          <StackPanel Spacing="12">
-            <TextBlock Text="Station Profile"
+    <TabControl Margin="16,12,16,16"
+                TabStripPlacement="Left">
+      <TabItem Header="Station"
+               AutomationProperties.AutomationId="SettingsStationTab">
+        <ScrollViewer VerticalScrollBarVisibility="Auto"
+                      HorizontalScrollBarVisibility="Disabled"
+                      Padding="16">
+          <StackPanel Spacing="16">
+            <TextBlock Text="Station"
                        FontSize="16"
                        FontWeight="SemiBold" />
+            <TextBlock Text="Core station identity and location details used across logging and exports."
+                       Opacity="0.6"
+                       TextWrapping="Wrap" />
 
-            <Grid ColumnDefinitions="110,*,110,*"
-                  RowDefinitions="Auto,Auto,Auto"
+            <Grid ColumnDefinitions="120,*,120,*"
+                  RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto"
                   ColumnSpacing="12"
-                  RowSpacing="8">
-              <TextBlock Grid.Row="0" Grid.Column="0"
-                         Text="Callsign:"
-                         VerticalAlignment="Center" />
+                  RowSpacing="6">
+              <TextBlock Grid.Row="0" Grid.Column="0" Text="Callsign:" VerticalAlignment="Center" />
               <TextBox x:Name="SettingsCallsignBox"
                        AutomationProperties.AutomationId="SettingsCallsignBox"
                        Grid.Row="0" Grid.Column="1"
                        Text="{Binding Callsign, Mode=TwoWay}"
                        PlaceholderText="e.g. W1AW" />
 
-              <TextBlock Grid.Row="0" Grid.Column="2"
-                         Text="Grid Square:"
-                         VerticalAlignment="Center" />
+              <TextBlock Grid.Row="0" Grid.Column="2" Text="Grid Square:" VerticalAlignment="Center" />
               <TextBox x:Name="SettingsGridSquareBox"
                        AutomationProperties.AutomationId="SettingsGridSquareBox"
                        Grid.Row="0" Grid.Column="3"
                        Text="{Binding GridSquare, Mode=TwoWay}"
                        PlaceholderText="e.g. FN31" />
 
-              <TextBlock Grid.Row="1" Grid.Column="0"
-                         Text="Operator Name:"
-                         VerticalAlignment="Center" />
+              <TextBlock Grid.Row="1" Grid.Column="0" Text="Operator Name:" VerticalAlignment="Center" />
               <TextBox x:Name="SettingsOperatorNameBox"
                        AutomationProperties.AutomationId="SettingsOperatorNameBox"
                        Grid.Row="1" Grid.Column="1"
                        Text="{Binding OperatorName, Mode=TwoWay}" />
 
-              <TextBlock Grid.Row="1" Grid.Column="2"
-                         Text="Operator Call:"
-                         VerticalAlignment="Center" />
+              <TextBlock Grid.Row="1" Grid.Column="2" Text="Operator Call:" VerticalAlignment="Center" />
               <TextBox x:Name="SettingsOperatorCallsignBox"
                        AutomationProperties.AutomationId="SettingsOperatorCallsignBox"
                        Grid.Row="1" Grid.Column="3"
                        Text="{Binding OperatorCallsign, Mode=TwoWay}" />
 
-              <TextBlock Grid.Row="2" Grid.Column="0"
-                         Text="Profile Name:"
-                         VerticalAlignment="Center" />
+              <TextBlock Grid.Row="2" Grid.Column="0" Text="Profile Name:" VerticalAlignment="Center" />
               <TextBox x:Name="SettingsProfileNameBox"
                        AutomationProperties.AutomationId="SettingsProfileNameBox"
                        Grid.Row="2" Grid.Column="1"
                        Grid.ColumnSpan="3"
                        Text="{Binding ProfileName, Mode=TwoWay}"
                        PlaceholderText="Default" />
-            </Grid>
-          </StackPanel>
-        </Border>
 
-        <Border Padding="16"
-                BorderThickness="1"
-                CornerRadius="8"
-                BorderBrush="{DynamicResource SystemControlForegroundBaseMediumLowBrush}">
-          <StackPanel Spacing="12">
-            <TextBlock Text="{Binding PersistenceSectionTitle}"
-                       FontSize="16"
-                       FontWeight="SemiBold" />
-            <TextBlock Text="{Binding PersistenceDescription}"
-                       Opacity="0.6"
-                       TextWrapping="Wrap"
-                       IsVisible="{Binding PersistenceDescription, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-
-            <ItemsControl ItemsSource="{Binding PersistenceFields}"
-                          IsVisible="{Binding HasPersistenceInputs}">
-              <ItemsControl.ItemTemplate>
-                <DataTemplate>
-                  <Grid ColumnDefinitions="110,*"
-                        ColumnSpacing="12"
-                        Margin="0,0,0,8">
-                    <TextBlock Grid.Column="0"
-                               Text="{Binding Label}"
-                               VerticalAlignment="Center" />
-                    <ComboBox Grid.Column="1"
-                              ItemsSource="{Binding AllowedValues}"
-                              SelectedItem="{Binding Value, Mode=TwoWay}"
-                              IsVisible="{Binding HasChoices}" />
-                    <TextBox Grid.Column="1"
-                             Text="{Binding Value, Mode=TwoWay}"
-                             IsVisible="{Binding !HasChoices}"
-                             TextWrapping="NoWrap"
-                             ScrollViewer.HorizontalScrollBarVisibility="Auto"
-                             ToolTip.Tip="{Binding Value}" />
-                  </Grid>
-                </DataTemplate>
-              </ItemsControl.ItemTemplate>
-            </ItemsControl>
-
-            <TextBlock Text="No additional persistence input is required for this engine."
-                       IsVisible="{Binding ShowsPersistenceInfoOnly}"
-                       Opacity="0.8"
-                       TextWrapping="Wrap" />
-          </StackPanel>
-        </Border>
-
-        <Border Padding="16"
-                BorderThickness="1"
-                CornerRadius="8"
-                BorderBrush="{DynamicResource SystemControlForegroundBaseMediumLowBrush}">
-          <StackPanel Spacing="12">
-            <TextBlock Text="Sync Settings"
-                       FontSize="16"
-                       FontWeight="SemiBold" />
-
-            <CheckBox x:Name="SettingsAutoSyncCheckBox"
-                      AutomationProperties.AutomationId="SettingsAutoSyncCheckBox"
-                      Content="Enable automatic sync"
-                      IsChecked="{Binding AutoSyncEnabled, Mode=TwoWay}" />
-
-            <Grid ColumnDefinitions="110,*,110,*"
-                  RowDefinitions="Auto,Auto"
-                  ColumnSpacing="12"
-                  RowSpacing="8">
-              <TextBlock Grid.Row="0" Grid.Column="0"
-                         Text="Interval (sec):"
-                         VerticalAlignment="Center" />
-              <NumericUpDown x:Name="SettingsSyncIntervalInput"
-                             AutomationProperties.AutomationId="SettingsSyncIntervalInput"
-                             Grid.Row="0" Grid.Column="1"
-                             Value="{Binding SyncIntervalSeconds, Mode=TwoWay}"
-                             Minimum="30"
-                             Maximum="86400"
-                             Increment="30"
-                             FormatString="F0"
-                             HorizontalAlignment="Left"
-                             Width="140" />
-
-              <TextBlock Grid.Row="1" Grid.Column="0"
-                         Text="Conflict Policy:"
-                         VerticalAlignment="Center" />
-              <ComboBox x:Name="SettingsConflictPolicyComboBox"
-                        AutomationProperties.AutomationId="SettingsConflictPolicyComboBox"
-                        Grid.Row="1" Grid.Column="1"
-                        Grid.ColumnSpan="3"
-                        SelectedIndex="{Binding ConflictPolicy, Mode=TwoWay, Converter={x:Static v:SettingsView.ConflictPolicyIndex}}"
-                        HorizontalAlignment="Left"
-                        Width="220">
-                <ComboBoxItem Content="Last Write Wins" />
-                <ComboBoxItem Content="Flag for Review" />
-              </ComboBox>
-            </Grid>
-          </StackPanel>
-        </Border>
-
-        <Border Padding="16"
-                BorderThickness="1"
-                CornerRadius="8"
-                BorderBrush="{DynamicResource SystemControlForegroundBaseMediumLowBrush}">
-          <StackPanel Spacing="12">
-            <TextBlock Text="Station Details"
-                       FontSize="16"
-                       FontWeight="SemiBold" />
-
-            <Grid ColumnDefinitions="110,*,110,*"
-                  RowDefinitions="Auto,Auto,Auto,Auto,Auto"
-                  ColumnSpacing="12"
-                  RowSpacing="8">
-              <TextBlock Grid.Row="0" Grid.Column="0"
-                         Text="County:"
-                         VerticalAlignment="Center" />
+              <TextBlock Grid.Row="3" Grid.Column="0" Text="County:" VerticalAlignment="Center" />
               <TextBox x:Name="SettingsCountyBox"
                        AutomationProperties.AutomationId="SettingsCountyBox"
-                       Grid.Row="0" Grid.Column="1"
+                       Grid.Row="3" Grid.Column="1"
                        Text="{Binding County, Mode=TwoWay}" />
 
-              <TextBlock Grid.Row="0" Grid.Column="2"
-                         Text="State:"
-                         VerticalAlignment="Center" />
+              <TextBlock Grid.Row="3" Grid.Column="2" Text="State:" VerticalAlignment="Center" />
               <TextBox x:Name="SettingsStateBox"
                        AutomationProperties.AutomationId="SettingsStateBox"
-                       Grid.Row="0" Grid.Column="3"
+                       Grid.Row="3" Grid.Column="3"
                        Text="{Binding State, Mode=TwoWay}" />
 
-              <TextBlock Grid.Row="1" Grid.Column="0"
-                         Text="Country:"
-                         VerticalAlignment="Center" />
+              <TextBlock Grid.Row="4" Grid.Column="0" Text="Country:" VerticalAlignment="Center" />
               <TextBox x:Name="SettingsCountryBox"
                        AutomationProperties.AutomationId="SettingsCountryBox"
-                       Grid.Row="1" Grid.Column="1"
+                       Grid.Row="4" Grid.Column="1"
                        Text="{Binding Country, Mode=TwoWay}" />
 
-              <TextBlock Grid.Row="1" Grid.Column="2"
-                         Text="DXCC:"
-                         VerticalAlignment="Center" />
+              <TextBlock Grid.Row="4" Grid.Column="2" Text="DXCC:" VerticalAlignment="Center" />
               <TextBox x:Name="SettingsDxccBox"
                        AutomationProperties.AutomationId="SettingsDxccBox"
-                       Grid.Row="1" Grid.Column="3"
+                       Grid.Row="4" Grid.Column="3"
                        Text="{Binding Dxcc, Mode=TwoWay}"
                        PlaceholderText="e.g. 291" />
 
-              <TextBlock Grid.Row="2" Grid.Column="0"
-                         Text="CQ Zone:"
-                         VerticalAlignment="Center" />
+              <TextBlock Grid.Row="5" Grid.Column="0" Text="CQ Zone:" VerticalAlignment="Center" />
               <TextBox x:Name="SettingsCqZoneBox"
                        AutomationProperties.AutomationId="SettingsCqZoneBox"
-                       Grid.Row="2" Grid.Column="1"
+                       Grid.Row="5" Grid.Column="1"
                        Text="{Binding CqZone, Mode=TwoWay}" />
 
-              <TextBlock Grid.Row="2" Grid.Column="2"
-                         Text="ITU Zone:"
-                         VerticalAlignment="Center" />
+              <TextBlock Grid.Row="5" Grid.Column="2" Text="ITU Zone:" VerticalAlignment="Center" />
               <TextBox x:Name="SettingsItuZoneBox"
                        AutomationProperties.AutomationId="SettingsItuZoneBox"
-                       Grid.Row="2" Grid.Column="3"
+                       Grid.Row="5" Grid.Column="3"
                        Text="{Binding ItuZone, Mode=TwoWay}" />
 
-              <TextBlock Grid.Row="3" Grid.Column="0"
-                         Text="Latitude:"
-                         VerticalAlignment="Center" />
+              <TextBlock Grid.Row="6" Grid.Column="0" Text="Latitude:" VerticalAlignment="Center" />
               <TextBox x:Name="SettingsLatitudeBox"
                        AutomationProperties.AutomationId="SettingsLatitudeBox"
-                       Grid.Row="3" Grid.Column="1"
+                       Grid.Row="6" Grid.Column="1"
                        Text="{Binding Latitude, Mode=TwoWay}"
                        PlaceholderText="Decimal degrees" />
 
-              <TextBlock Grid.Row="3" Grid.Column="2"
-                         Text="Longitude:"
-                         VerticalAlignment="Center" />
+              <TextBlock Grid.Row="6" Grid.Column="2" Text="Longitude:" VerticalAlignment="Center" />
               <TextBox x:Name="SettingsLongitudeBox"
                        AutomationProperties.AutomationId="SettingsLongitudeBox"
-                       Grid.Row="3" Grid.Column="3"
+                       Grid.Row="6" Grid.Column="3"
                        Text="{Binding Longitude, Mode=TwoWay}"
                        PlaceholderText="Decimal degrees" />
 
-              <TextBlock Grid.Row="4" Grid.Column="0"
-                         Text="ARRL Section:"
-                         VerticalAlignment="Center" />
+              <TextBlock Grid.Row="7" Grid.Column="0" Text="ARRL Section:" VerticalAlignment="Center" />
               <TextBox x:Name="SettingsArrlSectionBox"
                        AutomationProperties.AutomationId="SettingsArrlSectionBox"
-                       Grid.Row="4" Grid.Column="1"
+                       Grid.Row="7" Grid.Column="1"
                        Grid.ColumnSpan="3"
                        Text="{Binding ArrlSection, Mode=TwoWay}" />
             </Grid>
           </StackPanel>
-        </Border>
-      </StackPanel>
+        </ScrollViewer>
+      </TabItem>
 
-      <StackPanel Grid.Column="2"
-                  Spacing="20">
-        <Border Padding="16"
-                BorderThickness="1"
-                CornerRadius="8"
-                BorderBrush="{DynamicResource SystemControlForegroundBaseMediumLowBrush}">
-          <StackPanel Spacing="12">
-            <TextBlock Text="QRZ XML Lookup"
-                       FontSize="16"
-                       FontWeight="SemiBold" />
-            <TextBlock Text="Used for callsign lookups. Leave blank to disable."
-                       Opacity="0.6"
-                       TextWrapping="Wrap" />
+      <TabItem Header="Storage + Sync"
+               AutomationProperties.AutomationId="SettingsStorageSyncTab">
+        <StackPanel Margin="16"
+                    Spacing="16">
+          <TextBlock Text="{Binding PersistenceSectionTitle}"
+                     FontSize="16"
+                     FontWeight="SemiBold" />
+          <TextBlock Text="{Binding PersistenceDescription}"
+                     Opacity="0.6"
+                     TextWrapping="Wrap"
+                     IsVisible="{Binding PersistenceDescription, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
 
-            <Grid ColumnDefinitions="110,*"
-                  RowDefinitions="Auto,Auto"
-                  ColumnSpacing="12"
-                  RowSpacing="8">
-              <TextBlock Grid.Row="0" Grid.Column="0"
-                         Text="Username:"
+          <ItemsControl ItemsSource="{Binding PersistenceFields}"
+                        IsVisible="{Binding HasPersistenceInputs}">
+            <ItemsControl.ItemTemplate>
+              <DataTemplate>
+                <Grid ColumnDefinitions="120,*"
+                      ColumnSpacing="12"
+                      Margin="0,0,0,6">
+                  <TextBlock Grid.Column="0"
+                             Text="{Binding Label}"
+                             VerticalAlignment="Center" />
+                  <ComboBox Grid.Column="1"
+                            ItemsSource="{Binding AllowedValues}"
+                            SelectedItem="{Binding Value, Mode=TwoWay}"
+                            IsVisible="{Binding HasChoices}" />
+                  <TextBox Grid.Column="1"
+                           Text="{Binding Value, Mode=TwoWay}"
+                           IsVisible="{Binding !HasChoices}"
+                           TextWrapping="NoWrap"
+                           ScrollViewer.HorizontalScrollBarVisibility="Auto"
+                           ToolTip.Tip="{Binding Value}" />
+                </Grid>
+              </DataTemplate>
+            </ItemsControl.ItemTemplate>
+          </ItemsControl>
+
+          <TextBlock Text="No additional persistence input is required for this engine."
+                     IsVisible="{Binding ShowsPersistenceInfoOnly}"
+                     Opacity="0.8"
+                     TextWrapping="Wrap" />
+
+          <Separator />
+
+          <TextBlock Text="Sync Settings"
+                     FontSize="16"
+                     FontWeight="SemiBold" />
+          <CheckBox x:Name="SettingsAutoSyncCheckBox"
+                    AutomationProperties.AutomationId="SettingsAutoSyncCheckBox"
+                    Content="Enable automatic sync"
+                    IsChecked="{Binding AutoSyncEnabled, Mode=TwoWay}" />
+
+          <Grid ColumnDefinitions="120,*,120,*"
+                RowDefinitions="Auto,Auto"
+                ColumnSpacing="12"
+                RowSpacing="6">
+            <TextBlock Grid.Row="0" Grid.Column="0"
+                       Text="Interval (sec):"
+                       VerticalAlignment="Center" />
+            <NumericUpDown x:Name="SettingsSyncIntervalInput"
+                           AutomationProperties.AutomationId="SettingsSyncIntervalInput"
+                           Grid.Row="0" Grid.Column="1"
+                           Value="{Binding SyncIntervalSeconds, Mode=TwoWay}"
+                           Minimum="30"
+                           Maximum="86400"
+                           Increment="30"
+                           FormatString="F0"
+                           HorizontalAlignment="Left"
+                           Width="140" />
+
+            <TextBlock Grid.Row="1" Grid.Column="0"
+                       Text="Conflict Policy:"
+                       VerticalAlignment="Center" />
+            <ComboBox x:Name="SettingsConflictPolicyComboBox"
+                      AutomationProperties.AutomationId="SettingsConflictPolicyComboBox"
+                      Grid.Row="1" Grid.Column="1"
+                      Grid.ColumnSpan="3"
+                      SelectedIndex="{Binding ConflictPolicy, Mode=TwoWay, Converter={x:Static v:SettingsView.ConflictPolicyIndex}}"
+                      HorizontalAlignment="Left"
+                      Width="220">
+              <ComboBoxItem Content="Last Write Wins" />
+              <ComboBoxItem Content="Flag for Review" />
+            </ComboBox>
+          </Grid>
+        </StackPanel>
+      </TabItem>
+
+      <TabItem Header="QRZ"
+               AutomationProperties.AutomationId="SettingsQrzTab">
+        <StackPanel Margin="16"
+                    Spacing="16">
+          <TextBlock Text="QRZ XML Lookup"
+                     FontSize="16"
+                     FontWeight="SemiBold" />
+          <TextBlock Text="Used for callsign lookups. Leave blank to disable."
+                     Opacity="0.6"
+                     TextWrapping="Wrap" />
+
+          <Grid ColumnDefinitions="120,*"
+                RowDefinitions="Auto,Auto"
+                ColumnSpacing="12"
+                RowSpacing="6">
+            <TextBlock Grid.Row="0" Grid.Column="0" Text="Username:" VerticalAlignment="Center" />
+            <TextBox x:Name="SettingsQrzXmlUsernameBox"
+                     AutomationProperties.AutomationId="SettingsQrzXmlUsernameBox"
+                     Grid.Row="0" Grid.Column="1"
+                     Text="{Binding QrzXmlUsername, Mode=TwoWay}" />
+
+            <TextBlock Grid.Row="1" Grid.Column="0" Text="Password:" VerticalAlignment="Center" />
+            <TextBox x:Name="SettingsQrzXmlPasswordBox"
+                     AutomationProperties.AutomationId="SettingsQrzXmlPasswordBox"
+                     Grid.Row="1" Grid.Column="1"
+                     Text="{Binding QrzXmlPassword, Mode=TwoWay}"
+                     PasswordChar="•"
+                     PlaceholderText="Enter to update" />
+          </Grid>
+
+          <StackPanel Orientation="Horizontal"
+                      Spacing="12">
+            <Button x:Name="SettingsTestQrzXmlButton"
+                    AutomationProperties.AutomationId="SettingsTestQrzXmlButton"
+                    Content="Test XML Connection"
+                    Command="{Binding TestQrzXmlCommand}"
+                    IsEnabled="{Binding !IsTestingQrzXml}" />
+            <ProgressBar IsIndeterminate="True"
+                         IsVisible="{Binding IsTestingQrzXml}"
+                         Width="100"
                          VerticalAlignment="Center" />
-              <TextBox x:Name="SettingsQrzXmlUsernameBox"
-                       AutomationProperties.AutomationId="SettingsQrzXmlUsernameBox"
-                       Grid.Row="0" Grid.Column="1"
-                       Text="{Binding QrzXmlUsername, Mode=TwoWay}" />
-
-              <TextBlock Grid.Row="1" Grid.Column="0"
-                         Text="Password:"
-                         VerticalAlignment="Center" />
-              <TextBox x:Name="SettingsQrzXmlPasswordBox"
-                       AutomationProperties.AutomationId="SettingsQrzXmlPasswordBox"
-                       Grid.Row="1" Grid.Column="1"
-                       Text="{Binding QrzXmlPassword, Mode=TwoWay}"
-                       PasswordChar="•"
-                       PlaceholderText="Enter to update" />
-            </Grid>
-
-            <StackPanel Orientation="Horizontal"
-                        Spacing="12">
-              <Button x:Name="SettingsTestQrzXmlButton"
-                      AutomationProperties.AutomationId="SettingsTestQrzXmlButton"
-                      Content="Test XML Connection"
-                      Command="{Binding TestQrzXmlCommand}"
-                      IsEnabled="{Binding !IsTestingQrzXml}" />
-              <ProgressBar IsIndeterminate="True"
-                           IsVisible="{Binding IsTestingQrzXml}"
-                           Width="100"
-                           VerticalAlignment="Center" />
-            </StackPanel>
-
-            <TextBlock Text="{Binding QrzXmlTestResult}"
-                       TextWrapping="Wrap"
-                       IsVisible="{Binding QrzXmlTestResult, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
-                       Foreground="{Binding QrzXmlTestSucceeded, Converter={x:Static v:SettingsView.TestResultColor}}" />
           </StackPanel>
-        </Border>
 
-        <Border Padding="16"
-                BorderThickness="1"
-                CornerRadius="8"
-                BorderBrush="{DynamicResource SystemControlForegroundBaseMediumLowBrush}">
-          <StackPanel Spacing="12">
-            <TextBlock Text="QRZ Logbook Sync"
-                       FontSize="16"
-                       FontWeight="SemiBold" />
-            <TextBlock Text="API key for bidirectional sync with logbook.qrz.com."
-                       Opacity="0.6"
-                       TextWrapping="Wrap" />
+          <TextBlock Text="{Binding QrzXmlTestResult}"
+                     TextWrapping="Wrap"
+                     IsVisible="{Binding QrzXmlTestResult, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
+                     Foreground="{Binding QrzXmlTestSucceeded, Converter={x:Static v:SettingsView.TestResultColor}}" />
 
-            <Grid ColumnDefinitions="110,*"
-                  ColumnSpacing="12">
-              <TextBlock Grid.Column="0"
-                         Text="API Key:"
+          <Separator />
+
+          <TextBlock Text="QRZ Logbook Sync"
+                     FontSize="16"
+                     FontWeight="SemiBold" />
+          <TextBlock Text="API key for bidirectional sync with logbook.qrz.com."
+                     Opacity="0.6"
+                     TextWrapping="Wrap" />
+
+          <Grid ColumnDefinitions="120,*"
+                ColumnSpacing="12">
+            <TextBlock Grid.Column="0" Text="API Key:" VerticalAlignment="Center" />
+            <TextBox x:Name="SettingsQrzLogbookApiKeyBox"
+                     AutomationProperties.AutomationId="SettingsQrzLogbookApiKeyBox"
+                     Grid.Column="1"
+                     Text="{Binding QrzLogbookApiKey, Mode=TwoWay}"
+                     PasswordChar="•"
+                     PlaceholderText="Enter to update" />
+          </Grid>
+
+          <StackPanel Orientation="Horizontal"
+                      Spacing="12">
+            <Button x:Name="SettingsTestLogbookButton"
+                    AutomationProperties.AutomationId="SettingsTestLogbookButton"
+                    Content="Test Logbook"
+                    Command="{Binding TestQrzLogbookCommand}"
+                    IsEnabled="{Binding !IsTestingLogbook}" />
+            <ProgressBar IsIndeterminate="True"
+                         IsVisible="{Binding IsTestingLogbook}"
+                         Width="100"
                          VerticalAlignment="Center" />
-              <TextBox x:Name="SettingsQrzLogbookApiKeyBox"
-                       AutomationProperties.AutomationId="SettingsQrzLogbookApiKeyBox"
-                       Grid.Column="1"
-                       Text="{Binding QrzLogbookApiKey, Mode=TwoWay}"
-                       PasswordChar="•"
-                       PlaceholderText="Enter to update" />
-            </Grid>
-
-            <StackPanel Orientation="Horizontal"
-                        Spacing="12">
-              <Button x:Name="SettingsTestLogbookButton"
-                      AutomationProperties.AutomationId="SettingsTestLogbookButton"
-                      Content="Test Logbook"
-                      Command="{Binding TestQrzLogbookCommand}"
-                      IsEnabled="{Binding !IsTestingLogbook}" />
-              <ProgressBar IsIndeterminate="True"
-                           IsVisible="{Binding IsTestingLogbook}"
-                           Width="100"
-                           VerticalAlignment="Center" />
-            </StackPanel>
-
-            <TextBlock Text="{Binding LogbookTestResult}"
-                       TextWrapping="Wrap"
-                       IsVisible="{Binding LogbookTestResult, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
-                       Foreground="{Binding LogbookTestSucceeded, Converter={x:Static v:SettingsView.TestResultColor}}" />
           </StackPanel>
-        </Border>
 
-        <Border Padding="16"
-                BorderThickness="1"
-                CornerRadius="8"
-                BorderBrush="{DynamicResource SystemControlForegroundBaseMediumLowBrush}">
-          <StackPanel Spacing="12">
-            <TextBlock Text="Rig Control"
-                       FontSize="16"
-                       FontWeight="SemiBold" />
-            <TextBlock Text="Engine-wide rigctld settings shared by every client connected to this engine."
-                       Opacity="0.6"
-                       TextWrapping="Wrap" />
+          <TextBlock Text="{Binding LogbookTestResult}"
+                     TextWrapping="Wrap"
+                     IsVisible="{Binding LogbookTestResult, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
+                     Foreground="{Binding LogbookTestSucceeded, Converter={x:Static v:SettingsView.TestResultColor}}" />
+        </StackPanel>
+      </TabItem>
 
-            <CheckBox x:Name="SettingsRigControlEnabledCheckBox"
-                      AutomationProperties.AutomationId="SettingsRigControlEnabledCheckBox"
-                      Content="Enable live rig control"
-                      IsChecked="{Binding RigControlEnabled, Mode=TwoWay}" />
+      <TabItem Header="Rig Control"
+               AutomationProperties.AutomationId="SettingsRigTab">
+        <StackPanel Margin="16"
+                    Spacing="16">
+          <TextBlock Text="Rig Control"
+                     FontSize="16"
+                     FontWeight="SemiBold" />
+          <TextBlock Text="Engine-wide rigctld settings shared by every client connected to this engine."
+                     Opacity="0.6"
+                     TextWrapping="Wrap" />
 
-            <Grid ColumnDefinitions="110,*,110,*"
-                  RowDefinitions="Auto,Auto"
-                  ColumnSpacing="12"
-                  RowSpacing="8">
-              <TextBlock Grid.Row="0" Grid.Column="0"
-                         Text="Host:"
-                         VerticalAlignment="Center" />
-              <TextBox x:Name="SettingsRigControlHostBox"
-                       AutomationProperties.AutomationId="SettingsRigControlHostBox"
-                       Grid.Row="0" Grid.Column="1"
-                       Text="{Binding RigControlHost, Mode=TwoWay}"
-                       PlaceholderText="127.0.0.1" />
+          <CheckBox x:Name="SettingsRigControlEnabledCheckBox"
+                    AutomationProperties.AutomationId="SettingsRigControlEnabledCheckBox"
+                    Content="Enable live rig control"
+                    IsChecked="{Binding RigControlEnabled, Mode=TwoWay}" />
 
-              <TextBlock Grid.Row="0" Grid.Column="2"
-                         Text="Port:"
-                         VerticalAlignment="Center" />
-              <TextBox x:Name="SettingsRigControlPortBox"
-                       AutomationProperties.AutomationId="SettingsRigControlPortBox"
-                       Grid.Row="0" Grid.Column="3"
-                       Text="{Binding RigControlPort, Mode=TwoWay}"
-                       PlaceholderText="4532" />
+          <Grid ColumnDefinitions="120,*,120,*"
+                RowDefinitions="Auto,Auto"
+                ColumnSpacing="12"
+                RowSpacing="6">
+            <TextBlock Grid.Row="0" Grid.Column="0" Text="Host:" VerticalAlignment="Center" />
+            <TextBox x:Name="SettingsRigControlHostBox"
+                     AutomationProperties.AutomationId="SettingsRigControlHostBox"
+                     Grid.Row="0" Grid.Column="1"
+                     Text="{Binding RigControlHost, Mode=TwoWay}"
+                     PlaceholderText="127.0.0.1" />
 
-              <TextBlock Grid.Row="1" Grid.Column="0"
-                         Text="Read timeout:"
-                         VerticalAlignment="Center" />
-              <TextBox x:Name="SettingsRigControlReadTimeoutBox"
-                       AutomationProperties.AutomationId="SettingsRigControlReadTimeoutBox"
-                       Grid.Row="1" Grid.Column="1"
-                       Text="{Binding RigControlReadTimeoutMs, Mode=TwoWay}"
-                       PlaceholderText="2000" />
+            <TextBlock Grid.Row="0" Grid.Column="2" Text="Port:" VerticalAlignment="Center" />
+            <TextBox x:Name="SettingsRigControlPortBox"
+                     AutomationProperties.AutomationId="SettingsRigControlPortBox"
+                     Grid.Row="0" Grid.Column="3"
+                     Text="{Binding RigControlPort, Mode=TwoWay}"
+                     PlaceholderText="4532" />
 
-              <TextBlock Grid.Row="1" Grid.Column="2"
-                         Text="Stale threshold:"
-                         VerticalAlignment="Center" />
-              <TextBox x:Name="SettingsRigControlStaleThresholdBox"
-                       AutomationProperties.AutomationId="SettingsRigControlStaleThresholdBox"
-                       Grid.Row="1" Grid.Column="3"
-                       Text="{Binding RigControlStaleThresholdMs, Mode=TwoWay}"
-                       PlaceholderText="5000" />
-            </Grid>
-          </StackPanel>
-        </Border>
+            <TextBlock Grid.Row="1" Grid.Column="0" Text="Read timeout (ms):" VerticalAlignment="Center" />
+            <TextBox x:Name="SettingsRigControlReadTimeoutBox"
+                     AutomationProperties.AutomationId="SettingsRigControlReadTimeoutBox"
+                     Grid.Row="1" Grid.Column="1"
+                     Text="{Binding RigControlReadTimeoutMs, Mode=TwoWay}"
+                     PlaceholderText="2000" />
 
-        <ProgressBar IsIndeterminate="True"
-                     IsVisible="{Binding IsSaving}"
-                     Margin="0,8,0,0" />
-      </StackPanel>
-    </Grid>
+            <TextBlock Grid.Row="1" Grid.Column="2" Text="Stale threshold (ms):" VerticalAlignment="Center" />
+            <TextBox x:Name="SettingsRigControlStaleThresholdBox"
+                     AutomationProperties.AutomationId="SettingsRigControlStaleThresholdBox"
+                     Grid.Row="1" Grid.Column="3"
+                     Text="{Binding RigControlStaleThresholdMs, Mode=TwoWay}"
+                     PlaceholderText="5000" />
+          </Grid>
+        </StackPanel>
+      </TabItem>
+    </TabControl>
   </DockPanel>
 </Window>
