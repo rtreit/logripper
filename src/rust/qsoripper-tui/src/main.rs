@@ -171,6 +171,19 @@ fn handle_event(
             app.tick_debounce();
         }
         AppEvent::LookupResult(result) => {
+            // Discard stale results: if the user typed a new callsign while the
+            // previous lookup was in-flight, the returned callsign won't match
+            // the current input.
+            let current_call = app.form.callsign.trim().to_uppercase();
+            let result_matches = result
+                .as_ref()
+                .map_or(current_call.is_empty(), |info| {
+                    info.callsign.trim().eq_ignore_ascii_case(&current_call)
+                });
+            if !result_matches {
+                return;
+            }
+
             if let Some(ref info) = result {
                 if app.form.qth.is_empty() {
                     if let Some(ref qth) = info.qth {
@@ -1544,6 +1557,7 @@ mod tests {
         let (lookup_tx, _lookup_rx) = make_watch();
         let (rig_tx, _rig_rx) = make_rig_watch();
         let mut app = make_app();
+        app.form.callsign = "K7ABC".to_string();
         let info = CallsignInfo {
             callsign: "K7ABC".to_string(),
             name: Some("John".to_string()),
@@ -1572,6 +1586,7 @@ mod tests {
         let (lookup_tx, _lookup_rx) = make_watch();
         let (rig_tx, _rig_rx) = make_rig_watch();
         let mut app = make_app();
+        app.form.callsign = "K7ABC".to_string();
         app.form.qth = "Portland".to_string();
         let info = CallsignInfo {
             callsign: "K7ABC".to_string(),
@@ -1591,6 +1606,68 @@ mod tests {
             "",
         );
         assert_eq!(app.form.qth, "Portland");
+    }
+
+    #[tokio::test]
+    async fn handle_event_stale_lookup_result_discarded() {
+        use crate::app::CallsignInfo;
+        let (tx, _rx) = mpsc::unbounded_channel::<AppEvent>();
+        let (lookup_tx, _lookup_rx) = make_watch();
+        let (rig_tx, _rig_rx) = make_rig_watch();
+        let mut app = make_app();
+        // User has already typed a new callsign while the old lookup was in-flight.
+        app.form.callsign = "W1XYZ".to_string();
+        let stale_info = CallsignInfo {
+            callsign: "K7ABC".to_string(),
+            name: Some("Stale Name".to_string()),
+            qth: Some("Stale City".to_string()),
+            grid: None,
+            country: None,
+            cq_zone: None,
+            dxcc: None,
+        };
+        handle_event(
+            &mut app,
+            AppEvent::LookupResult(Some(stale_info)),
+            &tx,
+            &lookup_tx,
+            &rig_tx,
+            "",
+        );
+        // Stale result must be discarded.
+        assert!(app.lookup_result.is_none());
+        assert!(app.form.qth.is_empty());
+        assert!(app.form.worked_name.is_empty());
+    }
+
+    #[tokio::test]
+    async fn handle_event_lookup_result_matches_case_insensitive() {
+        use crate::app::CallsignInfo;
+        let (tx, _rx) = mpsc::unbounded_channel::<AppEvent>();
+        let (lookup_tx, _lookup_rx) = make_watch();
+        let (rig_tx, _rig_rx) = make_rig_watch();
+        let mut app = make_app();
+        // User typed lowercase, lookup returns uppercase.
+        app.form.callsign = "k7abc".to_string();
+        let info = CallsignInfo {
+            callsign: "K7ABC".to_string(),
+            name: Some("John".to_string()),
+            qth: Some("Seattle".to_string()),
+            grid: None,
+            country: None,
+            cq_zone: None,
+            dxcc: None,
+        };
+        handle_event(
+            &mut app,
+            AppEvent::LookupResult(Some(info)),
+            &tx,
+            &lookup_tx,
+            &rig_tx,
+            "",
+        );
+        assert!(app.lookup_result.is_some());
+        assert_eq!(app.form.qth, "Seattle");
     }
 
     #[tokio::test]
