@@ -95,9 +95,9 @@ internal sealed partial class RecentQsoListViewModel : ObservableObject
 
     public string GridZoomStatusText => $"Zoom {Math.Round((GridFontSize / DefaultGridFontSize) * 100):0}%";
 
-    public double GridRowHeight => Math.Round(19 * (GridFontSize / DefaultGridFontSize));
+    public double GridRowHeight => Math.Round(18 * (GridFontSize / DefaultGridFontSize));
 
-    public double GridHeaderHeight => Math.Round(21 * (GridFontSize / DefaultGridFontSize));
+    public double GridHeaderHeight => Math.Round(20 * (GridFontSize / DefaultGridFontSize));
 
     public string SyncSummaryText => BuildSyncSummaryText();
 
