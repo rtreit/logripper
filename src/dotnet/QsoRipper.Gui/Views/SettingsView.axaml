@@ -59,7 +59,8 @@
                  Margin="0,0,0,4" />
 
     <!-- Scrollable settings form -->
-    <ScrollViewer VerticalScrollBarVisibility="Auto"
+    <ScrollViewer x:Name="SettingsScrollViewer"
+                  VerticalScrollBarVisibility="Auto"
                   HorizontalScrollBarVisibility="Disabled"
                   Padding="24,16,24,160">
       <StackPanel Spacing="20">

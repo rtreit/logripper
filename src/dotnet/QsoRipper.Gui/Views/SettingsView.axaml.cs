@@ -2,7 +2,11 @@ using System;
 using System.Globalization;
 using Avalonia.Controls;
 using Avalonia.Data.Converters;
+using Avalonia.Input;
+using Avalonia.Interactivity;
 using Avalonia.Media;
+using Avalonia.Threading;
+using Avalonia.VisualTree;
 using QsoRipper.Domain;
 using QsoRipper.Gui.ViewModels;
 
@@ -10,9 +14,13 @@ namespace QsoRipper.Gui.Views;
 
 internal sealed partial class SettingsView : Window
 {
+    private readonly ScrollViewer? _settingsScrollViewer;
+
     public SettingsView()
     {
         InitializeComponent();
+        _settingsScrollViewer = this.FindControl<ScrollViewer>("SettingsScrollViewer");
+        AddHandler(InputElement.GotFocusEvent, OnDescendantGotFocus, RoutingStrategies.Bubble, handledEventsToo: true);
         DataContextChanged += OnDataContextChanged;
     }
 
@@ -53,6 +61,18 @@ internal sealed partial class SettingsView : Window
         }
 
         base.OnClosed(e);
+    }
+
+    private void OnDescendantGotFocus(object? sender, RoutedEventArgs e)
+    {
+        if (_settingsScrollViewer is null
+            || e.Source is not Control control
+            || control.FindAncestorOfType<ScrollViewer>() != _settingsScrollViewer)
+        {
+            return;
+        }
+
+        Dispatcher.UIThread.Post(control.BringIntoView, DispatcherPriority.Background);
     }
 
     private sealed class ConflictPolicyIndexConverter : IValueConverter
