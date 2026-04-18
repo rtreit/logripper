@@ -1,6 +1,7 @@
 using System;
 using Avalonia;
 using QsoRipper.Gui.Inspection;
+using QsoRipper.Gui.Utilities;
 
 namespace QsoRipper.Gui;
 
@@ -13,6 +14,7 @@ internal static class Program
     [STAThread]
     public static void Main(string[] args)
     {
+        GuiPerformanceTrace.Write(nameof(Main) + ".start");
         if (!UxCaptureOptions.TryParse(args, out var options, out var error))
         {
             Console.Error.WriteLine(error);
@@ -37,6 +39,7 @@ internal static class Program
         CaptureOptions = options;
         InspectionOptions = inspectionOptions;
 
+        GuiPerformanceTrace.Write(nameof(Main) + ".beforeStartWithClassicDesktopLifetime");
         BuildAvaloniaApp()
             .StartWithClassicDesktopLifetime(args);
     }

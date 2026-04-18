@@ -11,6 +11,14 @@ namespace QsoRipper.Gui.ViewModels;
 
 internal sealed class RecentQsoItemViewModel : ObservableObject, IEditableObject
 {
+    private static readonly IBrush ContinentNorthAmericaBrush = new SolidColorBrush(Color.Parse("#18FFB347"));
+    private static readonly IBrush ContinentEuropeBrush = new SolidColorBrush(Color.Parse("#184488FF"));
+    private static readonly IBrush ContinentAsiaBrush = new SolidColorBrush(Color.Parse("#18FF6B6B"));
+    private static readonly IBrush ContinentAfricaBrush = new SolidColorBrush(Color.Parse("#1877DD77"));
+    private static readonly IBrush ContinentSouthAmericaBrush = new SolidColorBrush(Color.Parse("#18FFD700"));
+    private static readonly IBrush ContinentOceaniaBrush = new SolidColorBrush(Color.Parse("#1800CED1"));
+    private static readonly IBrush ContinentAntarcticaBrush = new SolidColorBrush(Color.Parse("#18E0E0E0"));
+
     private static readonly string[] TimestampFormats =
     [
         "yy-MM-dd HH:mm",
@@ -50,6 +58,10 @@ internal sealed class RecentQsoItemViewModel : ObservableObject, IEditableObject
     private string _state = string.Empty;
     private string _county = string.Empty;
     private bool _isDirty;
+    private DateTimeOffset _utcSortKey = DateTimeOffset.MinValue;
+    private ulong _frequencySortKey;
+    private uint _dxccSortKey;
+    private DateTimeOffset _utcEndSortKey = DateTimeOffset.MinValue;
 
     public string LocalId => _sourceQso.LocalId;
 
@@ -58,7 +70,14 @@ internal sealed class RecentQsoItemViewModel : ObservableObject, IEditableObject
     public string UtcDisplay
     {
         get => _utcDisplay;
-        set => SetProperty(ref _utcDisplay, value);
+        set
+        {
+            if (SetProperty(ref _utcDisplay, value))
+            {
+                _utcSortKey = ParseUtcSortKey(value);
+                OnPropertyChanged(nameof(UtcSortKey));
+            }
+        }
     }
 
     public string WorkedCallsign
@@ -94,7 +113,14 @@ internal sealed class RecentQsoItemViewModel : ObservableObject, IEditableObject
     public string Frequency
     {
         get => _frequency;
-        set => SetProperty(ref _frequency, value);
+        set
+        {
+            if (SetProperty(ref _frequency, value))
+            {
+                _frequencySortKey = ParseFrequencySortKey(value);
+                OnPropertyChanged(nameof(FrequencySortKey));
+            }
+        }
     }
 
     public string Rst
@@ -117,7 +143,14 @@ internal sealed class RecentQsoItemViewModel : ObservableObject, IEditableObject
     public string Dxcc
     {
         get => _dxcc;
-        set => SetProperty(ref _dxcc, value);
+        set
+        {
+            if (SetProperty(ref _dxcc, value))
+            {
+                _dxccSortKey = ParseDxccSortKey(value);
+                OnPropertyChanged(nameof(DxccSortKey));
+            }
+        }
     }
 
     public string Grid
@@ -159,7 +192,14 @@ internal sealed class RecentQsoItemViewModel : ObservableObject, IEditableObject
     public string UtcEndDisplay
     {
         get => _utcEndDisplay;
-        set => SetProperty(ref _utcEndDisplay, value);
+        set
+        {
+            if (SetProperty(ref _utcEndDisplay, value))
+            {
+                _utcEndSortKey = ParseUtcSortKey(value);
+                OnPropertyChanged(nameof(UtcEndSortKey));
+            }
+        }
     }
 
     public string CqZone
@@ -200,13 +240,13 @@ internal sealed class RecentQsoItemViewModel : ObservableObject, IEditableObject
 
     public IBrush ContinentBrush => Continent switch
     {
-        "NA" => new SolidColorBrush(Color.Parse("#18FFB347")),
-        "EU" => new SolidColorBrush(Color.Parse("#184488FF")),
-        "AS" => new SolidColorBrush(Color.Parse("#18FF6B6B")),
-        "AF" => new SolidColorBrush(Color.Parse("#1877DD77")),
-        "SA" => new SolidColorBrush(Color.Parse("#18FFD700")),
-        "OC" => new SolidColorBrush(Color.Parse("#1800CED1")),
-        "AN" => new SolidColorBrush(Color.Parse("#18E0E0E0")),
+        "NA" => ContinentNorthAmericaBrush,
+        "EU" => ContinentEuropeBrush,
+        "AS" => ContinentAsiaBrush,
+        "AF" => ContinentAfricaBrush,
+        "SA" => ContinentSouthAmericaBrush,
+        "OC" => ContinentOceaniaBrush,
+        "AN" => ContinentAntarcticaBrush,
         _ => Brushes.Transparent,
     };
 
@@ -266,25 +306,13 @@ internal sealed class RecentQsoItemViewModel : ObservableObject, IEditableObject
         UtcDisplay,
         UtcEndDisplay);
 
-    public DateTimeOffset UtcSortKey =>
-        TryParseTimestamp(UtcDisplay, required: false, out var timestamp)
-            ? timestamp
-            : DateTimeOffset.MinValue;
+    public DateTimeOffset UtcSortKey => _utcSortKey;
 
-    public ulong FrequencySortKey =>
-        TryParseFrequency(Frequency, out var frequency)
-            ? frequency
-            : 0;
+    public ulong FrequencySortKey => _frequencySortKey;
 
-    public uint DxccSortKey =>
-        TryParseOptionalUInt(Dxcc, out var dxcc)
-            ? dxcc
-            : 0;
+    public uint DxccSortKey => _dxccSortKey;
 
-    public DateTimeOffset UtcEndSortKey =>
-        TryParseTimestamp(UtcEndDisplay, required: false, out var timestamp)
-            ? timestamp
-            : DateTimeOffset.MinValue;
+    public DateTimeOffset UtcEndSortKey => _utcEndSortKey;
 
     public static RecentQsoItemViewModel FromQso(QsoRecord qso) => FromQso(qso, null);
 
@@ -486,14 +514,14 @@ internal sealed class RecentQsoItemViewModel : ObservableObject, IEditableObject
     {
         _sourceQso = qso.Clone();
         _editSnapshot = null;
-        ApplyState(EditableQsoState.FromQso(_sourceQso, _displayTimestampFormat));
-        Qth = BuildQth(_sourceQso);
-        SyncStatus = BuildSyncStatus(_sourceQso.SyncStatus);
-        Continent = NoteOrNull(_sourceQso.WorkedContinent) ?? "-";
-        State = NoteOrNull(_sourceQso.WorkedState) ?? string.Empty;
-        County = ParseCountyName(_sourceQso.WorkedCounty);
-        Comment = NoteOrNull(_sourceQso.Comment) ?? "-";
-        RecomputeDirty();
+        ApplyStateSilently(EditableQsoState.FromQso(_sourceQso, _displayTimestampFormat));
+        _qth = BuildQth(_sourceQso);
+        _syncStatus = BuildSyncStatus(_sourceQso.SyncStatus);
+        _continent = NoteOrNull(_sourceQso.WorkedContinent) ?? "-";
+        _state = NoteOrNull(_sourceQso.WorkedState) ?? string.Empty;
+        _county = ParseCountyName(_sourceQso.WorkedCounty);
+        RefreshSortKeys();
+        _isDirty = false;
     }
 
     private EditableQsoState CaptureState() => new(
@@ -536,6 +564,28 @@ internal sealed class RecentQsoItemViewModel : ObservableObject, IEditableObject
         UtcEndDisplay = state.UtcEndDisplay;
         CqZone = state.CqZone;
         ItuZone = state.ItuZone;
+    }
+
+    private void ApplyStateSilently(EditableQsoState state)
+    {
+        _utcDisplay = state.UtcDisplay;
+        _workedCallsign = state.WorkedCallsign;
+        _band = state.Band;
+        _mode = state.Mode;
+        _frequency = state.Frequency;
+        _rst = state.Rst;
+        _dxcc = state.Dxcc;
+        _country = state.Country;
+        _operatorName = state.OperatorName;
+        _grid = state.Grid;
+        _exchange = state.Exchange;
+        _contest = state.Contest;
+        _station = state.Station;
+        _note = state.Note;
+        _comment = state.Comment;
+        _utcEndDisplay = state.UtcEndDisplay;
+        _cqZone = state.CqZone;
+        _ituZone = state.ItuZone;
     }
 
     private void RecomputeDirty()
@@ -719,6 +769,35 @@ internal sealed class RecentQsoItemViewModel : ObservableObject, IEditableObject
 
     private static string BuildNote(QsoRecord qso) =>
         NoteOrNull(qso.Notes) ?? "-";
+
+    private void RefreshSortKeys()
+    {
+        _utcSortKey = ParseUtcSortKey(_utcDisplay);
+        _frequencySortKey = ParseFrequencySortKey(_frequency);
+        _dxccSortKey = ParseDxccSortKey(_dxcc);
+        _utcEndSortKey = ParseUtcSortKey(_utcEndDisplay);
+    }
+
+    private static DateTimeOffset ParseUtcSortKey(string? value)
+    {
+        return TryParseTimestamp(value, required: false, out var timestamp)
+            ? timestamp
+            : DateTimeOffset.MinValue;
+    }
+
+    private static ulong ParseFrequencySortKey(string? value)
+    {
+        return TryParseFrequency(value, out var frequency)
+            ? frequency
+            : 0;
+    }
+
+    private static uint ParseDxccSortKey(string? value)
+    {
+        return TryParseOptionalUInt(value, out var dxcc)
+            ? dxcc
+            : 0;
+    }
 
     private static string BuildCountry(QsoRecord qso)
     {
