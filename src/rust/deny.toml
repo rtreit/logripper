@@ -35,6 +35,11 @@ version = "=0.2.17"
 reason = "Required by ring/rustls transitives while uuid and tempfile currently resolve getrandom 0.4."
 
 [[bans.skip]]
+name = "wit-bindgen"
+version = "=0.51.0"
+reason = "getrandom's WASI transitives currently resolve both wit-bindgen 0.51 and 0.57 on Ubuntu, with no direct workspace-level unification path."
+
+[[bans.skip]]
 name = "hashbrown"
 version = "=0.12.3"
 reason = "Pulled by the tonic 0.12 transport stack via indexmap 1.x while the rest of the graph is already on indexmap 2.x."

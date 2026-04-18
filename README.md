@@ -153,7 +153,7 @@ winget install Bufbuild.Buf
 .\build.ps1 check
 ```
 
-By default, `.\build.ps1` builds the Rust workspace in **Release**, publishes the Native AOT CLI to `artifacts\publish\QsoRipper.Cli\Release\`, and publishes the desktop GUI to `artifacts\publish\QsoRipper.Gui\Release\`. Use `-Configuration Debug` to switch the Rust build and both .NET publish outputs to `Debug`.
+By default, `.\build.ps1` builds the Rust workspace in **Release**, publishes the Native AOT CLI to `artifacts\publish\qsoripper-cli\Release\`, and publishes the desktop GUI to `artifacts\publish\qsoripper-gui\Release\`. Use `-Configuration Debug` to switch the Rust build and both .NET publish outputs to `Debug`.
 
 For engine-neutral local validation, use the split checks plus the shared conformance harness:
 
@@ -281,7 +281,7 @@ If you want an engine to stay running in the background while you log QSOs from 
 
 ```powershell
 .\start-qsoripper.ps1 -Engine local-rust
-.\artifacts\publish\QsoRipper.Cli\Release\QsoRipper.Cli.exe log W1AW 20m FT8
+.\artifacts\publish\qsoripper-cli\Release\QsoRipper.Cli.exe log W1AW 20m FT8
 .\stop-qsoripper.ps1
 ```
 
@@ -562,7 +562,7 @@ Or publish the Native AOT build and run the produced executable:
 
 ```powershell
 .\build.ps1 dotnet
-.\artifacts\publish\QsoRipper.Cli\Release\QsoRipper.Cli.exe status
+.\artifacts\publish\qsoripper-cli\Release\QsoRipper.Cli.exe status
 ```
 
 The CLI generates client stubs from the shared proto contracts at build time and currently includes commands for status, lookup, and local logbook operations over gRPC.
