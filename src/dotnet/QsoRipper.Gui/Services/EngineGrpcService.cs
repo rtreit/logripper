@@ -87,7 +87,7 @@ internal sealed class EngineGrpcService : IEngineClient, IDisposable
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(limit);
 
-        var recentQsos = new List<QsoRecord>();
+        var recentQsos = new List<QsoRecord>(limit);
         using var call = _logbookClient.ListQsos(
             new ListQsosRequest
             {

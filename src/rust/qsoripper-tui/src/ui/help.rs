@@ -49,7 +49,7 @@ pub(super) fn render(frame: &mut Frame, area: Rect) {
         "F2               ",
         "Toggle advanced fields (F2 or Esc to close)",
     ));
-    lines.push(binding("F10 / Shift+Enter ", "Log the QSO"));
+    lines.push(binding("F10 / Alt+Enter  ", "Log the QSO"));
     lines.push(binding("F7               ", "Reset QSO start time to now"));
     lines.push(binding(
         "F8               ",

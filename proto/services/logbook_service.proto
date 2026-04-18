@@ -31,10 +31,10 @@ import "services/update_qso_response.proto";
 //   DeleteQso     — implemented for local storage; QRZ delete supported when delete_from_qrz=true
 //   GetQso        — implemented for local storage
 //   ListQsos      — implemented for local storage
-//   SyncWithQrz  — planned (returns UNIMPLEMENTED)
-//   GetSyncStatus — implemented for local storage counts; QRZ metadata remains absent until sync lands
-//   ImportAdif   — implemented for local ADIF migration import with duplicate/warning reporting
-//   ExportAdif   — implemented for filtered ADIF export
+//   SyncWithQrz   — implemented (both engines)
+//   GetSyncStatus — implemented for local storage counts
+//   ImportAdif    — implemented for local ADIF migration import with duplicate/warning reporting
+//   ExportAdif    — implemented for filtered ADIF export
 //
 // Transport: native gRPC (HTTP/2 + binary protobuf).
 // Browser clients must go through a gRPC-Web proxy — see docs/api/client-integration.md.

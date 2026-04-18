@@ -274,6 +274,149 @@ internal static class ManagedQsoParity
             && OptionalUInt64Compatible(existing.HasFrequencyKhz ? existing.FrequencyKhz : null, candidate.HasFrequencyKhz ? candidate.FrequencyKhz : null);
     }
 
+    /// <summary>
+    /// Merges a partial update into an existing QSO record. Fields that are
+    /// set to their protobuf default in <paramref name="incoming"/> are kept
+    /// from <paramref name="existing"/>; non-default incoming values win.
+    /// Identity fields (LocalId, QrzLogid, QrzBookid) and metadata timestamps
+    /// are always preserved from the existing record.
+    /// </summary>
+    public static QsoRecord MergeQsoForUpdate(QsoRecord existing, QsoRecord incoming)
+    {
+        ArgumentNullException.ThrowIfNull(existing);
+        ArgumentNullException.ThrowIfNull(incoming);
+
+        var merged = existing.Clone();
+
+        // --- Core contact fields (always required — take from incoming if non-default) ---
+        if (!string.IsNullOrEmpty(incoming.StationCallsign))
+        {
+            merged.StationCallsign = incoming.StationCallsign;
+        }
+
+        if (!string.IsNullOrEmpty(incoming.WorkedCallsign))
+        {
+            merged.WorkedCallsign = incoming.WorkedCallsign;
+        }
+
+        if (incoming.UtcTimestamp is not null)
+        {
+            merged.UtcTimestamp = incoming.UtcTimestamp.Clone();
+        }
+
+        if (incoming.Band != Band.Unspecified)
+        {
+            merged.Band = incoming.Band;
+        }
+
+        if (incoming.Mode != Mode.Unspecified)
+        {
+            merged.Mode = incoming.Mode;
+        }
+
+        MergeOptionalUInt64(incoming.HasFrequencyKhz, incoming.FrequencyKhz, value => merged.FrequencyKhz = value);
+        MergeOptionalString(incoming.HasSubmode ? incoming.Submode : null, value => merged.Submode = value);
+        if (incoming.UtcEndTimestamp is not null)
+        {
+            merged.UtcEndTimestamp = incoming.UtcEndTimestamp.Clone();
+        }
+
+        // Station snapshot is handled separately by ApplyStationContextNoLock
+
+        // --- Signal reports ---
+        if (incoming.RstSent is not null)
+        {
+            merged.RstSent = incoming.RstSent.Clone();
+        }
+
+        if (incoming.RstReceived is not null)
+        {
+            merged.RstReceived = incoming.RstReceived.Clone();
+        }
+
+        MergeOptionalString(incoming.TxPower, value => merged.TxPower = value);
+
+        // --- QSL / confirmation ---
+        if (incoming.QslSentStatus != QslStatus.Unspecified)
+        {
+            merged.QslSentStatus = incoming.QslSentStatus;
+        }
+
+        if (incoming.QslReceivedStatus != QslStatus.Unspecified)
+        {
+            merged.QslReceivedStatus = incoming.QslReceivedStatus;
+        }
+
+        if (incoming.HasLotwSent)
+        {
+            merged.LotwSent = incoming.LotwSent;
+        }
+
+        if (incoming.HasLotwReceived)
+        {
+            merged.LotwReceived = incoming.LotwReceived;
+        }
+
+        if (incoming.HasEqslSent)
+        {
+            merged.EqslSent = incoming.EqslSent;
+        }
+
+        if (incoming.HasEqslReceived)
+        {
+            merged.EqslReceived = incoming.EqslReceived;
+        }
+
+        if (incoming.QslSentDate is not null)
+        {
+            merged.QslSentDate = incoming.QslSentDate.Clone();
+        }
+
+        if (incoming.QslReceivedDate is not null)
+        {
+            merged.QslReceivedDate = incoming.QslReceivedDate.Clone();
+        }
+
+        // --- Enrichment from callsign lookup ---
+        MergeOptionalString(incoming.WorkedOperatorCallsign, value => merged.WorkedOperatorCallsign = value);
+        MergeOptionalString(incoming.WorkedOperatorName, value => merged.WorkedOperatorName = value);
+        MergeOptionalString(incoming.WorkedGrid, value => merged.WorkedGrid = value);
+        MergeOptionalString(incoming.WorkedCountry, value => merged.WorkedCountry = value);
+        MergeOptionalUInt32(incoming.HasWorkedDxcc, incoming.WorkedDxcc, value => merged.WorkedDxcc = value);
+        MergeOptionalString(incoming.WorkedState, value => merged.WorkedState = value);
+        MergeOptionalUInt32(incoming.HasWorkedCqZone, incoming.WorkedCqZone, value => merged.WorkedCqZone = value);
+        MergeOptionalUInt32(incoming.HasWorkedItuZone, incoming.WorkedItuZone, value => merged.WorkedItuZone = value);
+        MergeOptionalString(incoming.WorkedCounty, value => merged.WorkedCounty = value);
+        MergeOptionalString(incoming.WorkedIota, value => merged.WorkedIota = value);
+        MergeOptionalString(incoming.WorkedContinent, value => merged.WorkedContinent = value);
+        MergeOptionalString(incoming.WorkedArrlSection, value => merged.WorkedArrlSection = value);
+        MergeOptionalString(incoming.Skcc, value => merged.Skcc = value);
+
+        // --- Contest fields ---
+        MergeOptionalString(incoming.ContestId, value => merged.ContestId = value);
+        MergeOptionalString(incoming.SerialSent, value => merged.SerialSent = value);
+        MergeOptionalString(incoming.SerialReceived, value => merged.SerialReceived = value);
+        MergeOptionalString(incoming.ExchangeSent, value => merged.ExchangeSent = value);
+        MergeOptionalString(incoming.ExchangeReceived, value => merged.ExchangeReceived = value);
+
+        // --- Propagation ---
+        MergeOptionalString(incoming.PropMode, value => merged.PropMode = value);
+        MergeOptionalString(incoming.SatName, value => merged.SatName = value);
+        MergeOptionalString(incoming.SatMode, value => merged.SatMode = value);
+
+        // --- Operator notes ---
+        MergeOptionalString(incoming.Notes, value => merged.Notes = value);
+        MergeOptionalString(incoming.Comment, value => merged.Comment = value);
+
+        // --- Extra fields ---
+        foreach (var pair in incoming.ExtraFields)
+        {
+            merged.ExtraFields[pair.Key] = pair.Value;
+        }
+
+        return merged;
+    }
+
     public static QsoRecord MergeQsoForRefresh(QsoRecord existing, QsoRecord import)
     {
         ArgumentNullException.ThrowIfNull(existing);

@@ -2,6 +2,8 @@
 
 use std::time::Instant;
 
+use qsoripper_core::proto::qsoripper::domain::QsoRecord;
+
 use crate::form::LogForm;
 
 /// Rig connection status mirroring the proto `RigConnectionStatus` enum.
@@ -83,6 +85,8 @@ pub(crate) struct RecentQso {
     pub(crate) grid: Option<String>,
     /// Worked operator name.
     pub(crate) name: Option<String>,
+    /// Full proto record from the engine, preserved for lossless round-trip during edits.
+    pub(crate) source_record: QsoRecord,
 }
 
 impl RecentQso {
@@ -350,6 +354,11 @@ mod tests {
             country: None,
             grid: None,
             name: None,
+            source_record: QsoRecord {
+                local_id: id.to_string(),
+                worked_callsign: callsign.to_string(),
+                ..Default::default()
+            },
         }
     }
 
@@ -566,6 +575,7 @@ mod tests {
             country: Some("United States".to_string()),
             grid: Some("CN87".to_string()),
             name: Some("John".to_string()),
+            source_record: QsoRecord::default(),
         };
         assert!(qso.matches_search("40m"));
         assert!(qso.matches_search("cw"));
@@ -594,6 +604,7 @@ mod tests {
             country: None,
             grid: None,
             name: None,
+            source_record: QsoRecord::default(),
         };
         assert!(!qso.matches_search("united"));
     }

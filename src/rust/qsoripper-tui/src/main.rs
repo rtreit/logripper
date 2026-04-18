@@ -170,21 +170,7 @@ fn handle_event(
             app.utc_now = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
             app.tick_debounce();
         }
-        AppEvent::LookupResult(result) => {
-            if let Some(ref info) = result {
-                if app.form.qth.is_empty() {
-                    if let Some(ref qth) = info.qth {
-                        app.form.qth.clone_from(qth);
-                    }
-                }
-                if app.form.worked_name.is_empty() {
-                    if let Some(ref name) = info.name {
-                        app.form.worked_name.clone_from(name);
-                    }
-                }
-            }
-            app.lookup_result = result;
-        }
+        AppEvent::LookupResult(result) => apply_lookup_result(app, result),
         AppEvent::SpaceWeather(sw) => {
             app.space_weather = sw;
         }
@@ -267,6 +253,35 @@ fn handle_event(
             }
         }
     }
+}
+
+/// Apply a callsign-lookup result to the app state.
+///
+/// Discards stale results: if the user typed a new callsign while the previous lookup
+/// was in-flight, the returned callsign will no longer match the current input and the
+/// result is silently dropped.
+fn apply_lookup_result(app: &mut App, result: Option<app::CallsignInfo>) {
+    let current_call = app.form.callsign.trim().to_uppercase();
+    let result_matches = result.as_ref().map_or(current_call.is_empty(), |info| {
+        info.callsign.trim().eq_ignore_ascii_case(&current_call)
+    });
+    if !result_matches {
+        return;
+    }
+
+    if let Some(ref info) = result {
+        if app.form.qth.is_empty() {
+            if let Some(ref qth) = info.qth {
+                app.form.qth.clone_from(qth);
+            }
+        }
+        if app.form.worked_name.is_empty() {
+            if let Some(ref name) = info.name {
+                app.form.worked_name.clone_from(name);
+            }
+        }
+    }
+    app.lookup_result = result;
 }
 
 /// Handle a key event in the current view.
@@ -642,37 +657,67 @@ fn jump_to_field(app: &mut App, ch: char) {
 /// Load the QSO identified by `local_id` into the form for editing.
 ///
 /// Sets `editing_local_id` so that saving the form calls `UpdateQso` instead of `LogQso`.
+/// All form-visible fields are populated from the stored `source_record` so that
+/// the operator sees the full QSO data, not just the columns displayed in the list.
 fn load_qso_into_form(app: &mut App, local_id: &str, lookup_tx: &watch::Sender<String>) {
-    let data = app
-        .recent_qsos
-        .iter()
-        .find(|q| q.local_id == local_id)
-        .map(|q| {
-            (
-                q.callsign.clone(),
-                q.band.clone(),
-                q.mode.clone(),
-                q.rst_sent.clone(),
-                q.rst_rcvd.clone(),
-                q.utc.clone(),
-                q.name.clone(),
-            )
-        });
-    let Some((callsign, band, mode, rst_sent, rst_rcvd, utc, name)) = data else {
+    let Some(qso) = app.recent_qsos.iter().find(|q| q.local_id == local_id) else {
         return;
     };
-    app.form.callsign = callsign;
-    if let Some(bi) = BANDS.iter().position(|&b| b == band.as_str()) {
+
+    // --- Display fields (from the display-ready RecentQso) ---
+    app.form.callsign = qso.callsign.clone();
+    if let Some(bi) = BANDS.iter().position(|&b| b == qso.band.as_str()) {
         app.form.band_idx = bi;
     }
-    if let Some(mi) = MODES.iter().position(|&m| m == mode.as_str()) {
+    if let Some(mi) = MODES.iter().position(|&m| m == qso.mode.as_str()) {
         app.form.mode_idx = mi;
     }
     app.form.on_band_change();
-    app.form.rst_sent = rst_sent;
-    app.form.rst_rcvd = rst_rcvd;
-    app.form.time = utc;
-    app.form.worked_name = name.unwrap_or_default();
+    app.form.rst_sent = qso.rst_sent.clone();
+    app.form.rst_rcvd = qso.rst_rcvd.clone();
+    app.form.time = qso.utc.clone();
+    app.form.worked_name = qso.name.clone().unwrap_or_default();
+
+    // --- Additional fields from the source proto record ---
+    let src = &qso.source_record;
+    app.form.comment = src.comment.clone().unwrap_or_default();
+    app.form.notes = src.notes.clone().unwrap_or_default();
+    if let Some(khz) = src.frequency_khz {
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "ham radio frequencies are well within f64 mantissa range"
+        )]
+        {
+            app.form.frequency_mhz = format!("{:.3}", khz as f64 / 1_000.0);
+        }
+    }
+    if let Some(ref ts) = src.utc_timestamp {
+        if let Some(dt) = chrono::DateTime::from_timestamp(ts.seconds, 0) {
+            app.form.date = dt.format("%Y-%m-%d").to_string();
+        }
+    }
+    if let Some(ref ts) = src.utc_end_timestamp {
+        if let Some(dt) = chrono::DateTime::from_timestamp(ts.seconds, 0) {
+            app.form.time_off = dt.format("%H:%M").to_string();
+        }
+    }
+    // qth is not stored on QsoRecord; it comes from the lookup result.
+    app.form.tx_power = src.tx_power.clone().unwrap_or_default();
+    app.form.submode_override = src.submode.clone().unwrap_or_default();
+    app.form.contest_id = src.contest_id.clone().unwrap_or_default();
+    app.form.serial_sent = src.serial_sent.clone().unwrap_or_default();
+    app.form.serial_rcvd = src.serial_received.clone().unwrap_or_default();
+    app.form.exchange_sent = src.exchange_sent.clone().unwrap_or_default();
+    app.form.exchange_rcvd = src.exchange_received.clone().unwrap_or_default();
+    app.form.prop_mode = src.prop_mode.clone().unwrap_or_default();
+    app.form.sat_name = src.sat_name.clone().unwrap_or_default();
+    app.form.sat_mode = src.sat_mode.clone().unwrap_or_default();
+    app.form.iota = src.worked_iota.clone().unwrap_or_default();
+    app.form.arrl_section = src.worked_arrl_section.clone().unwrap_or_default();
+    app.form.worked_state = src.worked_state.clone().unwrap_or_default();
+    app.form.worked_county = src.worked_county.clone().unwrap_or_default();
+    app.form.skcc = src.skcc.clone().unwrap_or_default();
+
     app.form.focused = Field::Callsign;
     app.form.field_selected = true;
     app.qso_list_focused = false;
@@ -687,6 +732,8 @@ fn load_qso_into_form(app: &mut App, local_id: &str, lookup_tx: &watch::Sender<S
 /// Spawn a task to save the current form contents.
 ///
 /// If `editing_local_id` is set, calls `UpdateQso`; otherwise calls `LogQso`.
+/// When editing, the original `source_record` is passed along so that `update_qso`
+/// can preserve non-form fields (QSL status, metadata, extra ADIF overflow, etc.).
 fn spawn_log_qso(app: &App, event_tx: &mpsc::UnboundedSender<AppEvent>, endpoint: &str) {
     let tx = event_tx.clone();
     let ep = endpoint.to_string();
@@ -703,11 +750,22 @@ fn spawn_log_qso(app: &App, event_tx: &mpsc::UnboundedSender<AppEvent>, endpoint
             info.dxcc,
         )
     });
+
+    // Capture the original QsoRecord for lossless round-trip during edits.
+    let base_record = editing_id.as_ref().and_then(|id| {
+        app.recent_qsos
+            .iter()
+            .find(|q| q.local_id == *id)
+            .map(|q| q.source_record.clone())
+    });
+
     tokio::spawn(async move {
         match grpc::create_channel(&ep).await {
             Ok(ch) => {
                 if let Some(local_id) = editing_id {
-                    match grpc::update_qso(ch, &local_id, &form_snap, lookup_snap).await {
+                    match grpc::update_qso(ch, &local_id, &form_snap, lookup_snap, base_record)
+                        .await
+                    {
                         Ok(()) => {
                             let callsign = form_snap.callsign.to_uppercase();
                             let _ = tx.send(AppEvent::QsoUpdated(callsign));
@@ -918,6 +976,7 @@ mod tests {
     }
 
     fn make_qso(id: &str, callsign: &str) -> RecentQso {
+        use qsoripper_core::proto::qsoripper::domain::QsoRecord;
         RecentQso {
             local_id: id.to_string(),
             utc: "12:00".to_string(),
@@ -929,6 +988,11 @@ mod tests {
             country: None,
             grid: None,
             name: None,
+            source_record: QsoRecord {
+                local_id: id.to_string(),
+                worked_callsign: callsign.to_string(),
+                ..Default::default()
+            },
         }
     }
 
@@ -1452,6 +1516,7 @@ mod tests {
 
     #[test]
     fn load_qso_into_form_populates_fields() {
+        use qsoripper_core::proto::qsoripper::domain::QsoRecord;
         let (lookup_tx, _rx) = make_watch();
         let mut app = make_app();
         let qso = RecentQso {
@@ -1465,6 +1530,13 @@ mod tests {
             country: None,
             grid: None,
             name: Some("John".to_string()),
+            source_record: QsoRecord {
+                local_id: "q1".to_string(),
+                worked_callsign: "K7ABC".to_string(),
+                comment: Some("field day".to_string()),
+                notes: Some("loud signal".to_string()),
+                ..Default::default()
+            },
         };
         app.recent_qsos.push(qso);
         load_qso_into_form(&mut app, "q1", &lookup_tx);
@@ -1474,6 +1546,9 @@ mod tests {
         assert_eq!(app.form.rst_sent, "599");
         assert_eq!(app.editing_local_id, Some("q1".to_string()));
         assert!(!app.qso_list_focused);
+        // Bug #209: non-visible fields must now be loaded from source_record.
+        assert_eq!(app.form.comment, "field day");
+        assert_eq!(app.form.notes, "loud signal");
     }
 
     #[test]
@@ -1493,6 +1568,64 @@ mod tests {
         app.recent_qsos.push(make_qso("q1", "W1ABC"));
         load_qso_into_form(&mut app, "q1", &lookup_tx);
         assert!(matches!(app.view, View::LogEntry));
+    }
+
+    #[test]
+    fn load_qso_into_form_populates_advanced_fields_from_source() {
+        use qsoripper_core::proto::qsoripper::domain::QsoRecord;
+        let (lookup_tx, _rx) = make_watch();
+        let mut app = make_app();
+        let qso = RecentQso {
+            local_id: "adv1".to_string(),
+            utc: "09:15".to_string(),
+            callsign: "W1AW".to_string(),
+            band: "20M".to_string(),
+            mode: "CW".to_string(),
+            rst_sent: "599".to_string(),
+            rst_rcvd: "599".to_string(),
+            country: Some("United States".to_string()),
+            grid: Some("FN31pr".to_string()),
+            name: Some("Hiram".to_string()),
+            source_record: QsoRecord {
+                local_id: "adv1".to_string(),
+                worked_callsign: "W1AW".to_string(),
+                tx_power: Some("100W".to_string()),
+                contest_id: Some("CQWW".to_string()),
+                serial_sent: Some("001".to_string()),
+                serial_received: Some("042".to_string()),
+                exchange_sent: Some("5NN CT".to_string()),
+                exchange_received: Some("5NN NY".to_string()),
+                prop_mode: Some("ES".to_string()),
+                sat_name: Some("AO-7".to_string()),
+                sat_mode: Some("V/U".to_string()),
+                worked_iota: Some("EU-005".to_string()),
+                worked_arrl_section: Some("CT".to_string()),
+                worked_state: Some("CT".to_string()),
+                worked_county: Some("Hartford".to_string()),
+                skcc: Some("12345".to_string()),
+                comment: Some("solid copy".to_string()),
+                notes: Some("first QSO with W1AW".to_string()),
+                ..Default::default()
+            },
+        };
+        app.recent_qsos.push(qso);
+        load_qso_into_form(&mut app, "adv1", &lookup_tx);
+        assert_eq!(app.form.tx_power, "100W");
+        assert_eq!(app.form.contest_id, "CQWW");
+        assert_eq!(app.form.serial_sent, "001");
+        assert_eq!(app.form.serial_rcvd, "042");
+        assert_eq!(app.form.exchange_sent, "5NN CT");
+        assert_eq!(app.form.exchange_rcvd, "5NN NY");
+        assert_eq!(app.form.prop_mode, "ES");
+        assert_eq!(app.form.sat_name, "AO-7");
+        assert_eq!(app.form.sat_mode, "V/U");
+        assert_eq!(app.form.iota, "EU-005");
+        assert_eq!(app.form.arrl_section, "CT");
+        assert_eq!(app.form.worked_state, "CT");
+        assert_eq!(app.form.worked_county, "Hartford");
+        assert_eq!(app.form.skcc, "12345");
+        assert_eq!(app.form.comment, "solid copy");
+        assert_eq!(app.form.notes, "first QSO with W1AW");
     }
 
     #[tokio::test]
@@ -1544,6 +1677,7 @@ mod tests {
         let (lookup_tx, _lookup_rx) = make_watch();
         let (rig_tx, _rig_rx) = make_rig_watch();
         let mut app = make_app();
+        app.form.callsign = "K7ABC".to_string();
         let info = CallsignInfo {
             callsign: "K7ABC".to_string(),
             name: Some("John".to_string()),
@@ -1572,6 +1706,7 @@ mod tests {
         let (lookup_tx, _lookup_rx) = make_watch();
         let (rig_tx, _rig_rx) = make_rig_watch();
         let mut app = make_app();
+        app.form.callsign = "K7ABC".to_string();
         app.form.qth = "Portland".to_string();
         let info = CallsignInfo {
             callsign: "K7ABC".to_string(),
@@ -1591,6 +1726,68 @@ mod tests {
             "",
         );
         assert_eq!(app.form.qth, "Portland");
+    }
+
+    #[tokio::test]
+    async fn handle_event_stale_lookup_result_discarded() {
+        use crate::app::CallsignInfo;
+        let (tx, _rx) = mpsc::unbounded_channel::<AppEvent>();
+        let (lookup_tx, _lookup_rx) = make_watch();
+        let (rig_tx, _rig_rx) = make_rig_watch();
+        let mut app = make_app();
+        // User has already typed a new callsign while the old lookup was in-flight.
+        app.form.callsign = "W1XYZ".to_string();
+        let stale_info = CallsignInfo {
+            callsign: "K7ABC".to_string(),
+            name: Some("Stale Name".to_string()),
+            qth: Some("Stale City".to_string()),
+            grid: None,
+            country: None,
+            cq_zone: None,
+            dxcc: None,
+        };
+        handle_event(
+            &mut app,
+            AppEvent::LookupResult(Some(stale_info)),
+            &tx,
+            &lookup_tx,
+            &rig_tx,
+            "",
+        );
+        // Stale result must be discarded.
+        assert!(app.lookup_result.is_none());
+        assert!(app.form.qth.is_empty());
+        assert!(app.form.worked_name.is_empty());
+    }
+
+    #[tokio::test]
+    async fn handle_event_lookup_result_matches_case_insensitive() {
+        use crate::app::CallsignInfo;
+        let (tx, _rx) = mpsc::unbounded_channel::<AppEvent>();
+        let (lookup_tx, _lookup_rx) = make_watch();
+        let (rig_tx, _rig_rx) = make_rig_watch();
+        let mut app = make_app();
+        // User typed lowercase, lookup returns uppercase.
+        app.form.callsign = "k7abc".to_string();
+        let info = CallsignInfo {
+            callsign: "K7ABC".to_string(),
+            name: Some("John".to_string()),
+            qth: Some("Seattle".to_string()),
+            grid: None,
+            country: None,
+            cq_zone: None,
+            dxcc: None,
+        };
+        handle_event(
+            &mut app,
+            AppEvent::LookupResult(Some(info)),
+            &tx,
+            &lookup_tx,
+            &rig_tx,
+            "",
+        );
+        assert!(app.lookup_result.is_some());
+        assert_eq!(app.form.qth, "Seattle");
     }
 
     #[tokio::test]

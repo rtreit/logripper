@@ -447,36 +447,54 @@ static char *json_extract_object(const char *start)
 
 /* ── CLI runner: execute `qr <args>` and capture stdout ────────────────── */
 
-static char g_cli_path[MAX_PATH];
+static WCHAR g_cli_path[MAX_PATH];
+
+static int TryCliCandidate(const WCHAR *base, const WCHAR *config, int versioned)
+{
+    if (versioned)
+        _snwprintf(g_cli_path, MAX_PATH,
+                   L"%s\\QsoRipper.Cli\\%s\\net10.0\\QsoRipper.Cli.exe", base, config);
+    else
+        _snwprintf(g_cli_path, MAX_PATH,
+                   L"%s\\QsoRipper.Cli\\%s\\QsoRipper.Cli.exe", base, config);
+    g_cli_path[MAX_PATH - 1] = L'\0';
+    return GetFileAttributesW(g_cli_path) != INVALID_FILE_ATTRIBUTES;
+}
 
 static void FindCliPath(void)
 {
     /* Try to find QsoRipper.Cli.exe relative to our own exe:
        We're at: .../artifacts/publish/qsoripper-win32/Release/qsoripper-win32.exe
-       CLI is at: .../artifacts/publish/QsoRipper.Cli/Release/QsoRipper.Cli.exe */
-    char module[MAX_PATH];
-    GetModuleFileNameA(NULL, module, MAX_PATH);
+       CLI is at: .../artifacts/publish/QsoRipper.Cli/{Debug|Release}[/net10.0]/QsoRipper.Cli.exe */
+    WCHAR module[MAX_PATH];
+    GetModuleFileNameW(NULL, module, MAX_PATH);
 
     /* Walk up to artifacts/publish */
-    char *p = strrchr(module, '\\');
+    WCHAR *p = wcsrchr(module, L'\\');
     if (p) *p = 0; /* strip exe name */
-    p = strrchr(module, '\\');
-    if (p) *p = 0; /* strip Release */
-    p = strrchr(module, '\\');
+    p = wcsrchr(module, L'\\');
+    if (p) *p = 0; /* strip Release|Debug */
+    p = wcsrchr(module, L'\\');
     if (p) *p = 0; /* strip qsoripper-win32 */
 
-    /* Try sibling directory */
-    snprintf(g_cli_path, MAX_PATH, "%s\\QsoRipper.Cli\\Release\\QsoRipper.Cli.exe", module);
-    if (GetFileAttributesA(g_cli_path) != INVALID_FILE_ATTRIBUTES)
-        return;
+    /* Probe sibling directory — Debug first (more likely during development),
+       then Release.  For each configuration try both the versioned TFM
+       sub-directory (net10.0) and the unversioned output path. */
+    if (TryCliCandidate(module, L"Debug",   1)) return;
+    if (TryCliCandidate(module, L"Debug",   0)) return;
+    if (TryCliCandidate(module, L"Release", 1)) return;
+    if (TryCliCandidate(module, L"Release", 0)) return;
 
     /* Try QSORIPPER_CLI_PATH env var */
-    if (GetEnvironmentVariableA("QSORIPPER_CLI_PATH", g_cli_path, MAX_PATH) > 0)
-        if (GetFileAttributesA(g_cli_path) != INVALID_FILE_ATTRIBUTES)
+    if (GetEnvironmentVariableW(L"QSORIPPER_CLI_PATH", g_cli_path, MAX_PATH) > 0)
+        if (GetFileAttributesW(g_cli_path) != INVALID_FILE_ATTRIBUTES)
             return;
 
-    /* Fallback: assume on PATH */
-    safe_strcpy(g_cli_path, MAX_PATH, "QsoRipper.Cli.exe");
+    /* Fallback: assume on PATH — log a diagnostic so developers can tell
+       the launcher didn't find a local build artifact. */
+    OutputDebugStringW(L"FindCliPath: no local CLI artifact found; "
+                       L"falling back to PATH lookup for QsoRipper.Cli.exe\n");
+    wcscpy_s(g_cli_path, MAX_PATH, L"QsoRipper.Cli.exe");
 }
 
 static char *RunQrCommand(const char *args)
@@ -490,10 +508,29 @@ static char *RunQrCommand(const char *args)
         return NULL;
     SetHandleInformation(hReadPipe, HANDLE_FLAG_INHERIT, 0);
 
-    char cmdline[8192];
-    snprintf(cmdline, sizeof(cmdline), "\"%s\" %s", g_cli_path, args);
+    /* Build wide command line: "<g_cli_path>" <args>
+       g_cli_path is already wide; args is ASCII — widen it in place.
+       Heap-allocate to avoid a 16 KB stack frame (C6262). */
+    enum { CMD_CHARS = 8192 };
+    WCHAR *wcmdline = (WCHAR *)malloc(CMD_CHARS * sizeof(WCHAR));
+    if (!wcmdline) {
+        CloseHandle(hReadPipe);
+        CloseHandle(hWritePipe);
+        return NULL;
+    }
+    int pos = _snwprintf(wcmdline, CMD_CHARS, L"\"%s\" ", g_cli_path);
+    if (pos < 0 || pos >= CMD_CHARS) { /* overflow */
+        free(wcmdline);
+        CloseHandle(hReadPipe);
+        CloseHandle(hWritePipe);
+        return NULL;
+    }
+    /* Convert the narrow args to wide and append */
+    MultiByteToWideChar(CP_UTF8, 0, args, -1,
+                        wcmdline + pos, CMD_CHARS - pos);
+    wcmdline[CMD_CHARS - 1] = L'\0';
 
-    STARTUPINFOA si = {0};
+    STARTUPINFOW si = {0};
     si.cb = sizeof(si);
     si.dwFlags = STARTF_USESTDHANDLES | STARTF_USESHOWWINDOW;
     si.hStdOutput = hWritePipe;
@@ -503,15 +540,17 @@ static char *RunQrCommand(const char *args)
 
     PROCESS_INFORMATION pi = {0};
 
-    if (!CreateProcessA(NULL, cmdline, NULL, NULL, TRUE,
+    if (!CreateProcessW(NULL, wcmdline, NULL, NULL, TRUE,
                         CREATE_NO_WINDOW, NULL, NULL, &si, &pi)) {
+        free(wcmdline);
         CloseHandle(hReadPipe);
         CloseHandle(hWritePipe);
         return NULL;
     }
+    free(wcmdline);
     CloseHandle(hWritePipe);
 
-    /* Read all stdout */
+    /* Read all stdout (byte stream — CLI outputs UTF-8) */
     char *output = (char *)malloc(8192);
     if (!output) {
         WaitForSingleObject(pi.hProcess, 5000);
@@ -889,13 +928,50 @@ static void SetStatus(const char *msg, int is_error)
 
 /* ── CLI integration: Log QSO ──────────────────────────────────────────── */
 
+/* Append a properly quoted Windows command-line argument to cmd.
+   Follows the Microsoft C/C++ argument parsing rules:
+     - Wrap the value in double quotes.
+     - Escape every embedded " as \".
+     - Before each " (including the closing one), double any immediately
+       preceding run of backslashes so they are not mis-parsed as escapes.
+   See: https://learn.microsoft.com/en-us/cpp/c-language/parsing-c-command-line-arguments */
 static void AppendArg(char *cmd, size_t cmd_sz, const char *flag, const char *val)
 {
     if (!val || !val[0]) return;
     safe_strcat(cmd, cmd_sz, " ");
     safe_strcat(cmd, cmd_sz, flag);
     safe_strcat(cmd, cmd_sz, " \"");
-    safe_strcat(cmd, cmd_sz, val);
+
+    size_t cur = strlen(cmd);
+    const char *s = val;
+    while (*s) {
+        /* Count consecutive backslashes */
+        size_t num_bs = 0;
+        while (*s == '\\') { num_bs++; s++; }
+
+        if (*s == '"') {
+            /* Double backslashes before an embedded quote, then escape the quote */
+            for (size_t i = 0; i < num_bs * 2 + 1; i++) {
+                if (cur + 1 < cmd_sz) cmd[cur++] = '\\';
+            }
+            if (cur + 1 < cmd_sz) cmd[cur++] = '"';
+            s++;
+        } else if (*s == '\0') {
+            /* End of string: double trailing backslashes before the closing quote */
+            for (size_t i = 0; i < num_bs * 2; i++) {
+                if (cur + 1 < cmd_sz) cmd[cur++] = '\\';
+            }
+        } else {
+            /* Backslashes not before a quote are literal */
+            for (size_t i = 0; i < num_bs; i++) {
+                if (cur + 1 < cmd_sz) cmd[cur++] = '\\';
+            }
+            if (cur + 1 < cmd_sz) cmd[cur++] = *s;
+            s++;
+        }
+    }
+    cmd[cur] = '\0';
+
     safe_strcat(cmd, cmd_sz, "\"");
 }
 

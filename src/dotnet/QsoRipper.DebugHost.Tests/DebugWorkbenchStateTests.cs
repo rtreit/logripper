@@ -30,6 +30,23 @@ public class DebugWorkbenchStateTests
     }
 
     [Fact]
+    public void Initializes_default_launcher_preview_without_storage_overrides()
+    {
+        var state = new DebugWorkbenchState(Options.Create(new DebugWorkbenchOptions
+        {
+            DefaultEngineEndpoint = "http://localhost:60051"
+        }));
+
+        Assert.Equal("http://localhost:60051", state.EngineEndpoint);
+        Assert.True(string.IsNullOrWhiteSpace(state.EngineStorageBackend));
+        Assert.Equal(Path.Combine(".", "data", "qsoripper.db"), state.EnginePersistenceLocation);
+        Assert.Contains("start-qsoripper.ps1", state.BuildEngineLaunchCommand(), StringComparison.Ordinal);
+        Assert.DoesNotContain("-Storage", state.BuildEngineLaunchCommand(), StringComparison.Ordinal);
+        Assert.DoesNotContain("-PersistenceLocation", state.BuildEngineLaunchCommand(), StringComparison.Ordinal);
+        Assert.Empty(state.GetEngineEnvironmentOverrides());
+    }
+
+    [Fact]
     public void Update_storage_options_switches_back_to_memory()
     {
         var state = new DebugWorkbenchState(Options.Create(new DebugWorkbenchOptions()));
@@ -71,6 +88,8 @@ public class DebugWorkbenchStateTests
         Assert.Contains("start-qsoripper.ps1", state.BuildEngineLaunchCommand(), StringComparison.Ordinal);
         Assert.Contains("-Engine local-dotnet", state.BuildEngineLaunchCommand(), StringComparison.Ordinal);
         Assert.Contains("-ListenAddress 127.0.0.1:50052", state.BuildEngineLaunchCommand(), StringComparison.Ordinal);
+        Assert.DoesNotContain("-Storage", state.BuildEngineLaunchCommand(), StringComparison.Ordinal);
+        Assert.Empty(state.GetEngineEnvironmentOverrides());
     }
 
     [Fact]
@@ -194,7 +213,7 @@ public class DebugWorkbenchStateTests
 
         Assert.NotNull(state.SetupStatus);
         Assert.Null(state.SetupErrorMessage);
-        Assert.Equal("memory", state.EngineStorageBackend);
+        Assert.True(string.IsNullOrWhiteSpace(state.EngineStorageBackend));
         Assert.Equal(@".\data\portable-qsoripper.db", state.EnginePersistenceLocation);
     }
 

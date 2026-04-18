@@ -36,8 +36,8 @@ $RustManifest = Join-Path $PSScriptRoot 'src' 'rust' 'Cargo.toml'
 $DotnetSolution = Join-Path $PSScriptRoot 'src' 'dotnet' 'QsoRipper.slnx'
 $DotnetCliProject = Join-Path $PSScriptRoot 'src' 'dotnet' 'QsoRipper.Cli' 'QsoRipper.Cli.csproj'
 $DotnetGuiProject = Join-Path $PSScriptRoot 'src' 'dotnet' 'QsoRipper.Gui' 'QsoRipper.Gui.csproj'
-$DotnetCliPublishDir = Join-Path $PSScriptRoot 'artifacts' 'publish' | Join-Path -ChildPath 'QsoRipper.Cli' | Join-Path -ChildPath $Configuration
-$DotnetGuiPublishDir = Join-Path $PSScriptRoot 'artifacts' 'publish' | Join-Path -ChildPath 'QsoRipper.Gui' | Join-Path -ChildPath $Configuration
+$DotnetCliPublishDir = Join-Path $PSScriptRoot 'artifacts' 'publish' | Join-Path -ChildPath 'qsoripper-cli' | Join-Path -ChildPath $Configuration
+$DotnetGuiPublishDir = Join-Path $PSScriptRoot 'artifacts' 'publish' | Join-Path -ChildPath 'qsoripper-gui' | Join-Path -ChildPath $Configuration
 $TuiPublishDir = Join-Path $PSScriptRoot 'artifacts' 'publish' | Join-Path -ChildPath 'qsoripper-tui' | Join-Path -ChildPath $Configuration
 $StressTuiPublishDir = Join-Path $PSScriptRoot 'artifacts' 'publish' | Join-Path -ChildPath 'qsoripper-stress-tui' | Join-Path -ChildPath $Configuration
 $RustDir = Join-Path $PSScriptRoot 'src' 'rust'
@@ -48,6 +48,22 @@ $StressTuiBinary = if ($IsWindows) { 'qsoripper-stress-tui.exe' } else { 'qsorip
 
 function Write-Step([string]$Message) {
     Write-Host "`n=== $Message ===" -ForegroundColor Cyan
+}
+
+function Get-CppcheckInstallHint {
+    if ($IsWindows) {
+        return 'Install with: winget install Cppcheck.Cppcheck'
+    }
+
+    if ($IsMacOS) {
+        return 'Install with: brew install cppcheck'
+    }
+
+    if ($IsLinux) {
+        return 'Install with: sudo apt install cppcheck'
+    }
+
+    return 'Install from https://cppcheck.sourceforge.io/'
 }
 
 function Invoke-Build([string]$Step, [string]$Command, [string[]]$Arguments) {
@@ -193,7 +209,7 @@ function Build-Win32 {
     }
 
     # cppcheck static analysis — fails the build on error-severity findings
-    Write-Step 'Win32 static analysis (cppcheck)'
+    Write-Step 'Win32 static analysis (cppcheck, optional)'
     $cppcheckExe = Get-Command cppcheck -ErrorAction SilentlyContinue
     if ($cppcheckExe) {
         cppcheck --enable=warning,performance,portability `
@@ -209,7 +225,8 @@ function Build-Win32 {
         }
     }
     else {
-        Write-Host 'cppcheck not found, skipping. Install from https://cppcheck.sourceforge.io/' -ForegroundColor Yellow
+        $installHint = Get-CppcheckInstallHint
+        Write-Host "cppcheck not found; continuing without optional Win32 static analysis. $installHint" -ForegroundColor Yellow
     }
 
     Write-Step "Building qsoripper-win32 ($Configuration)"
@@ -264,7 +281,50 @@ function Check-Proto {
 function Check-Rust {
     Invoke-Build 'Rust formatting' cargo @('fmt', '--manifest-path', $RustManifest, '--all', '--', '--check')
     Invoke-Build 'Rust clippy' cargo @('clippy', '--manifest-path', $RustManifest, '--all-targets', '--', '-D', 'warnings')
-    Invoke-Build 'Rust tests' cargo @('test', '--manifest-path', $RustManifest)
+
+    # Coverage threshold check (matches CI's 80% minimum)
+    $llvmCovCmd = Get-Command cargo-llvm-cov -ErrorAction SilentlyContinue
+    if ($llvmCovCmd) {
+        Invoke-Build 'Rust tests (with coverage)' cargo @(
+            'llvm-cov', '--manifest-path', $RustManifest,
+            '--workspace',
+            '--exclude', 'qsoripper-stress',
+            '--exclude', 'qsoripper-stress-tui'
+        )
+
+        Write-Step 'Rust coverage threshold'
+        $summaryPath = Join-Path ([System.IO.Path]::GetTempPath()) "qsoripper-rust-cov-$PID.json"
+        try {
+            cargo llvm-cov report `
+                --manifest-path $RustManifest `
+                --ignore-filename-regex 'qsoripper-stress' `
+                --json --summary-only `
+                --output-path $summaryPath
+            if ($LASTEXITCODE -ne 0) {
+                Write-Host "FAILED: Generating Rust coverage report" -ForegroundColor Red
+                exit $LASTEXITCODE
+            }
+            $summary = Get-Content $summaryPath -Raw | ConvertFrom-Json
+            $lineCoverage = [double]$summary.data[0].totals.lines.percent
+            $covered = $summary.data[0].totals.lines.covered
+            $total = $summary.data[0].totals.lines.count
+            $threshold = 80.0
+            Write-Host "Rust line coverage: $([math]::Round($lineCoverage, 2))% ($covered/$total lines)  (threshold: ${threshold}%)"
+            if ($lineCoverage -lt $threshold) {
+                Write-Host "FAIL: Rust line coverage $([math]::Round($lineCoverage, 2))% is below the minimum threshold of ${threshold}%" -ForegroundColor Red
+                exit 1
+            }
+            Write-Host "PASS: Rust coverage threshold met." -ForegroundColor Green
+        }
+        finally {
+            Remove-Item $summaryPath -ErrorAction SilentlyContinue
+        }
+    }
+    else {
+        Write-Step 'Rust tests'
+        Write-Host 'cargo-llvm-cov not installed, running tests without coverage. Install with: cargo install cargo-llvm-cov' -ForegroundColor Yellow
+        Invoke-Build 'Rust tests (no coverage)' cargo @('test', '--manifest-path', $RustManifest)
+    }
 
     Check-Proto
 
@@ -292,7 +352,54 @@ function Check-Rust {
 function Check-Dotnet {
     Invoke-Build '.NET formatting' dotnet @('format', $DotnetSolution, '--verify-no-changes')
     Invoke-Build ".NET build ($Configuration)" dotnet @('build', $DotnetSolution, '-c', $Configuration)
-    Invoke-Build ".NET tests ($Configuration)" dotnet @('test', $DotnetSolution, '-c', $Configuration, '--no-build')
+
+    # Run tests with coverage collection (matches CI)
+    $coverageDir = Join-Path $PSScriptRoot 'coverage'
+    if (Test-Path $coverageDir) { Remove-Item $coverageDir -Recurse -Force }
+
+    $runsettings = Join-Path $PSScriptRoot 'src' 'dotnet' 'CodeCoverage.runsettings'
+    Invoke-Build ".NET tests with coverage ($Configuration)" dotnet @(
+        'test', $DotnetSolution, '-c', $Configuration, '--no-build',
+        '--collect:XPlat Code Coverage',
+        "--settings:$runsettings",
+        "--results-directory:$coverageDir"
+    )
+
+    # Coverage threshold check (matches CI's 50% minimum)
+    Write-Step '.NET coverage threshold'
+    $coberturaFiles = Get-ChildItem $coverageDir -Filter 'coverage.cobertura.xml' -Recurse -ErrorAction SilentlyContinue
+    if ($coberturaFiles) {
+        $totalCovered = 0
+        $totalLines = 0
+        foreach ($file in $coberturaFiles) {
+            [xml]$cobertura = Get-Content $file.FullName
+            $lineRate = [double]$cobertura.coverage.'line-rate'
+            $linesValid = [int]$cobertura.coverage.'lines-valid'
+            $totalCovered += [math]::Round($lineRate * $linesValid)
+            $totalLines += $linesValid
+        }
+        $coverage = if ($totalLines -gt 0) { [math]::Round(($totalCovered / $totalLines) * 100, 1) } else { 0 }
+        $threshold = 50.0
+        Write-Host ".NET line coverage: ${coverage}% ($totalCovered/$totalLines lines)  (threshold: ${threshold}%)"
+        if ($coverage -lt $threshold) {
+            Write-Host "FAIL: .NET line coverage ${coverage}% is below the minimum threshold of ${threshold}%" -ForegroundColor Red
+            exit 1
+        }
+        Write-Host "PASS: .NET coverage threshold met." -ForegroundColor Green
+    }
+    else {
+        Write-Host 'WARNING: No Cobertura coverage files found. Coverage threshold not checked.' -ForegroundColor Yellow
+    }
+
+    # Vulnerable package check (matches CI)
+    Write-Step 'Vulnerable package check'
+    $vulnOutput = dotnet list $DotnetSolution package --vulnerable --include-transitive 2>&1 | Out-String
+    Write-Host $vulnOutput
+    if ($vulnOutput -match 'has the following vulnerable packages') {
+        Write-Host "FAIL: Vulnerable NuGet packages detected. Review output above and update affected packages." -ForegroundColor Red
+        exit 1
+    }
+    Write-Host "PASS: No vulnerable packages found." -ForegroundColor Green
 }
 
 function Check-All {
@@ -313,8 +420,8 @@ Commands:
   rust          Build Rust only (copies qsoripper-tui and qsoripper-stress-tui binaries to artifacts)
   dotnet        Publish the CLI and GUI apps only
   win32         Build the Win32 C GUI app only
-  check-rust    Rust quality: fmt, clippy, test, buf lint, cargo deny
-  check-dotnet  .NET quality: format, build, test
+  check-rust    Rust quality: fmt, clippy, test + coverage threshold, buf lint, cargo deny
+  check-dotnet  .NET quality: format, build, test + coverage threshold, vulnerable package check
   proto         Run buf lint
   help          Show this help
 

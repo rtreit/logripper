@@ -28,6 +28,7 @@ internal sealed partial class MainWindow : Window
     private MainWindowViewModel? _viewModel;
     private bool _gridLayoutApplied;
     private bool _menuAccessKeysPrimed;
+    private bool _loggedFirstRecentQsoRow;
     private Dictionary<RecentQsoGridColumn, DataGridColumn> _columnMap = [];
     internal bool IsInspectionMode { get; set; }
 
@@ -53,16 +54,22 @@ internal sealed partial class MainWindow : Window
     protected override async void OnOpened(EventArgs e)
     {
         base.OnOpened(e);
+        GuiPerformanceTrace.Write(nameof(OnOpened) + ".start");
         ClampToCurrentScreen();
         if (!IsInspectionMode)
         {
-            PrimeMenuAccessKeys();
+            GuiPerformanceTrace.Write(nameof(OnOpened) + ".afterScheduleMenuAccessKeys");
             ApplyPersistedGridLayout();
+            GuiPerformanceTrace.Write(nameof(OnOpened) + ".afterApplyPersistedGridLayout");
             if (DataContext is MainWindowViewModel vm)
             {
                 vm.ApplyPreferences(_preferencesStore.Load());
+                GuiPerformanceTrace.Write(nameof(OnOpened) + ".afterApplyPreferences");
                 await vm.CheckFirstRunAsync();
+                GuiPerformanceTrace.Write(nameof(OnOpened) + ".afterCheckFirstRun");
             }
+
+            Dispatcher.UIThread.Post(PrimeMenuAccessKeys, DispatcherPriority.Background);
         }
     }
 
@@ -592,6 +599,13 @@ internal sealed partial class MainWindow : Window
         if (e.Row.DataContext is RecentQsoItemViewModel item)
         {
             e.Row.Background = item.ContinentBrush;
+            if (!_loggedFirstRecentQsoRow)
+            {
+                _loggedFirstRecentQsoRow = true;
+                GuiPerformanceTrace.Write(
+                    nameof(OnRecentQsoGridLoadingRow) + ".firstRow",
+                    $"callsign={item.WorkedCallsign}; utc={item.UtcDisplay}");
+            }
         }
     }
 

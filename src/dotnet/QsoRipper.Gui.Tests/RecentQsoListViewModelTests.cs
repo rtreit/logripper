@@ -70,6 +70,7 @@ public class RecentQsoListViewModelTests
         Assert.Equal("2 QSOs", viewModel.CountStatusText);
         Assert.Equal("No filter", viewModel.FilterStatusText);
         Assert.Equal("Sync local", viewModel.TopSyncIndicatorText);
+        Assert.Equal(200, engine.LastRecentQsoLimit);
     }
 
     [Fact]
@@ -386,6 +387,8 @@ public class RecentQsoListViewModelTests
 
         public List<QsoRecord> UpdatedQsos { get; } = [];
 
+        public int? LastRecentQsoLimit { get; private set; }
+
         public Task<GetSetupWizardStateResponse> GetWizardStateAsync(CancellationToken ct = default) =>
             throw new NotImplementedException();
 
@@ -406,6 +409,7 @@ public class RecentQsoListViewModelTests
 
         public Task<IReadOnlyList<QsoRecord>> ListRecentQsosAsync(int limit = 200, CancellationToken ct = default)
         {
+            LastRecentQsoLimit = limit;
             if (RefreshException is not null)
             {
                 throw RefreshException;

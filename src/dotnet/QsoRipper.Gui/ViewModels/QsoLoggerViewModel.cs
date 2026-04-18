@@ -125,6 +125,13 @@ internal sealed partial class QsoLoggerViewModel : ObservableObject
 
     partial void OnCallsignChanged(string value)
     {
+        var normalized = NormalizeCallsignInput(value);
+        if (!string.Equals(value, normalized, StringComparison.Ordinal))
+        {
+            Callsign = normalized;
+            return;
+        }
+
         UpdateLogEnabled();
 
         if (!string.IsNullOrWhiteSpace(value) && !_timerRunning)
@@ -147,7 +154,7 @@ internal sealed partial class QsoLoggerViewModel : ObservableObject
 
         // Debounced lookup
         _lookupCts = new CancellationTokenSource();
-        _ = DebouncedLookupAsync(value.Trim().ToUpperInvariant(), _lookupCts.Token);
+        _ = DebouncedLookupAsync(value.Trim(), _lookupCts.Token);
     }
 
     partial void OnSelectedBandIndexChanged(int value)
@@ -544,6 +551,13 @@ internal sealed partial class QsoLoggerViewModel : ObservableObject
         }
 
         return string.Join(" ", parts);
+    }
+
+    private static string NormalizeCallsignInput(string value)
+    {
+        return string.IsNullOrEmpty(value)
+            ? string.Empty
+            : value.ToUpperInvariant();
     }
 
     // ── Timer helpers ────────────────────────────────────────────────────

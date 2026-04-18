@@ -15,6 +15,7 @@ use crate::{
         lookup::normalize_callsign,
     },
     proto::qsoripper::domain::{CallsignRecord, LookupResult, LookupState},
+    storage::{EngineStorage, LookupSnapshot},
 };
 
 use super::provider::{
@@ -84,6 +85,7 @@ pub struct LookupCoordinator {
     config: LookupCoordinatorConfig,
     cache: RwLock<HashMap<String, CacheEntry>>,
     in_flight: Mutex<HashMap<String, SharedProviderLookup>>,
+    snapshot_storage: Option<Arc<dyn EngineStorage>>,
 }
 
 impl LookupCoordinator {
@@ -95,6 +97,26 @@ impl LookupCoordinator {
             config,
             cache: RwLock::new(HashMap::new()),
             in_flight: Mutex::new(HashMap::new()),
+            snapshot_storage: None,
+        }
+    }
+
+    /// Create a lookup coordinator backed by a persistent snapshot store.
+    ///
+    /// Lookup results are persisted to the store and loaded when the
+    /// in-memory cache does not contain a fresh entry.
+    #[must_use]
+    pub fn with_snapshot_store(
+        provider: Arc<dyn CallsignProvider>,
+        config: LookupCoordinatorConfig,
+        storage: Arc<dyn EngineStorage>,
+    ) -> Self {
+        Self {
+            provider,
+            config,
+            cache: RwLock::new(HashMap::new()),
+            in_flight: Mutex::new(HashMap::new()),
+            snapshot_storage: Some(storage),
         }
     }
 
@@ -209,7 +231,11 @@ impl LookupCoordinator {
     }
 
     async fn get_cache_entry(&self, normalized_callsign: &str) -> Option<CacheEntry> {
-        self.cache.read().await.get(normalized_callsign).cloned()
+        if let Some(entry) = self.cache.read().await.get(normalized_callsign).cloned() {
+            return Some(entry);
+        }
+        // Fall back to persistent snapshot store.
+        self.load_snapshot_entry(normalized_callsign).await
     }
 
     fn is_fresh(&self, entry: &CacheEntry) -> bool {
@@ -322,7 +348,113 @@ impl LookupCoordinator {
         self.cache
             .write()
             .await
-            .insert(normalized_callsign.to_string(), entry);
+            .insert(normalized_callsign.to_string(), entry.clone());
+
+        // Persist to the snapshot store if available.
+        if let Some(ref storage) = self.snapshot_storage {
+            let ttl = self.ttl_for(&entry);
+            let now_utc = chrono::Utc::now();
+            let stored_at = prost_types::Timestamp {
+                seconds: now_utc.timestamp(),
+                nanos: 0,
+            };
+            let ttl_secs = i64::try_from(ttl.as_secs()).unwrap_or(i64::MAX);
+            let expires_at = prost_types::Timestamp {
+                seconds: now_utc.timestamp().saturating_add(ttl_secs),
+                nanos: 0,
+            };
+            let result = match &entry.lookup {
+                CachedLookup::Found(record) => LookupResult {
+                    state: LookupState::Found as i32,
+                    record: Some((**record).clone()),
+                    ..Default::default()
+                },
+                CachedLookup::NotFound => LookupResult {
+                    state: LookupState::NotFound as i32,
+                    ..Default::default()
+                },
+            };
+            let snapshot = LookupSnapshot {
+                callsign: normalized_callsign.to_string(),
+                result,
+                stored_at,
+                expires_at: Some(expires_at),
+            };
+            if let Err(err) = storage
+                .lookup_snapshots()
+                .upsert_lookup_snapshot(&snapshot)
+                .await
+            {
+                eprintln!(
+                    "[lookup] Failed to persist lookup snapshot for {normalized_callsign}: {err}"
+                );
+            }
+        }
+    }
+
+    /// Try to load a lookup entry from persistent storage, returning a fresh
+    /// in-memory cache entry when the stored snapshot has not yet expired.
+    async fn load_snapshot_entry(&self, normalized_callsign: &str) -> Option<CacheEntry> {
+        let storage = self.snapshot_storage.as_ref()?;
+        let snapshot = match storage
+            .lookup_snapshots()
+            .get_lookup_snapshot(normalized_callsign)
+            .await
+        {
+            Ok(Some(s)) => s,
+            Ok(None) => return None,
+            Err(err) => {
+                eprintln!(
+                    "[lookup] Failed to load lookup snapshot for {normalized_callsign}: {err}"
+                );
+                return None;
+            }
+        };
+
+        // Check expiry — if expired, don't use.
+        if let Some(ref expires_at) = snapshot.expires_at {
+            let now_secs = chrono::Utc::now().timestamp();
+            if now_secs >= expires_at.seconds {
+                return None;
+            }
+        }
+
+        let lookup = if snapshot.result.state == LookupState::Found as i32 {
+            if let Some(record) = snapshot.result.record {
+                CachedLookup::Found(Box::new(record))
+            } else {
+                return None;
+            }
+        } else {
+            CachedLookup::NotFound
+        };
+
+        // Reconstruct a cache entry with its Instant set so TTL checks pass.
+        // Use the remaining lifetime to back-date `cached_at`.
+        let remaining = snapshot.expires_at.map_or(Duration::ZERO, |e| {
+            let now_secs = chrono::Utc::now().timestamp();
+            let remaining_secs =
+                u64::try_from(e.seconds.saturating_sub(now_secs).max(0)).unwrap_or(0);
+            Duration::from_secs(remaining_secs)
+        });
+        let ttl = match &lookup {
+            CachedLookup::Found(_) => self.config.positive_ttl,
+            CachedLookup::NotFound => self.config.negative_ttl,
+        };
+        let elapsed = ttl.saturating_sub(remaining);
+        let cached_at = Instant::now()
+            .checked_sub(elapsed)
+            .unwrap_or_else(Instant::now);
+
+        let entry = CacheEntry { lookup, cached_at };
+
+        // Promote into in-memory cache so subsequent reads are fast.
+        self.cache
+            .write()
+            .await
+            .insert(normalized_callsign.to_string(), entry.clone());
+
+        Some(entry)
     }
 
     /// Run provider lookup with exact-first / base-callsign-fallback behavior.
@@ -572,5 +704,241 @@ mod tests {
         assert_eq!(first.state, LookupState::Found as i32);
         assert_eq!(second.state, LookupState::Found as i32);
         assert_eq!(provider.call_count(), 1);
+    }
+
+    // -- Snapshot persistence tests -----------------------------------------
+
+    use std::collections::BTreeMap;
+
+    use crate::storage::{
+        EngineStorage, LogbookCounts, LogbookStore, LookupSnapshot, LookupSnapshotStore,
+        QsoListQuery, StorageError, SyncMetadata,
+    };
+
+    /// Minimal in-memory implementation of [`EngineStorage`] for snapshot tests.
+    /// Only the [`LookupSnapshotStore`] methods are exercised; the logbook
+    /// surface is left unimplemented.
+    struct MockSnapshotStorage {
+        snapshots: tokio::sync::RwLock<BTreeMap<String, LookupSnapshot>>,
+    }
+
+    impl MockSnapshotStorage {
+        fn new() -> Self {
+            Self {
+                snapshots: tokio::sync::RwLock::new(BTreeMap::new()),
+            }
+        }
+    }
+
+    impl EngineStorage for MockSnapshotStorage {
+        fn logbook(&self) -> &dyn LogbookStore {
+            unimplemented!("logbook not used in snapshot tests")
+        }
+        fn lookup_snapshots(&self) -> &dyn LookupSnapshotStore {
+            self
+        }
+        fn backend_name(&self) -> &'static str {
+            "mock-snapshot"
+        }
+    }
+
+    #[tonic::async_trait]
+    impl LogbookStore for MockSnapshotStorage {
+        async fn insert_qso(
+            &self,
+            _qso: &crate::proto::qsoripper::domain::QsoRecord,
+        ) -> Result<(), StorageError> {
+            unimplemented!()
+        }
+        async fn update_qso(
+            &self,
+            _qso: &crate::proto::qsoripper::domain::QsoRecord,
+        ) -> Result<bool, StorageError> {
+            unimplemented!()
+        }
+        async fn delete_qso(&self, _local_id: &str) -> Result<bool, StorageError> {
+            unimplemented!()
+        }
+        async fn get_qso(
+            &self,
+            _local_id: &str,
+        ) -> Result<Option<crate::proto::qsoripper::domain::QsoRecord>, StorageError> {
+            unimplemented!()
+        }
+        async fn list_qsos(
+            &self,
+            _query: &QsoListQuery,
+        ) -> Result<Vec<crate::proto::qsoripper::domain::QsoRecord>, StorageError> {
+            unimplemented!()
+        }
+        async fn qso_counts(&self) -> Result<LogbookCounts, StorageError> {
+            unimplemented!()
+        }
+        async fn get_sync_metadata(&self) -> Result<SyncMetadata, StorageError> {
+            unimplemented!()
+        }
+        async fn upsert_sync_metadata(&self, _metadata: &SyncMetadata) -> Result<(), StorageError> {
+            unimplemented!()
+        }
+    }
+
+    #[tonic::async_trait]
+    impl LookupSnapshotStore for MockSnapshotStorage {
+        async fn get_lookup_snapshot(
+            &self,
+            callsign: &str,
+        ) -> Result<Option<LookupSnapshot>, StorageError> {
+            Ok(self.snapshots.read().await.get(callsign).cloned())
+        }
+        async fn upsert_lookup_snapshot(
+            &self,
+            snapshot: &LookupSnapshot,
+        ) -> Result<(), StorageError> {
+            self.snapshots
+                .write()
+                .await
+                .insert(snapshot.callsign.clone(), snapshot.clone());
+            Ok(())
+        }
+        async fn delete_lookup_snapshot(&self, callsign: &str) -> Result<bool, StorageError> {
+            Ok(self.snapshots.write().await.remove(callsign).is_some())
+        }
+    }
+
+    #[tokio::test]
+    async fn lookup_persists_snapshot_to_storage() {
+        let storage = Arc::new(MockSnapshotStorage::new());
+        let provider = QueueProvider::new(
+            vec![Ok(ProviderLookup::found(
+                found_record("W1AW", "Persisted"),
+                Vec::new(),
+            ))],
+            Duration::ZERO,
+        );
+        let coordinator = LookupCoordinator::with_snapshot_store(
+            Arc::new(provider),
+            LookupCoordinatorConfig::new(Duration::from_secs(300), Duration::from_secs(60)),
+            storage.clone() as Arc<dyn EngineStorage>,
+        );
+
+        let result = coordinator.lookup("W1AW", false).await;
+        assert_eq!(result.state, LookupState::Found as i32);
+
+        // The snapshot should now be persisted in storage.
+        let snapshot = storage
+            .lookup_snapshots()
+            .get_lookup_snapshot("W1AW")
+            .await
+            .expect("storage read")
+            .expect("snapshot should exist after lookup");
+        assert_eq!(snapshot.callsign, "W1AW");
+        assert_eq!(snapshot.result.state, LookupState::Found as i32);
+        assert!(snapshot.expires_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn lookup_loads_fresh_snapshot_from_storage_on_cold_start() {
+        let storage = Arc::new(MockSnapshotStorage::new());
+
+        // Pre-populate a fresh snapshot in storage (expires far in the future).
+        let now_secs = chrono::Utc::now().timestamp();
+        let snapshot = LookupSnapshot {
+            callsign: "W1AW".to_string(),
+            result: LookupResult {
+                state: LookupState::Found as i32,
+                record: Some(CallsignRecord {
+                    callsign: "W1AW".to_string(),
+                    first_name: "Stored".to_string(),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            stored_at: prost_types::Timestamp {
+                seconds: now_secs,
+                nanos: 0,
+            },
+            expires_at: Some(prost_types::Timestamp {
+                seconds: now_secs + 600,
+                nanos: 0,
+            }),
+        };
+        storage
+            .lookup_snapshots()
+            .upsert_lookup_snapshot(&snapshot)
+            .await
+            .unwrap();
+
+        // Create a coordinator with an empty in-memory cache. The provider
+        // should NOT be called — the persisted snapshot should be used.
+        let provider = QueueProvider::new(Vec::new(), Duration::ZERO);
+        let coordinator = LookupCoordinator::with_snapshot_store(
+            Arc::new(provider.clone()),
+            LookupCoordinatorConfig::new(Duration::from_secs(600), Duration::from_secs(60)),
+            storage as Arc<dyn EngineStorage>,
+        );
+
+        let result = coordinator.lookup("W1AW", false).await;
+        assert_eq!(result.state, LookupState::Found as i32);
+        assert!(
+            result.cache_hit,
+            "result should be a cache hit from storage"
+        );
+        let record = result.record.expect("record should be present");
+        assert_eq!(record.first_name, "Stored");
+        assert_eq!(provider.call_count(), 0, "provider should not be called");
+    }
+
+    #[tokio::test]
+    async fn lookup_ignores_expired_snapshot_from_storage() {
+        let storage = Arc::new(MockSnapshotStorage::new());
+
+        // Pre-populate an expired snapshot in storage.
+        let now_secs = chrono::Utc::now().timestamp();
+        let snapshot = LookupSnapshot {
+            callsign: "W1AW".to_string(),
+            result: LookupResult {
+                state: LookupState::Found as i32,
+                record: Some(CallsignRecord {
+                    callsign: "W1AW".to_string(),
+                    first_name: "Expired".to_string(),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            stored_at: prost_types::Timestamp {
+                seconds: now_secs - 1000,
+                nanos: 0,
+            },
+            expires_at: Some(prost_types::Timestamp {
+                seconds: now_secs - 1, // already expired
+                nanos: 0,
+            }),
+        };
+        storage
+            .lookup_snapshots()
+            .upsert_lookup_snapshot(&snapshot)
+            .await
+            .unwrap();
+
+        // The coordinator should ignore the expired snapshot and call the provider.
+        let provider = QueueProvider::new(
+            vec![Ok(ProviderLookup::found(
+                found_record("W1AW", "Fresh"),
+                Vec::new(),
+            ))],
+            Duration::ZERO,
+        );
+        let coordinator = LookupCoordinator::with_snapshot_store(
+            Arc::new(provider.clone()),
+            LookupCoordinatorConfig::new(Duration::from_secs(600), Duration::from_secs(60)),
+            storage as Arc<dyn EngineStorage>,
+        );
+
+        let result = coordinator.lookup("W1AW", false).await;
+        assert_eq!(result.state, LookupState::Found as i32);
+        assert!(!result.cache_hit);
+        let record = result.record.expect("record should be present");
+        assert_eq!(record.first_name, "Fresh");
+        assert_eq!(provider.call_count(), 1, "provider should be called");
     }
 }

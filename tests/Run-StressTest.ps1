@@ -55,12 +55,24 @@ try {
     Write-Step 'Building Rust server and stress test'
     Push-Location $rustDir
     cargo build -p qsoripper-server 2>&1 | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        Pop-Location
+        throw "cargo build -p qsoripper-server failed with exit code $LASTEXITCODE"
+    }
     cargo test --test stress_test --no-run 2>&1 | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        Pop-Location
+        throw "cargo test --test stress_test --no-run failed with exit code $LASTEXITCODE"
+    }
     Pop-Location
 
     Write-Step 'Building C# stress client'
     Push-Location $dotnetDir
     dotnet build --nologo -v quiet 2>&1 | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        Pop-Location
+        throw "dotnet build for stress client failed with exit code $LASTEXITCODE"
+    }
     Pop-Location
 
     # ---- Run Rust in-process stress test ----
@@ -128,6 +140,10 @@ try {
     if ($dotnetOutputText -match 'INTERNAL errors:\s+(\d+)') {
         $grpcInternalCount = [int]$Matches[1]
     }
+    $clientErrorCount = 0
+    if ($dotnetOutputText -match 'Other errors:\s+(\d+)') {
+        $clientErrorCount = [int]$Matches[1]
+    }
     $totalCalls = 0
     if ($dotnetOutputText -match 'Total calls:\s+([\d,]+)') {
         $totalCalls = $Matches[1]
@@ -139,8 +155,11 @@ try {
     $timestamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
     $panicCount = $uniquePanics.Count
     $totalPanicHits = $serverPanics.Count
-    $statusColor = if ($panicCount -gt 0) { '#dc3545' } else { '#28a745' }
-    $statusText = if ($panicCount -gt 0) { "PANICS FOUND ($panicCount unique)" } else { 'ALL CLEAR' }
+    $failureCount = $panicCount + $grpcInternalCount + $clientErrorCount
+    if ($dotnetExitCode -ne 0) { $failureCount++ }
+    if ($serverCrashed) { $failureCount++ }
+    $statusColor = if ($failureCount -gt 0) { '#dc3545' } else { '#28a745' }
+    $statusText = if ($failureCount -gt 0) { "FAILURES DETECTED" } else { 'ALL CLEAR' }
 
     $panicRows = ''
     if ($panicCount -gt 0) {
@@ -197,6 +216,7 @@ try {
     <div style="margin-top: 1rem;">
         <div class="metric"><div class="metric-value">$totalCalls</div><div class="metric-label">gRPC calls</div></div>
         <div class="metric"><div class="metric-value">$grpcInternalCount</div><div class="metric-label">INTERNAL errors</div></div>
+        <div class="metric"><div class="metric-value">$clientErrorCount</div><div class="metric-label">client/transport errors</div></div>
         <div class="metric"><div class="metric-value">$totalPanicHits</div><div class="metric-label">server panics (total hits)</div></div>
         <div class="metric"><div class="metric-value">$panicCount</div><div class="metric-label">unique panic sites</div></div>
     </div>
@@ -261,14 +281,39 @@ $(if ($serverLog -and $panicCount -gt 0) {
 
     Write-Host "`nReport written to: $OutputPath" -ForegroundColor Green
 
+    # ---- Pass/fail decision ----
+    # Fail if any error category is non-zero: panics, gRPC INTERNAL errors,
+    # client/transport errors, non-zero dotnet exit code, or server crash.
+    $failures = @()
     if ($panicCount -gt 0) {
-        Write-Host "`nFound $panicCount unique panic site(s) with $totalPanicHits total hits:" -ForegroundColor Red
-        foreach ($p in $uniquePanics) {
-            Write-Host "  $($p.Location): $($p.Message)" -ForegroundColor Red
+        $failures += "$panicCount unique panic site(s) with $totalPanicHits total hits"
+    }
+    if ($grpcInternalCount -gt 0) {
+        $failures += "$grpcInternalCount gRPC INTERNAL error(s)"
+    }
+    if ($clientErrorCount -gt 0) {
+        $failures += "$clientErrorCount client/transport error(s)"
+    }
+    if ($dotnetExitCode -ne 0) {
+        $failures += "C# stress client exited with code $dotnetExitCode"
+    }
+    if ($serverCrashed) {
+        $failures += "Server crashed (exit code $($serverProcess.ExitCode))"
+    }
+
+    if ($failures.Count -gt 0) {
+        Write-Host "`nSTRESS TEST FAILED:" -ForegroundColor Red
+        foreach ($f in $failures) {
+            Write-Host "  - $f" -ForegroundColor Red
+        }
+        if ($panicCount -gt 0) {
+            foreach ($p in $uniquePanics) {
+                Write-Host "    $($p.Location): $($p.Message)" -ForegroundColor Red
+            }
         }
         exit 1
     } else {
-        Write-Host "`nNo panics found. The engine held up." -ForegroundColor Green
+        Write-Host "`nNo failures found. The engine held up." -ForegroundColor Green
         exit 0
     }
 }

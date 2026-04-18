@@ -25,6 +25,14 @@ public sealed class QrzLogbookClient : IQrzLogbookApi, IDisposable
     }
 
     /// <summary>
+    /// Create a client using the provided API key and explicit QRZ API URL.
+    /// </summary>
+    public QrzLogbookClient(string apiKey, Uri apiUri)
+        : this(new HttpClient { Timeout = TimeSpan.FromSeconds(30) }, apiKey, apiUri, ownsHttpClient: true)
+    {
+    }
+
+    /// <summary>
     /// Create a client with a caller-supplied <see cref="HttpClient"/> and optional API URL override (for testing).
     /// </summary>
     public QrzLogbookClient(HttpClient httpClient, string apiKey, Uri? apiUri = null)
@@ -99,6 +107,38 @@ public sealed class QrzLogbookClient : IQrzLogbookApi, IDisposable
         if (!map.TryGetValue("LOGID", out var logid) || string.IsNullOrWhiteSpace(logid))
         {
             throw new QrzLogbookException("INSERT response missing LOGID.");
+        }
+
+        return logid;
+    }
+
+    /// <inheritdoc />
+    public async Task<string> UpdateQsoAsync(QsoRecord qso)
+    {
+        ArgumentNullException.ThrowIfNull(qso);
+
+        if (!qso.HasQrzLogid || string.IsNullOrWhiteSpace(qso.QrzLogid))
+        {
+            throw new QrzLogbookException("REPLACE requires a QRZ LOGID but the QSO has none.");
+        }
+
+        var adifRecord = AdifCodec.SerializeSingleQso(qso);
+
+        var formFields = new List<KeyValuePair<string, string>>(4)
+        {
+            new("ACTION", "REPLACE"),
+            new("KEY", _apiKey),
+            new("LOGID", qso.QrzLogid),
+            new("ADIF", adifRecord),
+        };
+
+        var body = await PostFormAsync(formFields).ConfigureAwait(false);
+        var map = QrzResponseParser.ParseKeyValueResponse(body);
+        QrzResponseParser.CheckResult(map);
+
+        if (!map.TryGetValue("LOGID", out var logid) || string.IsNullOrWhiteSpace(logid))
+        {
+            throw new QrzLogbookException("REPLACE response missing LOGID.");
         }
 
         return logid;

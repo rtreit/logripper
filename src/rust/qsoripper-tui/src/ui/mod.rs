@@ -101,6 +101,7 @@ mod tests {
     }
 
     fn make_qso(id: &str, callsign: &str) -> RecentQso {
+        use qsoripper_core::proto::qsoripper::domain::QsoRecord;
         RecentQso {
             local_id: id.to_string(),
             utc: "14:32".to_string(),
@@ -112,6 +113,11 @@ mod tests {
             country: Some("United States".to_string()),
             grid: Some("CN87".to_string()),
             name: Some("John Smith".to_string()),
+            source_record: QsoRecord {
+                local_id: id.to_string(),
+                worked_callsign: callsign.to_string(),
+                ..Default::default()
+            },
         }
     }
 

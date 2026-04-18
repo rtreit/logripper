@@ -984,7 +984,7 @@
     <div class="card-body">
         <h2 class="h5">Local launcher preview</h2>
         <div class="small text-muted mb-2">
-            The command below uses the repo launcher helper for the selected engine profile. Profiles that support storage-session overrides reflect the storage state configured on this page.
+            The command below uses the repo launcher helper for the selected engine profile. The environment block only includes explicit overrides, so the shared config file remains the default source of durable storage selection.
         </div>
         <pre class="payload-view">@WorkbenchState.BuildEngineLaunchCommand()</pre>
         <div class="small text-muted mt-2 mb-1">Equivalent environment</div>

@@ -107,8 +107,12 @@ Returns metadata about the running engine.
 
 **Behavior:**
 - Must always succeed if the engine is running.
-- Returns the engine's name (e.g., `"qsoripper-server"`), version string, implementation language (e.g., `"rust"`, `"csharp"`), and a list of supported capability flags.
-- The response must include the storage backend currently in use (see `StorageBackend` enum).
+- Returns the engine's identity (`engine_id`, `display_name`), version string, and a list of supported capability strings.
+- The response is an `EngineInfo` message (see `proto/services/engine_info.proto`) containing:
+  - `engine_id` — stable identifier (e.g., `"rust-tonic"`, `"dotnet-managed"`)
+  - `display_name` — human-readable label
+  - `version` — semver string
+  - `capabilities` — repeated list of capability names (see §8)
 
 **Error semantics:**
 - This RPC should never fail under normal operation.
@@ -976,7 +980,7 @@ The engine must start and function even when external integrations are unavailab
 
 ### 6.3 Configuration Persistence
 
-- Configuration is persisted as a TOML or JSON file in `QSORIPPER_CONFIG_PATH`.
+- Configuration is persisted as a shared TOML file in `QSORIPPER_CONFIG_PATH`.
 - The `SaveSetup` RPC writes configuration to this path.
 - On startup, the engine loads persisted configuration and overlays environment variable overrides (env vars take precedence).
 - Runtime config mutations (via `DeveloperControlService`) are ephemeral and do not persist across restarts unless explicitly saved.
@@ -1148,26 +1152,35 @@ Every engine must implement `GetEngineInfo` to report its identity and capabilit
 
 **Required response fields:**
 
-| Field | Example (Rust) | Example (.NET) |
+| Proto field | Example (Rust) | Example (.NET) |
 |---|---|---|
-| Engine name | `qsoripper-server` | `qsoripper-engine-dotnet` |
-| Version | `0.1.0` | `0.1.0` |
-| Language | `rust` | `csharp` |
-| Storage backend | `sqlite` | `memory` |
-| Capabilities | List of supported feature flags | List of supported feature flags |
+| `engine_id` | `rust-tonic` | `dotnet-managed` |
+| `display_name` | `QsoRipper Rust Engine` | `QsoRipper .NET Engine` |
+| `version` | `0.1.0` | `0.1.0` |
+| `capabilities` | List of supported capability strings | List of supported capability strings |
 
-**Capability flags** indicate which optional features the engine supports. Clients use these to enable or disable UI features. Examples:
+> **Note:** Earlier drafts of this spec referenced `engine_language` and `storage_backend` fields. These were never added to the `EngineInfo` proto message. Use `engine_id` to infer the implementation language if needed.
 
-- `logbook` — core QSO CRUD
-- `lookup` — callsign lookup
-- `sync` — QRZ logbook sync
-- `rig_control` — rigctld integration
-- `space_weather` — NOAA space weather
-- `stress` — stress testing control plane
-- `adif_import` — ADIF file import
-- `adif_export` — ADIF file export
+**Capability strings** indicate which optional features the engine supports. Clients use these to enable or disable UI features.
 
-Engines should report capabilities accurately based on their current configuration. An engine with no QRZ credentials should not report `lookup` as a capability.
+Both engines currently report the following capabilities:
+
+| Capability | Description |
+|---|---|
+| `engine-info` | Engine metadata / health check |
+| `logbook` | Core QSO CRUD |
+| `lookup-cache` | Cached callsign lookup |
+| `lookup-callsign` | Live callsign lookup |
+| `lookup-stream` | Streaming callsign lookup |
+| `setup` | First-run setup wizard |
+| `station-profiles` | Station profile management |
+| `runtime-config` | Runtime configuration updates |
+| `rig-control` | rigctld integration |
+| `space-weather` | NOAA space weather data |
+
+> **Note:** Earlier drafts listed aspirational names (`sync`, `rig_control`, `stress`, `adif_import`, `adif_export`) that were never adopted. The canonical names above use kebab-case and match what both engines actually report. New capabilities should follow this convention.
+
+Engines currently report a static set of capabilities. Configuration-gated capability reporting (e.g., hiding `lookup-callsign` when no QRZ credentials are configured) is a planned enhancement.
 
 ---
 

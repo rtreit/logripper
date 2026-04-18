@@ -11,12 +11,13 @@ namespace QsoRipper.Engine.Lookup.Qrz;
 public sealed class QrzXmlProvider : ICallsignProvider
 {
     private const string DefaultBaseUrl = "https://xmldata.qrz.com/xml/current/";
-    private const string AgentName = "qsoripper-dotnet";
+    private const string DefaultAgentName = "qsoripper-dotnet";
 
     private readonly HttpClient _httpClient;
     private readonly string _username;
     private readonly string _password;
     private readonly string _baseUrl;
+    private readonly string _userAgent;
     private readonly Lock _sessionLock = new();
     private string? _sessionKey;
 
@@ -24,7 +25,7 @@ public sealed class QrzXmlProvider : ICallsignProvider
 
     /// <summary>Create a new QRZ XML provider.</summary>
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1054:URI parameters should not be strings", Justification = "URL is built from env config, not user-facing API")]
-    public QrzXmlProvider(HttpClient httpClient, string username, string password, string? baseUrl = null)
+    public QrzXmlProvider(HttpClient httpClient, string username, string password, string? baseUrl = null, string? userAgent = null)
     {
         ArgumentNullException.ThrowIfNull(httpClient);
         ArgumentException.ThrowIfNullOrWhiteSpace(username);
@@ -34,6 +35,7 @@ public sealed class QrzXmlProvider : ICallsignProvider
         _username = username;
         _password = password;
         _baseUrl = NormalizeBaseUrl(baseUrl ?? DefaultBaseUrl);
+        _userAgent = NormalizeUserAgent(userAgent);
     }
 
     /// <inheritdoc/>
@@ -43,7 +45,20 @@ public sealed class QrzXmlProvider : ICallsignProvider
         var normalized = callsign.Trim().ToUpperInvariant();
 
         // Ensure we have a session key (login if needed).
-        var sessionKey = await EnsureSessionKeyAsync(ct).ConfigureAwait(false);
+        string? sessionKey;
+        try
+        {
+            sessionKey = await EnsureSessionKeyAsync(ct).ConfigureAwait(false);
+        }
+        catch (QrzNetworkException ex)
+        {
+            return new ProviderLookupResult
+            {
+                State = ProviderLookupState.NetworkError,
+                ErrorMessage = $"Network error during QRZ login: {ex.Message}",
+            };
+        }
+
         if (sessionKey is null)
         {
             return new ProviderLookupResult
@@ -62,7 +77,19 @@ public sealed class QrzXmlProvider : ICallsignProvider
 
         // Session expired — re-login and retry once
         ClearSessionKey();
-        sessionKey = await LoginAsync(ct).ConfigureAwait(false);
+        try
+        {
+            sessionKey = await LoginAsync(ct).ConfigureAwait(false);
+        }
+        catch (QrzNetworkException ex)
+        {
+            return new ProviderLookupResult
+            {
+                State = ProviderLookupState.NetworkError,
+                ErrorMessage = $"Network error during QRZ re-login: {ex.Message}",
+            };
+        }
+
         if (sessionKey is null)
         {
             return new ProviderLookupResult
@@ -185,22 +212,27 @@ public sealed class QrzXmlProvider : ICallsignProvider
         return await LoginAsync(ct).ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// Attempts to log in to the QRZ XML API.
+    /// Returns null if the server responded but no session key was found (auth failure).
+    /// Throws <see cref="QrzNetworkException"/> if the request could not reach the server.
+    /// </summary>
     private async Task<string?> LoginAsync(CancellationToken ct)
     {
-        var url = new Uri($"{_baseUrl}?username={Uri.EscapeDataString(_username)}&password={Uri.EscapeDataString(_password)}&agent={Uri.EscapeDataString(AgentName)}");
+        var url = new Uri($"{_baseUrl}?username={Uri.EscapeDataString(_username)}&password={Uri.EscapeDataString(_password)}&agent={Uri.EscapeDataString(_userAgent)}");
 
         string body;
         try
         {
             body = await _httpClient.GetStringAsync(url, ct).ConfigureAwait(false);
         }
-        catch (HttpRequestException)
+        catch (HttpRequestException ex)
         {
-            return null;
+            throw new QrzNetworkException($"HTTP request failed: {ex.Message}", ex);
         }
-        catch (TaskCanceledException)
+        catch (TaskCanceledException ex) when (!ct.IsCancellationRequested)
         {
-            return null;
+            throw new QrzNetworkException($"HTTP request timed out: {ex.Message}", ex);
         }
 
         var doc = ParseXml(body);
@@ -544,5 +576,12 @@ public sealed class QrzXmlProvider : ICallsignProvider
     private static string NormalizeBaseUrl(string baseUrl)
     {
         return baseUrl.EndsWith('/') ? baseUrl : baseUrl + '/';
+    }
+
+    private static string NormalizeUserAgent(string? userAgent)
+    {
+        return string.IsNullOrWhiteSpace(userAgent)
+            ? DefaultAgentName
+            : userAgent.Trim();
     }
 }

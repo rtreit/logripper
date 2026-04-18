@@ -395,8 +395,22 @@ async fn update_metadata(
     counters: &mut SyncCounters,
 ) {
     let now = chrono::Utc::now();
+
+    // Refresh the QRZ QSO count from what the local store now knows.
+    // After a successful bidirectional sync the number of locally-synced
+    // QSOs is the best available estimate of the remote logbook count.
+    let qrz_qso_count = match store.qso_counts().await {
+        Ok(counts) => counts
+            .local_qso_count
+            .saturating_sub(counts.pending_upload_count),
+        Err(err) => {
+            eprintln!("[sync] Failed to refresh local QSO counts: {err}");
+            prev_metadata.qrz_qso_count
+        }
+    };
+
     let updated = SyncMetadata {
-        qrz_qso_count: prev_metadata.qrz_qso_count,
+        qrz_qso_count,
         last_sync: Some(prost_types::Timestamp {
             seconds: now.timestamp(),
             nanos: 0,
@@ -920,6 +934,36 @@ mod tests {
         assert!(
             metadata.last_sync.is_some(),
             "last_sync should be set after sync"
+        );
+    }
+
+    #[tokio::test]
+    async fn metadata_qrz_count_refreshed_after_download() {
+        let store = MemoryStorage::new();
+
+        // Download two remote QSOs — they arrive as Synced.
+        let remote1 = {
+            let mut q = make_qso("W1AW", "K7ABC", Band::Band20m, Mode::Ft8, 1_700_000_000);
+            q.qrz_logid = Some("QRZ001".into());
+            q
+        };
+        let remote2 = {
+            let mut q = make_qso("W1AW", "JA1ZZZ", Band::Band40m, Mode::Cw, 1_700_000_100);
+            q.qrz_logid = Some("QRZ002".into());
+            q
+        };
+        let api = MockQrzApi::new(Ok(vec![remote1, remote2]), vec![]);
+
+        let (tx, rx) = mpsc::channel(16);
+        execute_sync(&api, &store, true, ConflictPolicy::LastWriteWins, &tx).await;
+        drop(tx);
+        drop(collect_final(rx).await);
+
+        let metadata = store.get_sync_metadata().await.unwrap();
+        assert!(metadata.last_sync.is_some(), "last_sync should be set");
+        assert_eq!(
+            metadata.qrz_qso_count, 2,
+            "qrz_qso_count should reflect the two synced remote QSOs"
         );
     }
 

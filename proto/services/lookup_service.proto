@@ -21,11 +21,11 @@ import "services/stream_lookup_response.proto";
 //   Client → LookupService → LookupCoordinator → CallsignProvider → QrzProvider
 //
 // Implementation status:
-//   Lookup             — implemented
-//   StreamLookup       — implemented
-//   GetCachedCallsign  — implemented
-//   GetDxccEntity      — planned (returns UNIMPLEMENTED)
-//   BatchLookup        — planned (returns UNIMPLEMENTED)
+//   Lookup             — implemented (both engines)
+//   StreamLookup       — implemented (both engines)
+//   GetCachedCallsign  — implemented (both engines)
+//   GetDxccEntity      — implemented (.NET, by DXCC code; prefix lookup not yet supported); unimplemented (Rust)
+//   BatchLookup        — implemented (.NET); unimplemented (Rust)
 //
 // Transport: native gRPC (HTTP/2 + binary protobuf).
 // Browser clients must go through a gRPC-Web proxy — see docs/api/client-integration.md.

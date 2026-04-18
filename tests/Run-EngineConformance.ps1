@@ -67,6 +67,18 @@ function Invoke-Cli {
     $startInfo.RedirectStandardError = $true
     $startInfo.UseShellExecute = $false
     $startInfo.ArgumentList.Add($cliDll)
+
+    foreach ($name in @(
+            'QSORIPPER_QRZ_XML_USERNAME',
+            'QSORIPPER_QRZ_XML_PASSWORD',
+            'QSORIPPER_QRZ_USER_AGENT',
+            'QSORIPPER_QRZ_XML_BASE_URL',
+            'QSORIPPER_QRZ_LOGBOOK_API_KEY',
+            'QSORIPPER_QRZ_LOGBOOK_BASE_URL'
+        )) {
+        $null = $startInfo.Environment.Remove($name)
+    }
+
     foreach ($argument in $Arguments) {
         $startInfo.ArgumentList.Add($argument)
     }
@@ -250,9 +262,12 @@ function Start-TestEngine {
         ForceRestart = $true
     }
 
-    if ($EngineProfile -eq 'rust') {
+    if (-not [string]::IsNullOrWhiteSpace($Storage)) {
         $parameters.Storage = $Storage
-        $parameters.SqlitePath = $SqlitePath
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($SqlitePath)) {
+        $parameters.PersistenceLocation = $SqlitePath
     }
 
     if ($SkipBuild) {
@@ -393,6 +408,67 @@ function Invoke-ConformanceScenario {
     }
 }
 
+function Assert-SharedSetupRoundTrip {
+    param(
+        [string]$FirstEngineProfile,
+        [string]$SecondEngineProfile,
+        [string]$ScenarioId
+    )
+
+    $scenarioDirectory = Join-Path $runDirectory $ScenarioId
+    $null = New-Item -ItemType Directory -Path $scenarioDirectory -Force
+    $configPath = Join-Path $scenarioDirectory 'config.toml'
+    $persistencePath = Join-Path $scenarioDirectory 'shared-setup.db'
+    $environment = @{
+        QSORIPPER_LOG_FILE = $persistencePath
+        QSORIPPER_STATION_CALLSIGN = $stationCallsign
+        QSORIPPER_OPERATOR_CALLSIGN = $stationCallsign
+        QSORIPPER_PROFILE_NAME = $profileName
+        QSORIPPER_GRID = $grid
+    }
+
+    Write-Step "Seeding shared setup with $FirstEngineProfile"
+    $null = Start-TestEngine -EngineProfile $FirstEngineProfile -ConfigPath $configPath -Storage 'sqlite' -SqlitePath $persistencePath
+    $seedSetup = Invoke-Cli -Arguments @('--engine', $FirstEngineProfile, 'setup', '--from-env') -Environment $environment
+    Assert-CommandSucceeded -Result $seedSetup -Description "$FirstEngineProfile setup round-trip seed"
+    Stop-TestEngine
+
+    Write-Step "Verifying shared setup on $SecondEngineProfile"
+    $null = Start-TestEngine -EngineProfile $SecondEngineProfile -ConfigPath $configPath -Storage '' -SqlitePath ''
+    $statusResult = Invoke-Cli -Arguments @('--engine', $SecondEngineProfile, 'setup', '--status', '--json')
+    Assert-CommandSucceeded -Result $statusResult -Description "$SecondEngineProfile setup --status round-trip"
+    $statusJson = $statusResult.StdOut | ConvertFrom-Json
+    $runtimeResult = Invoke-Cli -Arguments @('--engine', $SecondEngineProfile, 'config', '--json')
+    Assert-CommandSucceeded -Result $runtimeResult -Description "$SecondEngineProfile config --json round-trip"
+    $runtimeJson = $runtimeResult.StdOut | ConvertFrom-Json
+
+    if (-not $statusJson.status.setupComplete) {
+        throw "$ScenarioId did not preserve setup completeness when switching from $FirstEngineProfile to $SecondEngineProfile."
+    }
+
+    if ($statusJson.status.stationProfile.stationCallsign -ne $stationCallsign) {
+        throw "$ScenarioId did not preserve the station profile when switching from $FirstEngineProfile to $SecondEngineProfile."
+    }
+
+    if ([string]::IsNullOrWhiteSpace($statusJson.status.activeStationProfileId)) {
+        throw "$ScenarioId did not preserve the active station profile id when switching from $FirstEngineProfile to $SecondEngineProfile."
+    }
+
+    if ($runtimeJson.activeStorageBackend -ne 'sqlite') {
+        throw "$ScenarioId did not reload sqlite storage from shared config when switching from $FirstEngineProfile to $SecondEngineProfile."
+    }
+
+    if ([string]::IsNullOrWhiteSpace($runtimeJson.persistenceLocation)) {
+        throw "$ScenarioId did not report a persistence path after switching from $FirstEngineProfile to $SecondEngineProfile."
+    }
+
+    if ([System.IO.Path]::GetFullPath($runtimeJson.persistenceLocation) -ne [System.IO.Path]::GetFullPath($persistencePath)) {
+        throw "$ScenarioId did not preserve the shared persistence path when switching from $FirstEngineProfile to $SecondEngineProfile."
+    }
+
+    Stop-TestEngine
+}
+
 function Assert-EquivalentRecords {
     param(
         [System.Collections.IDictionary]$Left,
@@ -452,17 +528,19 @@ try {
         }
     }
 
-    $rustConfigPath = Join-Path $runDirectory 'rust-engine.json'
-    $dotnetConfigPath = Join-Path $runDirectory 'dotnet-engine.json'
+    $sharedConfigPath = Join-Path $runDirectory 'config.toml'
     $persistencePath = Join-Path $runDirectory 'conformance-log.db'
 
-    $rustScenarioOutput = @(Invoke-ConformanceScenario -EngineProfile 'rust' -ConfigPath $rustConfigPath -PersistencePath $persistencePath -Storage 'sqlite')
+    $rustScenarioOutput = @(Invoke-ConformanceScenario -EngineProfile 'rust' -ConfigPath $sharedConfigPath -PersistencePath $persistencePath -Storage 'sqlite')
     $rustResult = Select-ScenarioResult -Results $rustScenarioOutput -EngineProfile 'rust'
     Stop-TestEngine
 
-    $dotnetScenarioOutput = @(Invoke-ConformanceScenario -EngineProfile 'dotnet' -ConfigPath $dotnetConfigPath -PersistencePath $persistencePath -Storage 'memory')
+    $dotnetScenarioOutput = @(Invoke-ConformanceScenario -EngineProfile 'dotnet' -ConfigPath $sharedConfigPath -PersistencePath $persistencePath -Storage 'sqlite')
     $dotnetResult = Select-ScenarioResult -Results $dotnetScenarioOutput -EngineProfile 'dotnet'
     Stop-TestEngine
+
+    Assert-SharedSetupRoundTrip -FirstEngineProfile 'rust' -SecondEngineProfile 'dotnet' -ScenarioId 'rust-to-dotnet'
+    Assert-SharedSetupRoundTrip -FirstEngineProfile 'dotnet' -SecondEngineProfile 'rust' -ScenarioId 'dotnet-to-rust'
 
     Assert-EquivalentRecords -Left $rustResult.Qso -Right $dotnetResult.Qso -Description 'GetQso'
     Assert-EquivalentRecords -Left $rustResult.ListQso -Right $dotnetResult.ListQso -Description 'ListQsos'

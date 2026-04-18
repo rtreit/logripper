@@ -7,12 +7,13 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Grpc.Core;
 using QsoRipper.Gui.Services;
+using QsoRipper.Gui.Utilities;
 
 namespace QsoRipper.Gui.ViewModels;
 
 internal sealed partial class RecentQsoListViewModel : ObservableObject
 {
-    private const int DefaultLimit = 500;
+    private const int DefaultLimit = 200;
     private const double DefaultGridFontSize = 12;
     private const double MinGridFontSize = 10;
     private const double MaxGridFontSize = 18;
@@ -20,21 +21,23 @@ internal sealed partial class RecentQsoListViewModel : ObservableObject
 
     private readonly IEngineClient _engine;
     private readonly List<RecentQsoItemViewModel> _allItems = [];
-    private readonly ObservableCollection<RecentQsoItemViewModel> _viewItems = [];
     private ParsedSearchQuery _parsedSearchQuery = ParsedSearchQuery.Empty;
     private bool _suppressSortStateSync;
+    private DataGridCollectionView _view;
 
     public RecentQsoListViewModel(IEngineClient engine)
     {
         _engine = engine;
-        View = new DataGridCollectionView(_viewItems);
-        View.Filter = FilterVisibleItem;
-        View.SortDescriptions.CollectionChanged += OnSortDescriptionsChanged;
+        _view = CreateView(Array.Empty<RecentQsoItemViewModel>());
         ColumnOptions = new ObservableCollection<RecentQsoColumnOptionViewModel>(CreateColumnOptions());
         ApplyPersistedSort(RecentQsoSortColumn.Utc, ascending: false);
     }
 
-    public DataGridCollectionView View { get; }
+    public DataGridCollectionView View
+    {
+        get => _view;
+        private set => SetProperty(ref _view, value);
+    }
 
     public ObservableCollection<RecentQsoColumnOptionViewModel> ColumnOptions { get; }
 
@@ -183,6 +186,7 @@ internal sealed partial class RecentQsoListViewModel : ObservableObject
     [RelayCommand(CanExecute = nameof(CanRefresh))]
     internal async Task RefreshAsync()
     {
+        GuiPerformanceTrace.Write(nameof(RefreshAsync) + ".start");
         IsLoading = true;
         ErrorMessage = null;
 
@@ -190,13 +194,22 @@ internal sealed partial class RecentQsoListViewModel : ObservableObject
         {
             var selectedLocalId = SelectedQso?.LocalId;
             var qsos = await _engine.ListRecentQsosAsync(DefaultLimit);
-
+            GuiPerformanceTrace.Write(nameof(RefreshAsync) + ".afterListRecentQsos", $"count={qsos.Count}");
+            var items = new RecentQsoItemViewModel[qsos.Count];
             var format = TimestampFormat;
-            ReplaceItems(qsos.Select(q => RecentQsoItemViewModel.FromQso(q, format)));
+            for (var index = 0; index < qsos.Count; index++)
+            {
+                items[index] = RecentQsoItemViewModel.FromQso(qsos[index], format);
+            }
+
+            GuiPerformanceTrace.Write(nameof(RefreshAsync) + ".afterMaterializeItems", $"count={items.Length}");
+            ReplaceItems(items);
+            GuiPerformanceTrace.Write(nameof(RefreshAsync) + ".afterReplaceItems", $"count={items.Length}");
 
             HasLoaded = true;
             LastLoadedAtUtc = DateTimeOffset.UtcNow;
             RefreshView(selectedLocalId);
+            GuiPerformanceTrace.Write(nameof(RefreshAsync) + ".afterRefreshView", $"visible={VisibleItemCount}");
         }
         catch (RpcException ex)
         {
@@ -210,6 +223,7 @@ internal sealed partial class RecentQsoListViewModel : ObservableObject
         {
             IsLoading = false;
             NotifyStatusPropertiesChanged();
+            GuiPerformanceTrace.Write(nameof(RefreshAsync) + ".complete");
         }
     }
 
@@ -545,19 +559,27 @@ internal sealed partial class RecentQsoListViewModel : ObservableObject
 
     private void ApplySortDescriptions(RecentQsoSortColumn column, bool ascending)
     {
+        ApplySortDescriptions(View, column, ascending);
+    }
+
+    private void ApplySortDescriptions(
+        DataGridCollectionView view,
+        RecentQsoSortColumn column,
+        bool ascending)
+    {
         var primaryDirection = ascending ? ListSortDirection.Ascending : ListSortDirection.Descending;
         _suppressSortStateSync = true;
         try
         {
-            View.SortDescriptions.Clear();
-            View.SortDescriptions.Add(
+            view.SortDescriptions.Clear();
+            view.SortDescriptions.Add(
                 new DataGridComparerSortDescription(
                     new PropertyPathComparer(GetSortMemberPath(column)),
                     primaryDirection));
 
             if (column != RecentQsoSortColumn.Utc)
             {
-                View.SortDescriptions.Add(
+                view.SortDescriptions.Add(
                     new DataGridComparerSortDescription(
                         new PropertyPathComparer(nameof(RecentQsoItemViewModel.UtcSortKey)),
                         ListSortDirection.Descending));
@@ -622,12 +644,7 @@ internal sealed partial class RecentQsoListViewModel : ObservableObject
         _allItems.Clear();
         _allItems.AddRange(items);
 
-        _viewItems.Clear();
-        foreach (var item in _allItems)
-        {
-            item.PropertyChanged += OnItemPropertyChanged;
-            _viewItems.Add(item);
-        }
+        ReplaceView();
 
         UpdatePendingEditCount();
     }
@@ -655,6 +672,30 @@ internal sealed partial class RecentQsoListViewModel : ObservableObject
     private void UpdatePendingEditCount()
     {
         PendingEditCount = _allItems.Count(item => item.IsDirty);
+    }
+
+    private DataGridCollectionView CreateView(IList items)
+    {
+        var view = new DataGridCollectionView(items);
+        view.Filter = FilterVisibleItem;
+        view.SortDescriptions.CollectionChanged += OnSortDescriptionsChanged;
+        return view;
+    }
+
+    private void ReplaceView()
+    {
+        View.SortDescriptions.CollectionChanged -= OnSortDescriptionsChanged;
+
+        foreach (var item in _allItems)
+        {
+            item.PropertyChanged += OnItemPropertyChanged;
+        }
+
+        var nextView = CreateView(_allItems.ToList());
+        GuiPerformanceTrace.Write(nameof(ReplaceView) + ".createdView", $"count={_allItems.Count}");
+        ApplySortDescriptions(nextView, CurrentSortColumn, SortAscending);
+        View = nextView;
+        GuiPerformanceTrace.Write(nameof(ReplaceView) + ".assignedView", $"count={_allItems.Count}");
     }
 
     private void SyncSortStateFromView()

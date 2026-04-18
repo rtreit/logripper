@@ -12,7 +12,7 @@ internal sealed class DebugWorkbenchOptions
 
     public string DefaultEngineEndpoint { get; set; } = string.Empty;
 
-    public string DefaultEngineStorageBackend { get; set; } = "memory";
+    public string DefaultEngineStorageBackend { get; set; } = string.Empty;
 
     public string DefaultEnginePersistenceLocation { get; set; } = PersistenceSetup.DefaultRelativePersistencePath;
 

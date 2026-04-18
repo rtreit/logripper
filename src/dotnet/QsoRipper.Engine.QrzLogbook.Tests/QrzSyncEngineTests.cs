@@ -215,7 +215,7 @@ public sealed class QrzSyncEngineTests
     }
 
     [Fact]
-    public async Task Upload_sends_modified_qsos()
+    public async Task Upload_sends_modified_qsos_via_replace()
     {
         var store = CreateStore();
         var local = MakeLocalQso("N0CALL", BaseTime, Band._20M, Mode.Ssb, SyncStatus.Modified);
@@ -225,13 +225,50 @@ public sealed class QrzSyncEngineTests
         var api = new FakeQrzLogbookApi
         {
             FetchResult = [],
-            UploadLogid = "88888",
+            UpdateLogid = "existing-id",
         };
         var engine = new QrzSyncEngine(api);
 
         var result = await engine.ExecuteSyncAsync(store.Logbook, fullSync: true);
 
         Assert.Equal(1u, result.UploadedCount);
+        // Modified QSO must go through UpdateQsoAsync (REPLACE), not UploadQsoAsync (INSERT)
+        Assert.Empty(api.UploadedQsos);
+        Assert.Single(api.UpdatedQsos);
+        Assert.Equal("N0CALL", api.UpdatedQsos[0].WorkedCallsign);
+    }
+
+    [Fact]
+    public async Task Upload_modified_qso_overwrites_existing_logid_bug_213()
+    {
+        // Regression: modified QSOs with an existing QrzLogid must use REPLACE, not INSERT.
+        var store = CreateStore();
+        var modified = MakeLocalQso("W1AW", BaseTime, Band._40M, Mode.Cw, SyncStatus.Modified);
+        modified.QrzLogid = "qrz-99";
+        await store.Logbook.InsertQsoAsync(modified);
+
+        var newQso = MakeLocalQso("K1ABC", BaseTime.AddMinutes(5), Band._20M, Mode.Ssb, SyncStatus.LocalOnly);
+        await store.Logbook.InsertQsoAsync(newQso);
+
+        var api = new FakeQrzLogbookApi
+        {
+            FetchResult = [],
+            UploadLogid = "new-id-100",
+            UpdateLogid = "qrz-99",
+        };
+        var engine = new QrzSyncEngine(api);
+
+        var result = await engine.ExecuteSyncAsync(store.Logbook, fullSync: true);
+
+        Assert.Equal(2u, result.UploadedCount);
+
+        // Modified QSO → UpdateQsoAsync (REPLACE)
+        Assert.Single(api.UpdatedQsos);
+        Assert.Equal("W1AW", api.UpdatedQsos[0].WorkedCallsign);
+
+        // New QSO → UploadQsoAsync (INSERT)
+        Assert.Single(api.UploadedQsos);
+        Assert.Equal("K1ABC", api.UploadedQsos[0].WorkedCallsign);
     }
 
     [Fact]
@@ -428,8 +465,10 @@ public sealed class QrzSyncEngineTests
     {
         public List<QsoRecord> FetchResult { get; set; } = [];
         public string UploadLogid { get; set; } = "12345";
+        public string UpdateLogid { get; set; } = "12345";
         public Func<QsoRecord, Task<string>>? UploadFunc { get; set; }
         public List<QsoRecord> UploadedQsos { get; } = [];
+        public List<QsoRecord> UpdatedQsos { get; } = [];
         public string? LastSinceDate { get; private set; }
 
         public Task<List<QsoRecord>> FetchQsosAsync(string? sinceDateYmd)
@@ -447,6 +486,12 @@ public sealed class QrzSyncEngineTests
             }
 
             return Task.FromResult(UploadLogid);
+        }
+
+        public Task<string> UpdateQsoAsync(QsoRecord qso)
+        {
+            UpdatedQsos.Add(qso);
+            return Task.FromResult(UpdateLogid);
         }
     }
 }
