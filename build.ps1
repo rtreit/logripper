@@ -50,6 +50,22 @@ function Write-Step([string]$Message) {
     Write-Host "`n=== $Message ===" -ForegroundColor Cyan
 }
 
+function Get-CppcheckInstallHint {
+    if ($IsWindows) {
+        return 'Install with: winget install Cppcheck.Cppcheck'
+    }
+
+    if ($IsMacOS) {
+        return 'Install with: brew install cppcheck'
+    }
+
+    if ($IsLinux) {
+        return 'Install with: sudo apt install cppcheck'
+    }
+
+    return 'Install from https://cppcheck.sourceforge.io/'
+}
+
 function Invoke-Build([string]$Step, [string]$Command, [string[]]$Arguments) {
     Write-Step $Step
     & $Command @Arguments
@@ -193,7 +209,7 @@ function Build-Win32 {
     }
 
     # cppcheck static analysis — fails the build on error-severity findings
-    Write-Step 'Win32 static analysis (cppcheck)'
+    Write-Step 'Win32 static analysis (cppcheck, optional)'
     $cppcheckExe = Get-Command cppcheck -ErrorAction SilentlyContinue
     if ($cppcheckExe) {
         cppcheck --enable=warning,performance,portability `
@@ -209,7 +225,8 @@ function Build-Win32 {
         }
     }
     else {
-        Write-Host 'cppcheck not found, skipping. Install from https://cppcheck.sourceforge.io/' -ForegroundColor Yellow
+        $installHint = Get-CppcheckInstallHint
+        Write-Host "cppcheck not found; continuing without optional Win32 static analysis. $installHint" -ForegroundColor Yellow
     }
 
     Write-Step "Building qsoripper-win32 ($Configuration)"

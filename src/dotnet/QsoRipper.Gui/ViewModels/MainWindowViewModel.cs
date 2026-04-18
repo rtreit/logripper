@@ -19,6 +19,8 @@ namespace QsoRipper.Gui.ViewModels;
 
 internal sealed partial class MainWindowViewModel : ObservableObject, IDisposable
 {
+    private static readonly TimeSpan PreferredEngineSwitchTimeout = TimeSpan.FromSeconds(1.5);
+
     private readonly IEngineClient _engine;
     private readonly SwitchableEngineClient? _switchableEngine;
     private readonly DispatcherTimer _utcTimer;
@@ -68,6 +70,7 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
     private bool _isEngineSwitching;
 
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(InspectorPanelHost))]
     private bool _isInspectorOpen;
 
     [ObservableProperty]
@@ -183,6 +186,8 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
 
     public bool HasInspectorQso => InspectorQso is not null;
 
+    public MainWindowViewModel? InspectorPanelHost => IsInspectorOpen ? this : null;
+
     public event EventHandler? SearchFocusRequested;
 
     public event EventHandler? GridFocusRequested;
@@ -202,21 +207,31 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
     {
         try
         {
+            GuiPerformanceTrace.Write(nameof(CheckFirstRunAsync) + ".start");
             await ApplyPreferredEngineSelectionAsync();
-            UpdateAvailableEngineSummary();
-            var state = await _engine.GetWizardStateAsync();
-            ApplySetupContext(state);
-            IsSetupIncomplete = !state.Status.SetupComplete;
+            GuiPerformanceTrace.Write(nameof(CheckFirstRunAsync) + ".afterPreferredEngine");
+            StatusMessage = "Loading recent QSOs...";
+            var recentQsoRefreshTask = RecentQsos.RefreshAsync();
+            var status = (await _engine.GetSetupStatusAsync()).Status;
+            GuiPerformanceTrace.Write(
+                nameof(CheckFirstRunAsync) + ".afterSetupStatus",
+                $"firstRun={status.IsFirstRun}; setupComplete={status.SetupComplete}");
+            ApplySetupContext(status);
+            IsSetupIncomplete = !status.SetupComplete;
 
-            if (state.Status.IsFirstRun)
+            if (status.IsFirstRun)
             {
                 StatusMessage = "Welcome";
                 await OpenWizardAsync();
+                await recentQsoRefreshTask;
             }
             else
             {
-                await ActivateDashboardAsync(focusSearch);
+                await ActivateDashboardAsync(focusSearch, recentQsoRefreshTask);
             }
+
+            Dispatcher.UIThread.Post(UpdateAvailableEngineSummary, DispatcherPriority.Background);
+            GuiPerformanceTrace.Write(nameof(CheckFirstRunAsync) + ".complete");
         }
         catch (Grpc.Core.RpcException)
         {
@@ -370,7 +385,10 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
             return;
         }
 
-        using var timeoutSource = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        using var timeoutSource = new CancellationTokenSource(PreferredEngineSwitchTimeout);
+        GuiPerformanceTrace.Write(
+            nameof(ApplyPreferredEngineSelectionAsync) + ".switchStart",
+            $"profile={targetProfile.ProfileId}; endpoint={targetEndpoint}");
         var result = await _switchableEngine.SwitchAsync(targetProfile, targetEndpoint, timeoutSource.Token);
         if (result.Success)
         {
@@ -383,6 +401,9 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
                 : result.Message;
         }
 
+        GuiPerformanceTrace.Write(
+            nameof(ApplyPreferredEngineSelectionAsync) + ".switchComplete",
+            $"success={result.Success}; endpoint={result.Endpoint}");
         _preferredEngineProfileId = null;
         _preferredEngineEndpoint = null;
     }
@@ -397,7 +418,7 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
 
         var runtimeEntries = EngineRuntimeDiscovery.DiscoverLocalEngines(new EngineRuntimeDiscoveryOptions
         {
-            ValidateTcpReachability = true
+            ValidateTcpReachability = false
         });
         var runningLabels = runtimeEntries
             .Where(static entry => entry.IsRunning)
@@ -413,7 +434,7 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
     {
         var runtimeEntries = EngineRuntimeDiscovery.DiscoverLocalEngines(new EngineRuntimeDiscoveryOptions
         {
-            ValidateTcpReachability = true
+            ValidateTcpReachability = false
         });
         var runningEntry = runtimeEntries.FirstOrDefault(entry =>
             entry.IsRunning
@@ -873,14 +894,19 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
         EngineEndpoint = _switchableEngine?.CurrentEndpoint,
     };
 
-    private async Task ActivateDashboardAsync(bool focusSearch)
+    private async Task ActivateDashboardAsync(bool focusSearch, Task? recentQsoRefreshTask = null)
     {
+        GuiPerformanceTrace.Write(nameof(ActivateDashboardAsync) + ".start");
+        StatusMessage = "Loading recent QSOs...";
+        recentQsoRefreshTask ??= RecentQsos.RefreshAsync();
+        await recentQsoRefreshTask;
+        GuiPerformanceTrace.Write(nameof(ActivateDashboardAsync) + ".afterRecentQsosRefresh");
         StatusMessage = "Ready";
-        await RecentQsos.RefreshAsync();
-        await RefreshSyncStatusAsync();
+        _ = RefreshSyncStatusAsync();
 
         _ = FetchSpaceWeatherAsync();
         _spaceWeatherTimer.Start();
+        await Task.Yield();
 
         if (IsWizardOpen)
         {
@@ -896,6 +922,8 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
             // Default: focus the QSO logger callsign field for immediate entry
             Logger.FocusLogger();
         }
+
+        GuiPerformanceTrace.Write(nameof(ActivateDashboardAsync) + ".complete");
     }
 
     private void UtcTimerOnTick(object? sender, EventArgs e)
@@ -925,7 +953,7 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
     {
         try
         {
-            ApplySetupContext(await _engine.GetWizardStateAsync());
+            ApplySetupContext((await _engine.GetSetupStatusAsync()).Status);
         }
         catch (Grpc.Core.RpcException)
         {
@@ -933,11 +961,10 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
         }
     }
 
-    private void ApplySetupContext(QsoRipper.Services.GetSetupWizardStateResponse state)
+    private void ApplySetupContext(QsoRipper.Services.SetupStatus status)
     {
-        var activeProfile = state.StationProfiles.FirstOrDefault(profile => profile.IsActive)?.Profile
-            ?? state.Status.StationProfile;
-        ActiveLogText = BuildLogText(state.Status);
+        var activeProfile = status.StationProfile;
+        ActiveLogText = BuildLogText(status);
         ActiveProfileText = BuildProfileText(activeProfile);
         ActiveStationText = BuildStationText(activeProfile);
     }

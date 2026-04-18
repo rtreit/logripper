@@ -6,6 +6,10 @@
     <ApplicationIcon>Assets\qsoripper.ico</ApplicationIcon>
   </PropertyGroup>
 
+  <PropertyGroup Condition="'$(Configuration)' == 'Release'">
+    <PublishReadyToRun>true</PublishReadyToRun>
+  </PropertyGroup>
+
   <ItemGroup>
     <AvaloniaResource Include="Assets\qsoripper.ico" />
   </ItemGroup>

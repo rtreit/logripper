@@ -684,81 +684,85 @@
               </Border>
             </Grid>
 
-            <Border x:Name="InspectorPanel"
-                    AutomationProperties.AutomationId="InspectorPanel"
-                    Grid.Column="1"
-                    Width="320"
-                    Padding="12,10"
-                    BorderBrush="{DynamicResource SystemControlForegroundBaseMediumLowBrush}"
-                    BorderThickness="1,0,0,0"
-                    Background="{DynamicResource SystemControlBackgroundAltHighBrush}"
-                    IsVisible="{Binding IsInspectorOpen}">
-              <ScrollViewer>
-                <StackPanel Spacing="10">
-                  <TextBlock Text="Inspector"
-                             FontSize="13"
-                             FontWeight="SemiBold" />
+            <ContentControl Grid.Column="1"
+                            Content="{Binding InspectorPanelHost}">
+              <ContentControl.DataTemplates>
+                <DataTemplate x:DataType="vm:MainWindowViewModel">
+                  <Border AutomationProperties.AutomationId="InspectorPanel"
+                          Width="320"
+                          Padding="12,10"
+                          BorderBrush="{DynamicResource SystemControlForegroundBaseMediumLowBrush}"
+                          BorderThickness="1,0,0,0"
+                          Background="{DynamicResource SystemControlBackgroundAltHighBrush}">
+                    <ScrollViewer>
+                      <StackPanel Spacing="10">
+                        <TextBlock Text="Inspector"
+                                   FontSize="13"
+                                   FontWeight="SemiBold" />
 
-                  <StackPanel Spacing="6"
-                              IsVisible="{Binding HasInspectorQso}">
-                    <Grid ColumnDefinitions="Auto,*"
-                          ColumnSpacing="10"
-                          RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto">
-                      <TextBlock Text="Call" Grid.Row="0" Opacity="0.68" />
-                      <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding InspectorQso.WorkedCallsign}" />
-                      <TextBlock Text="UTC" Grid.Row="1" Opacity="0.68" />
-                      <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding InspectorQso.UtcDisplay}" />
-                      <TextBlock Text="Band" Grid.Row="2" Opacity="0.68" />
-                      <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding InspectorQso.Band}" />
-                      <TextBlock Text="Mode" Grid.Row="3" Opacity="0.68" />
-                      <TextBlock Grid.Row="3" Grid.Column="1" Text="{Binding InspectorQso.Mode}" />
-                      <TextBlock Text="Freq" Grid.Row="4" Opacity="0.68" />
-                      <TextBlock Grid.Row="4" Grid.Column="1" Text="{Binding InspectorQso.Frequency}" />
-                      <TextBlock Text="RST" Grid.Row="5" Opacity="0.68" />
-                      <TextBlock Grid.Row="5" Grid.Column="1" Text="{Binding InspectorQso.Rst}" />
-                      <TextBlock Text="DXCC" Grid.Row="6" Opacity="0.68" />
-                      <TextBlock Grid.Row="6" Grid.Column="1" Text="{Binding InspectorQso.Dxcc}" />
-                      <TextBlock Text="Country" Grid.Row="7" Opacity="0.68" />
-                      <TextBlock Grid.Row="7" Grid.Column="1" Text="{Binding InspectorQso.Country}" />
-                      <TextBlock Text="Name" Grid.Row="8" Opacity="0.68" />
-                      <TextBlock Grid.Row="8" Grid.Column="1" Text="{Binding InspectorQso.OperatorName}" TextWrapping="Wrap" />
-                      <TextBlock Text="Grid" Grid.Row="9" Opacity="0.68" />
-                      <TextBlock Grid.Row="9" Grid.Column="1" Text="{Binding InspectorQso.Grid}" />
-                      <TextBlock Text="QTH" Grid.Row="10" Opacity="0.68" />
-                      <TextBlock Grid.Row="10" Grid.Column="1" Text="{Binding InspectorQso.Qth}" TextWrapping="Wrap" />
-                      <TextBlock Text="State" Grid.Row="11" Opacity="0.68" />
-                      <TextBlock Grid.Row="11" Grid.Column="1" Text="{Binding InspectorQso.State}" />
-                      <TextBlock Text="County" Grid.Row="12" Opacity="0.68" />
-                      <TextBlock Grid.Row="12" Grid.Column="1" Text="{Binding InspectorQso.County}" />
-                      <TextBlock Text="Cont" Grid.Row="13" Opacity="0.68" />
-                      <TextBlock Grid.Row="13" Grid.Column="1" Text="{Binding InspectorQso.Continent}" />
-                      <TextBlock Text="CQ Zone" Grid.Row="14" Opacity="0.68" />
-                      <TextBlock Grid.Row="14" Grid.Column="1" Text="{Binding InspectorQso.CqZone}" />
-                      <TextBlock Text="ITU Zone" Grid.Row="15" Opacity="0.68" />
-                      <TextBlock Grid.Row="15" Grid.Column="1" Text="{Binding InspectorQso.ItuZone}" />
-                      <TextBlock Text="Contest" Grid.Row="16" Opacity="0.68" />
-                      <TextBlock Grid.Row="16" Grid.Column="1" Text="{Binding InspectorQso.Contest}" />
-                      <TextBlock Text="Exch" Grid.Row="17" Opacity="0.68" />
-                      <TextBlock Grid.Row="17" Grid.Column="1" Text="{Binding InspectorQso.Exchange}" />
-                      <TextBlock Text="Station" Grid.Row="18" Opacity="0.68" />
-                      <TextBlock Grid.Row="18" Grid.Column="1" Text="{Binding InspectorQso.Station}" />
-                      <TextBlock Text="End" Grid.Row="19" Opacity="0.68" />
-                      <TextBlock Grid.Row="19" Grid.Column="1" Text="{Binding InspectorQso.UtcEndDisplay}" />
-                      <TextBlock Text="Sync" Grid.Row="20" Opacity="0.68" />
-                      <TextBlock Grid.Row="20" Grid.Column="1" Text="{Binding InspectorQso.SyncStatus}" />
-                      <TextBlock Text="Comment" Grid.Row="21" Opacity="0.68" />
-                      <TextBlock Grid.Row="21" Grid.Column="1" Text="{Binding InspectorQso.Comment}" TextWrapping="Wrap" />
-                      <TextBlock Text="Note" Grid.Row="22" Opacity="0.68" />
-                      <TextBlock Grid.Row="22" Grid.Column="1" Text="{Binding InspectorQso.Note}" TextWrapping="Wrap" />
-                    </Grid>
-                  </StackPanel>
+                        <StackPanel Spacing="6"
+                                    IsVisible="{Binding HasInspectorQso}">
+                          <Grid ColumnDefinitions="Auto,*"
+                                ColumnSpacing="10"
+                                RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto">
+                            <TextBlock Text="Call" Grid.Row="0" Opacity="0.68" />
+                            <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding InspectorQso.WorkedCallsign}" />
+                            <TextBlock Text="UTC" Grid.Row="1" Opacity="0.68" />
+                            <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding InspectorQso.UtcDisplay}" />
+                            <TextBlock Text="Band" Grid.Row="2" Opacity="0.68" />
+                            <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding InspectorQso.Band}" />
+                            <TextBlock Text="Mode" Grid.Row="3" Opacity="0.68" />
+                            <TextBlock Grid.Row="3" Grid.Column="1" Text="{Binding InspectorQso.Mode}" />
+                            <TextBlock Text="Freq" Grid.Row="4" Opacity="0.68" />
+                            <TextBlock Grid.Row="4" Grid.Column="1" Text="{Binding InspectorQso.Frequency}" />
+                            <TextBlock Text="RST" Grid.Row="5" Opacity="0.68" />
+                            <TextBlock Grid.Row="5" Grid.Column="1" Text="{Binding InspectorQso.Rst}" />
+                            <TextBlock Text="DXCC" Grid.Row="6" Opacity="0.68" />
+                            <TextBlock Grid.Row="6" Grid.Column="1" Text="{Binding InspectorQso.Dxcc}" />
+                            <TextBlock Text="Country" Grid.Row="7" Opacity="0.68" />
+                            <TextBlock Grid.Row="7" Grid.Column="1" Text="{Binding InspectorQso.Country}" />
+                            <TextBlock Text="Name" Grid.Row="8" Opacity="0.68" />
+                            <TextBlock Grid.Row="8" Grid.Column="1" Text="{Binding InspectorQso.OperatorName}" TextWrapping="Wrap" />
+                            <TextBlock Text="Grid" Grid.Row="9" Opacity="0.68" />
+                            <TextBlock Grid.Row="9" Grid.Column="1" Text="{Binding InspectorQso.Grid}" />
+                            <TextBlock Text="QTH" Grid.Row="10" Opacity="0.68" />
+                            <TextBlock Grid.Row="10" Grid.Column="1" Text="{Binding InspectorQso.Qth}" TextWrapping="Wrap" />
+                            <TextBlock Text="State" Grid.Row="11" Opacity="0.68" />
+                            <TextBlock Grid.Row="11" Grid.Column="1" Text="{Binding InspectorQso.State}" />
+                            <TextBlock Text="County" Grid.Row="12" Opacity="0.68" />
+                            <TextBlock Grid.Row="12" Grid.Column="1" Text="{Binding InspectorQso.County}" />
+                            <TextBlock Text="Cont" Grid.Row="13" Opacity="0.68" />
+                            <TextBlock Grid.Row="13" Grid.Column="1" Text="{Binding InspectorQso.Continent}" />
+                            <TextBlock Text="CQ Zone" Grid.Row="14" Opacity="0.68" />
+                            <TextBlock Grid.Row="14" Grid.Column="1" Text="{Binding InspectorQso.CqZone}" />
+                            <TextBlock Text="ITU Zone" Grid.Row="15" Opacity="0.68" />
+                            <TextBlock Grid.Row="15" Grid.Column="1" Text="{Binding InspectorQso.ItuZone}" />
+                            <TextBlock Text="Contest" Grid.Row="16" Opacity="0.68" />
+                            <TextBlock Grid.Row="16" Grid.Column="1" Text="{Binding InspectorQso.Contest}" />
+                            <TextBlock Text="Exch" Grid.Row="17" Opacity="0.68" />
+                            <TextBlock Grid.Row="17" Grid.Column="1" Text="{Binding InspectorQso.Exchange}" />
+                            <TextBlock Text="Station" Grid.Row="18" Opacity="0.68" />
+                            <TextBlock Grid.Row="18" Grid.Column="1" Text="{Binding InspectorQso.Station}" />
+                            <TextBlock Text="End" Grid.Row="19" Opacity="0.68" />
+                            <TextBlock Grid.Row="19" Grid.Column="1" Text="{Binding InspectorQso.UtcEndDisplay}" />
+                            <TextBlock Text="Sync" Grid.Row="20" Opacity="0.68" />
+                            <TextBlock Grid.Row="20" Grid.Column="1" Text="{Binding InspectorQso.SyncStatus}" />
+                            <TextBlock Text="Comment" Grid.Row="21" Opacity="0.68" />
+                            <TextBlock Grid.Row="21" Grid.Column="1" Text="{Binding InspectorQso.Comment}" TextWrapping="Wrap" />
+                            <TextBlock Text="Note" Grid.Row="22" Opacity="0.68" />
+                            <TextBlock Grid.Row="22" Grid.Column="1" Text="{Binding InspectorQso.Note}" TextWrapping="Wrap" />
+                          </Grid>
+                        </StackPanel>
 
-                  <TextBlock Text="No QSO selected."
-                             Opacity="0.68"
-                             IsVisible="{Binding !HasInspectorQso}" />
-                </StackPanel>
-              </ScrollViewer>
-            </Border>
+                        <TextBlock Text="No QSO selected."
+                                   Opacity="0.68"
+                                   IsVisible="{Binding !HasInspectorQso}" />
+                      </StackPanel>
+                    </ScrollViewer>
+                  </Border>
+                </DataTemplate>
+              </ContentControl.DataTemplates>
+            </ContentControl>
           </Grid>
 
           <Border x:Name="SortChooserPanel"
@@ -846,14 +850,18 @@
           </Border>
 
           <!-- Callsign Card overlay -->
-          <Border x:Name="CallsignCardPanel"
-                  AutomationProperties.AutomationId="CallsignCardPanel"
-                  HorizontalAlignment="Right"
-                  VerticalAlignment="Top"
-                  Margin="0,8,14,8"
-                  IsVisible="{Binding IsCallsignCardOpen}">
-            <v:CallsignCardView DataContext="{Binding CallsignCard}" />
-          </Border>
+          <ContentControl Content="{Binding CallsignCard}">
+            <ContentControl.DataTemplates>
+              <DataTemplate x:DataType="vm:CallsignCardViewModel">
+                <Border AutomationProperties.AutomationId="CallsignCardPanel"
+                        HorizontalAlignment="Right"
+                        VerticalAlignment="Top"
+                        Margin="0,8,14,8">
+                  <v:CallsignCardView />
+                </Border>
+              </DataTemplate>
+            </ContentControl.DataTemplates>
+          </ContentControl>
         </Panel>
 
         <Border Grid.Row="3"
@@ -926,39 +934,48 @@
       </Border>
 
       <!-- Full QSO Card overlay -->
-      <Border x:Name="FullQsoCardOverlay"
-              AutomationProperties.AutomationId="FullQsoCardOverlay"
-              IsVisible="{Binding IsFullQsoCardOpen}"
-              Background="#80000000"
-              HorizontalAlignment="Stretch"
-              VerticalAlignment="Stretch">
-        <v:FullQsoCardView DataContext="{Binding FullQsoCard}"
-                           HorizontalAlignment="Center"
-                           VerticalAlignment="Center" />
-      </Border>
+      <ContentControl Content="{Binding FullQsoCard}">
+        <ContentControl.DataTemplates>
+          <DataTemplate x:DataType="vm:FullQsoCardViewModel">
+            <Border AutomationProperties.AutomationId="FullQsoCardOverlay"
+                    Background="#80000000"
+                    HorizontalAlignment="Stretch"
+                    VerticalAlignment="Stretch">
+              <v:FullQsoCardView HorizontalAlignment="Center"
+                                 VerticalAlignment="Center" />
+            </Border>
+          </DataTemplate>
+        </ContentControl.DataTemplates>
+      </ContentControl>
 
       <!-- Help overlay -->
-      <Border x:Name="HelpOverlay"
-              AutomationProperties.AutomationId="HelpOverlay"
-              IsVisible="{Binding IsHelpOpen}"
-              Background="#80000000">
-        <v:HelpOverlayView DataContext="{Binding HelpOverlay}" />
-      </Border>
+      <ContentControl Content="{Binding HelpOverlay}">
+        <ContentControl.DataTemplates>
+          <DataTemplate x:DataType="vm:HelpOverlayViewModel">
+            <Border AutomationProperties.AutomationId="HelpOverlay"
+                    Background="#80000000">
+              <v:HelpOverlayView />
+            </Border>
+          </DataTemplate>
+        </ContentControl.DataTemplates>
+      </ContentControl>
 
-      <Border x:Name="SetupWizardOverlay"
-              AutomationProperties.AutomationId="SetupWizardOverlay"
-              IsVisible="{Binding IsWizardOpen}"
-              Background="#80000000">
-        <Border Background="{DynamicResource SystemControlBackgroundAltHighBrush}"
-                CornerRadius="8"
-                Margin="40,24"
-                BoxShadow="0 8 32 0 #40000000"
-                ClipToBounds="True">
-          <v:SetupWizardView x:Name="SetupWizardView"
-                             AutomationProperties.AutomationId="SetupWizardView"
-                             DataContext="{Binding WizardViewModel}" />
-        </Border>
-      </Border>
+      <ContentControl Content="{Binding WizardViewModel}">
+        <ContentControl.DataTemplates>
+          <DataTemplate x:DataType="vm:SetupWizardViewModel">
+            <Border AutomationProperties.AutomationId="SetupWizardOverlay"
+                    Background="#80000000">
+              <Border Background="{DynamicResource SystemControlBackgroundAltHighBrush}"
+                      CornerRadius="8"
+                      Margin="40,24"
+                      BoxShadow="0 8 32 0 #40000000"
+                      ClipToBounds="True">
+                <v:SetupWizardView AutomationProperties.AutomationId="SetupWizardView" />
+              </Border>
+            </Border>
+          </DataTemplate>
+        </ContentControl.DataTemplates>
+      </ContentControl>
     </Panel>
   </DockPanel>
 </Window>

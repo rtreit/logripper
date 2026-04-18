@@ -143,6 +143,21 @@ winget install Bufbuild.Buf
 # See https://buf.build/docs/installation
 ```
 
+**cppcheck** (optional, recommended for Win32 work) -- enables extra static analysis for `src\c\qsoripper-win32` when you run `.\build.ps1` or configure the CMake project:
+
+```
+# Windows
+winget install Cppcheck.Cppcheck
+
+# Linux (Debian/Ubuntu)
+sudo apt install cppcheck
+
+# Linux (Fedora)
+sudo dnf install cppcheck
+```
+
+If `cppcheck` is not installed, `.\build.ps1` still builds the Win32 app and skips only that extra analysis step.
+
 ### Build and Test
 
 **Repository build script:**
