@@ -149,6 +149,30 @@ public sealed class CliUtilityTests
     }
 
     [Fact]
+    public void TimeParser_treats_offsetless_timestamp_as_utc()
+    {
+        var parsed = TimeParser.Parse("2024-06-15 14:30:00");
+
+        Assert.NotNull(parsed);
+        Assert.Equal(new DateTime(2024, 6, 15, 14, 30, 0, DateTimeKind.Utc), parsed!.ToDateTime());
+    }
+
+    [Theory]
+    [InlineData("2024-06-15T14:30:00")]
+    [InlineData("2024-06-15 14:30:00")]
+    [InlineData("06/15/2024 14:30:00")]
+    public void TimeParser_offsetless_timestamps_are_not_shifted_by_local_timezone(string input)
+    {
+        var parsed = TimeParser.Parse(input);
+
+        Assert.NotNull(parsed);
+        var dt = parsed!.ToDateTime();
+        Assert.Equal(DateTimeKind.Utc, dt.Kind);
+        Assert.Equal(14, dt.Hour);
+        Assert.Equal(30, dt.Minute);
+    }
+
+    [Fact]
     public void JsonOutput_Print_writes_indented_json()
     {
         var output = ConsoleCapture.Out(() => JsonOutput.Print(new GetSyncStatusResponse { LocalQsoCount = 3 }));

@@ -11,7 +11,7 @@ internal static class TimeParser
             return Timestamp.FromDateTime(dt);
         }
 
-        if (DateTime.TryParse(input, null, System.Globalization.DateTimeStyles.AdjustToUniversal, out var parsed))
+        if (DateTime.TryParse(input, null, System.Globalization.DateTimeStyles.AssumeUniversal | System.Globalization.DateTimeStyles.AdjustToUniversal, out var parsed))
         {
             return Timestamp.FromDateTime(DateTime.SpecifyKind(parsed, DateTimeKind.Utc));
         }
