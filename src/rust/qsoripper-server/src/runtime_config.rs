@@ -912,12 +912,13 @@ fn build_runtime_bindings(values: &BTreeMap<String, String>) -> Result<RuntimeBi
         &parse_storage_options_from_values(values).map_err(|error| error.to_string())?,
     )
     .map_err(|error| error.to_string())?;
-    let logbook_engine = LogbookEngine::new(storage);
+    let logbook_engine = LogbookEngine::new(Arc::clone(&storage));
     let active_storage_backend = logbook_engine.storage_backend_name().to_string();
     let (provider, lookup_provider_summary) = build_lookup_provider(values);
-    let lookup_coordinator = Arc::new(LookupCoordinator::new(
+    let lookup_coordinator = Arc::new(LookupCoordinator::with_snapshot_store(
         provider,
         LookupCoordinatorConfig::default(),
+        storage,
     ));
     let space_weather_monitor = build_space_weather_monitor(values);
     let rig_control_monitor = build_rig_control_monitor(values);

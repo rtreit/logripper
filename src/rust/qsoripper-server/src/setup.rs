@@ -549,13 +549,6 @@ impl PersistedSetupConfig {
         let qrz_xml_username = normalize_optional_string(request.qrz_xml_username.as_deref());
         let qrz_xml_password = normalize_optional_string(request.qrz_xml_password.as_deref());
 
-        if qrz_xml_username.is_some() != qrz_xml_password.is_some() {
-            return Err(
-                "QRZ XML username and password must either both be set or both be omitted."
-                    .to_string(),
-            );
-        }
-
         let requested_log_file_path = setup_request_persistence_path(request)
             .or_else(|| normalize_optional_string(request.log_file_path.as_deref()));
         #[allow(deprecated)]
@@ -1071,6 +1064,12 @@ impl PersistedStationProfile {
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 struct PersistedQrzXmlConfig {
     username: Option<String>,
+    /// QRZ XML password is never written to disk. It is only read from
+    /// environment variable `QSORIPPER_QRZ_XML_PASSWORD` at runtime.
+    /// The field is kept deserializable so legacy configs that already
+    /// contain a password can still be loaded (the value will be used
+    /// for runtime config but will not be re-persisted on the next save).
+    #[serde(skip_serializing)]
     password: Option<String>,
     user_agent: Option<String>,
 }
@@ -1393,13 +1392,6 @@ fn build_warnings(persisted_config: Option<&PersistedSetupConfig>) -> Vec<String
             .push("Persisted setup is missing an active station profile selection.".to_string());
     }
 
-    if config.qrz_xml.username.is_some() != config.qrz_xml.password.is_some() {
-        warnings.push(
-            "Persisted QRZ XML credentials are incomplete; username and password must be paired."
-                .to_string(),
-        );
-    }
-
     warnings
 }
 
@@ -1449,22 +1441,15 @@ fn build_station_profiles_step(config: Option<&PersistedSetupConfig>) -> SetupWi
     }
 }
 
-fn build_qrz_integration_step(config: Option<&PersistedSetupConfig>) -> SetupWizardStepStatus {
-    let username = config.and_then(|c| c.qrz_xml.username.as_ref());
-    let password = config.and_then(|c| c.qrz_xml.password.as_ref());
-    // QRZ is optional — step is complete if either both are set or both are absent.
-    let paired = username.is_some() == password.is_some();
-    let issues = if paired {
-        Vec::new()
-    } else {
-        vec![
-            "QRZ XML username and password must either both be set or both be omitted.".to_string(),
-        ]
-    };
+fn build_qrz_integration_step(_config: Option<&PersistedSetupConfig>) -> SetupWizardStepStatus {
+    // QRZ integration is entirely optional.  The step is always complete:
+    //   - no config → user hasn't configured QRZ yet, which is fine.
+    //   - config exists, no username → user intentionally skipped QRZ.
+    //   - config exists, username set → password is supplied via env var at runtime.
     SetupWizardStepStatus {
         step: SetupWizardStep::QrzIntegration.into(),
-        complete: paired,
-        issues,
+        complete: true,
+        issues: Vec::new(),
     }
 }
 
@@ -1611,34 +1596,27 @@ fn validate_station_profiles_step(request: &ValidateSetupStepRequest) -> Validat
 
 fn validate_qrz_step(request: &ValidateSetupStepRequest) -> ValidateSetupStepResponse {
     let username = normalize_optional_string(request.qrz_xml_username.as_deref());
-    let password = normalize_optional_string(request.qrz_xml_password.as_deref());
     let mut fields = Vec::new();
 
-    // Both or neither must be set — absent is valid (skip QRZ).
-    let paired = username.is_some() == password.is_some();
-
+    // Username-only is valid; the password is supplied via env var at runtime.
     fields.push(SetupFieldValidation {
         field: "qrz_xml_username".to_string(),
-        valid: paired || username.is_some(),
-        message: if !paired && username.is_none() {
-            "Username is required when password is set.".to_string()
-        } else {
-            String::new()
-        },
+        valid: true,
+        message: String::new(),
     });
 
     fields.push(SetupFieldValidation {
         field: "qrz_xml_password".to_string(),
-        valid: paired || password.is_some(),
-        message: if !paired && password.is_none() {
-            "Password is required when username is set.".to_string()
+        valid: true,
+        message: if username.is_some() {
+            "Password must be set via QSORIPPER_QRZ_XML_PASSWORD environment variable.".to_string()
         } else {
             String::new()
         },
     });
 
     ValidateSetupStepResponse {
-        valid: paired,
+        valid: true,
         fields,
     }
 }
@@ -2189,14 +2167,14 @@ station_callsign = "K7RND"
     }
 
     #[tokio::test]
-    async fn save_setup_rejects_partial_qrz_credentials() {
+    async fn save_setup_accepts_username_only_qrz_credentials() {
         let config_path = unique_config_path();
         let log_file_path = absolute_log_file_path(&config_path, "partial.db");
         let setup_state = Arc::new(SetupState::load(config_path.clone()).expect("setup state"));
         let runtime_config = Arc::new(RuntimeConfigManager::new(BTreeMap::new()).expect("runtime"));
-        let service = SetupControlSurface::new(setup_state, runtime_config);
+        let service = SetupControlSurface::new(setup_state.clone(), runtime_config.clone());
 
-        let error = SetupService::save_setup(
+        let response = SetupService::save_setup(
             &service,
             Request::new(SaveSetupRequest {
                 storage_backend: StorageBackend::Unspecified as i32,
@@ -2212,9 +2190,17 @@ station_callsign = "K7RND"
             }),
         )
         .await
-        .expect_err("save setup should fail");
+        .expect("username-only save should succeed; password comes from env");
 
-        assert_eq!(tonic::Code::InvalidArgument, error.code());
+        let status = response.into_inner().status.expect("status payload");
+        assert_eq!(Some("k7rnd"), status.qrz_xml_username.as_deref());
+        assert!(!status.has_qrz_xml_password);
+
+        drop(service);
+        drop(runtime_config);
+        drop(setup_state);
+        let config_directory = config_path.parent().expect("config directory");
+        fs::remove_dir_all(config_directory).expect("remove temp config directory");
     }
 
     #[allow(clippy::too_many_lines)]
@@ -2440,12 +2426,15 @@ station_callsign = "K7RND"
     }
 
     #[test]
-    fn qrz_step_incomplete_when_only_username() {
+    fn qrz_step_complete_when_only_username() {
         let mut config = PersistedSetupConfig::default();
         config.qrz_xml.username = Some("user".to_string());
         let step = build_qrz_integration_step(Some(&config));
-        assert!(!step.complete);
-        assert!(!step.issues.is_empty());
+        assert!(
+            step.complete,
+            "username-only is valid; password comes from env"
+        );
+        assert!(step.issues.is_empty());
     }
 
     #[test]
@@ -2557,7 +2546,7 @@ station_callsign = "K7RND"
     }
 
     #[test]
-    fn validate_qrz_step_rejects_partial_credentials() {
+    fn validate_qrz_step_accepts_username_only() {
         let request = ValidateSetupStepRequest {
             step: SetupWizardStep::QrzIntegration.into(),
             qrz_xml_username: Some("user".to_string()),
@@ -2565,7 +2554,10 @@ station_callsign = "K7RND"
             ..Default::default()
         };
         let result = validate_qrz_step(&request);
-        assert!(!result.valid);
+        assert!(
+            result.valid,
+            "username-only is valid; password comes from env"
+        );
     }
 
     // ── is_first_run tests ──────────────────────────────────────────────────
@@ -3133,5 +3125,94 @@ station_callsign = "K7RND"
         })
         .expect_err("invalid port should be rejected");
         assert_eq!("Rig control port must be between 1 and 65535.", error);
+    }
+
+    // ── Bug #220: password must never be serialized to disk ─────────────────
+
+    #[test]
+    fn password_excluded_from_serialized_config() {
+        let mut config = PersistedSetupConfig::default();
+        config.qrz_xml.username = Some("K7RND".to_string());
+        config.qrz_xml.password = Some("super_secret_password".to_string());
+
+        let toml_output = toml::to_string_pretty(&config).expect("serialize config");
+
+        assert!(
+            toml_output.contains("K7RND"),
+            "username should be present in TOML"
+        );
+        assert!(
+            !toml_output.contains("super_secret_password"),
+            "password must NOT appear in serialized TOML"
+        );
+        assert!(
+            !toml_output.contains("password"),
+            "password key must NOT appear in serialized TOML"
+        );
+    }
+
+    #[test]
+    fn legacy_config_with_password_deserializes_but_wont_reserialize() {
+        let toml_input = r#"
+[qrz_xml]
+username = "K7RND"
+password = "legacy_secret"
+"#;
+        let config: PersistedSetupConfig =
+            toml::from_str(toml_input).expect("deserialize legacy config");
+        assert_eq!(Some("K7RND"), config.qrz_xml.username.as_deref());
+        assert_eq!(
+            Some("legacy_secret"),
+            config.qrz_xml.password.as_deref(),
+            "legacy password should still be deserialized for runtime use"
+        );
+
+        // Re-serialization must strip the password.
+        let reserialized = toml::to_string_pretty(&config).expect("reserialize");
+        assert!(
+            !reserialized.contains("legacy_secret"),
+            "password must not survive reserialization: {reserialized}"
+        );
+    }
+
+    #[tokio::test]
+    async fn save_setup_does_not_persist_password_to_disk() {
+        let config_path = unique_config_path();
+        let log_file_path = absolute_log_file_path(&config_path, "no_pw.db");
+        let setup_state = Arc::new(SetupState::load(config_path.clone()).expect("setup state"));
+        let runtime_config = Arc::new(RuntimeConfigManager::new(BTreeMap::new()).expect("runtime"));
+        let service = SetupControlSurface::new(setup_state, runtime_config);
+
+        SetupService::save_setup(
+            &service,
+            Request::new(SaveSetupRequest {
+                storage_backend: StorageBackend::Unspecified as i32,
+                sqlite_path: None,
+                log_file_path: Some(log_file_path),
+                station_profile: Some(StationProfile {
+                    station_callsign: "k7rnd".to_string(),
+                    ..StationProfile::default()
+                }),
+                qrz_xml_username: Some("k7rnd".to_string()),
+                qrz_xml_password: Some("should_not_appear".to_string()),
+                ..Default::default()
+            }),
+        )
+        .await
+        .expect("save setup");
+
+        let saved = fs::read_to_string(&config_path).expect("read saved config");
+        assert!(
+            !saved.contains("should_not_appear"),
+            "password must NOT be written to disk: {saved}"
+        );
+        assert!(
+            saved.contains("K7RND") || saved.contains("k7rnd"),
+            "username should be in saved config"
+        );
+
+        drop(service);
+        let config_directory = config_path.parent().expect("config directory");
+        fs::remove_dir_all(config_directory).expect("remove temp config directory");
     }
 }
