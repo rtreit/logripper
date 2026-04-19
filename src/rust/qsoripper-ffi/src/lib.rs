@@ -39,9 +39,11 @@ use client::QsrClient;
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn qsr_connect(endpoint: *const c_char) -> *mut QsrClient {
     let ep = unsafe { client::cstr_to_str(endpoint) };
-    match QsrClient::connect(ep) {
-        Ok(boxed) => Box::into_raw(boxed),
-        Err(_) => std::ptr::null_mut(),
+    if let Ok(boxed) = QsrClient::connect(ep) {
+        Box::into_raw(boxed)
+    } else {
+        client::set_error("WIN32-BUG-3: connect failed");
+        std::ptr::null_mut()
     }
 }
 

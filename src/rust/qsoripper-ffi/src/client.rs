@@ -39,7 +39,7 @@ use crate::types::{
 static LAST_ERROR: Mutex<String> = Mutex::new(String::new());
 
 /// Set the last error message.
-fn set_error(msg: impl Into<String>) {
+pub(crate) fn set_error(msg: impl Into<String>) {
     if let Ok(mut guard) = LAST_ERROR.lock() {
         *guard = msg.into();
     }

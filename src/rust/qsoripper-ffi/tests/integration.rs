@@ -136,6 +136,21 @@ fn connect_and_disconnect() {
 }
 
 #[test]
+fn connect_failure_sets_last_error() {
+    let bad_endpoint = CString::new("not-a-uri").expect("CString::new failed");
+    let client = unsafe { qsr_connect(bad_endpoint.as_ptr()) };
+    assert!(
+        client.is_null(),
+        "expected qsr_connect to fail for invalid URI"
+    );
+    assert_eq!(
+        last_error(),
+        "WIN32-BUG-3: connect failed",
+        "connect failure must set deterministic last_error"
+    );
+}
+
+#[test]
 fn log_list_get_delete_round_trip() {
     skip_if_no_server!();
     let client = connect();
