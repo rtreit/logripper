@@ -74,4 +74,11 @@ jobs:
           path: coverage/report/
 
       - name: Check for vulnerable packages
-        run: dotnet list src/dotnet/QsoRipper.slnx package --vulnerable --include-transitive
+        run: |
+          output="$(dotnet list src/dotnet/QsoRipper.slnx package --vulnerable --include-transitive 2>&1)"
+          echo "$output"
+          if echo "$output" | grep -q "has the following vulnerable packages"; then
+            echo "FAIL: Vulnerable NuGet packages detected. Review output above and update affected packages."
+            exit 1
+          fi
+          echo "PASS: No vulnerable packages found."

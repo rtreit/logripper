@@ -320,6 +320,7 @@ function Check-Rust {
         Invoke-Build 'Rust tests (with coverage)' cargo @(
             'llvm-cov', '--manifest-path', $RustManifest,
             '--workspace',
+            '--exclude', 'qsoripper-ffi',
             '--exclude', 'qsoripper-stress',
             '--exclude', 'qsoripper-stress-tui'
         )
@@ -329,7 +330,7 @@ function Check-Rust {
         try {
             cargo llvm-cov report `
                 --manifest-path $RustManifest `
-                --ignore-filename-regex 'qsoripper-stress' `
+                --ignore-filename-regex 'qsoripper-(stress|ffi)' `
                 --json --summary-only `
                 --output-path $summaryPath
             if ($LASTEXITCODE -ne 0) {
