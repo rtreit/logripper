@@ -23,6 +23,17 @@ function Get-FunctionBody([string]$Content, [string]$FunctionName) {
 $checkRustBody = Get-FunctionBody $scriptContent 'Check-Rust'
 $checkDotnetBody = Get-FunctionBody $scriptContent 'Check-Dotnet'
 
+function Get-CFunctionBody([string]$Content, [string]$FunctionSignature) {
+    $escaped = [regex]::Escape($FunctionSignature)
+    $pattern = "(?ms)$escaped\s*\{(.+?)^\}"
+    if ($Content -match $pattern) { return $Matches[1] }
+    return ''
+}
+
+$win32MainPath = Join-Path $repoRoot 'src' 'c' 'qsoripper-win32' 'src' 'main.c'
+$win32MainContent = Get-Content $win32MainPath -Raw
+$logQsoBody = Get-CFunctionBody $win32MainContent 'static void LogQso(void)'
+
 Describe 'build.ps1 Check-Rust CI parity (Bug #202)' {
 
     It 'runs tests with coverage via cargo-llvm-cov when available' {
@@ -72,5 +83,12 @@ Describe 'Win32 CLI publish/discovery path contract (WIN32-BUG-2)' {
     It 'probes the qsoripper-cli directory from FindCliPath candidates' {
         $win32MainContent | Should Match 'qsoripper-cli'
         $win32MainContent | Should Not Match 'QsoRipper\.Cli\\\\%s\\\\(?:net10\.0\\\\)?QsoRipper\.Cli\.exe'
+    }
+}
+
+Describe 'Win32 LogQso shadowing regression (WIN32-BUG-1)' {
+
+    It 'declares exactly one cmd buffer in LogQso' {
+        [regex]::Matches($logQsoBody, 'char\s+cmd\s*\[\s*4096\s*\]\s*;').Count | Should Be 1
     }
 }
