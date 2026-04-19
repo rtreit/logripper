@@ -45,6 +45,16 @@ public class CliRegressionTests
         Assert.DoesNotContain("Could not connect to QsoRipper engine", result.StandardError, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task Entry_point_rejects_config_set_without_key_value_before_connecting()
+    {
+        var result = await CliProcessRunner.RunAsync("config", "--set");
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Contains("Missing value for --set. Expected KEY=VALUE format.", result.StandardError, StringComparison.Ordinal);
+        Assert.DoesNotContain("Could not connect to QsoRipper engine", result.StandardError, StringComparison.Ordinal);
+    }
+
     [Theory]
     [InlineData(Band._125M, "1.25M")]
     [InlineData(Band._125Cm, "1.25CM")]
