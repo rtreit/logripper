@@ -207,7 +207,12 @@ pub(crate) async fn lookup_callsign(
     Ok(Some(CallsignInfo {
         callsign: record.callsign,
         name,
-        qth: record.addr2,
+        qth: match (record.addr2.as_deref(), record.state.as_deref()) {
+            (Some(city), Some(st)) if !st.is_empty() => Some(format!("{city}, {st}")),
+            (Some(city), _) => Some(city.to_string()),
+            (None, Some(st)) if !st.is_empty() => Some(st.to_string()),
+            _ => None,
+        },
         grid: record.grid_square,
         country: record.country,
         cq_zone: record.cq_zone,
