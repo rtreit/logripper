@@ -181,4 +181,41 @@ public sealed class QrzResponseParserTests
         Assert.Equal("773", prefix["COUNT"]);
         Assert.False(prefix.ContainsKey("ADIF"));
     }
+
+    // -- IsEmptyFetchFail ---------------------------------------------------
+
+    [Fact]
+    public void IsEmptyFetchFail_count0_no_reason_returns_true()
+    {
+        var map = QrzResponseParser.ParseKeyValueResponse("COUNT=0&RESULT=FAIL");
+        Assert.True(QrzResponseParser.IsEmptyFetchFail(map));
+    }
+
+    [Fact]
+    public void IsEmptyFetchFail_result_first_returns_true()
+    {
+        var map = QrzResponseParser.ParseKeyValueResponse("RESULT=FAIL&COUNT=0");
+        Assert.True(QrzResponseParser.IsEmptyFetchFail(map));
+    }
+
+    [Fact]
+    public void IsEmptyFetchFail_with_reason_returns_false()
+    {
+        var map = QrzResponseParser.ParseKeyValueResponse("COUNT=0&RESULT=FAIL&REASON=bad key");
+        Assert.False(QrzResponseParser.IsEmptyFetchFail(map));
+    }
+
+    [Fact]
+    public void IsEmptyFetchFail_count_nonzero_returns_false()
+    {
+        var map = QrzResponseParser.ParseKeyValueResponse("COUNT=5&RESULT=FAIL");
+        Assert.False(QrzResponseParser.IsEmptyFetchFail(map));
+    }
+
+    [Fact]
+    public void IsEmptyFetchFail_result_ok_returns_false()
+    {
+        var map = QrzResponseParser.ParseKeyValueResponse("COUNT=0&RESULT=OK");
+        Assert.False(QrzResponseParser.IsEmptyFetchFail(map));
+    }
 }

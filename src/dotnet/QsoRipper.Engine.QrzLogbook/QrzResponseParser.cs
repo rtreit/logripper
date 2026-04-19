@@ -124,6 +124,20 @@ internal static class QrzResponseParser
         return $"<EOH>\n{payload}";
     }
 
+    /// <summary>
+    /// Detects the QRZ quirk where a MODSINCE FETCH with zero matching records
+    /// returns <c>RESULT=FAIL</c> with <c>COUNT=0</c> and no <c>REASON</c>.
+    /// This should be treated as an empty result, not an error.
+    /// </summary>
+    internal static bool IsEmptyFetchFail(Dictionary<string, string> map)
+    {
+        return map.TryGetValue("RESULT", out var result)
+            && result.Equals("FAIL", StringComparison.OrdinalIgnoreCase)
+            && map.TryGetValue("COUNT", out var count)
+            && count == "0"
+            && !map.ContainsKey("REASON");
+    }
+
     private static bool IsAuthError(string reason)
     {
         return reason.Contains("invalid api key", StringComparison.OrdinalIgnoreCase)

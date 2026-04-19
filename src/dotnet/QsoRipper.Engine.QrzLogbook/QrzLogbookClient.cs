@@ -1,4 +1,3 @@
-using System.Text;
 using QsoRipper.Domain;
 
 namespace QsoRipper.Engine.QrzLogbook;
@@ -10,6 +9,7 @@ namespace QsoRipper.Engine.QrzLogbook;
 public sealed class QrzLogbookClient : IQrzLogbookApi, IDisposable
 {
     private static readonly Uri DefaultApiUri = new("https://logbook.qrz.com/api");
+    private const string DefaultUserAgent = "QsoRipper/0.1";
 
     private readonly HttpClient _httpClient;
     private readonly string _apiKey;
@@ -20,7 +20,7 @@ public sealed class QrzLogbookClient : IQrzLogbookApi, IDisposable
     /// Create a client using the provided API key.
     /// </summary>
     public QrzLogbookClient(string apiKey)
-        : this(new HttpClient { Timeout = TimeSpan.FromSeconds(30) }, apiKey, DefaultApiUri, ownsHttpClient: true)
+        : this(CreateDefaultHttpClient(), apiKey, DefaultApiUri, ownsHttpClient: true)
     {
     }
 
@@ -28,7 +28,7 @@ public sealed class QrzLogbookClient : IQrzLogbookApi, IDisposable
     /// Create a client using the provided API key and explicit QRZ API URL.
     /// </summary>
     public QrzLogbookClient(string apiKey, Uri apiUri)
-        : this(new HttpClient { Timeout = TimeSpan.FromSeconds(30) }, apiKey, apiUri, ownsHttpClient: true)
+        : this(CreateDefaultHttpClient(), apiKey, apiUri, ownsHttpClient: true)
     {
     }
 
@@ -55,21 +55,30 @@ public sealed class QrzLogbookClient : IQrzLogbookApi, IDisposable
     /// <inheritdoc />
     public async Task<List<QsoRecord>> FetchQsosAsync(string? sinceDateYmd)
     {
+        var optionValue = string.IsNullOrWhiteSpace(sinceDateYmd)
+            ? "ALL"
+            : $"MODSINCE:{sinceDateYmd}";
+
         var formFields = new List<KeyValuePair<string, string>>(3)
         {
             new("ACTION", "FETCH"),
             new("KEY", _apiKey),
+            new("OPTION", optionValue),
         };
-
-        if (!string.IsNullOrWhiteSpace(sinceDateYmd))
-        {
-            formFields.Add(new KeyValuePair<string, string>("OPTION", $"MODSINCE:{sinceDateYmd}"));
-        }
 
         var body = await PostFormAsync(formFields).ConfigureAwait(false);
 
         // Parse the prefix (RESULT, COUNT) before the ADIF payload.
         var prefix = QrzResponseParser.ParseFetchPrefix(body);
+
+        // QRZ returns RESULT=FAIL with COUNT=0 and no REASON for MODSINCE
+        // queries that match zero records. Treat this as an empty result
+        // rather than an error.
+        if (QrzResponseParser.IsEmptyFetchFail(prefix))
+        {
+            return [];
+        }
+
         QrzResponseParser.CheckResult(prefix);
 
         // Extract ADIF payload.
@@ -156,6 +165,7 @@ public sealed class QrzLogbookClient : IQrzLogbookApi, IDisposable
     private async Task<string> PostFormAsync(List<KeyValuePair<string, string>> fields)
     {
         using var content = new FormUrlEncodedContent(fields);
+
         using var response = await _httpClient.PostAsync(_apiUri, content).ConfigureAwait(false);
 
         var body = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
@@ -171,4 +181,11 @@ public sealed class QrzLogbookClient : IQrzLogbookApi, IDisposable
 
     private static string Truncate(string value, int maxLength) =>
         value.Length <= maxLength ? value : string.Concat(value.AsSpan(0, maxLength), "…");
+
+    private static HttpClient CreateDefaultHttpClient()
+    {
+        var client = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+        client.DefaultRequestHeaders.UserAgent.ParseAdd(DefaultUserAgent);
+        return client;
+    }
 }

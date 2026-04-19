@@ -230,10 +230,14 @@ fn find_adif_marker_index(body: &str) -> Option<usize> {
     body.to_ascii_uppercase().find("ADIF=")
 }
 
-fn starts_with_result_header(body: &str) -> bool {
-    body.trim_start()
-        .get(..7)
-        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("RESULT="))
+/// QRZ returns `RESULT=FAIL` with `COUNT=0` and no `REASON` for MODSINCE
+/// FETCH queries that match zero records.  This should be treated as an
+/// empty result rather than an error.
+fn is_empty_fetch_fail(map: &HashMap<String, String>) -> bool {
+    map.get("RESULT")
+        .is_some_and(|v| v.eq_ignore_ascii_case("FAIL"))
+        && map.get("COUNT").is_some_and(|v| v == "0")
+        && !map.contains_key("REASON")
 }
 
 /// Extract the ADIF payload from a QRZ FETCH response body.
@@ -422,10 +426,17 @@ impl QrzLogbookClient {
             .await?;
 
         // Some error/empty FETCH responses are key-value only (no ADIF field).
-        if starts_with_result_header(&body) && find_adif_marker_index(&body).is_none() {
+        if find_adif_marker_index(&body).is_none() {
             let map = parse_kv_response(&body);
-            check_result(map)?;
-            return Ok(Vec::new());
+            if map.contains_key("RESULT") {
+                // QRZ returns RESULT=FAIL with COUNT=0 and no REASON for
+                // MODSINCE queries that match zero records.  Treat as empty.
+                if is_empty_fetch_fail(&map) {
+                    return Ok(Vec::new());
+                }
+                check_result(map)?;
+                return Ok(Vec::new());
+            }
         }
 
         // QRZ FETCH responses commonly use:
@@ -627,6 +638,38 @@ mod tests {
         assert!(is_auth_error("Access Denied"));
         assert!(!is_auth_error("bad record format"));
         assert!(!is_auth_error("duplicate QSO"));
+    }
+
+    // -- is_empty_fetch_fail ------------------------------------------------
+
+    #[test]
+    fn empty_fetch_fail_count0_no_reason() {
+        let map = parse_kv_response("COUNT=0&RESULT=FAIL");
+        assert!(is_empty_fetch_fail(&map));
+    }
+
+    #[test]
+    fn empty_fetch_fail_result_first() {
+        let map = parse_kv_response("RESULT=FAIL&COUNT=0");
+        assert!(is_empty_fetch_fail(&map));
+    }
+
+    #[test]
+    fn empty_fetch_fail_with_reason_is_not_empty() {
+        let map = parse_kv_response("COUNT=0&RESULT=FAIL&REASON=bad key");
+        assert!(!is_empty_fetch_fail(&map));
+    }
+
+    #[test]
+    fn empty_fetch_fail_count_nonzero_is_not_empty() {
+        let map = parse_kv_response("COUNT=5&RESULT=FAIL");
+        assert!(!is_empty_fetch_fail(&map));
+    }
+
+    #[test]
+    fn empty_fetch_fail_result_ok_is_not_empty() {
+        let map = parse_kv_response("COUNT=0&RESULT=OK");
+        assert!(!is_empty_fetch_fail(&map));
     }
 
     // -- Status parsing -----------------------------------------------------
