@@ -145,13 +145,49 @@ internal sealed class DebugCommandService
 
         using var timeoutSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeoutSource.CancelAfter(TimeSpan.FromSeconds(_options.CommandTimeoutSeconds));
-        await process.WaitForExitAsync(timeoutSource.Token);
+        try
+        {
+            await process.WaitForExitAsync(timeoutSource.Token);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            if (!process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+            }
+
+            await process.WaitForExitAsync(cancellationToken);
+            return CreateTimeoutResult(command, _options.CommandTimeoutSeconds, await standardOutput, await standardError, startedAt, effectiveEnvironment);
+        }
 
         return new CommandExecutionResult(
             command,
             process.ExitCode,
             await standardOutput,
             await standardError,
+            startedAt,
+            DateTimeOffset.UtcNow,
+            effectiveEnvironment);
+    }
+
+    private static CommandExecutionResult CreateTimeoutResult(
+        DebugCommandDefinition command,
+        int timeoutSeconds,
+        string standardOutput,
+        string standardError,
+        DateTimeOffset startedAt,
+        IReadOnlyDictionary<string, string> effectiveEnvironment)
+    {
+        var timeoutMessage = $"Command timed out after {timeoutSeconds} second(s).";
+        var combinedError = string.IsNullOrWhiteSpace(standardError)
+            ? timeoutMessage
+            : $"{standardError}{Environment.NewLine}{timeoutMessage}";
+
+        return new CommandExecutionResult(
+            command,
+            -1,
+            standardOutput,
+            combinedError,
             startedAt,
             DateTimeOffset.UtcNow,
             effectiveEnvironment);

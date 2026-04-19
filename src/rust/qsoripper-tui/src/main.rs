@@ -9,6 +9,7 @@ mod ui;
 use std::io;
 
 use crossterm::{
+    cursor::Show,
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -24,6 +25,32 @@ const ENDPOINT_ENV_VAR: &str = "QSORIPPER_ENDPOINT";
 const DEFAULT_RUST_ENDPOINT: &str = "http://127.0.0.1:50051";
 const DEFAULT_DOTNET_ENDPOINT: &str = "http://127.0.0.1:50052";
 
+struct PanicCleanupGuard<F: FnMut()> {
+    cleanup: F,
+    armed: bool,
+}
+
+impl<F: FnMut()> PanicCleanupGuard<F> {
+    fn new(cleanup: F) -> Self {
+        Self {
+            cleanup,
+            armed: true,
+        }
+    }
+
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl<F: FnMut()> Drop for PanicCleanupGuard<F> {
+    fn drop(&mut self) {
+        if self.armed {
+            (self.cleanup)();
+        }
+    }
+}
+
 /// Application entry point.
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -32,11 +59,17 @@ async fn main() -> anyhow::Result<()> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen)?;
+    let mut panic_cleanup = PanicCleanupGuard::new(|| {
+        let _ = disable_raw_mode();
+        let mut stdout = io::stdout();
+        let _ = execute!(stdout, LeaveAlternateScreen, Show);
+    });
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
     let result = run(&mut terminal, endpoint).await;
 
+    panic_cleanup.disarm();
     disable_raw_mode()?;
     execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
     terminal.show_cursor()?;
@@ -104,32 +137,29 @@ async fn run<B: ratatui::backend::Backend>(
     let (rig_enabled_tx, rig_enabled_rx) = watch::channel(true);
 
     let mut app = App::new(endpoint);
+    let channel = grpc::create_channel(&app.endpoint)?;
 
     spawn_key_task(event_tx.clone());
     spawn_clock_task(event_tx.clone());
-    spawn_lookup_task(lookup_rx, event_tx.clone(), app.endpoint.clone());
-    spawn_rig_poll_task(rig_enabled_rx, event_tx.clone(), app.endpoint.clone());
+    spawn_lookup_task(lookup_rx, event_tx.clone(), channel.clone());
+    spawn_rig_poll_task(rig_enabled_rx, event_tx.clone(), channel.clone());
 
     // Prefetch space weather and recent QSOs on startup.
     {
         let tx = event_tx.clone();
-        let ep = app.endpoint.clone();
+        let channel = channel.clone();
         tokio::spawn(async move {
-            if let Ok(ch) = grpc::create_channel(&ep).await {
-                if let Ok(sw) = grpc::get_space_weather(ch).await {
-                    let _ = tx.send(AppEvent::SpaceWeather(sw));
-                }
+            if let Ok(sw) = grpc::get_space_weather(channel).await {
+                let _ = tx.send(AppEvent::SpaceWeather(sw));
             }
         });
     }
     {
         let tx = event_tx.clone();
-        let ep = app.endpoint.clone();
+        let channel = channel.clone();
         tokio::spawn(async move {
-            if let Ok(ch) = grpc::create_channel(&ep).await {
-                if let Ok(qsos) = grpc::list_recent_qsos(ch, 0).await {
-                    let _ = tx.send(AppEvent::RecentQsos(qsos));
-                }
+            if let Ok(qsos) = grpc::list_recent_qsos(channel, 0).await {
+                let _ = tx.send(AppEvent::RecentQsos(qsos));
             }
         });
     }
@@ -138,14 +168,13 @@ async fn run<B: ratatui::backend::Backend>(
 
     while app.running {
         if let Some(event) = event_rx.recv().await {
-            let endpoint = app.endpoint.clone();
-            handle_event(
+            handle_event_with_channel(
                 &mut app,
                 event,
+                &channel,
                 &event_tx,
                 &lookup_tx,
                 &rig_enabled_tx,
-                &endpoint,
             );
             app.expire_status();
             terminal.draw(|f| ui::render_ui(&app, f))?;
@@ -156,16 +185,18 @@ async fn run<B: ratatui::backend::Backend>(
 }
 
 /// Dispatch a single [`AppEvent`] to the appropriate handler.
-fn handle_event(
+fn handle_event_with_channel(
     app: &mut App,
     event: AppEvent,
+    channel: &tonic::transport::Channel,
     event_tx: &mpsc::UnboundedSender<AppEvent>,
     lookup_tx: &watch::Sender<String>,
     rig_enabled_tx: &watch::Sender<bool>,
-    endpoint: &str,
 ) {
     match event {
-        AppEvent::Key(key) => handle_key(app, key, event_tx, lookup_tx, rig_enabled_tx, endpoint),
+        AppEvent::Key(key) => {
+            handle_key_with_channel(app, key, channel, event_tx, lookup_tx, rig_enabled_tx);
+        }
         AppEvent::Tick => {
             app.utc_now = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
             app.tick_debounce();
@@ -187,7 +218,7 @@ fn handle_event(
             app.form.on_band_change();
             app.lookup_result = None;
             app.reset_timer();
-            refresh_recent_qsos(event_tx, endpoint);
+            refresh_recent_qsos(event_tx, channel);
         }
         AppEvent::QsoLogFailed(err) => {
             app.set_error(format!("Log failed: {err}"));
@@ -203,7 +234,7 @@ fn handle_event(
             app.lookup_result = None;
             app.editing_local_id = None;
             app.reset_timer();
-            refresh_recent_qsos(event_tx, endpoint);
+            refresh_recent_qsos(event_tx, channel);
         }
         AppEvent::QsoUpdateFailed(err) => {
             app.set_error(format!("Update failed: {err}"));
@@ -214,7 +245,7 @@ fn handle_event(
             app.view = app::View::LogEntry;
             app.qso_list_focused = false;
             app.qso_selected = None;
-            refresh_recent_qsos(event_tx, endpoint);
+            refresh_recent_qsos(event_tx, channel);
         }
         AppEvent::QsoDeleteFailed(err) => {
             app.set_error(format!("Delete failed: {err}"));
@@ -244,7 +275,7 @@ fn handle_event(
                 .map(|q| (q.local_id.clone(), q.callsign.clone()))
                 .collect();
             if !unnamed.is_empty() {
-                enrich_names(unnamed, event_tx, endpoint);
+                enrich_names(unnamed, event_tx, channel);
             }
         }
         AppEvent::QsoNameEnriched { local_id, name } => {
@@ -253,6 +284,26 @@ fn handle_event(
             }
         }
     }
+}
+
+#[cfg(test)]
+fn handle_event(
+    app: &mut App,
+    event: AppEvent,
+    event_tx: &mpsc::UnboundedSender<AppEvent>,
+    lookup_tx: &watch::Sender<String>,
+    rig_enabled_tx: &watch::Sender<bool>,
+    endpoint: &str,
+) {
+    let endpoint = if endpoint.is_empty() {
+        DEFAULT_RUST_ENDPOINT
+    } else {
+        endpoint
+    };
+    let Ok(channel) = grpc::create_channel(endpoint) else {
+        return;
+    };
+    handle_event_with_channel(app, event, &channel, event_tx, lookup_tx, rig_enabled_tx);
 }
 
 /// Apply a callsign-lookup result to the app state.
@@ -289,13 +340,13 @@ fn apply_lookup_result(app: &mut App, result: Option<app::CallsignInfo>) {
     clippy::too_many_lines,
     reason = "top-level key dispatch; splitting would obscure the routing logic"
 )]
-fn handle_key(
+fn handle_key_with_channel(
     app: &mut App,
     key: crossterm::event::KeyEvent,
+    channel: &tonic::transport::Channel,
     event_tx: &mpsc::UnboundedSender<AppEvent>,
     lookup_tx: &watch::Sender<String>,
     rig_enabled_tx: &watch::Sender<bool>,
-    endpoint: &str,
 ) {
     use crossterm::event::{KeyCode, KeyModifiers};
 
@@ -324,7 +375,7 @@ fn handle_key(
     }
 
     if matches!(app.view, app::View::ConfirmDeleteQso) {
-        handle_confirm_delete_key(app, key, event_tx, endpoint);
+        handle_confirm_delete_key(app, key, event_tx, channel);
         return;
     }
 
@@ -382,9 +433,9 @@ fn handle_key(
             app.reset_qso_start_time();
             app.set_status(format!("QSO start time reset to {}", app.form.time));
         }
-        KeyCode::F(10) => spawn_log_qso(app, event_tx, endpoint),
+        KeyCode::F(10) => spawn_log_qso(app, event_tx, channel),
         KeyCode::Enter if key.modifiers.contains(KeyModifiers::ALT) => {
-            spawn_log_qso(app, event_tx, endpoint);
+            spawn_log_qso(app, event_tx, channel);
         }
         KeyCode::End => {
             app.form.field_selected = false;
@@ -427,6 +478,26 @@ fn handle_key(
         KeyCode::Char(c) => handle_char_key(app, c, lookup_tx),
         _ => {}
     }
+}
+
+#[cfg(test)]
+fn handle_key(
+    app: &mut App,
+    key: crossterm::event::KeyEvent,
+    event_tx: &mpsc::UnboundedSender<AppEvent>,
+    lookup_tx: &watch::Sender<String>,
+    rig_enabled_tx: &watch::Sender<bool>,
+    endpoint: &str,
+) {
+    let endpoint = if endpoint.is_empty() {
+        DEFAULT_RUST_ENDPOINT
+    } else {
+        endpoint
+    };
+    let Ok(channel) = grpc::create_channel(endpoint) else {
+        return;
+    };
+    handle_key_with_channel(app, key, &channel, event_tx, lookup_tx, rig_enabled_tx);
 }
 
 /// Handle keyboard input while the search box is focused.
@@ -535,13 +606,13 @@ fn handle_confirm_delete_key(
     app: &mut App,
     key: crossterm::event::KeyEvent,
     event_tx: &mpsc::UnboundedSender<AppEvent>,
-    endpoint: &str,
+    channel: &tonic::transport::Channel,
 ) {
     use crossterm::event::KeyCode;
     match key.code {
         KeyCode::Char('y' | 'Y') | KeyCode::Enter => {
             if let Some(ref id) = app.delete_candidate_id.clone() {
-                spawn_delete_qso(id, event_tx, endpoint);
+                spawn_delete_qso(id, event_tx, channel);
             }
         }
         KeyCode::Char('n' | 'N') | KeyCode::Esc => {
@@ -553,20 +624,19 @@ fn handle_confirm_delete_key(
 }
 
 /// Spawn a task to delete a QSO by its local ID and forward the result to the event channel.
-fn spawn_delete_qso(local_id: &str, event_tx: &mpsc::UnboundedSender<AppEvent>, endpoint: &str) {
+fn spawn_delete_qso(
+    local_id: &str,
+    event_tx: &mpsc::UnboundedSender<AppEvent>,
+    channel: &tonic::transport::Channel,
+) {
     let tx = event_tx.clone();
-    let ep = endpoint.to_string();
+    let channel = channel.clone();
     let id = local_id.to_string();
     tokio::spawn(async move {
-        match grpc::create_channel(&ep).await {
-            Ok(ch) => match grpc::delete_qso(ch, &id).await {
-                Ok(()) => {
-                    let _ = tx.send(AppEvent::QsoDeleted(id));
-                }
-                Err(e) => {
-                    let _ = tx.send(AppEvent::QsoDeleteFailed(e.to_string()));
-                }
-            },
+        match grpc::delete_qso(channel, &id).await {
+            Ok(()) => {
+                let _ = tx.send(AppEvent::QsoDeleted(id));
+            }
             Err(e) => {
                 let _ = tx.send(AppEvent::QsoDeleteFailed(e.to_string()));
             }
@@ -734,9 +804,13 @@ fn load_qso_into_form(app: &mut App, local_id: &str, lookup_tx: &watch::Sender<S
 /// If `editing_local_id` is set, calls `UpdateQso`; otherwise calls `LogQso`.
 /// When editing, the original `source_record` is passed along so that `update_qso`
 /// can preserve non-form fields (QSL status, metadata, extra ADIF overflow, etc.).
-fn spawn_log_qso(app: &App, event_tx: &mpsc::UnboundedSender<AppEvent>, endpoint: &str) {
+fn spawn_log_qso(
+    app: &App,
+    event_tx: &mpsc::UnboundedSender<AppEvent>,
+    channel: &tonic::transport::Channel,
+) {
     let tx = event_tx.clone();
-    let ep = endpoint.to_string();
+    let channel = channel.clone();
     let mut form_snap = app.form.clone();
     let editing_id = app.editing_local_id.clone();
     if editing_id.is_none() {
@@ -760,33 +834,24 @@ fn spawn_log_qso(app: &App, event_tx: &mpsc::UnboundedSender<AppEvent>, endpoint
     });
 
     tokio::spawn(async move {
-        match grpc::create_channel(&ep).await {
-            Ok(ch) => {
-                if let Some(local_id) = editing_id {
-                    match grpc::update_qso(ch, &local_id, &form_snap, lookup_snap, base_record)
-                        .await
-                    {
-                        Ok(()) => {
-                            let callsign = form_snap.callsign.to_uppercase();
-                            let _ = tx.send(AppEvent::QsoUpdated(callsign));
-                        }
-                        Err(e) => {
-                            let _ = tx.send(AppEvent::QsoUpdateFailed(e.to_string()));
-                        }
-                    }
-                } else {
-                    match grpc::log_qso(ch, &form_snap, lookup_snap).await {
-                        Ok(id) => {
-                            let _ = tx.send(AppEvent::QsoLogged(id));
-                        }
-                        Err(e) => {
-                            let _ = tx.send(AppEvent::QsoLogFailed(e.to_string()));
-                        }
-                    }
+        if let Some(local_id) = editing_id {
+            match grpc::update_qso(channel, &local_id, &form_snap, lookup_snap, base_record).await {
+                Ok(()) => {
+                    let callsign = form_snap.callsign.to_uppercase();
+                    let _ = tx.send(AppEvent::QsoUpdated(callsign));
+                }
+                Err(e) => {
+                    let _ = tx.send(AppEvent::QsoUpdateFailed(e.to_string()));
                 }
             }
-            Err(e) => {
-                let _ = tx.send(AppEvent::QsoLogFailed(e.to_string()));
+        } else {
+            match grpc::log_qso(channel, &form_snap, lookup_snap).await {
+                Ok(id) => {
+                    let _ = tx.send(AppEvent::QsoLogged(id));
+                }
+                Err(e) => {
+                    let _ = tx.send(AppEvent::QsoLogFailed(e.to_string()));
+                }
             }
         }
     });
@@ -837,16 +902,13 @@ fn cycle_right(app: &mut App) {
 fn enrich_names(
     qsos: Vec<(String, String)>,
     event_tx: &mpsc::UnboundedSender<AppEvent>,
-    endpoint: &str,
+    channel: &tonic::transport::Channel,
 ) {
     let tx = event_tx.clone();
-    let ep = endpoint.to_string();
+    let channel = channel.clone();
     tokio::spawn(async move {
-        let Ok(ch) = grpc::create_channel(&ep).await else {
-            return;
-        };
         for (local_id, callsign) in qsos {
-            if let Ok(Some(info)) = grpc::lookup_callsign(ch.clone(), &callsign).await {
+            if let Ok(Some(info)) = grpc::lookup_callsign(channel.clone(), &callsign).await {
                 if let Some(name) = info.name {
                     let _ = tx.send(AppEvent::QsoNameEnriched { local_id, name });
                 }
@@ -856,14 +918,15 @@ fn enrich_names(
 }
 
 /// Spawn a task to refresh the recent QSOs list and forward the result to the event channel.
-fn refresh_recent_qsos(event_tx: &mpsc::UnboundedSender<AppEvent>, endpoint: &str) {
+fn refresh_recent_qsos(
+    event_tx: &mpsc::UnboundedSender<AppEvent>,
+    channel: &tonic::transport::Channel,
+) {
     let tx = event_tx.clone();
-    let ep = endpoint.to_string();
+    let channel = channel.clone();
     tokio::spawn(async move {
-        if let Ok(ch) = grpc::create_channel(&ep).await {
-            if let Ok(qsos) = grpc::list_recent_qsos(ch, 0).await {
-                let _ = tx.send(AppEvent::RecentQsos(qsos));
-            }
+        if let Ok(qsos) = grpc::list_recent_qsos(channel, 0).await {
+            let _ = tx.send(AppEvent::RecentQsos(qsos));
         }
     });
 }
@@ -937,6 +1000,11 @@ fn apply_rig_snapshot(app: &mut App, rig: Option<app::RigInfo>) {
     clippy::items_after_statements
 )]
 mod tests {
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    };
+
     use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
     use tokio::sync::{mpsc, watch};
 
@@ -994,6 +1062,34 @@ mod tests {
                 ..Default::default()
             },
         }
+    }
+
+    #[test]
+    fn panic_cleanup_guard_runs_on_unwind() {
+        let cleaned = Arc::new(AtomicBool::new(false));
+        let cleaned_in_guard = Arc::clone(&cleaned);
+        let panic_result = std::panic::catch_unwind(move || {
+            let _guard = PanicCleanupGuard::new(move || {
+                cleaned_in_guard.store(true, Ordering::SeqCst);
+            });
+            std::panic::resume_unwind(Box::new("boom"));
+        });
+
+        assert!(panic_result.is_err());
+        assert!(cleaned.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn panic_cleanup_guard_disarm_skips_cleanup() {
+        let cleaned = Arc::new(AtomicBool::new(false));
+        let cleaned_in_guard = Arc::clone(&cleaned);
+        {
+            let mut guard = PanicCleanupGuard::new(move || {
+                cleaned_in_guard.store(true, Ordering::SeqCst);
+            });
+            guard.disarm();
+        }
+        assert!(!cleaned.load(Ordering::SeqCst));
     }
 
     fn resolve_endpoint_from<const ARG_COUNT: usize, const ENV_COUNT: usize>(

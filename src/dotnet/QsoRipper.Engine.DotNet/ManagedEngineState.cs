@@ -609,7 +609,7 @@ internal sealed class ManagedEngineState
                 return new SyncWithQrzResponse
                 {
                     Complete = true,
-                    Error = $"{ex.Message}\n{ex.StackTrace}",
+                    Error = ex.Message,
                 };
             }
         }

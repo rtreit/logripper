@@ -17,7 +17,11 @@
 mod client;
 mod types;
 
-use std::os::raw::c_char;
+use std::{
+    collections::HashMap,
+    os::raw::c_char,
+    sync::{Mutex, OnceLock},
+};
 
 pub use types::{
     QsrLogQsoRequest, QsrLogQsoResult, QsrLookupResult, QsrQsoDetail, QsrQsoList, QsrQsoSummary,
@@ -25,6 +29,21 @@ pub use types::{
 };
 
 use client::QsrClient;
+
+static QSO_LIST_ALLOCATIONS: OnceLock<Mutex<HashMap<usize, usize>>> = OnceLock::new();
+
+fn qso_list_allocations() -> &'static Mutex<HashMap<usize, usize>> {
+    QSO_LIST_ALLOCATIONS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+pub(crate) fn register_qso_list_allocation(items: *mut QsrQsoSummary, len: usize) {
+    if items.is_null() || len == 0 {
+        return;
+    }
+    if let Ok(mut allocations) = qso_list_allocations().lock() {
+        allocations.insert(items as usize, len);
+    }
+}
 
 /// Connect to the QsoRipper engine at the given endpoint.
 ///
@@ -180,11 +199,15 @@ pub unsafe extern "C" fn qsr_free_qso_list(list: *mut QsrQsoList) {
     let Some(l) = (unsafe { list.as_mut() }) else {
         return;
     };
-    if !l.items.is_null() && l.count > 0 {
-        #[allow(clippy::cast_sign_loss)]
-        let slice =
-            unsafe { Box::from_raw(std::slice::from_raw_parts_mut(l.items, l.count as usize)) };
-        drop(slice);
+    if !l.items.is_null() {
+        let len = qso_list_allocations()
+            .lock()
+            .ok()
+            .and_then(|mut allocations| allocations.remove(&(l.items as usize)));
+        if let Some(len) = len {
+            let slice = unsafe { Box::from_raw(std::slice::from_raw_parts_mut(l.items, len)) };
+            drop(slice);
+        }
         l.items = std::ptr::null_mut();
         l.count = 0;
     }
@@ -250,4 +273,29 @@ pub unsafe extern "C" fn qsr_get_space_weather(
         return -1;
     };
     c.get_space_weather(o)
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn qso_list_free_clears_pointer_even_if_count_is_negative() {
+        let boxed = vec![unsafe { std::mem::zeroed::<QsrQsoSummary>() }].into_boxed_slice();
+        let len = boxed.len();
+        let ptr = Box::into_raw(boxed).cast::<QsrQsoSummary>();
+
+        register_qso_list_allocation(ptr, len);
+
+        let mut list = QsrQsoList {
+            items: ptr,
+            count: -7,
+        };
+
+        unsafe { qsr_free_qso_list(&raw mut list) };
+
+        assert!(list.items.is_null());
+        assert_eq!(0, list.count);
+    }
 }

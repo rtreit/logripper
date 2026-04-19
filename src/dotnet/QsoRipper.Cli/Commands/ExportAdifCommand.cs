@@ -6,7 +6,10 @@ namespace QsoRipper.Cli.Commands;
 
 internal static class ExportAdifCommand
 {
-    public static async Task<int> RunAsync(GrpcChannel channel, string[] args)
+    public static async Task<int> RunAsync(
+        GrpcChannel channel,
+        string[] args,
+        CancellationToken cancellationToken = default)
     {
         string? outputFile = null;
         var includeHeader = false;
@@ -25,17 +28,19 @@ internal static class ExportAdifCommand
         }
 
         var client = new LogbookService.LogbookServiceClient(channel);
-        using var call = client.ExportAdif(new ExportAdifRequest { IncludeHeader = includeHeader });
+        using var call = client.ExportAdif(
+            new ExportAdifRequest { IncludeHeader = includeHeader },
+            cancellationToken: cancellationToken);
         using var output = outputFile is not null
             ? new FileStream(outputFile, FileMode.Create, FileAccess.Write)
             : Console.OpenStandardOutput();
 
-        while (await call.ResponseStream.MoveNext(CancellationToken.None))
+        while (await call.ResponseStream.MoveNext(cancellationToken))
         {
             var chunk = call.ResponseStream.Current.Chunk;
             if (chunk is not null)
             {
-                await output.WriteAsync(chunk.Data.Memory);
+                await output.WriteAsync(chunk.Data.Memory, cancellationToken);
             }
         }
 

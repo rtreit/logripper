@@ -10,6 +10,10 @@
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $scriptPath = Join-Path $repoRoot 'build.ps1'
 $scriptContent = Get-Content $scriptPath -Raw
+$rustWorkflowPath = Join-Path $repoRoot '.github' 'workflows' 'rust-quality.yml'
+$rustWorkflowContent = Get-Content $rustWorkflowPath -Raw
+$dotnetWorkflowPath = Join-Path $repoRoot '.github' 'workflows' 'dotnet-quality.yml'
+$dotnetWorkflowContent = Get-Content $dotnetWorkflowPath -Raw
 $win32MainPath = Join-Path $repoRoot 'src' 'c' 'qsoripper-win32' 'src' 'main.c'
 $win32MainContent = Get-Content $win32MainPath -Raw
 
@@ -52,6 +56,21 @@ Describe 'build.ps1 Check-Rust CI parity (Bug #202)' {
     }
 }
 
+Describe 'build.ps1 Rust coverage exclusion parity (Bug #269)' {
+
+    It 'excludes qsoripper-ffi during local cargo llvm-cov runs' {
+        $checkRustBody | Should Match "'--exclude', 'qsoripper-ffi'"
+    }
+
+    It 'matches CI ignore-filename-regex for stress and ffi' {
+        $checkRustBody | Should Match "ignore-filename-regex 'qsoripper-\(stress\|ffi\)'"
+    }
+
+    It 'CI workflow still excludes qsoripper-ffi' {
+        $rustWorkflowContent | Should Match '--exclude qsoripper-ffi'
+    }
+}
+
 Describe 'build.ps1 Check-Dotnet CI parity (Bug #202)' {
 
     It 'runs tests with coverage collection' {
@@ -71,6 +90,14 @@ Describe 'build.ps1 Check-Dotnet CI parity (Bug #202)' {
     It 'runs vulnerable package check' {
         # Must reference --vulnerable for package vulnerability scanning
         $checkDotnetBody | Should Match '--vulnerable'
+    }
+}
+
+Describe '.github/workflows/dotnet-quality.yml vulnerable package gate (Bug #259)' {
+
+    It 'fails the workflow when vulnerable packages are reported' {
+        $dotnetWorkflowContent | Should Match 'has the following vulnerable packages'
+        $dotnetWorkflowContent | Should Match 'exit 1'
     }
 }
 
