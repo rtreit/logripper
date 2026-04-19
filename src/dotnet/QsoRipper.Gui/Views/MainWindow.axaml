@@ -431,7 +431,7 @@
                     </DataGridTemplateColumn.CellEditingTemplate>
                   </DataGridTemplateColumn>
                   <DataGridTemplateColumn Header="Mode"
-                                          Width="68"
+                                          Width="74"
                                           MinWidth="56"
                                           SortMemberPath="Mode">
                     <DataGridTemplateColumn.CellTemplate>
