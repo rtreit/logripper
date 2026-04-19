@@ -1,15 +1,7 @@
-//! Build script that generates the C header via cbindgen.
+//! Build script intentionally left as a no-op.
+//!
+//! The FFI header is checked in at `qsoripper_ffi.h` and copied to the C
+//! project during build packaging; generating it via cbindgen in CI violates
+//! this repository's cargo-deny license and duplicate-crate policy.
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let crate_dir = std::env::var("CARGO_MANIFEST_DIR")?;
-
-    let config = cbindgen::Config::from_file("cbindgen.toml")?;
-
-    cbindgen::Builder::new()
-        .with_crate(&crate_dir)
-        .with_config(config)
-        .generate()?
-        .write_to_file("qsoripper_ffi.h");
-
-    Ok(())
-}
+fn main() {}

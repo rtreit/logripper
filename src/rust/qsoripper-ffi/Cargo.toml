@@ -16,8 +16,5 @@ prost-types = { workspace = true }
 tokio = { workspace = true }
 tonic = { workspace = true }
 
-[build-dependencies]
-cbindgen = "0.28"
-
 [lints]
 workspace = true
