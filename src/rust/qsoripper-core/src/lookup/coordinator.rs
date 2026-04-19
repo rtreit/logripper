@@ -345,10 +345,11 @@ impl LookupCoordinator {
     }
 
     async fn store_cache_entry(&self, normalized_callsign: &str, entry: CacheEntry) {
-        self.cache
-            .write()
-            .await
-            .insert(normalized_callsign.to_string(), entry.clone());
+        {
+            let mut cache = self.cache.write().await;
+            cache.insert(normalized_callsign.to_string(), entry.clone());
+            cache.retain(|_, cached_entry| self.is_fresh(cached_entry));
+        }
 
         // Persist to the snapshot store if available.
         if let Some(ref storage) = self.snapshot_storage {
@@ -449,10 +450,11 @@ impl LookupCoordinator {
         let entry = CacheEntry { lookup, cached_at };
 
         // Promote into in-memory cache so subsequent reads are fast.
-        self.cache
-            .write()
-            .await
-            .insert(normalized_callsign.to_string(), entry.clone());
+        {
+            let mut cache = self.cache.write().await;
+            cache.insert(normalized_callsign.to_string(), entry.clone());
+            cache.retain(|_, cached_entry| self.is_fresh(cached_entry));
+        }
 
         Some(entry)
     }
@@ -704,6 +706,29 @@ mod tests {
         assert_eq!(first.state, LookupState::Found as i32);
         assert_eq!(second.state, LookupState::Found as i32);
         assert_eq!(provider.call_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn inserting_new_entry_evicts_expired_cache_entries() {
+        let provider = QueueProvider::new(Vec::new(), Duration::ZERO);
+        let coordinator = LookupCoordinator::new(
+            Arc::new(provider),
+            LookupCoordinatorConfig::new(Duration::from_millis(1), Duration::from_millis(1)),
+        );
+
+        for index in 0..5 {
+            let callsign = format!("W1AW{index}");
+            let _ = coordinator.lookup(&callsign, false).await;
+        }
+        sleep(Duration::from_millis(5)).await;
+
+        let _ = coordinator.lookup("K7RND", false).await;
+
+        let cache_len = coordinator.cache.read().await.len();
+        assert_eq!(
+            cache_len, 1,
+            "expected expired cache entries to be evicted when inserting a new entry"
+        );
     }
 
     // -- Snapshot persistence tests -----------------------------------------

@@ -142,6 +142,39 @@ public sealed class ManagedEngineStateTests : IDisposable
     }
 
     [Fact]
+    public void Sync_with_qrz_unexpected_exception_does_not_include_stack_trace()
+    {
+        var storage = new MemoryStorage();
+        var syncEngine = new QrzSyncEngine(new FakeMalformedQrzLogbookApi());
+        var state = new ManagedEngineState(
+            Path.Combine(_tempDirectory, "config.toml"),
+            storage,
+            lookupCoordinator: null,
+            rigControlMonitor: null,
+            spaceWeatherMonitor: null,
+            syncEngine: syncEngine);
+
+        state.SaveSetup(new SaveSetupRequest
+        {
+            QrzLogbookApiKey = "api-key",
+            StationProfile = new StationProfile
+            {
+                ProfileName = "Home",
+                StationCallsign = "K7RND",
+                OperatorCallsign = "K7RND",
+                Grid = "CN87"
+            }
+        });
+
+        var response = state.SyncWithQrz();
+
+        Assert.True(response.Complete);
+        Assert.False(string.IsNullOrWhiteSpace(response.Error));
+        Assert.DoesNotContain("\n", response.Error, StringComparison.Ordinal);
+        Assert.DoesNotContain(" at ", response.Error, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Apply_runtime_config_rejects_non_memory_storage()
     {
         var state = CreateState();
@@ -735,6 +768,16 @@ public sealed class ManagedEngineStateTests : IDisposable
             var logId = $"FAKE-{Interlocked.Increment(ref _logIdCounter)}";
             return Task.FromResult(logId);
         }
+    }
+
+    private sealed class FakeMalformedQrzLogbookApi : IQrzLogbookApi
+    {
+        public Task<List<QsoRecord>> FetchQsosAsync(string? sinceDateYmd)
+            => Task.FromResult(new List<QsoRecord> { null! });
+
+        public Task<string> UploadQsoAsync(QsoRecord qso) => Task.FromResult("FAKE-1");
+
+        public Task<string> UpdateQsoAsync(QsoRecord qso) => Task.FromResult("FAKE-1");
     }
 }
 #pragma warning restore CA1707
