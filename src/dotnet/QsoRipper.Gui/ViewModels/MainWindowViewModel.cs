@@ -738,7 +738,8 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
                 if (snapshot.Status == QsoRipper.Domain.RigConnectionStatus.Connected)
                 {
                     var freqMhz = snapshot.FrequencyHz / 1_000_000.0;
-                    RigStatusText = $"Rig: {freqMhz.ToString("F3", CultureInfo.InvariantCulture)} {snapshot.Mode}";
+                    var modeDisplay = ProtoEnumDisplay.ForMode(snapshot.Mode);
+                    RigStatusText = $"Rig: {freqMhz.ToString("F3", CultureInfo.InvariantCulture)} {modeDisplay}";
                     Logger.ApplyRigSnapshot(snapshot);
                 }
                 else

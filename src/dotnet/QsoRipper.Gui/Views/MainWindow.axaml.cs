@@ -59,6 +59,10 @@ internal sealed partial class MainWindow : Window
         ClampToCurrentScreen();
         if (!IsInspectionMode)
         {
+            // Prime menu access keys immediately so it completes before
+            // the user can interact. Must run before the async first-run
+            // check which yields the UI thread.
+            Dispatcher.UIThread.Post(PrimeMenuAccessKeys, DispatcherPriority.Background);
             GuiPerformanceTrace.Write(nameof(OnOpened) + ".afterScheduleMenuAccessKeys");
             ApplyPersistedGridLayout();
             GuiPerformanceTrace.Write(nameof(OnOpened) + ".afterApplyPersistedGridLayout");
@@ -69,8 +73,6 @@ internal sealed partial class MainWindow : Window
                 await vm.CheckFirstRunAsync();
                 GuiPerformanceTrace.Write(nameof(OnOpened) + ".afterCheckFirstRun");
             }
-
-            Dispatcher.UIThread.Post(PrimeMenuAccessKeys, DispatcherPriority.Background);
         }
 
         EnsureColumnHeadersFit();
@@ -139,22 +141,10 @@ internal sealed partial class MainWindow : Window
             return;
         }
 
-        base.OnKeyDown(e);
-
-        if (e.Handled || _viewModel is null || _viewModel.IsWizardOpen)
-        {
-            return;
-        }
-
-        if (string.Equals(e.KeySymbol, "/", StringComparison.Ordinal)
-            && e.Source is not TextBox
-            && !(_recentQsoSearchBox?.IsFocused ?? false))
-        {
-            FocusRecentQsoSearchBox();
-            e.Handled = true;
-            return;
-        }
-
+        // Close open panels on Escape BEFORE base.OnKeyDown so the Menu
+        // control cannot consume the key first (Alt+Enter activates the
+        // menu bar; a subsequent Escape would deactivate it instead of
+        // closing the inspector/card if we let base handle it first).
         if (e.Key == Key.Escape)
         {
             if (_viewModel.IsFullQsoCardOpen)
@@ -182,7 +172,24 @@ internal sealed partial class MainWindow : Window
             {
                 _viewModel.ToggleInspectorCommand.Execute(null);
                 e.Handled = true;
+                return;
             }
+        }
+
+        base.OnKeyDown(e);
+
+        if (e.Handled || _viewModel is null || _viewModel.IsWizardOpen)
+        {
+            return;
+        }
+
+        if (string.Equals(e.KeySymbol, "/", StringComparison.Ordinal)
+            && e.Source is not TextBox
+            && !(_recentQsoSearchBox?.IsFocused ?? false))
+        {
+            FocusRecentQsoSearchBox();
+            e.Handled = true;
+            return;
         }
     }
 
@@ -366,12 +373,22 @@ internal sealed partial class MainWindow : Window
         _menuAccessKeysPrimed = true;
 
         // Avalonia access-key mode does not fully initialize until a menu has been shown once.
+        // Save focused element so we can restore it after the prime cycle.
         Dispatcher.UIThread.Post(
             () =>
             {
+                var previousFocus = FocusManager?.GetFocusedElement() as Control;
                 _fileMenuItem.IsSubMenuOpen = true;
                 Dispatcher.UIThread.Post(
-                    () => _fileMenuItem.IsSubMenuOpen = false,
+                    () =>
+                    {
+                        _fileMenuItem.IsSubMenuOpen = false;
+                        // Restore focus so the menu prime doesn't steal it
+                        // from whatever the user focused in the meantime.
+                        Dispatcher.UIThread.Post(
+                            () => previousFocus?.Focus(),
+                            DispatcherPriority.Background);
+                    },
                     DispatcherPriority.Background);
             },
             DispatcherPriority.Background);
