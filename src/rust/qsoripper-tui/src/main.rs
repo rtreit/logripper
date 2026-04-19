@@ -195,7 +195,7 @@ fn handle_event_with_channel(
 ) {
     match event {
         AppEvent::Key(key) => {
-            handle_key_with_channel(app, key, channel, event_tx, lookup_tx, rig_enabled_tx)
+            handle_key_with_channel(app, key, channel, event_tx, lookup_tx, rig_enabled_tx);
         }
         AppEvent::Tick => {
             app.utc_now = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
@@ -300,7 +300,9 @@ fn handle_event(
     } else {
         endpoint
     };
-    let channel = grpc::create_channel(endpoint).expect("test endpoint should parse");
+    let Ok(channel) = grpc::create_channel(endpoint) else {
+        return;
+    };
     handle_event_with_channel(app, event, &channel, event_tx, lookup_tx, rig_enabled_tx);
 }
 
@@ -492,7 +494,9 @@ fn handle_key(
     } else {
         endpoint
     };
-    let channel = grpc::create_channel(endpoint).expect("test endpoint should parse");
+    let Ok(channel) = grpc::create_channel(endpoint) else {
+        return;
+    };
     handle_key_with_channel(app, key, &channel, event_tx, lookup_tx, rig_enabled_tx);
 }
 
@@ -1068,7 +1072,7 @@ mod tests {
             let _guard = PanicCleanupGuard::new(move || {
                 cleaned_in_guard.store(true, Ordering::SeqCst);
             });
-            panic!("boom");
+            std::panic::resume_unwind(Box::new("boom"));
         });
 
         assert!(panic_result.is_err());

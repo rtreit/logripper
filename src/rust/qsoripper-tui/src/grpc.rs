@@ -27,18 +27,6 @@ pub(crate) fn create_channel(endpoint: &str) -> anyhow::Result<Channel> {
     Ok(endpoint.connect_lazy())
 }
 
-#[cfg(test)]
-#[allow(clippy::unwrap_used)]
-mod tests {
-    use super::create_channel;
-
-    #[tokio::test]
-    async fn create_channel_does_not_require_server_to_be_online() {
-        let channel_result = create_channel("http://127.0.0.1:9");
-        assert!(channel_result.is_ok());
-    }
-}
-
 /// Log a QSO from the form and return the engine-assigned `local_id`.
 ///
 /// `lookup` carries enrichment from the callsign lookup: `(grid, country, cq_zone, dxcc)`.
@@ -469,5 +457,17 @@ fn resolve_mode(mode_str: &str) -> (Mode, Option<&'static str>) {
         "FT4" => (Mode::Mfsk, Some("FT4")),
         "PSK31" => (Mode::Psk, Some("PSK31")),
         s => (mode_from_adif(s).unwrap_or(Mode::Unspecified), None),
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::create_channel;
+
+    #[tokio::test]
+    async fn create_channel_does_not_require_server_to_be_online() {
+        let channel_result = create_channel("http://127.0.0.1:9");
+        assert!(channel_result.is_ok());
     }
 }

@@ -293,7 +293,7 @@ mod tests {
             count: -7,
         };
 
-        unsafe { qsr_free_qso_list(&mut list) };
+        unsafe { qsr_free_qso_list(&raw mut list) };
 
         assert!(list.items.is_null());
         assert_eq!(0, list.count);
