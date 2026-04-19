@@ -42,12 +42,12 @@ internal static class GetQsoCommand
 
         if (qso.RstSent is not null)
         {
-            Console.WriteLine($"RST Sent:         {FormatRst(qso.RstSent)}");
+            Console.WriteLine($"RST Sent:         {ListQsosCommand.FormatRst(qso.RstSent)}");
         }
 
         if (qso.RstReceived is not null)
         {
-            Console.WriteLine($"RST Rcvd:         {FormatRst(qso.RstReceived)}");
+            Console.WriteLine($"RST Rcvd:         {ListQsosCommand.FormatRst(qso.RstReceived)}");
         }
 
         if (qso.HasQrzLogid)
@@ -56,15 +56,5 @@ internal static class GetQsoCommand
         }
 
         return 0;
-    }
-
-    private static string FormatRst(RstReport rst)
-    {
-        if (rst.HasTone)
-        {
-            return $"{rst.Readability}{rst.Strength}{rst.Tone}";
-        }
-
-        return $"{rst.Readability}{rst.Strength}";
     }
 }

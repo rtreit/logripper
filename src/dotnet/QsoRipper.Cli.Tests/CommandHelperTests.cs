@@ -277,7 +277,8 @@ public sealed class CommandHelperTests
         {
             { null, "" },
             { new RstReport { Readability = 5, Strength = 9 }, "59" },
-            { new RstReport { Readability = 5, Strength = 9, Tone = 9 }, "599" }
+            { new RstReport { Readability = 5, Strength = 9, Tone = 9 }, "599" },
+            { new RstReport { Raw = "599" }, "599" },
         };
 
     [Theory]
