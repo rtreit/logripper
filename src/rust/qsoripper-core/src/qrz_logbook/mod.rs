@@ -42,6 +42,9 @@ pub const QRZ_LOGBOOK_USER_AGENT_ENV_VAR: &str = "QSORIPPER_QRZ_LOGBOOK_USER_AGE
 
 /// Default HTTP timeout in seconds for logbook requests.
 const DEFAULT_HTTP_TIMEOUT_SECONDS: u64 = 30;
+/// Retry count for transient HTTP failures (5xx / transport).
+const DEFAULT_HTTP_MAX_RETRIES: u32 = 2;
+const RETRY_BASE_DELAY_MILLIS: u64 = 200;
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -515,25 +518,56 @@ impl QrzLogbookClient {
         let mut form: Vec<(&str, &str)> = vec![("KEY", &self.config.api_key)];
         form.extend_from_slice(params);
 
-        let response = self
-            .client
-            .post(&self.config.base_url)
-            .form(&form)
-            .send()
-            .await?;
+        for attempt in 0..=DEFAULT_HTTP_MAX_RETRIES {
+            let response = self
+                .client
+                .post(&self.config.base_url)
+                .form(&form)
+                .send()
+                .await;
 
-        let status = response.status();
+            match response {
+                Ok(response) => {
+                    let status = response.status();
 
-        if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
-            return Err(QrzLogbookError::RateLimited);
+                    if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+                        return Err(QrzLogbookError::RateLimited);
+                    }
+
+                    if status.is_server_error() && attempt < DEFAULT_HTTP_MAX_RETRIES {
+                        tokio::time::sleep(retry_delay(attempt)).await;
+                        continue;
+                    }
+
+                    if !status.is_success() {
+                        return Err(QrzLogbookError::ApiError(format!("HTTP {status}")));
+                    }
+
+                    return response.text().await.map_err(QrzLogbookError::NetworkError);
+                }
+                Err(error) => {
+                    if is_retryable_transport_error(&error) && attempt < DEFAULT_HTTP_MAX_RETRIES {
+                        tokio::time::sleep(retry_delay(attempt)).await;
+                        continue;
+                    }
+                    return Err(QrzLogbookError::NetworkError(error));
+                }
+            }
         }
 
-        if !status.is_success() {
-            return Err(QrzLogbookError::ApiError(format!("HTTP {status}")));
-        }
-
-        response.text().await.map_err(QrzLogbookError::NetworkError)
+        Err(QrzLogbookError::ApiError(
+            "request retries exhausted".to_string(),
+        ))
     }
+}
+
+fn retry_delay(attempt: u32) -> Duration {
+    let shift = attempt.min(6);
+    Duration::from_millis(RETRY_BASE_DELAY_MILLIS.saturating_mul(1_u64 << shift))
+}
+
+fn is_retryable_transport_error(error: &reqwest::Error) -> bool {
+    error.is_timeout() || error.is_connect() || error.is_request() || error.is_body()
 }
 
 // ---------------------------------------------------------------------------
@@ -1276,6 +1310,41 @@ mod tests {
     }
 
     // -- Rate limiting ------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_connection_retries_transient_http_failure_then_succeeds() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let address = listener.local_addr().expect("local addr");
+
+        tokio::spawn(async move {
+            let (mut first_socket, _) = listener.accept().await.expect("accept first");
+            let _ = read_http_request(&mut first_socket).await;
+            write_http_response_with_status(
+                &mut first_socket,
+                503,
+                "Service Unavailable",
+                "temporary outage",
+            )
+            .await;
+
+            let (mut second_socket, _) = listener.accept().await.expect("accept second");
+            let _ = read_http_request(&mut second_socket).await;
+            write_http_response(
+                &mut second_socket,
+                "text/plain",
+                "RESULT=OK&CALLSIGN=KC7AVA&COUNT=500",
+            )
+            .await;
+        });
+
+        let config = test_config(format!("http://{address}/api"));
+        let client = QrzLogbookClient::new(config).expect("client");
+
+        let status = client.test_connection().await.expect("status");
+
+        assert_eq!("KC7AVA", status.owner);
+        assert_eq!(500, status.qso_count);
+    }
 
     #[tokio::test]
     async fn rate_limited_response_returns_error() {
