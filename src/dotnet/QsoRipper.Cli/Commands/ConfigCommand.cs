@@ -27,8 +27,14 @@ internal static class ConfigCommand
                 return 0;
             }
 
-            if (args[i] == "--set" && i < args.Length - 1)
+            if (args[i] == "--set")
             {
+                if (i >= args.Length - 1)
+                {
+                    Console.Error.WriteLine("Missing value for --set. Expected KEY=VALUE format.");
+                    return 1;
+                }
+
                 var kvp = args[++i];
                 var eqIndex = kvp.IndexOf('=', StringComparison.Ordinal);
                 if (eqIndex < 1)
