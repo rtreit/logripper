@@ -2,6 +2,7 @@ using System.Net.Http;
 using System.Reflection;
 using System.Text;
 using Google.Protobuf.WellKnownTypes;
+using Grpc.Core;
 using QsoRipper.Domain;
 using QsoRipper.Engine.DotNet;
 using QsoRipper.Engine.QrzLogbook;
@@ -661,6 +662,22 @@ public sealed class ManagedEngineStateTests : IDisposable
         Assert.Equal(14074UL, stored.FrequencyKhz);
     }
 
+    [Fact]
+    public async Task Import_adif_grpc_converts_post_await_validation_errors_to_invalid_argument()
+    {
+        var state = CreateState();
+        var service = new ManagedLogbookGrpcService(state);
+        var stream = new TestAsyncStreamReader<ImportAdifRequest>([
+            new ImportAdifRequest()
+        ]);
+
+        var ex = await Assert.ThrowsAsync<RpcException>(
+            () => service.ImportAdif(stream, new TestServerCallContext()));
+
+        Assert.Equal(StatusCode.InvalidArgument, ex.StatusCode);
+        Assert.Equal("chunk is required.", ex.Status.Detail);
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(_tempDirectory))
@@ -745,6 +762,47 @@ public sealed class ManagedEngineStateTests : IDisposable
     private sealed class FakeRigControlProvider(Func<RigSnapshot> factory) : IRigControlProvider
     {
         public RigSnapshot GetSnapshot() => factory();
+    }
+
+    private sealed class TestAsyncStreamReader<T>(IReadOnlyList<T> items)
+        : IAsyncStreamReader<T>
+    {
+        private int _index = -1;
+
+        public T Current => items[_index];
+
+        public Task<bool> MoveNext(CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            _index++;
+            return Task.FromResult(_index < items.Count);
+        }
+    }
+
+    private sealed class TestServerCallContext : ServerCallContext
+    {
+        private readonly Metadata _responseTrailers = [];
+        private readonly Dictionary<object, object> _userState = [];
+        private WriteOptions? _writeOptions;
+        private Status _status;
+
+        protected override string MethodCore => "test";
+        protected override string HostCore => "localhost";
+        protected override string PeerCore => "test-peer";
+        protected override DateTime DeadlineCore => DateTime.UtcNow.AddMinutes(1);
+        protected override Metadata RequestHeadersCore => [];
+        protected override CancellationToken CancellationTokenCore => CancellationToken.None;
+        protected override Metadata ResponseTrailersCore => _responseTrailers;
+        protected override Status StatusCore { get => _status; set => _status = value; }
+        protected override WriteOptions? WriteOptionsCore { get => _writeOptions; set => _writeOptions = value; }
+        protected override AuthContext AuthContextCore => new("none", []);
+
+        protected override ContextPropagationToken CreatePropagationTokenCore(ContextPropagationOptions? options) =>
+            throw new NotSupportedException();
+
+        protected override Task WriteResponseHeadersAsyncCore(Metadata responseHeaders) => Task.CompletedTask;
+
+        protected override IDictionary<object, object> UserStateCore => _userState;
     }
 
     /// <summary>
