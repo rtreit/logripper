@@ -30,6 +30,7 @@ use qsoripper_core::proto::qsoripper::services::{
     LogQsoRequest, LookupRequest, UpdateQsoRequest,
 };
 
+use crate::register_qso_list_allocation;
 use crate::types::{
     str_to_buf, QsrLogQsoRequest, QsrLogQsoResult, QsrLookupResult, QsrQsoDetail, QsrQsoList,
     QsrQsoSummary, QsrRigStatus, QsrRstReport, QsrSpaceWeather, QsrUpdateQsoRequest,
@@ -251,6 +252,10 @@ impl QsrClient {
             let boxed = items.into_boxed_slice();
             out.count = count;
             out.items = Box::into_raw(boxed).cast::<QsrQsoSummary>();
+            register_qso_list_allocation(
+                out.items,
+                usize::try_from(out.count).expect("non-negative count fits usize"),
+            );
         }
 
         0
