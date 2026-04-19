@@ -4,7 +4,10 @@ project(qsoripper-win32 C)
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 
-add_executable(qsoripper-win32 WIN32 src/main.c)
+add_executable(qsoripper-win32 WIN32
+    src/main.c
+    src/backend_ffi_gate.c
+)
 
 # FFI library from the Rust qsoripper-ffi crate
 # The .dll.lib import library and header are produced by `cargo build -p qsoripper-ffi`
@@ -32,6 +35,28 @@ if(MSVC)
 else()
     target_compile_options(qsoripper-win32 PRIVATE -Wall -Wextra)
 endif()
+
+enable_testing()
+
+add_executable(qsoripper-win32-backend-lifetime-tests
+    tests/backend_lifetime_tests.c
+    src/backend_ffi_gate.c
+)
+target_include_directories(qsoripper-win32-backend-lifetime-tests PRIVATE
+    ${FFI_INCLUDE}
+)
+target_link_libraries(qsoripper-win32-backend-lifetime-tests PRIVATE
+    user32
+)
+if(MSVC)
+    target_compile_options(qsoripper-win32-backend-lifetime-tests PRIVATE /W4 /WX)
+else()
+    target_compile_options(qsoripper-win32-backend-lifetime-tests PRIVATE -Wall -Wextra)
+endif()
+add_test(
+    NAME qsoripper-win32-backend-lifetime-tests
+    COMMAND qsoripper-win32-backend-lifetime-tests
+)
 
 # cppcheck static analysis
 find_program(CPPCHECK_EXE NAMES cppcheck)

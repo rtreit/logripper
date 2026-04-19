@@ -18,6 +18,7 @@
 #include <time.h>
 #include <stdint.h>
 #include "qsoripper_ffi.h"
+#include "backend_ffi_gate.h"
 
 /* ── Compile-time settings ─────────────────────────────────────────────── */
 
@@ -345,6 +346,7 @@ static struct {
     fn_qsr_lookup            pf_lookup;
     fn_qsr_get_rig_status   pf_get_rig_status;
     fn_qsr_get_space_weather pf_get_space_weather;
+    BackendFfiGate ffi_gate;
 
     /* CLI state */
     char cli_path[MAX_PATH];
@@ -369,6 +371,8 @@ static void DeleteSelectedQso(void);
 static int  PaintAdvancedForm(HDC hdc, int y_start, int w);
 static void InitBackend(void);
 static void ShutdownBackend(void);
+static int AcquireFfiClient(struct QsrClient **client_out);
+static void ReleaseFfiClient(void);
 
 static char *FieldBuffer(enum Field f);
 static int   FieldMaxLen(enum Field f);
@@ -1130,6 +1134,17 @@ static void fill_log_request(QsrLogQsoRequest *req)
     }
 }
 
+static int AcquireFfiClient(struct QsrClient **client_out)
+{
+    if (g_backend.mode != BACKEND_FFI) return 0;
+    return backend_ffi_gate_try_acquire(&g_backend.ffi_gate, (void **)client_out);
+}
+
+static void ReleaseFfiClient(void)
+{
+    backend_ffi_gate_release(&g_backend.ffi_gate);
+}
+
 static void LogQso(void)
 {
     if (g_state.callsign[0] == 0) {
@@ -1146,15 +1161,18 @@ static void LogQso(void)
                   "%02d:%02d", st.wHour, st.wMinute);
     }
 
-    char cmd[4096];
-
     if (g_backend.mode == BACKEND_FFI) {
+        struct QsrClient *ffi_client = NULL;
+        if (!AcquireFfiClient(&ffi_client)) {
+            SetStatus("Backend unavailable (shutting down)", 1);
+            return;
+        }
         if (is_update) {
             QsrUpdateQsoRequest ureq;
             memset(&ureq, 0, sizeof(ureq));
             safe_strcpy((char *)ureq.local_id, sizeof(ureq.local_id), g_state.editing_local_id);
             fill_log_request(&ureq.qso);
-            if (g_backend.pf_update_qso(g_backend.ffi_client, &ureq) == 0) {
+            if (g_backend.pf_update_qso(ffi_client, &ureq) == 0) {
                 SetStatus("QSO updated", 0);
             } else {
                 SetStatus("Failed to update QSO", 1);
@@ -1163,7 +1181,7 @@ static void LogQso(void)
             QsrLogQsoRequest req;
             QsrLogQsoResult res;
             fill_log_request(&req);
-            if (g_backend.pf_log_qso(g_backend.ffi_client, &req, &res) == 0) {
+            if (g_backend.pf_log_qso(ffi_client, &req, &res) == 0) {
                 char msg[128];
                 snprintf(msg, sizeof(msg), "Logged %s on %s %s",
                           g_state.callsign, BANDS[g_state.band_idx],
@@ -1173,6 +1191,7 @@ static void LogQso(void)
                 SetStatus("Failed to log QSO", 1);
             }
         }
+        ReleaseFfiClient();
     } else {
         /* CLI path */
         char cmd[4096];
@@ -1267,10 +1286,13 @@ static unsigned __stdcall QsoLoadThread(void *param)
     if (!res) { free(arg); return 0; }
 
     if (g_backend.mode == BACKEND_FFI) {
+        struct QsrClient *ffi_client = NULL;
         QsrQsoList list;
         memset(&list, 0, sizeof(list));
 
-        if (g_backend.pf_list_qsos(g_backend.ffi_client, &list) == 0 && list.count > 0) {
+        if (AcquireFfiClient(&ffi_client) &&
+            g_backend.pf_list_qsos(ffi_client, &list) == 0 &&
+            list.count > 0) {
             res->qsos = (RecentQso *)calloc((size_t)list.count, sizeof(RecentQso));
             if (res->qsos) {
                 res->count = list.count;
@@ -1290,6 +1312,9 @@ static unsigned __stdcall QsoLoadThread(void *param)
                 }
             }
             g_backend.pf_free_qso_list(&list);
+        }
+        if (ffi_client) {
+            ReleaseFfiClient();
         }
     } else {
         /* CLI path */
@@ -1394,9 +1419,11 @@ static unsigned __stdcall LookupThread(void *param)
     safe_strcpy(res->callsign, sizeof(res->callsign), arg->callsign);
 
     if (g_backend.mode == BACKEND_FFI) {
+        struct QsrClient *ffi_client = NULL;
         QsrLookupResult lr;
         memset(&lr, 0, sizeof(lr));
-        if (g_backend.pf_lookup(g_backend.ffi_client, arg->callsign, &lr) == 0) {
+        if (AcquireFfiClient(&ffi_client) &&
+            g_backend.pf_lookup(ffi_client, arg->callsign, &lr) == 0) {
             if (lr.has_data) {
                 res->has_data = 1;
                 safe_strcpy(res->name,    sizeof(res->name),    (const char *)lr.name);
@@ -1409,6 +1436,9 @@ static unsigned __stdcall LookupThread(void *param)
             } else if (lr.error_msg[0]) {
                 safe_strcpy(res->error_msg, sizeof(res->error_msg), (const char *)lr.error_msg);
             }
+        }
+        if (ffi_client) {
+            ReleaseFfiClient();
         }
     } else {
         /* CLI path */
@@ -1456,14 +1486,20 @@ static unsigned __stdcall RigPollThread(void *param)
     if (!res) { free(arg); return 0; }
 
     if (g_backend.mode == BACKEND_FFI) {
+        struct QsrClient *ffi_client = NULL;
         QsrRigStatus rs;
         memset(&rs, 0, sizeof(rs));
-        if (g_backend.pf_get_rig_status(g_backend.ffi_client, &rs) == 0 && rs.connected) {
+        if (AcquireFfiClient(&ffi_client) &&
+            g_backend.pf_get_rig_status(ffi_client, &rs) == 0 &&
+            rs.connected) {
             res->connected = 1;
             safe_strcpy(res->freq_display, sizeof(res->freq_display), (const char *)rs.freq_display);
             safe_strcpy(res->freq_mhz,    sizeof(res->freq_mhz),     (const char *)rs.freq_mhz);
             safe_strcpy(res->band,         sizeof(res->band),          (const char *)rs.band);
             safe_strcpy(res->mode,         sizeof(res->mode),          (const char *)rs.mode);
+        }
+        if (ffi_client) {
+            ReleaseFfiClient();
         }
     } else {
         /* CLI path */
@@ -1500,13 +1536,19 @@ static unsigned __stdcall RigPollThread(void *param)
 static void FetchSpaceWeather(void)
 {
     if (g_backend.mode == BACKEND_FFI) {
+        struct QsrClient *ffi_client = NULL;
         QsrSpaceWeather sw;
         memset(&sw, 0, sizeof(sw));
-        if (g_backend.pf_get_space_weather(g_backend.ffi_client, &sw) == 0 && sw.has_data) {
+        if (AcquireFfiClient(&ffi_client) &&
+            g_backend.pf_get_space_weather(ffi_client, &sw) == 0 &&
+            sw.has_data) {
             g_state.k_index = sw.k_index;
             g_state.solar_flux = sw.solar_flux;
             g_state.sunspot_number = sw.sunspot_number;
             g_state.has_weather = 1;
+        }
+        if (ffi_client) {
+            ReleaseFfiClient();
         }
     } else {
         /* CLI path */
@@ -1541,8 +1583,14 @@ static void LoadSelectedQso(void)
     int loaded = 0;
 
     if (g_backend.mode == BACKEND_FFI) {
-        if (g_backend.pf_get_qso(g_backend.ffi_client, q->local_id, &detail) == 0)
+        struct QsrClient *ffi_client = NULL;
+        if (AcquireFfiClient(&ffi_client) &&
+            g_backend.pf_get_qso(ffi_client, q->local_id, &detail) == 0) {
             loaded = 1;
+        }
+        if (ffi_client) {
+            ReleaseFfiClient();
+        }
     } else {
         /* CLI path */
         char cmd[256];
@@ -1705,7 +1753,11 @@ static void DeleteSelectedQso(void)
 
     int ok = 0;
     if (g_backend.mode == BACKEND_FFI) {
-        ok = (g_backend.pf_delete_qso(g_backend.ffi_client, q->local_id) == 0);
+        struct QsrClient *ffi_client = NULL;
+        if (AcquireFfiClient(&ffi_client)) {
+            ok = (g_backend.pf_delete_qso(ffi_client, q->local_id) == 0);
+            ReleaseFfiClient();
+        }
     } else {
         char cmd[256];
         snprintf(cmd, sizeof(cmd), "delete \"%s\" --json", q->local_id);
@@ -3618,6 +3670,7 @@ static int InitFFIBackend(void)
         g_backend.ffi_dll = NULL;
         return 0;
     }
+    backend_ffi_gate_init(&g_backend.ffi_gate, g_backend.ffi_client);
 
     return 1;
 }
@@ -3657,9 +3710,11 @@ static void InitBackend(void)
 static void ShutdownBackend(void)
 {
     if (g_backend.mode == BACKEND_FFI) {
-        if (g_backend.ffi_client) {
-            g_backend.pf_disconnect(g_backend.ffi_client);
-            g_backend.ffi_client = NULL;
+        struct QsrClient *client_to_disconnect = NULL;
+        backend_ffi_gate_begin_shutdown(&g_backend.ffi_gate, (void **)&client_to_disconnect);
+        g_backend.ffi_client = NULL;
+        if (client_to_disconnect) {
+            g_backend.pf_disconnect(client_to_disconnect);
         }
         if (g_backend.ffi_dll) {
             FreeLibrary(g_backend.ffi_dll);
