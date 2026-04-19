@@ -659,13 +659,37 @@ static char *RunQrCommand(const char *args)
     }
     output[totalRead] = 0;
 
-    WaitForSingleObject(pi.hProcess, 5000);
+    DWORD wait_result = WaitForSingleObject(pi.hProcess, 5000);
+    DWORD exit_code = 1;
+    BOOL got_exit_code = (wait_result == WAIT_OBJECT_0) &&
+                         GetExitCodeProcess(pi.hProcess, &exit_code);
     CloseHandle(pi.hProcess);
     CloseHandle(pi.hThread);
     CloseHandle(hReadPipe);
 
+    if (!got_exit_code || exit_code != 0) {
+        free(output);
+        return NULL;
+    }
+
     return output;
 }
+
+#ifdef QSORIPPER_WIN32_TESTING
+void qsr_test_set_cli_path(const WCHAR *path)
+{
+    if (!path) {
+        g_cli_path[0] = L'\0';
+        return;
+    }
+    wcsncpy_s(g_cli_path, MAX_PATH, path, _TRUNCATE);
+}
+
+char *qsr_test_run_qr_command(const char *args)
+{
+    return RunQrCommand(args);
+}
+#endif
 
 /* Append a properly quoted Windows command-line argument to cmd.
    Follows the Microsoft C/C++ argument parsing rules:
