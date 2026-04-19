@@ -554,10 +554,6 @@ fn qso_to_summary(qso: &QsoRecord) -> QsrQsoSummary {
 
     if let Some(country) = &qso.worked_country {
         str_to_buf(country, &mut s.country);
-    } else if let Some(snap) = &qso.station_snapshot {
-        if let Some(country) = &snap.country {
-            str_to_buf(country, &mut s.country);
-        }
     }
 
     if let Some(grid) = &qso.worked_grid {
@@ -839,5 +835,44 @@ fn populate_rig_status(
     let mode_enum = Mode::try_from(snapshot.mode).unwrap_or(Mode::Unspecified);
     if let Some(mode_str) = mode_to_adif(mode_enum) {
         str_to_buf(mode_str, &mut out.mode);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{buf_to_str, qso_to_summary};
+    use qsoripper_core::proto::qsoripper::domain::{QsoRecord, StationSnapshot};
+
+    #[test]
+    fn qso_to_summary_does_not_use_station_snapshot_country_when_worked_country_missing() {
+        let qso = QsoRecord {
+            worked_callsign: "JA1ABC".to_string(),
+            station_snapshot: Some(StationSnapshot {
+                country: Some("United States".to_string()),
+                ..StationSnapshot::default()
+            }),
+            ..QsoRecord::default()
+        };
+
+        let summary = qso_to_summary(&qso);
+
+        assert_eq!("", buf_to_str(&summary.country));
+    }
+
+    #[test]
+    fn qso_to_summary_uses_explicit_worked_country_when_present() {
+        let qso = QsoRecord {
+            worked_callsign: "JA1ABC".to_string(),
+            worked_country: Some("Japan".to_string()),
+            station_snapshot: Some(StationSnapshot {
+                country: Some("United States".to_string()),
+                ..StationSnapshot::default()
+            }),
+            ..QsoRecord::default()
+        };
+
+        let summary = qso_to_summary(&qso);
+
+        assert_eq!("Japan", buf_to_str(&summary.country));
     }
 }
