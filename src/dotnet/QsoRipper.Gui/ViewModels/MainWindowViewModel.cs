@@ -720,7 +720,22 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
 
     private async void OnQsoLogged(object? sender, EventArgs e)
     {
-        await RecentQsos.RefreshAsync();
+        try
+        {
+            await RecentQsos.RefreshAsync();
+        }
+        catch (Grpc.Core.RpcException)
+        {
+            StatusMessage = "Ready (refresh failed)";
+        }
+        catch (ObjectDisposedException)
+        {
+            StatusMessage = "Ready (engine restarting...)";
+        }
+        catch (InvalidOperationException)
+        {
+            StatusMessage = "Ready (refresh failed)";
+        }
     }
 
     private void OnLoggerFocusRequested(object? sender, EventArgs e)
@@ -751,11 +766,26 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
         {
             RigStatusText = "Rig: error";
         }
+        catch (ObjectDisposedException)
+        {
+            RigStatusText = "Rig: unavailable";
+        }
     }
 
     private async void OnSpaceWeatherTimerTick(object? sender, EventArgs e)
     {
-        await FetchSpaceWeatherAsync();
+        try
+        {
+            await FetchSpaceWeatherAsync();
+        }
+        catch (ObjectDisposedException)
+        {
+            SpaceWeatherText = "Weather: unavailable";
+        }
+        catch (InvalidOperationException)
+        {
+            SpaceWeatherText = "Weather: error";
+        }
     }
 
     private async Task FetchSpaceWeatherAsync()
