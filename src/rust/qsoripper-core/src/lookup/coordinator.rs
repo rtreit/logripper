@@ -784,6 +784,17 @@ mod tests {
         async fn delete_qso(&self, _local_id: &str) -> Result<bool, StorageError> {
             unimplemented!()
         }
+        async fn soft_delete_qso(
+            &self,
+            _local_id: &str,
+            _deleted_at_ms: i64,
+            _pending_remote_delete: bool,
+        ) -> Result<bool, StorageError> {
+            unimplemented!()
+        }
+        async fn restore_qso(&self, _local_id: &str) -> Result<bool, StorageError> {
+            unimplemented!()
+        }
         async fn get_qso(
             &self,
             _local_id: &str,

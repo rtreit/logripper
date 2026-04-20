@@ -18,6 +18,25 @@ public interface ILogbookStore
     /// <returns><c>true</c> if the record was found and deleted; <c>false</c> if not found.</returns>
     ValueTask<bool> DeleteQsoAsync(string localId);
 
+    /// <summary>
+    /// Soft-deletes a QSO by setting its tombstone (<c>DeletedAt</c>) and optionally
+    /// queueing it for remote QRZ delete on the next sync. The row remains in the
+    /// table so it can be restored.
+    /// </summary>
+    /// <param name="localId">Local identifier of the QSO to soft-delete.</param>
+    /// <param name="deletedAt">Wall-clock tombstone time recorded on the row.</param>
+    /// <param name="pendingRemoteDelete">When <c>true</c>, mark the row for QRZ removal on the next sync.</param>
+    /// <returns><c>true</c> if the record was found and updated; <c>false</c> if not found.</returns>
+    ValueTask<bool> SoftDeleteQsoAsync(string localId, DateTimeOffset deletedAt, bool pendingRemoteDelete);
+
+    /// <summary>
+    /// Restores a previously soft-deleted QSO, clearing both the tombstone and
+    /// the pending-remote-delete flag.
+    /// </summary>
+    /// <param name="localId">Local identifier of the QSO to restore.</param>
+    /// <returns><c>true</c> if the record was found and restored; <c>false</c> if not found.</returns>
+    ValueTask<bool> RestoreQsoAsync(string localId);
+
     /// <summary>Retrieves a single QSO record by its local identifier, or <c>null</c> if not found.</summary>
     ValueTask<QsoRecord?> GetQsoAsync(string localId);
 

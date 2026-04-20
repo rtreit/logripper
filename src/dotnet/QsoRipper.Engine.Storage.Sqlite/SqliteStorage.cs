@@ -28,7 +28,9 @@ public sealed class SqliteStorage : IEngineStorage, ILogbookStore, ILookupSnapsh
             created_at_ms INTEGER,
             updated_at_ms INTEGER,
             sync_status INTEGER NOT NULL,
-            record BLOB NOT NULL
+            record BLOB NOT NULL,
+            deleted_at_ms INTEGER,
+            pending_remote_delete INTEGER NOT NULL DEFAULT 0
         );
 
         CREATE INDEX IF NOT EXISTS idx_qsos_station_callsign ON qsos (station_callsign);
@@ -38,6 +40,7 @@ public sealed class SqliteStorage : IEngineStorage, ILogbookStore, ILookupSnapsh
         CREATE INDEX IF NOT EXISTS idx_qsos_mode ON qsos (mode);
         CREATE INDEX IF NOT EXISTS idx_qsos_contest_id ON qsos (contest_id);
         CREATE INDEX IF NOT EXISTS idx_qsos_sync_status ON qsos (sync_status);
+        CREATE INDEX IF NOT EXISTS idx_qsos_deleted_at_ms ON qsos (deleted_at_ms);
 
         CREATE TABLE IF NOT EXISTS sync_metadata (
             id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -92,9 +95,11 @@ public sealed class SqliteStorage : IEngineStorage, ILogbookStore, ILookupSnapsh
                 cmd.CommandText =
                     """
                     INSERT INTO qsos (local_id, qrz_logid, qrz_bookid, station_callsign, worked_callsign,
-                        utc_timestamp_ms, band, mode, contest_id, created_at_ms, updated_at_ms, sync_status, record)
+                        utc_timestamp_ms, band, mode, contest_id, created_at_ms, updated_at_ms, sync_status, record,
+                        deleted_at_ms, pending_remote_delete)
                     VALUES ($local_id, $qrz_logid, $qrz_bookid, $station_callsign, $worked_callsign,
-                        $utc_timestamp_ms, $band, $mode, $contest_id, $created_at_ms, $updated_at_ms, $sync_status, $record)
+                        $utc_timestamp_ms, $band, $mode, $contest_id, $created_at_ms, $updated_at_ms, $sync_status, $record,
+                        $deleted_at_ms, $pending_remote_delete)
                     """;
                 BindQsoParameters(cmd, qso);
                 cmd.ExecuteNonQuery();
@@ -135,7 +140,9 @@ public sealed class SqliteStorage : IEngineStorage, ILogbookStore, ILookupSnapsh
                     created_at_ms = $created_at_ms,
                     updated_at_ms = $updated_at_ms,
                     sync_status = $sync_status,
-                    record = $record
+                    record = $record,
+                    deleted_at_ms = $deleted_at_ms,
+                    pending_remote_delete = $pending_remote_delete
                 WHERE local_id = $local_id
                 """;
             BindQsoParameters(cmd, qso);
@@ -158,6 +165,38 @@ public sealed class SqliteStorage : IEngineStorage, ILogbookStore, ILookupSnapsh
             var rows = cmd.ExecuteNonQuery();
             return new ValueTask<bool>(rows > 0);
         }
+    }
+
+    /// <inheritdoc />
+    public async ValueTask<bool> SoftDeleteQsoAsync(string localId, DateTimeOffset deletedAt, bool pendingRemoteDelete)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(localId);
+
+        var existing = await GetQsoAsync(localId).ConfigureAwait(false);
+        if (existing is null)
+        {
+            return false;
+        }
+
+        existing.DeletedAt = Timestamp.FromDateTimeOffset(deletedAt);
+        existing.PendingRemoteDelete = pendingRemoteDelete;
+        return await UpdateQsoAsync(existing).ConfigureAwait(false);
+    }
+
+    /// <inheritdoc />
+    public async ValueTask<bool> RestoreQsoAsync(string localId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(localId);
+
+        var existing = await GetQsoAsync(localId).ConfigureAwait(false);
+        if (existing is null)
+        {
+            return false;
+        }
+
+        existing.DeletedAt = null;
+        existing.PendingRemoteDelete = false;
+        return await UpdateQsoAsync(existing).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
@@ -192,6 +231,18 @@ public sealed class SqliteStorage : IEngineStorage, ILogbookStore, ILookupSnapsh
             ThrowIfDisposed();
             using var cmd = _connection.CreateCommand();
             var whereClauses = new List<string>();
+
+            switch (query.DeletedFilter)
+            {
+                case DeletedRecordsFilter.ActiveOnly:
+                    whereClauses.Add("deleted_at_ms IS NULL");
+                    break;
+                case DeletedRecordsFilter.DeletedOnly:
+                    whereClauses.Add("deleted_at_ms IS NOT NULL");
+                    break;
+                case DeletedRecordsFilter.All:
+                    break;
+            }
 
             if (query.After is { } after)
             {
@@ -277,11 +328,11 @@ public sealed class SqliteStorage : IEngineStorage, ILogbookStore, ILookupSnapsh
         {
             ThrowIfDisposed();
             using var totalCmd = _connection.CreateCommand();
-            totalCmd.CommandText = "SELECT COUNT(*) FROM qsos";
+            totalCmd.CommandText = "SELECT COUNT(*) FROM qsos WHERE deleted_at_ms IS NULL";
             var total = Convert.ToInt32(totalCmd.ExecuteScalar(), CultureInfo.InvariantCulture);
 
             using var pendingCmd = _connection.CreateCommand();
-            pendingCmd.CommandText = "SELECT COUNT(*) FROM qsos WHERE sync_status != $synced";
+            pendingCmd.CommandText = "SELECT COUNT(*) FROM qsos WHERE sync_status != $synced AND deleted_at_ms IS NULL";
             pendingCmd.Parameters.AddWithValue("$synced", (int)SyncStatus.Synced);
             var pending = Convert.ToInt32(pendingCmd.ExecuteScalar(), CultureInfo.InvariantCulture);
 
@@ -445,7 +496,40 @@ public sealed class SqliteStorage : IEngineStorage, ILogbookStore, ILookupSnapsh
             using var cmd = _connection.CreateCommand();
             cmd.CommandText = MigrationSql;
             cmd.ExecuteNonQuery();
+
+            ApplySoftDeleteMigration();
         }
+    }
+
+    private void ApplySoftDeleteMigration()
+    {
+        if (!HasColumn("qsos", "deleted_at_ms"))
+        {
+            using var alter = _connection.CreateCommand();
+            alter.CommandText = "ALTER TABLE qsos ADD COLUMN deleted_at_ms INTEGER";
+            alter.ExecuteNonQuery();
+        }
+
+        if (!HasColumn("qsos", "pending_remote_delete"))
+        {
+            using var alter = _connection.CreateCommand();
+            alter.CommandText = "ALTER TABLE qsos ADD COLUMN pending_remote_delete INTEGER NOT NULL DEFAULT 0";
+            alter.ExecuteNonQuery();
+        }
+
+        using var index = _connection.CreateCommand();
+        index.CommandText = "CREATE INDEX IF NOT EXISTS idx_qsos_deleted_at_ms ON qsos (deleted_at_ms)";
+        index.ExecuteNonQuery();
+    }
+
+    private bool HasColumn(string table, string column)
+    {
+        using var cmd = _connection.CreateCommand();
+        cmd.CommandText = "SELECT 1 FROM pragma_table_info($table) WHERE name = $column LIMIT 1";
+        cmd.Parameters.AddWithValue("$table", table);
+        cmd.Parameters.AddWithValue("$column", column);
+        using var reader = cmd.ExecuteReader();
+        return reader.Read();
     }
 
     internal void ConfigurePragmas(TimeSpan busyTimeout)
@@ -492,6 +576,8 @@ public sealed class SqliteStorage : IEngineStorage, ILogbookStore, ILookupSnapsh
         cmd.Parameters.AddWithValue("$updated_at_ms", NullableMsToDbValue(TimestampToMs(qso.UpdatedAt)));
         cmd.Parameters.AddWithValue("$sync_status", (int)qso.SyncStatus);
         cmd.Parameters.AddWithValue("$record", qso.ToByteArray());
+        cmd.Parameters.AddWithValue("$deleted_at_ms", NullableMsToDbValue(TimestampToMs(qso.DeletedAt)));
+        cmd.Parameters.AddWithValue("$pending_remote_delete", qso.PendingRemoteDelete ? 1 : 0);
     }
 
     private static object NullableMsToDbValue(long? value)
