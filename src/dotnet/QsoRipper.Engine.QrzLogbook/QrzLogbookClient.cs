@@ -1,3 +1,4 @@
+using System.Globalization;
 using QsoRipper.Domain;
 
 namespace QsoRipper.Engine.QrzLogbook;
@@ -155,6 +156,77 @@ public sealed class QrzLogbookClient : IQrzLogbookApi, IDisposable
         }
 
         return qso.QrzLogid;
+    }
+
+    /// <inheritdoc />
+    public async Task<QrzLogbookStatus> GetStatusAsync()
+    {
+        var formFields = new List<KeyValuePair<string, string>>(2)
+        {
+            new("ACTION", "STATUS"),
+            new("KEY", _apiKey),
+        };
+
+        var body = await PostFormAsync(formFields).ConfigureAwait(false);
+        var map = QrzResponseParser.ParseKeyValueResponse(body);
+        QrzResponseParser.CheckResult(map);
+
+        // Match Rust qsoripper-core/src/qrz_logbook/mod.rs::test_connection:
+        // prefer CALLSIGN, fall back to OWNER. COUNT may be missing on a brand-new
+        // logbook; treat that as zero rather than failing.
+        var owner = map.TryGetValue("CALLSIGN", out var callsign) && !string.IsNullOrWhiteSpace(callsign)
+            ? callsign
+            : map.GetValueOrDefault("OWNER", string.Empty);
+
+        uint qsoCount = 0;
+        if (map.TryGetValue("COUNT", out var countText)
+            && uint.TryParse(countText, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed))
+        {
+            qsoCount = parsed;
+        }
+
+        return new QrzLogbookStatus(owner, qsoCount);
+    }
+
+    /// <inheritdoc />
+    public async Task DeleteQsoAsync(string logid)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(logid);
+
+        var formFields = new List<KeyValuePair<string, string>>(3)
+        {
+            new("ACTION", "DELETE"),
+            new("KEY", _apiKey),
+            new("LOGID", logid),
+        };
+
+        string body;
+        try
+        {
+            body = await PostFormAsync(formFields).ConfigureAwait(false);
+        }
+        catch (QrzLogbookException ex) when (ex.Message.StartsWith("HTTP 404", StringComparison.Ordinal))
+        {
+            // Already gone server-side — treat as success.
+            return;
+        }
+
+        var map = QrzResponseParser.ParseKeyValueResponse(body);
+        try
+        {
+            QrzResponseParser.CheckResult(map);
+        }
+        catch (QrzLogbookAuthException)
+        {
+            throw;
+        }
+        catch (QrzLogbookException ex) when (QrzResponseParser.IsNotFoundError(ex.Message))
+        {
+            // QRZ says the record is already gone — treat as success so the
+            // queued-remote-delete loop can clear local pending flags and
+            // doesn't loop forever.
+            return;
+        }
     }
 
     /// <inheritdoc cref="IDisposable.Dispose"/>

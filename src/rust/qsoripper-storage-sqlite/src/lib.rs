@@ -7,8 +7,8 @@ use prost::Message;
 use qsoripper_core::domain::lookup::normalize_callsign;
 use qsoripper_core::proto::qsoripper::domain::{LookupResult, QsoRecord, SyncStatus};
 use qsoripper_core::storage::{
-    EngineStorage, LogbookCounts, LogbookStore, LookupSnapshot, LookupSnapshotStore, QsoListQuery,
-    QsoSortOrder, StorageError, SyncMetadata,
+    DeletedRecordsFilter, EngineStorage, LogbookCounts, LogbookStore, LookupSnapshot,
+    LookupSnapshotStore, QsoListQuery, QsoSortOrder, StorageError, SyncMetadata,
 };
 use sqlite::{ConnectionThreadSafe, ReadableWithIndex, State, Statement, Value};
 use std::sync::{Mutex, MutexGuard};
@@ -62,8 +62,10 @@ impl LogbookStore for SqliteStorage {
                 created_at_ms,
                 updated_at_ms,
                 sync_status,
-                record
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                record,
+                deleted_at_ms,
+                pending_remote_delete
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             &[
                 Value::from(qso.local_id.as_str()),
                 Value::from(qso.qrz_logid.as_deref()),
@@ -78,6 +80,8 @@ impl LogbookStore for SqliteStorage {
                 Value::from(timestamp_to_millis(qso.updated_at.as_ref())),
                 Value::Integer(i64::from(qso.sync_status)),
                 Value::Binary(encoded),
+                Value::from(timestamp_to_millis(qso.deleted_at.as_ref())),
+                Value::Integer(i64::from(qso.pending_remote_delete)),
             ],
         )
         .map_err(|err| map_insert_error(err, &qso.local_id))?;
@@ -102,7 +106,9 @@ impl LogbookStore for SqliteStorage {
                  created_at_ms = ?,
                  updated_at_ms = ?,
                  sync_status = ?,
-                 record = ?
+                 record = ?,
+                 deleted_at_ms = ?,
+                 pending_remote_delete = ?
              WHERE local_id = ?",
             &[
                 Value::from(qso.qrz_logid.as_deref()),
@@ -117,6 +123,8 @@ impl LogbookStore for SqliteStorage {
                 Value::from(timestamp_to_millis(qso.updated_at.as_ref())),
                 Value::Integer(i64::from(qso.sync_status)),
                 Value::Binary(encoded),
+                Value::from(timestamp_to_millis(qso.deleted_at.as_ref())),
+                Value::Integer(i64::from(qso.pending_remote_delete)),
                 Value::from(qso.local_id.as_str()),
             ],
         )
@@ -137,6 +145,29 @@ impl LogbookStore for SqliteStorage {
         Ok(rows > 0)
     }
 
+    async fn soft_delete_qso(
+        &self,
+        local_id: &str,
+        deleted_at_ms: i64,
+        pending_remote_delete: bool,
+    ) -> Result<bool, StorageError> {
+        let Some(mut record) = self.get_qso(local_id).await? else {
+            return Ok(false);
+        };
+        record.deleted_at = millis_to_timestamp(Some(deleted_at_ms));
+        record.pending_remote_delete = pending_remote_delete;
+        self.update_qso(&record).await
+    }
+
+    async fn restore_qso(&self, local_id: &str) -> Result<bool, StorageError> {
+        let Some(mut record) = self.get_qso(local_id).await? else {
+            return Ok(false);
+        };
+        record.deleted_at = None;
+        record.pending_remote_delete = false;
+        self.update_qso(&record).await
+    }
+
     async fn get_qso(&self, local_id: &str) -> Result<Option<QsoRecord>, StorageError> {
         let connection = self.connection()?;
         let payload = query_optional::<Vec<u8>>(
@@ -154,6 +185,16 @@ impl LogbookStore for SqliteStorage {
         let connection = self.connection()?;
         let mut sql = String::from("SELECT record FROM qsos WHERE 1 = 1");
         let mut values = Vec::<Value>::new();
+
+        match query.deleted_filter {
+            DeletedRecordsFilter::ActiveOnly => {
+                sql.push_str(" AND deleted_at_ms IS NULL");
+            }
+            DeletedRecordsFilter::DeletedOnly => {
+                sql.push_str(" AND deleted_at_ms IS NOT NULL");
+            }
+            DeletedRecordsFilter::All => {}
+        }
 
         if let Some(after) = query.after.as_ref() {
             sql.push_str(" AND utc_timestamp_ms >= ?");
@@ -224,13 +265,17 @@ impl LogbookStore for SqliteStorage {
 
     async fn qso_counts(&self) -> Result<LogbookCounts, StorageError> {
         let connection = self.connection()?;
-        let local_qso_count =
-            query_optional::<i64>(&connection, "SELECT COUNT(*) FROM qsos", &[], 0)
-                .map_err(map_sqlite_error)?
-                .unwrap_or(0);
+        let local_qso_count = query_optional::<i64>(
+            &connection,
+            "SELECT COUNT(*) FROM qsos WHERE deleted_at_ms IS NULL",
+            &[],
+            0,
+        )
+        .map_err(map_sqlite_error)?
+        .unwrap_or(0);
         let pending_upload_count = query_optional::<i64>(
             &connection,
-            "SELECT COUNT(*) FROM qsos WHERE sync_status != ?",
+            "SELECT COUNT(*) FROM qsos WHERE sync_status != ? AND deleted_at_ms IS NULL",
             &[Value::Integer(i64::from(SyncStatus::Synced as i32))],
             0,
         )

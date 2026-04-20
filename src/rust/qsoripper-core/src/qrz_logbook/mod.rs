@@ -232,6 +232,16 @@ fn is_auth_error(reason: &str) -> bool {
         || lower.contains("access denied")
 }
 
+/// Detect QRZ "logid does not exist" responses, which we treat as success
+/// for delete operations to keep the queued-remote-delete loop idempotent.
+fn is_not_found_error(reason: &str) -> bool {
+    let lower = reason.to_ascii_lowercase();
+    lower.contains("not found")
+        || lower.contains("no such")
+        || lower.contains("does not exist")
+        || lower.contains("no record")
+}
+
 fn find_adif_marker_index(body: &str) -> Option<usize> {
     body.to_ascii_uppercase().find("ADIF=")
 }
@@ -606,13 +616,23 @@ impl QrzLogbookClient {
     ///
     /// Returns an error on network failure, authentication failure, or if
     /// the QRZ API rejects the deletion.
+    /// Delete a QSO from the QRZ logbook by its server-side logid.
+    ///
+    /// Treats QRZ "not found" / "no record" responses as **success** so that
+    /// the caller's queued-remote-delete loop is idempotent: if a row was
+    /// already removed remotely (manually, or by an earlier sync attempt that
+    /// got far enough to delete but not far enough to clear local flags), the
+    /// next sync just clears the local pending flag instead of looping forever.
     pub async fn delete_qso(&self, logid: &str) -> Result<(), QrzLogbookError> {
         let body = self
             .post_form(&[("ACTION", "DELETE"), ("LOGID", logid)])
             .await?;
         let map = parse_kv_response(&body);
-        check_result(map)?;
-        Ok(())
+        match check_result(map) {
+            Ok(_) => Ok(()),
+            Err(QrzLogbookError::ApiError(reason)) if is_not_found_error(&reason) => Ok(()),
+            Err(other) => Err(other),
+        }
     }
 
     /// Send a form-encoded POST to the QRZ Logbook API.
@@ -1483,15 +1503,30 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn delete_qso_api_failure() {
+    async fn delete_qso_treats_not_found_as_success() {
+        // QRZ returns RESULT=FAIL with a "not found"-ish reason when the row
+        // was already gone. The queued-remote-delete loop relies on this
+        // being treated as success so the local pending flag clears.
         let (base_url, _) =
             spawn_logbook_server(&[("text/plain", "RESULT=FAIL&REASON=record not found")]).await;
+        let client = QrzLogbookClient::new(test_config(base_url)).expect("client");
+
+        client
+            .delete_qso("000000")
+            .await
+            .expect("not-found is success");
+    }
+
+    #[tokio::test]
+    async fn delete_qso_api_failure_other_reasons_propagate() {
+        let (base_url, _) =
+            spawn_logbook_server(&[("text/plain", "RESULT=FAIL&REASON=bad record format")]).await;
         let client = QrzLogbookClient::new(test_config(base_url)).expect("client");
 
         let err = client.delete_qso("000000").await.unwrap_err();
 
         match err {
-            QrzLogbookError::ApiError(reason) => assert_eq!(reason, "record not found"),
+            QrzLogbookError::ApiError(reason) => assert_eq!(reason, "bad record format"),
             other => panic!("expected ApiError, got: {other:?}"),
         }
     }

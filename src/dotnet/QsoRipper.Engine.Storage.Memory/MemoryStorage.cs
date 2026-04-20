@@ -73,6 +73,42 @@ public sealed class MemoryStorage : IEngineStorage, ILogbookStore, ILookupSnapsh
     }
 
     /// <inheritdoc />
+    public ValueTask<bool> SoftDeleteQsoAsync(string localId, DateTimeOffset deletedAt, bool pendingRemoteDelete)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(localId);
+
+        lock (_lock)
+        {
+            if (!_qsos.TryGetValue(localId.Trim(), out var stored))
+            {
+                return new ValueTask<bool>(false);
+            }
+
+            stored.DeletedAt = Timestamp.FromDateTimeOffset(deletedAt);
+            stored.PendingRemoteDelete = pendingRemoteDelete;
+            return new ValueTask<bool>(true);
+        }
+    }
+
+    /// <inheritdoc />
+    public ValueTask<bool> RestoreQsoAsync(string localId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(localId);
+
+        lock (_lock)
+        {
+            if (!_qsos.TryGetValue(localId.Trim(), out var stored))
+            {
+                return new ValueTask<bool>(false);
+            }
+
+            stored.DeletedAt = null;
+            stored.PendingRemoteDelete = false;
+            return new ValueTask<bool>(true);
+        }
+    }
+
+    /// <inheritdoc />
     public ValueTask<QsoRecord?> GetQsoAsync(string localId)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(localId);
@@ -96,6 +132,14 @@ public sealed class MemoryStorage : IEngineStorage, ILogbookStore, ILookupSnapsh
         lock (_lock)
         {
             IEnumerable<QsoRecord> items = _qsos.Values;
+
+            items = query.DeletedFilter switch
+            {
+                DeletedRecordsFilter.ActiveOnly => items.Where(q => q.DeletedAt is null),
+                DeletedRecordsFilter.DeletedOnly => items.Where(q => q.DeletedAt is not null),
+                DeletedRecordsFilter.All => items,
+                _ => items.Where(q => q.DeletedAt is null),
+            };
 
             if (query.After is { } after)
             {
@@ -154,9 +198,9 @@ public sealed class MemoryStorage : IEngineStorage, ILogbookStore, ILookupSnapsh
     {
         lock (_lock)
         {
-            var total = _qsos.Count;
-            var pending = _qsos.Values.Count(q => q.SyncStatus != SyncStatus.Synced);
-            return new ValueTask<LogbookCounts>(new LogbookCounts(total, pending));
+            var active = _qsos.Values.Where(q => q.DeletedAt is null).ToArray();
+            var pending = active.Count(q => q.SyncStatus != SyncStatus.Synced);
+            return new ValueTask<LogbookCounts>(new LogbookCounts(active.Length, pending));
         }
     }
 

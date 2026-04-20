@@ -34,6 +34,9 @@ public sealed record QsoListQuery
 
     /// <summary>Sort order for the result set. Defaults to <see cref="QsoSortOrder.NewestFirst"/>.</summary>
     public QsoSortOrder Sort { get; init; } = QsoSortOrder.NewestFirst;
+
+    /// <summary>Filter for soft-deleted (tombstoned) QSOs. Defaults to <see cref="DeletedRecordsFilter.ActiveOnly"/>.</summary>
+    public DeletedRecordsFilter DeletedFilter { get; init; } = DeletedRecordsFilter.ActiveOnly;
 }
 
 /// <summary>Sort order for QSO list queries.</summary>
@@ -44,4 +47,17 @@ public enum QsoSortOrder
 
     /// <summary>Oldest QSOs first (ascending timestamp).</summary>
     OldestFirst,
+}
+
+/// <summary>Soft-delete inclusion mode for <see cref="QsoListQuery"/>.</summary>
+public enum DeletedRecordsFilter
+{
+    /// <summary>Only return rows where <c>DeletedAt</c> is null.</summary>
+    ActiveOnly,
+
+    /// <summary>Only return rows where <c>DeletedAt</c> is set.</summary>
+    DeletedOnly,
+
+    /// <summary>Return both active and soft-deleted rows.</summary>
+    All,
 }

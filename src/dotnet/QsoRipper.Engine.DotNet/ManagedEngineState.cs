@@ -13,6 +13,33 @@ using QsoRipper.Services;
 
 namespace QsoRipper.Engine.DotNet;
 
+internal sealed record DeleteQsoOutcome(bool Found, bool RemoteDeleteQueued, bool MissingQrzLogid);
+
+internal sealed record RestoreQsoOutcome(bool Found, QsoRecord? Restored);
+
+internal sealed class QsoSoftDeletedException : InvalidOperationException
+{
+    public QsoSoftDeletedException()
+        : base("QSO is deleted; restore it before updating.")
+    {
+        LocalId = string.Empty;
+    }
+
+    public QsoSoftDeletedException(string localId)
+        : base($"QSO '{localId}' is deleted; restore it before updating.")
+    {
+        LocalId = localId;
+    }
+
+    public QsoSoftDeletedException(string message, Exception innerException)
+        : base(message, innerException)
+    {
+        LocalId = string.Empty;
+    }
+
+    public string LocalId { get; }
+}
+
 internal sealed class ManagedEngineState
 {
     private const string PersistenceStepDescription = "The managed .NET engine keeps its logbook in memory. No persistence input is required during setup.";
@@ -507,6 +534,10 @@ internal sealed class ManagedEngineState
             {
                 return new UpdateQsoResponse { Success = false, Error = $"QSO '{qso.LocalId}' was not found." };
             }
+            if (existing.DeletedAt is not null)
+            {
+                throw new QsoSoftDeletedException(qso.LocalId);
+            }
 
             // Merge incoming partial record into existing so unspecified fields are preserved.
             var merged = ManagedQsoParity.MergeQsoForUpdate(existing, qso);
@@ -523,13 +554,68 @@ internal sealed class ManagedEngineState
         }
     }
 
-    public bool DeleteQso(string localId)
+    public DeleteQsoOutcome DeleteQso(string localId, bool queueRemoteDelete)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(localId);
 
         lock (_gate)
         {
-            return Sync(_storage.Logbook.DeleteQsoAsync(localId.Trim()));
+            var trimmed = localId.Trim();
+            var existing = Sync(_storage.Logbook.GetQsoAsync(trimmed));
+            if (existing is null)
+            {
+                return new DeleteQsoOutcome(Found: false, RemoteDeleteQueued: false, MissingQrzLogid: false);
+            }
+
+            var hasLogid = !string.IsNullOrWhiteSpace(existing.QrzLogid);
+            var pending = queueRemoteDelete && hasLogid;
+
+            // Idempotent: re-deleting an already soft-deleted row is a no-op
+            // success that may upgrade pending_remote_delete if asked.
+            Sync(_storage.Logbook.SoftDeleteQsoAsync(trimmed, DateTimeOffset.UtcNow, pending));
+            return new DeleteQsoOutcome(
+                Found: true,
+                RemoteDeleteQueued: pending,
+                MissingQrzLogid: queueRemoteDelete && !hasLogid);
+        }
+    }
+
+    public RestoreQsoOutcome RestoreQso(string localId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(localId);
+
+        lock (_gate)
+        {
+            var trimmed = localId.Trim();
+            var existing = Sync(_storage.Logbook.GetQsoAsync(trimmed));
+            if (existing is null)
+            {
+                return new RestoreQsoOutcome(Found: false, Restored: null);
+            }
+
+            // Track whether we need to demote sync_status post-restore so the
+            // next sync re-uploads a row that has no remote logid yet.
+            var demoteToLocalOnly = existing.DeletedAt is not null
+                && string.IsNullOrWhiteSpace(existing.QrzLogid)
+                && existing.SyncStatus == SyncStatus.Synced;
+
+            Sync(_storage.Logbook.RestoreQsoAsync(trimmed));
+
+            if (demoteToLocalOnly)
+            {
+                var afterRestore = Sync(_storage.Logbook.GetQsoAsync(trimmed));
+                if (afterRestore is not null
+                    && string.IsNullOrWhiteSpace(afterRestore.QrzLogid)
+                    && afterRestore.SyncStatus == SyncStatus.Synced)
+                {
+                    afterRestore.SyncStatus = SyncStatus.LocalOnly;
+                    afterRestore.UpdatedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow);
+                    Sync(_storage.Logbook.UpdateQsoAsync(afterRestore));
+                }
+            }
+
+            var restored = Sync(_storage.Logbook.GetQsoAsync(trimmed));
+            return new RestoreQsoOutcome(Found: true, Restored: restored);
         }
     }
 
@@ -562,6 +648,12 @@ internal sealed class ManagedEngineState
                 Sort = request.Sort == QsoRipper.Services.QsoSortOrder.OldestFirst
                     ? Storage.QsoSortOrder.OldestFirst
                     : Storage.QsoSortOrder.NewestFirst,
+                DeletedFilter = request.DeletedFilter switch
+                {
+                    QsoRipper.Services.DeletedRecordsFilter.DeletedOnly => Storage.DeletedRecordsFilter.DeletedOnly,
+                    QsoRipper.Services.DeletedRecordsFilter.All => Storage.DeletedRecordsFilter.All,
+                    _ => Storage.DeletedRecordsFilter.ActiveOnly,
+                },
             };
 
             return Sync(_storage.Logbook.ListQsosAsync(storageQuery));
@@ -627,7 +719,13 @@ internal sealed class ManagedEngineState
             var response = new GetSyncStatusResponse
             {
                 LocalQsoCount = (uint)counts.LocalQsoCount,
-                QrzQsoCount = _hasQrzLogbookApiKey ? (uint)(counts.LocalQsoCount - counts.PendingUploadCount) : 0,
+                // Prefer the authoritative remote count persisted by Phase 3 of sync.
+                // Fall back to (local - pending) only if no successful sync has run.
+                QrzQsoCount = _hasQrzLogbookApiKey
+                    ? (syncMeta.LastSync is null
+                        ? (uint)Math.Max(0, counts.LocalQsoCount - counts.PendingUploadCount)
+                        : (uint)Math.Max(0, syncMeta.QrzQsoCount))
+                    : 0,
                 PendingUpload = (uint)counts.PendingUploadCount,
                 IsSyncing = false,
                 AutoSyncEnabled = _syncConfig.AutoSyncEnabled && _hasQrzLogbookApiKey,
@@ -638,10 +736,22 @@ internal sealed class ManagedEngineState
                 response.LastSync = Timestamp.FromDateTimeOffset(lastSyncUtc);
             }
 
-            var active = GetEffectiveActiveProfileNoLock();
-            if (_hasQrzLogbookApiKey && !string.IsNullOrWhiteSpace(active?.StationCallsign))
+            // Prefer the QRZ-reported owner from Phase 3 STATUS; fall back to the
+            // active station's callsign when sync hasn't populated metadata yet.
+            if (_hasQrzLogbookApiKey)
             {
-                response.QrzLogbookOwner = active.StationCallsign;
+                if (!string.IsNullOrWhiteSpace(syncMeta.QrzLogbookOwner))
+                {
+                    response.QrzLogbookOwner = syncMeta.QrzLogbookOwner;
+                }
+                else
+                {
+                    var active = GetEffectiveActiveProfileNoLock();
+                    if (!string.IsNullOrWhiteSpace(active?.StationCallsign))
+                    {
+                        response.QrzLogbookOwner = active.StationCallsign;
+                    }
+                }
             }
 
             return response;

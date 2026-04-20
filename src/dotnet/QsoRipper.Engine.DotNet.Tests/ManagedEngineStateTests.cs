@@ -704,6 +704,260 @@ public sealed class ManagedEngineStateTests : IDisposable
         }
     }
 
+    [Fact]
+    public void Soft_delete_marks_row_with_tombstone_and_keeps_it_retrievable()
+    {
+        var state = CreateState();
+        EnsureStationConfigured(state);
+        var loggedResp = LogSampleQso(state, "W1AW");
+        var logged = state.GetQso(loggedResp.LocalId)!;
+
+        var outcome = state.DeleteQso(logged.LocalId, queueRemoteDelete: false);
+
+        Assert.True(outcome.Found);
+        Assert.False(outcome.RemoteDeleteQueued);
+
+        var fetched = state.GetQso(logged.LocalId);
+        Assert.NotNull(fetched);
+        Assert.NotNull(fetched!.DeletedAt);
+        Assert.False(fetched.PendingRemoteDelete);
+    }
+
+    [Fact]
+    public void Soft_delete_with_qrz_logid_queues_remote_delete()
+    {
+        var state = CreateState();
+        state.SaveSetup(new SaveSetupRequest
+        {
+            QrzLogbookApiKey = "test-api-key",
+            StationProfile = new StationProfile
+            {
+                ProfileName = "Home",
+                StationCallsign = "K7RND",
+                OperatorCallsign = "K7RND",
+                Grid = "CN87",
+            },
+        });
+        var loggedResp = state.LogQso(new LogQsoRequest
+        {
+            SyncToQrz = true,
+            Qso = new QsoRecord
+            {
+                WorkedCallsign = "W1AW",
+                Band = Band._20M,
+                Mode = Mode.Ft8,
+                UtcTimestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            },
+        });
+        Assert.False(string.IsNullOrEmpty(loggedResp.QrzLogid));
+        var logged = state.GetQso(loggedResp.LocalId)!;
+
+        var outcome = state.DeleteQso(logged.LocalId, queueRemoteDelete: true);
+
+        Assert.True(outcome.Found);
+        Assert.True(outcome.RemoteDeleteQueued);
+        Assert.False(outcome.MissingQrzLogid);
+
+        var fetched = state.GetQso(logged.LocalId);
+        Assert.NotNull(fetched!.DeletedAt);
+        Assert.True(fetched.PendingRemoteDelete);
+    }
+
+    [Fact]
+    public void Soft_delete_without_qrz_logid_reports_missing_logid_when_remote_requested()
+    {
+        var state = CreateState();
+        EnsureStationConfigured(state);
+        var loggedResp = LogSampleQso(state, "W1AW");
+        var logged = state.GetQso(loggedResp.LocalId)!;
+
+        var outcome = state.DeleteQso(logged.LocalId, queueRemoteDelete: true);
+
+        Assert.True(outcome.Found);
+        Assert.False(outcome.RemoteDeleteQueued);
+        Assert.True(outcome.MissingQrzLogid);
+    }
+
+    [Fact]
+    public void Update_on_soft_deleted_row_throws_QsoSoftDeletedException()
+    {
+        var state = CreateState();
+        EnsureStationConfigured(state);
+        var loggedResp = LogSampleQso(state, "W1AW");
+        var logged = state.GetQso(loggedResp.LocalId)!;
+        state.DeleteQso(logged.LocalId, queueRemoteDelete: false);
+
+        Assert.Throws<QsoSoftDeletedException>(() => state.UpdateQso(new UpdateQsoRequest
+        {
+            Qso = new QsoRecord(logged) { Notes = "should not apply" },
+        }));
+    }
+
+    [Fact]
+    public void Restore_clears_tombstone_and_pending_flag()
+    {
+        var state = CreateState();
+        state.SaveSetup(new SaveSetupRequest
+        {
+            QrzLogbookApiKey = "test-api-key",
+            StationProfile = new StationProfile
+            {
+                ProfileName = "Home",
+                StationCallsign = "K7RND",
+                OperatorCallsign = "K7RND",
+                Grid = "CN87",
+            },
+        });
+        var loggedResp = state.LogQso(new LogQsoRequest
+        {
+            SyncToQrz = true,
+            Qso = new QsoRecord
+            {
+                WorkedCallsign = "W1AW",
+                Band = Band._20M,
+                Mode = Mode.Ft8,
+                UtcTimestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            },
+        });
+        var logged = state.GetQso(loggedResp.LocalId)!;
+        var originalLogid = logged.QrzLogid;
+        Assert.False(string.IsNullOrEmpty(originalLogid));
+        state.DeleteQso(logged.LocalId, queueRemoteDelete: true);
+
+        var outcome = state.RestoreQso(logged.LocalId);
+
+        Assert.True(outcome.Found);
+        Assert.NotNull(outcome.Restored);
+        Assert.Null(outcome.Restored!.DeletedAt);
+        Assert.False(outcome.Restored.PendingRemoteDelete);
+        Assert.Equal(originalLogid, outcome.Restored.QrzLogid);
+        Assert.Equal(SyncStatus.Synced, outcome.Restored.SyncStatus);
+    }
+
+    [Fact]
+    public void Restore_unknown_local_id_returns_not_found()
+    {
+        var state = CreateState();
+
+        var outcome = state.RestoreQso("does-not-exist");
+
+        Assert.False(outcome.Found);
+        Assert.Null(outcome.Restored);
+    }
+
+    [Fact]
+    public void List_qsos_excludes_soft_deleted_by_default()
+    {
+        var state = CreateState();
+        EnsureStationConfigured(state);
+        var keepResp = LogSampleQso(state, "W1AW");
+        var keep = state.GetQso(keepResp.LocalId)!;
+        var trashResp = LogSampleQso(state, "K7RND");
+        var trash = state.GetQso(trashResp.LocalId)!;
+        state.DeleteQso(trash.LocalId, queueRemoteDelete: false);
+
+        var active = state.ListQsos(new ListQsosRequest());
+
+        Assert.Contains(active, q => q.LocalId == keep.LocalId);
+        Assert.DoesNotContain(active, q => q.LocalId == trash.LocalId);
+    }
+
+    [Fact]
+    public void List_qsos_with_deleted_only_filter_returns_trash()
+    {
+        var state = CreateState();
+        EnsureStationConfigured(state);
+        var keepResp = LogSampleQso(state, "W1AW");
+        var keep = state.GetQso(keepResp.LocalId)!;
+        var trashResp = LogSampleQso(state, "K7RND");
+        var trash = state.GetQso(trashResp.LocalId)!;
+        state.DeleteQso(trash.LocalId, queueRemoteDelete: false);
+
+        var deleted = state.ListQsos(new ListQsosRequest { DeletedFilter = DeletedRecordsFilter.DeletedOnly });
+
+        Assert.DoesNotContain(deleted, q => q.LocalId == keep.LocalId);
+        Assert.Contains(deleted, q => q.LocalId == trash.LocalId);
+    }
+
+    [Fact]
+    public async Task Restore_qso_grpc_returns_restored_record()
+    {
+        var state = CreateState();
+        EnsureStationConfigured(state);
+        var loggedResp = LogSampleQso(state, "W1AW");
+        var logged = state.GetQso(loggedResp.LocalId)!;
+        state.DeleteQso(logged.LocalId, queueRemoteDelete: false);
+
+        var service = new ManagedLogbookGrpcService(state);
+        var response = await service.RestoreQso(
+            new RestoreQsoRequest { LocalId = logged.LocalId },
+            null!);
+
+        Assert.True(response.Success);
+        Assert.NotNull(response.Restored);
+        Assert.Null(response.Restored!.DeletedAt);
+    }
+
+    [Fact]
+    public async Task Restore_qso_grpc_throws_not_found_for_unknown_id()
+    {
+        var state = CreateState();
+        var service = new ManagedLogbookGrpcService(state);
+
+        var ex = await Assert.ThrowsAsync<RpcException>(() => service.RestoreQso(
+            new RestoreQsoRequest { LocalId = "missing-id" },
+            null!));
+        Assert.Equal(StatusCode.NotFound, ex.StatusCode);
+    }
+
+    [Fact]
+    public async Task Update_qso_grpc_on_soft_deleted_row_returns_failed_precondition()
+    {
+        var state = CreateState();
+        EnsureStationConfigured(state);
+        var loggedResp = LogSampleQso(state, "W1AW");
+        var logged = state.GetQso(loggedResp.LocalId)!;
+        state.DeleteQso(logged.LocalId, queueRemoteDelete: false);
+
+        var service = new ManagedLogbookGrpcService(state);
+        var ex = await Assert.ThrowsAsync<RpcException>(() => service.UpdateQso(
+            new UpdateQsoRequest
+            {
+                Qso = new QsoRecord(logged) { Notes = "blocked" },
+            },
+            null!));
+        Assert.Equal(StatusCode.FailedPrecondition, ex.StatusCode);
+    }
+
+    private static LogQsoResponse LogSampleQso(ManagedEngineState state, string callsign)
+    {
+        return state.LogQso(new LogQsoRequest
+        {
+            SyncToQrz = false,
+            Qso = new QsoRecord
+            {
+                WorkedCallsign = callsign,
+                Band = Band._20M,
+                Mode = Mode.Ft8,
+                UtcTimestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            },
+        });
+    }
+
+    private static void EnsureStationConfigured(ManagedEngineState state)
+    {
+        state.SaveSetup(new SaveSetupRequest
+        {
+            StationProfile = new StationProfile
+            {
+                ProfileName = "Home",
+                StationCallsign = "K7RND",
+                OperatorCallsign = "K7RND",
+                Grid = "CN87",
+            },
+        });
+    }
+
     private ManagedEngineState CreateState()
     {
         return new ManagedEngineState(Path.Combine(_tempDirectory, "config.toml"), new MemoryStorage());
@@ -844,6 +1098,11 @@ public sealed class ManagedEngineStateTests : IDisposable
             var logId = $"FAKE-{Interlocked.Increment(ref _logIdCounter)}";
             return Task.FromResult(logId);
         }
+
+        public Task<QrzLogbookStatus> GetStatusAsync() =>
+            Task.FromResult(new QrzLogbookStatus("K7RND", (uint)_logIdCounter));
+
+        public Task DeleteQsoAsync(string logid) => Task.CompletedTask;
     }
 
     private sealed class FakeMalformedQrzLogbookApi : IQrzLogbookApi
@@ -854,6 +1113,11 @@ public sealed class ManagedEngineStateTests : IDisposable
         public Task<string> UploadQsoAsync(QsoRecord qso) => Task.FromResult("FAKE-1");
 
         public Task<string> UpdateQsoAsync(QsoRecord qso) => Task.FromResult("FAKE-1");
+
+        public Task<QrzLogbookStatus> GetStatusAsync() =>
+            Task.FromResult(new QrzLogbookStatus("K7RND", 0));
+
+        public Task DeleteQsoAsync(string logid) => Task.CompletedTask;
     }
 }
 #pragma warning restore CA1707

@@ -4,8 +4,8 @@ use qsoripper_core::application::logbook::is_pending_sync_status;
 use qsoripper_core::domain::lookup::normalize_callsign;
 use qsoripper_core::proto::qsoripper::domain::QsoRecord;
 use qsoripper_core::storage::{
-    EngineStorage, LogbookCounts, LogbookStore, LookupSnapshot, LookupSnapshotStore, QsoListQuery,
-    QsoSortOrder, StorageError, SyncMetadata,
+    DeletedRecordsFilter, EngineStorage, LogbookCounts, LogbookStore, LookupSnapshot,
+    LookupSnapshotStore, QsoListQuery, QsoSortOrder, StorageError, SyncMetadata,
 };
 use std::cmp::Reverse;
 use std::collections::BTreeMap;
@@ -73,6 +73,31 @@ impl LogbookStore for MemoryStorage {
         Ok(state.qsos.remove(local_id).is_some())
     }
 
+    async fn soft_delete_qso(
+        &self,
+        local_id: &str,
+        deleted_at_ms: i64,
+        pending_remote_delete: bool,
+    ) -> Result<bool, StorageError> {
+        let mut state = self.state.write().await;
+        let Some(record) = state.qsos.get_mut(local_id) else {
+            return Ok(false);
+        };
+        record.deleted_at = Some(millis_to_timestamp(deleted_at_ms));
+        record.pending_remote_delete = pending_remote_delete;
+        Ok(true)
+    }
+
+    async fn restore_qso(&self, local_id: &str) -> Result<bool, StorageError> {
+        let mut state = self.state.write().await;
+        let Some(record) = state.qsos.get_mut(local_id) else {
+            return Ok(false);
+        };
+        record.deleted_at = None;
+        record.pending_remote_delete = false;
+        Ok(true)
+    }
+
     async fn get_qso(&self, local_id: &str) -> Result<Option<QsoRecord>, StorageError> {
         let state = self.state.read().await;
         Ok(state.qsos.get(local_id).cloned())
@@ -128,14 +153,17 @@ impl LogbookStore for MemoryStorage {
 
     async fn qso_counts(&self) -> Result<LogbookCounts, StorageError> {
         let state = self.state.read().await;
-        let pending_upload_count = state
+        let active_iter = state
             .qsos
             .values()
+            .filter(|record| record.deleted_at.is_none());
+        let local_qso_count = active_iter.clone().count();
+        let pending_upload_count = active_iter
             .filter(|record| is_pending_sync_status(record.sync_status))
             .count();
 
         Ok(LogbookCounts {
-            local_qso_count: u32::try_from(state.qsos.len())
+            local_qso_count: u32::try_from(local_qso_count)
                 .map_err(|_| StorageError::backend("local_qso_count exceeds u32"))?,
             pending_upload_count: u32::try_from(pending_upload_count)
                 .map_err(|_| StorageError::backend("pending_upload_count exceeds u32"))?,
@@ -186,6 +214,20 @@ impl LookupSnapshotStore for MemoryStorage {
 }
 
 fn matches_query(record: &QsoRecord, query: &QsoListQuery) -> bool {
+    match query.deleted_filter {
+        DeletedRecordsFilter::ActiveOnly => {
+            if record.deleted_at.is_some() {
+                return false;
+            }
+        }
+        DeletedRecordsFilter::DeletedOnly => {
+            if record.deleted_at.is_none() {
+                return false;
+            }
+        }
+        DeletedRecordsFilter::All => {}
+    }
+
     if let Some(after) = query.after.as_ref() {
         if timestamp_to_millis(record.utc_timestamp.as_ref()) < timestamp_to_millis(Some(after)) {
             return false;
@@ -244,6 +286,14 @@ fn timestamp_to_millis(timestamp: Option<&prost_types::Timestamp>) -> i64 {
     })
 }
 
+fn millis_to_timestamp(millis: i64) -> prost_types::Timestamp {
+    let seconds = millis.div_euclid(1_000);
+    let nanos = i32::try_from(millis.rem_euclid(1_000))
+        .unwrap_or(0)
+        .saturating_mul(1_000_000);
+    prost_types::Timestamp { seconds, nanos }
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::panic)]
 mod tests {
@@ -253,7 +303,8 @@ mod tests {
     use qsoripper_core::domain::qso::QsoRecordBuilder;
     use qsoripper_core::proto::qsoripper::domain::{Band, LookupResult, LookupState, Mode};
     use qsoripper_core::storage::{
-        EngineStorage, LookupSnapshot, LookupSnapshotStore, QsoListQuery, QsoSortOrder,
+        DeletedRecordsFilter, EngineStorage, LogbookStore, LookupSnapshot, LookupSnapshotStore,
+        QsoListQuery, QsoSortOrder,
     };
     use std::sync::Arc;
 
@@ -366,6 +417,156 @@ mod tests {
 
         assert_eq!(loaded.callsign, "W1AW");
         assert_eq!(loaded.result.state, LookupState::Found as i32);
+    }
+
+    #[tokio::test]
+    async fn memory_storage_soft_delete_keeps_row_with_tombstone() {
+        let storage = MemoryStorage::new();
+        let qso = QsoRecordBuilder::new("W1AW", "K7ABC")
+            .band(Band::Band20m)
+            .mode(Mode::Ft8)
+            .timestamp(Timestamp {
+                seconds: 1_700_000_000,
+                nanos: 0,
+            })
+            .build();
+        let local_id = qso.local_id.clone();
+        storage.insert_qso(&qso).await.unwrap();
+
+        assert!(storage
+            .soft_delete_qso(&local_id, 1_700_000_500_000, true)
+            .await
+            .unwrap());
+
+        let fetched = storage.get_qso(&local_id).await.unwrap().unwrap();
+        assert!(fetched.deleted_at.is_some());
+        assert!(fetched.pending_remote_delete);
+    }
+
+    #[tokio::test]
+    async fn memory_storage_list_qsos_active_only_excludes_soft_deleted() {
+        let storage = MemoryStorage::new();
+        for callsign in ["A1A", "B2B"] {
+            let qso = QsoRecordBuilder::new("W1AW", callsign)
+                .band(Band::Band20m)
+                .mode(Mode::Ft8)
+                .timestamp(Timestamp {
+                    seconds: 1_700_000_000,
+                    nanos: 0,
+                })
+                .build();
+            storage.insert_qso(&qso).await.unwrap();
+        }
+        let all = storage
+            .list_qsos(&QsoListQuery {
+                deleted_filter: DeletedRecordsFilter::All,
+                ..QsoListQuery::default()
+            })
+            .await
+            .unwrap();
+        let target = all
+            .iter()
+            .find(|r| r.worked_callsign == "B2B")
+            .map(|r| r.local_id.clone())
+            .unwrap();
+
+        storage
+            .soft_delete_qso(&target, 1_700_000_500_000, false)
+            .await
+            .unwrap();
+
+        let active = storage.list_qsos(&QsoListQuery::default()).await.unwrap();
+        assert_eq!(active.len(), 1);
+        assert_eq!(active.first().unwrap().worked_callsign, "A1A");
+
+        let deleted_only = storage
+            .list_qsos(&QsoListQuery {
+                deleted_filter: DeletedRecordsFilter::DeletedOnly,
+                ..QsoListQuery::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(deleted_only.len(), 1);
+        assert_eq!(deleted_only.first().unwrap().worked_callsign, "B2B");
+
+        let all_after = storage
+            .list_qsos(&QsoListQuery {
+                deleted_filter: DeletedRecordsFilter::All,
+                ..QsoListQuery::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(all_after.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn memory_storage_qso_counts_excludes_soft_deleted() {
+        let storage = MemoryStorage::new();
+        for cs in ["A", "B"] {
+            let qso = QsoRecordBuilder::new("W1AW", cs)
+                .band(Band::Band20m)
+                .mode(Mode::Ft8)
+                .timestamp(Timestamp {
+                    seconds: 1_700_000_000,
+                    nanos: 0,
+                })
+                .build();
+            storage.insert_qso(&qso).await.unwrap();
+        }
+        let listed = storage
+            .list_qsos(&QsoListQuery {
+                deleted_filter: DeletedRecordsFilter::All,
+                ..QsoListQuery::default()
+            })
+            .await
+            .unwrap();
+        let target = listed
+            .iter()
+            .find(|r| r.worked_callsign == "B")
+            .map(|r| r.local_id.clone())
+            .unwrap();
+        storage
+            .soft_delete_qso(&target, 1_700_000_500_000, false)
+            .await
+            .unwrap();
+
+        let counts = storage.qso_counts().await.unwrap();
+        assert_eq!(counts.local_qso_count, 1);
+    }
+
+    #[tokio::test]
+    async fn memory_storage_restore_clears_tombstone() {
+        let storage = MemoryStorage::new();
+        let qso = QsoRecordBuilder::new("W1AW", "K7ABC")
+            .band(Band::Band20m)
+            .mode(Mode::Ft8)
+            .timestamp(Timestamp {
+                seconds: 1_700_000_000,
+                nanos: 0,
+            })
+            .build();
+        let local_id = qso.local_id.clone();
+        storage.insert_qso(&qso).await.unwrap();
+        storage
+            .soft_delete_qso(&local_id, 1_700_000_500_000, true)
+            .await
+            .unwrap();
+
+        assert!(storage.restore_qso(&local_id).await.unwrap());
+
+        let fetched = storage.get_qso(&local_id).await.unwrap().unwrap();
+        assert!(fetched.deleted_at.is_none());
+        assert!(!fetched.pending_remote_delete);
+    }
+
+    #[tokio::test]
+    async fn memory_storage_soft_delete_missing_returns_false() {
+        let storage = MemoryStorage::new();
+        assert!(!storage
+            .soft_delete_qso("missing", 1_700_000_500_000, false)
+            .await
+            .unwrap());
+        assert!(!storage.restore_qso("missing").await.unwrap());
     }
 
     #[test]

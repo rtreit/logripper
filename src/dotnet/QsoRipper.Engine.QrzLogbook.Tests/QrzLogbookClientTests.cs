@@ -210,6 +210,131 @@ public sealed class QrzLogbookClientTests
 
     // -- Helpers --------------------------------------------------------------
 
+    // -- STATUS --------------------------------------------------------------
+
+    [Fact]
+    public async Task GetStatus_sends_action_status_with_key()
+    {
+        var (client, handler) = CreateClient("RESULT=OK&CALLSIGN=KC7AVA&COUNT=500");
+
+        using (client)
+        {
+            await client.GetStatusAsync();
+        }
+
+        Assert.NotNull(handler.CapturedBody);
+        Assert.Contains("ACTION=STATUS", handler.CapturedBody!);
+        Assert.Contains($"KEY={FakeApiKey}", handler.CapturedBody!);
+    }
+
+    [Fact]
+    public async Task GetStatus_parses_callsign_and_count()
+    {
+        var (client, _) = CreateClient("RESULT=OK&CALLSIGN=KC7AVA&COUNT=500");
+
+        using (client)
+        {
+            var status = await client.GetStatusAsync();
+
+            Assert.Equal("KC7AVA", status.Owner);
+            Assert.Equal(500u, status.QsoCount);
+        }
+    }
+
+    [Fact]
+    public async Task GetStatus_falls_back_to_owner_field_when_callsign_missing()
+    {
+        // Some QRZ responses historically used OWNER instead of CALLSIGN.
+        var (client, _) = CreateClient("RESULT=OK&OWNER=W1AW&COUNT=42");
+
+        using (client)
+        {
+            var status = await client.GetStatusAsync();
+
+            Assert.Equal("W1AW", status.Owner);
+            Assert.Equal(42u, status.QsoCount);
+        }
+    }
+
+    [Fact]
+    public async Task GetStatus_defaults_count_to_zero_when_missing()
+    {
+        // A brand-new empty logbook may not include COUNT at all.
+        var (client, _) = CreateClient("RESULT=OK&CALLSIGN=N0CALL");
+
+        using (client)
+        {
+            var status = await client.GetStatusAsync();
+
+            Assert.Equal("N0CALL", status.Owner);
+            Assert.Equal(0u, status.QsoCount);
+        }
+    }
+
+    [Fact]
+    public async Task GetStatus_throws_auth_exception_on_invalid_api_key()
+    {
+        var (client, _) = CreateClient("RESULT=FAIL&REASON=invalid api key");
+
+        using (client)
+        {
+            await Assert.ThrowsAsync<QrzLogbookAuthException>(() => client.GetStatusAsync());
+        }
+    }
+
+    // -- DELETE --------------------------------------------------------------
+
+    [Fact]
+    public async Task Delete_sends_action_delete_with_logid()
+    {
+        var (client, handler) = CreateClient("RESULT=OK");
+
+        using (client)
+        {
+            await client.DeleteQsoAsync("123456");
+        }
+
+        Assert.Contains("ACTION=DELETE", handler.CapturedBody);
+        Assert.Contains("LOGID=123456", handler.CapturedBody);
+    }
+
+    [Fact]
+    public async Task Delete_treats_not_found_reason_as_success()
+    {
+        var (client, _) = CreateClient("RESULT=FAIL&REASON=record not found");
+
+        using (client)
+        {
+            // Should NOT throw — queued-remote-delete loop relies on this.
+            await client.DeleteQsoAsync("000000");
+        }
+    }
+
+    [Fact]
+    public async Task Delete_propagates_other_failure_reasons()
+    {
+        var (client, _) = CreateClient("RESULT=FAIL&REASON=bad record format");
+
+        using (client)
+        {
+            var ex = await Assert.ThrowsAsync<QrzLogbookException>(() => client.DeleteQsoAsync("000000"));
+            Assert.Contains("bad record format", ex.Message, StringComparison.OrdinalIgnoreCase);
+        }
+    }
+
+    [Fact]
+    public async Task Delete_propagates_auth_failure()
+    {
+        var (client, _) = CreateClient("RESULT=FAIL&REASON=invalid api key");
+
+        using (client)
+        {
+            await Assert.ThrowsAsync<QrzLogbookAuthException>(() => client.DeleteQsoAsync("000000"));
+        }
+    }
+
+    // -- Client helper --------------------------------------------------------
+
     private static (QrzLogbookClient Client, CapturingHandler Handler) CreateClient(string responseBody)
     {
         var handler = new CapturingHandler(responseBody);

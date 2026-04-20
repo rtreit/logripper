@@ -10,6 +10,7 @@ use crate::app::{CallsignInfo, RecentQso, RigInfo, SpaceWeatherInfo};
 use crate::grpc;
 
 const SPACE_WEATHER_REFRESH_INTERVAL: Duration = Duration::from_secs(60 * 60);
+const RIG_POLL_INTERVAL: Duration = Duration::from_millis(500);
 
 /// Events produced by background tasks and forwarded to the main event loop.
 pub(crate) enum AppEvent {
@@ -146,7 +147,7 @@ pub(crate) fn spawn_space_weather_task(
     });
 }
 
-/// Spawn a rig control polling task that fetches rig snapshots every second.
+/// Spawn a rig control polling task that fetches rig snapshots every 500ms.
 ///
 /// The poll is gated by `enabled_rx`: when the value is `false`, the task pauses
 /// polling and sends `None` snapshots. This avoids leaking multiple poll loops on toggle.
@@ -156,7 +157,7 @@ pub(crate) fn spawn_rig_poll_task(
     channel: Channel,
 ) {
     tokio::spawn(async move {
-        let mut interval = time::interval(Duration::from_secs(1));
+        let mut interval = time::interval(RIG_POLL_INTERVAL);
         loop {
             interval.tick().await;
             if event_tx.is_closed() {

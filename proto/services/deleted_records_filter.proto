@@ -1,0 +1,15 @@
+syntax = "proto3";
+
+package qsoripper.services;
+
+option csharp_namespace = "QsoRipper.Services";
+
+// Controls whether soft-deleted rows are included in list operations.
+// Default (UNSPECIFIED) is treated as ACTIVE_ONLY so existing callers keep
+// their previous behavior.
+enum DeletedRecordsFilter {
+  DELETED_RECORDS_FILTER_UNSPECIFIED = 0;
+  DELETED_RECORDS_FILTER_ACTIVE_ONLY = 1;
+  DELETED_RECORDS_FILTER_DELETED_ONLY = 2;
+  DELETED_RECORDS_FILTER_ALL = 3;
+}
