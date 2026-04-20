@@ -30,7 +30,8 @@
     <KeyBinding Gesture="Ctrl+N" Command="{Binding FocusLoggerCommand}" />
     <KeyBinding Gesture="Ctrl+R" Command="{Binding ToggleRigControlCommand}" />
     <KeyBinding Gesture="Ctrl+W" Command="{Binding ToggleSpaceWeatherCommand}" />
-    <KeyBinding Gesture="Ctrl+L" Command="{Binding ToggleFullQsoCardCommand}" />
+    <KeyBinding Gesture="Alt+A" Command="{Binding OpenQsoCardCommand}" />
+    <KeyBinding Gesture="Ctrl+L" Command="{Binding OpenQsoCardCommand}" />
   </Window.KeyBindings>
 
   <Window.Styles>
@@ -139,6 +140,8 @@
                   Command="{Binding ToggleColumnChooserCommand}" />
         <MenuItem Header="_Inspector" InputGesture="Alt+Enter"
                   Command="{Binding ToggleInspectorCommand}" />
+        <MenuItem Header="_QSO Card" InputGesture="Alt+A"
+                  Command="{Binding OpenQsoCardCommand}" />
         <MenuItem Header="Callsign _Card" InputGesture="F8"
                   Command="{Binding OpenCallsignCardCommand}" />
       </MenuItem>
@@ -344,11 +347,11 @@
                       ToolTip.Tip="Clear form (Esc)" />
 
               <Button Grid.Column="9"
-                      Content="▼"
-                      Command="{Binding ToggleFullQsoCardCommand}"
-                      MinHeight="28" MinWidth="28"
+                      Content="Advanced"
+                      Command="{Binding OpenQsoCardCommand}"
+                      MinHeight="28" MinWidth="84"
                       VerticalAlignment="Bottom"
-                      ToolTip.Tip="Full QSO entry (Ctrl+L)" />
+                      ToolTip.Tip="Open QSO Card (Alt+A / Ctrl+L)" />
             </Grid>
 
             <!-- Row 2: Status line (rig, space weather, timer, log status) -->

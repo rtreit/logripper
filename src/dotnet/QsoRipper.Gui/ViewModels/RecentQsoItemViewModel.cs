@@ -67,6 +67,8 @@ internal sealed class RecentQsoItemViewModel : ObservableObject, IEditableObject
 
     public bool HasQrzLogid => !string.IsNullOrEmpty(_sourceQso.QrzLogid);
 
+    internal QsoRecord ToSourceQso() => _sourceQso.Clone();
+
     public string UtcDisplay
     {
         get => _utcDisplay;
@@ -753,7 +755,7 @@ internal sealed class RecentQsoItemViewModel : ObservableObject, IEditableObject
         ProtoEnumDisplay.ForBand(qso.Band),
         ProtoEnumDisplay.ForMode(qso.Mode),
         qso.HasFrequencyKhz ? qso.FrequencyKhz.ToString(CultureInfo.InvariantCulture) : "-",
-        BuildCombinedReport(DisplayOrDash(qso.RstSent?.Raw), DisplayOrDash(qso.RstReceived?.Raw)),
+        BuildCombinedReport(FormatRst(qso.RstSent), FormatRst(qso.RstReceived)),
         BuildDxcc(qso),
         BuildCountry(qso),
         BuildOperatorName(qso),
@@ -873,6 +875,33 @@ internal sealed class RecentQsoItemViewModel : ObservableObject, IEditableObject
         }
 
         return $"{rstSent}/{rstReceived}";
+    }
+
+    private static string FormatRst(RstReport? report)
+    {
+        if (report is null)
+        {
+            return "-";
+        }
+
+        var raw = NoteOrNull(report.Raw);
+        if (raw is not null)
+        {
+            return raw;
+        }
+
+        if (report.Readability == 0 || report.Strength == 0)
+        {
+            return "-";
+        }
+
+        return report.Tone == 0
+            ? string.Create(
+                CultureInfo.InvariantCulture,
+                $"{report.Readability}{report.Strength}")
+            : string.Create(
+                CultureInfo.InvariantCulture,
+                $"{report.Readability}{report.Strength}{report.Tone}");
     }
 
     private static (string Sent, string Received) SplitCombinedReport(string value)

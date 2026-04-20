@@ -322,6 +322,59 @@ fn is_syncable_qso(qso: &QsoRecord) -> bool {
     !qso.worked_callsign.trim().is_empty() && qso.utc_timestamp.is_some()
 }
 
+fn qso_to_qrz_adif(qso: &QsoRecord) -> String {
+    let mut prepared = qso.clone();
+    prepared.tx_power = normalize_qrz_power(prepared.tx_power.as_deref());
+    AdifMapper::qso_to_adi(&prepared)
+}
+
+fn normalize_qrz_power(value: Option<&str>) -> Option<String> {
+    let trimmed = value?.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let mut numeric_end = 0;
+    let mut seen_digit = false;
+    let mut seen_decimal = false;
+    for ch in trimmed.chars() {
+        if ch.is_ascii_digit() {
+            seen_digit = true;
+            numeric_end += ch.len_utf8();
+            continue;
+        }
+
+        if ch == '.' && !seen_decimal {
+            seen_decimal = true;
+            numeric_end += ch.len_utf8();
+            continue;
+        }
+
+        break;
+    }
+
+    if !seen_digit || numeric_end == 0 {
+        return None;
+    }
+
+    let numeric = &trimmed[..numeric_end];
+    numeric
+        .parse::<f64>()
+        .ok()
+        .filter(|parsed| *parsed >= 0.0)?;
+
+    let suffix = trimmed[numeric_end..].trim();
+    if !suffix.is_empty()
+        && !suffix.eq_ignore_ascii_case("w")
+        && !suffix.eq_ignore_ascii_case("watt")
+        && !suffix.eq_ignore_ascii_case("watts")
+    {
+        return None;
+    }
+
+    Some(numeric.to_string())
+}
+
 async fn parse_fetch_adif_payload(
     adif_payload: &str,
     expected_count: Option<usize>,
@@ -480,7 +533,7 @@ impl QrzLogbookClient {
     /// Returns an error on network failure, authentication failure, or if
     /// the QRZ API rejects the record.
     pub async fn upload_qso(&self, qso: &QsoRecord) -> Result<QrzUploadResult, QrzLogbookError> {
-        let adif_record = AdifMapper::qso_to_adi(qso);
+        let adif_record = qso_to_qrz_adif(qso);
 
         let body = self
             .post_form(&[("ACTION", "INSERT"), ("ADIF", &adif_record)])
@@ -837,9 +890,35 @@ mod tests {
             worked_callsign: "W1AW".to_string(),
             ..Default::default()
         };
-        let adif = AdifMapper::qso_to_adi(&qso);
+        let adif = qso_to_qrz_adif(&qso);
         assert!(adif.contains("<CALL:4>W1AW"));
         assert!(adif.contains("<eor>"));
+    }
+
+    #[test]
+    fn qso_serialization_normalizes_qrz_tx_power_units() {
+        let qso = QsoRecord {
+            worked_callsign: "W1AW".to_string(),
+            tx_power: Some("100W".to_string()),
+            ..Default::default()
+        };
+
+        let adif = qso_to_qrz_adif(&qso);
+
+        assert!(adif.contains("<TX_PWR:3>100"));
+    }
+
+    #[test]
+    fn qso_serialization_omits_invalid_qrz_tx_power() {
+        let qso = QsoRecord {
+            worked_callsign: "W1AW".to_string(),
+            tx_power: Some("HIGH".to_string()),
+            ..Default::default()
+        };
+
+        let adif = qso_to_qrz_adif(&qso);
+
+        assert!(!adif.contains("TX_PWR"));
     }
 
     #[tokio::test]
