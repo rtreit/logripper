@@ -42,10 +42,23 @@ public sealed class QrzSyncEngine
     /// </summary>
     /// <param name="store">The logbook store to sync.</param>
     /// <param name="fullSync">When <c>true</c>, re-fetches all QRZ records instead of incremental.</param>
+    /// <param name="conflictPolicy">
+    /// How to resolve QSOs modified locally and remotely since the last sync.
+    /// <c>CONFLICT_POLICY_UNSPECIFIED</c> is treated as <c>FLAG_FOR_REVIEW</c>
+    /// per the engine spec (safe/non-destructive default).
+    /// </param>
     /// <returns>A <see cref="SyncResult"/> with counts and any error summary.</returns>
-    public async Task<SyncResult> ExecuteSyncAsync(ILogbookStore store, bool fullSync)
+    public async Task<SyncResult> ExecuteSyncAsync(
+        ILogbookStore store,
+        bool fullSync,
+        ConflictPolicy conflictPolicy = ConflictPolicy.Unspecified)
     {
         ArgumentNullException.ThrowIfNull(store);
+
+        // Treat the proto zero-value as the safe default per engine spec §6.3.
+        var effectivePolicy = conflictPolicy == ConflictPolicy.Unspecified
+            ? ConflictPolicy.FlagForReview
+            : conflictPolicy;
 
         var errors = new List<string>();
         uint downloaded = 0;
@@ -156,10 +169,16 @@ public sealed class QrzSyncEngine
             }
             else
             {
-                // Matched existing QSO — merge.
+                // Matched existing QSO — merge using the requested conflict policy.
                 try
                 {
-                    var merged = MergeRemoteIntoLocal(localMatch, remote, remoteLogid);
+                    var (merged, isConflict) =
+                        MergeRemoteIntoLocal(localMatch, remote, remoteLogid, effectivePolicy);
+                    if (isConflict)
+                    {
+                        conflicts++;
+                    }
+
                     if (await store.UpdateQsoAsync(merged).ConfigureAwait(false))
                     {
                         downloaded++;
@@ -315,20 +334,60 @@ public sealed class QrzSyncEngine
     }
 
     /// <summary>
-    /// Merge remote QSO data into an existing local QSO. Preserves the local ID and updates sync metadata.
+    /// Merge remote QSO data into an existing local QSO, honoring the requested conflict policy.
+    /// Returns the merged record along with a flag indicating whether this merge required
+    /// operator attention (conflict) — which is only true when the policy is FlagForReview
+    /// and the local row had unsynced edits.
     /// </summary>
-    private static QsoRecord MergeRemoteIntoLocal(QsoRecord local, QsoRecord remote, string? remoteLogid)
+    private static (QsoRecord Merged, bool IsConflict) MergeRemoteIntoLocal(
+        QsoRecord local,
+        QsoRecord remote,
+        string? remoteLogid,
+        ConflictPolicy policy)
     {
-        // For already-synced records, remote wins (overwrite with fresh remote data).
-        // For local-only records, link to remote and mark synced to avoid duplicate upload.
-        var merged = local.SyncStatus == SyncStatus.Synced ? remote.Clone() : local.Clone();
-        merged.LocalId = local.LocalId;
-        merged.SyncStatus = SyncStatus.Synced;
+        var localHasUnsyncedEdits = local.SyncStatus == SyncStatus.Modified;
 
-        // Preserve or assign logid.
+        // Happy path: local was already Synced (never edited since last sync) or the
+        // QSO is LocalOnly with no prior remote link. Remote wins for previously-synced
+        // rows (they reflect authoritative QRZ state), local is kept otherwise.
+        if (!localHasUnsyncedEdits)
+        {
+            var nonConflict = local.SyncStatus == SyncStatus.Synced ? remote.Clone() : local.Clone();
+            nonConflict.LocalId = local.LocalId;
+            nonConflict.SyncStatus = SyncStatus.Synced;
+            nonConflict.QrzLogid = remoteLogid ?? local.QrzLogid;
+            return (nonConflict, false);
+        }
+
+        // Conflict: local edits exist and remote also has a current version.
+        // The resolver choice determines who wins and whether we mark the row
+        // for operator review per engine spec §6.3.
+        QsoRecord merged;
+        bool requiresReview;
+        switch (policy)
+        {
+            case ConflictPolicy.LastWriteWins:
+                // Remote wins silently — no operator intervention needed, so
+                // this is NOT counted as a conflict in the sync result.
+                merged = remote.Clone();
+                merged.LocalId = local.LocalId;
+                merged.SyncStatus = SyncStatus.Synced;
+                requiresReview = false;
+                break;
+
+            case ConflictPolicy.FlagForReview:
+            default:
+                // Preserve the local edit but mark the row so operators can
+                // reconcile manually. Do NOT silently discard user data.
+                merged = local.Clone();
+                merged.LocalId = local.LocalId;
+                merged.SyncStatus = SyncStatus.Conflict;
+                requiresReview = true;
+                break;
+        }
+
         merged.QrzLogid = remoteLogid ?? local.QrzLogid;
-
-        return merged;
+        return (merged, requiresReview);
     }
 
     private static string? FormatSinceDate(SyncMetadata metadata)

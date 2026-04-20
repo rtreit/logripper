@@ -263,4 +263,48 @@ public sealed class AdifCodecTests
         Assert.Single(parsed);
         Assert.Equal("hello", parsed[0].ExtraFields["CUSTOM_APP_FIELD"]);
     }
+
+    [Fact]
+    public void Serialize_emits_qrz_logid_as_app_qrzlog_logid()
+    {
+        // Engines must round-trip qrz_logid via APP_QRZLOG_LOGID so that
+        // subsequent syncs can recognise previously-uploaded QSOs and avoid
+        // re-inserting them as duplicates (root cause of the April 2026 dup bug).
+        var original = new QsoRecord
+        {
+            WorkedCallsign = "W1AW",
+            Band = Band._20M,
+            Mode = Mode.Ft8,
+            UtcTimestamp = Timestamp.FromDateTimeOffset(new DateTimeOffset(2024, 6, 15, 12, 0, 0, TimeSpan.Zero)),
+            QrzLogid = "123456",
+            QrzBookid = "bk-42",
+        };
+
+        var adif = AdifCodec.SerializeSingleQso(original);
+
+        Assert.Contains("<APP_QRZLOG_LOGID:6>123456", adif);
+        Assert.Contains("<APP_QRZLOG_QSO_ID:5>bk-42", adif);
+    }
+
+    [Fact]
+    public void Serialize_then_parse_preserves_qrz_logid()
+    {
+        var original = new QsoRecord
+        {
+            WorkedCallsign = "W1AW",
+            Band = Band._20M,
+            Mode = Mode.Ft8,
+            UtcTimestamp = Timestamp.FromDateTimeOffset(new DateTimeOffset(2024, 6, 15, 12, 0, 0, TimeSpan.Zero)),
+            QrzLogid = "987654",
+        };
+
+        var adif = AdifCodec.SerializeSingleQso(original);
+        var parsed = AdifCodec.ParseAdif($"<EOH>\n{adif}");
+
+        Assert.Single(parsed);
+        Assert.Equal("987654", parsed[0].QrzLogid);
+        // The app key should not leak into ExtraFields — it is represented
+        // by the dedicated QrzLogid domain field only.
+        Assert.False(parsed[0].ExtraFields.ContainsKey("APP_QRZLOG_LOGID"));
+    }
 }

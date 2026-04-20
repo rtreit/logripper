@@ -127,6 +127,87 @@ public sealed class QrzLogbookClientTests
         }
     }
 
+    // -- UpdateQso (REPLACE) -------------------------------------------------
+
+    [Fact]
+    public async Task Update_sends_action_insert_with_option_replace_logid()
+    {
+        // QRZ logbook docs specify ACTION=INSERT&OPTION=REPLACE,LOGID:<id>
+        // for updating an existing QSO. Using the undocumented ACTION=REPLACE
+        // can cause duplicate inserts on some API endpoints.
+        var (client, handler) = CreateClient("RESULT=REPLACE&LOGID=42");
+
+        using (client)
+        {
+            var qso = new QsoRipper.Domain.QsoRecord
+            {
+                LocalId = "00000000-0000-0000-0000-000000000001",
+                WorkedCallsign = "W1AW",
+                Band = QsoRipper.Domain.Band._20M,
+                Mode = QsoRipper.Domain.Mode.Ft8,
+                UtcTimestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(
+                    new DateTimeOffset(2024, 6, 15, 12, 0, 0, TimeSpan.Zero)),
+                QrzLogid = "42",
+            };
+
+            var returned = await client.UpdateQsoAsync(qso);
+
+            Assert.Equal("42", returned);
+        }
+
+        Assert.NotNull(handler.CapturedBody);
+        Assert.Contains("ACTION=INSERT", handler.CapturedBody!);
+        Assert.Contains("OPTION=REPLACE%2CLOGID%3A42", handler.CapturedBody!);
+    }
+
+    [Fact]
+    public async Task Update_accepts_response_with_result_replace()
+    {
+        // The REPLACE action returns RESULT=REPLACE (not RESULT=OK). Parser
+        // must treat that as success.
+        var (client, _) = CreateClient("RESULT=REPLACE&LOGID=99");
+
+        using (client)
+        {
+            var qso = new QsoRipper.Domain.QsoRecord
+            {
+                LocalId = "00000000-0000-0000-0000-000000000002",
+                WorkedCallsign = "K5ABC",
+                Band = QsoRipper.Domain.Band._40M,
+                Mode = QsoRipper.Domain.Mode.Cw,
+                UtcTimestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(
+                    new DateTimeOffset(2024, 6, 15, 12, 0, 0, TimeSpan.Zero)),
+                QrzLogid = "99",
+            };
+
+            var returned = await client.UpdateQsoAsync(qso);
+            Assert.Equal("99", returned);
+        }
+    }
+
+    [Fact]
+    public async Task Update_falls_back_to_supplied_logid_when_response_omits_it()
+    {
+        var (client, _) = CreateClient("RESULT=REPLACE");
+
+        using (client)
+        {
+            var qso = new QsoRipper.Domain.QsoRecord
+            {
+                LocalId = "00000000-0000-0000-0000-000000000003",
+                WorkedCallsign = "N0ABC",
+                Band = QsoRipper.Domain.Band._20M,
+                Mode = QsoRipper.Domain.Mode.Ft8,
+                UtcTimestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(
+                    new DateTimeOffset(2024, 6, 15, 12, 0, 0, TimeSpan.Zero)),
+                QrzLogid = "777",
+            };
+
+            var returned = await client.UpdateQsoAsync(qso);
+            Assert.Equal("777", returned);
+        }
+    }
+
     // -- Helpers --------------------------------------------------------------
 
     private static (QrzLogbookClient Client, CapturingHandler Handler) CreateClient(string responseBody)

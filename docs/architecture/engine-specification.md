@@ -1036,28 +1036,33 @@ The QRZ logbook sync is a three-phase operation:
 
 #### Phase 1: Download
 
-1. Call QRZ logbook API `FETCH` with `OPTION=ALL`.
-2. Parse the ADIF response into QSO records.
+1. Call QRZ logbook API `FETCH` with `OPTION=ALL` (full sync) or `OPTION=ALL,MODSINCE:YYYY-MM-DD` (incremental).
+2. Parse the ADIF response into QSO records. Engines MUST recognise QRZ-specific ADIF application fields and map them onto dedicated domain fields (see §7.5 Import).
 3. For each remote QSO:
-   a. Attempt to match against local records using fuzzy matching: callsign (case-insensitive) + UTC timestamp (within a tolerance window) + band + mode.
-   b. If matched, compare and update per the `ConflictPolicy`:
-      - `LOCAL_WINS` — keep local version, only update `qrz_logid`.
-      - `REMOTE_WINS` — overwrite local fields with remote data.
-      - `NEWEST_WINS` — keep the version with the later `updated_at`.
-   c. If unmatched, insert as a new local record with `sync_status = SYNCED`.
-4. Filter ghost records: QSOs that appear in the remote data but are clearly duplicates or artifacts.
+   a. Prefer a direct match on `qrz_logid` if one was returned for that record.
+   b. Otherwise, fuzzy-match against local records: callsign (case-insensitive) + UTC timestamp (within a tolerance window, typically ±60s) + band + mode.
+   c. If matched, apply the configured `ConflictPolicy`:
+      - `CONFLICT_POLICY_LAST_WRITE_WINS` — treat the remote record as authoritative and overwrite local fields; mark the merged row as `SYNCED`.
+      - `CONFLICT_POLICY_FLAG_FOR_REVIEW` — when the local row was locally edited (`sync_status = MODIFIED`), preserve the local fields, set `sync_status = CONFLICT`, and increment the sync result's conflict counter so operators can reconcile manually. When the local row is already `SYNCED`, remote wins (no conflict).
+      - `CONFLICT_POLICY_UNSPECIFIED` — engines MUST treat the zero value as `FLAG_FOR_REVIEW` (the safe, non-destructive default) per §6.3.
+   d. If unmatched, insert as a new local record with `sync_status = SYNCED` and populate `qrz_logid` from the remote record.
+4. Filter ghost records: remote QSOs missing required fields (callsign, timestamp) are skipped without incrementing any counter.
 
 #### Phase 2: Upload
 
 1. Query local QSOs with `sync_status` in (`NOT_SYNCED`, `MODIFIED`).
-2. For each, serialize to ADIF and call QRZ logbook API `INSERT`.
-3. On success, update `sync_status = SYNCED` and store the returned `qrz_logid`.
-4. On per-QSO failure, log the error and continue with remaining QSOs.
+2. For each QSO, serialize to ADIF and call the QRZ logbook API:
+   - If `sync_status = NOT_SYNCED` (new record, no `qrz_logid`), use `ACTION=INSERT`.
+   - If `sync_status = MODIFIED` and the record has a `qrz_logid`, use the documented replace form `ACTION=INSERT&OPTION=REPLACE,LOGID:<logid>`. Engines MUST NOT use the undocumented `ACTION=REPLACE` form, which can silently produce duplicate inserts on the remote logbook.
+   - If `sync_status = MODIFIED` but no `qrz_logid` is available (e.g., first sync after upgrading from an engine that didn't persist the logid), fall back to `ACTION=INSERT`. Engines SHOULD additionally run the repair pass described in §7.7 before the first sync so modified-without-logid rows are rare.
+3. Accept both `RESULT=OK` (insert) and `RESULT=REPLACE` (update) as success indicators when parsing the QRZ response.
+4. On success, set `sync_status = SYNCED` and store the returned `LOGID` (or the supplied one for a REPLACE that echoes nothing) in `qrz_logid`.
+5. On per-QSO failure, log the error and continue with remaining QSOs.
 
 #### Phase 3: Metadata
 
-1. Call QRZ logbook API `STATUS` to get the current QSO count and owner.
-2. Update `sync_metadata` with the count, timestamp, and owner callsign.
+1. Call QRZ logbook API `STATUS` to get the current logbook QSO count and owner callsign.
+2. Update `sync_metadata` with the count, timestamp, and owner. If `STATUS` fails, engines SHOULD fall back to locally-computed counts rather than leaving metadata stale.
 
 **Resilience:** A failure in any phase should not prevent other phases from executing. The engine should report partial success/failure in the stream.
 
@@ -1109,17 +1114,27 @@ When DXCC data is available, cascade zone information onto the lookup result if 
 
 1. Parse the ADI-format input (header + records delimited by `<eor>`).
 2. Map ADIF field names to `QsoRecord` proto fields.
-3. Preserve unrecognized ADIF fields in the `extra_fields` map for lossless round-trip.
-4. Generate a `local_id` for each imported record.
-5. Normalize callsigns and validate required fields.
-6. Insert into storage with `sync_status = NOT_SYNCED`.
+3. Map QRZ-specific application fields to dedicated domain fields — not generic `extra_fields` — so sync can round-trip them:
+   - `APP_QRZLOG_LOGID` (canonical) and the legacy alias `APP_QRZ_LOGID` → `qrz_logid`
+   - `APP_QRZLOG_QSO_ID` (canonical) and the legacy alias `APP_QRZ_BOOKID` → `qrz_bookid`
+   Engines MUST NOT leave these app keys in `extra_fields` once a dedicated domain field carries the value, otherwise downstream sync will treat the record as unlinked and re-upload it as a duplicate.
+4. Preserve any other unrecognized ADIF fields in the `extra_fields` map for lossless round-trip.
+5. Generate a `local_id` for each imported record.
+6. Normalize callsigns and validate required fields.
+7. Insert into storage with `sync_status = NOT_SYNCED`.
+
+See `docs/integrations/adif-specification.md` for the authoritative field-name table.
 
 #### Export
 
 1. Generate an ADIF header with program name and version.
 2. For each QSO, serialize proto fields back to ADIF field names.
-3. Include `extra_fields` to preserve data from previous imports.
-4. Output records delimited by `<eor>`.
+3. Emit QRZ app fields whenever the corresponding domain field is populated:
+   - `qrz_logid` → `APP_QRZLOG_LOGID`
+   - `qrz_bookid` → `APP_QRZLOG_QSO_ID`
+   When iterating `extra_fields`, skip keys already covered by these dedicated emissions (`APP_QRZLOG_LOGID`, `APP_QRZ_LOGID`, `APP_QRZLOG_QSO_ID`, `APP_QRZ_BOOKID`) to avoid duplicate ADIF fields.
+4. Include other `extra_fields` to preserve data from previous imports.
+5. Output records delimited by `<eor>`.
 
 ### 7.6 Error Handling
 
@@ -1142,6 +1157,16 @@ When DXCC data is available, cascade zone information onto the lookup result if 
 | `UNAVAILABLE` | External service unreachable |
 | `UNIMPLEMENTED` | RPC is defined but not yet implemented |
 | `INTERNAL` | Unexpected server error (storage failure, serialization bug) |
+
+### 7.7 Startup Data-Repair Pass
+
+Engines that persist `extra_fields` as an opaque blob MUST run a best-effort data-repair pass on startup against the active logbook store. The pass:
+
+1. **Backfills dedicated domain fields from legacy `extra_fields`.** Scans every QSO and, for each record where `qrz_logid`/`qrz_bookid` are empty but a legacy key exists in `extra_fields` (e.g. `APP_QRZ_LOGID`, `APP_QRZLOG_LOGID`, `APP_QRZ_BOOKID`, `APP_QRZLOG_QSO_ID`), moves the value into the dedicated field and removes the legacy key from `extra_fields`.
+2. **Collapses duplicate rows that share a `qrz_logid`.** After the backfill, any group of QSOs with the same non-empty `qrz_logid` represents a historical duplicate-import bug. The engine keeps the oldest row as the winner, merges non-empty string fields from the losing rows into the winner, and deletes the losers. The winner keeps `sync_status = SYNCED`.
+3. **Logs a summary** of how many rows were backfilled, how many duplicates were collapsed, and any per-row errors, but does not fail engine startup on per-row errors.
+
+This pass exists because an earlier engine revision failed to map QRZ app fields onto dedicated domain columns (see §7.5 Import), causing subsequent syncs to re-upload every QSO as a new record and multiplying the logbook. The repair pass is idempotent; engines that have already cleaned their data will do no work on subsequent startups.
 
 ---
 
@@ -1230,15 +1255,15 @@ A conformant engine must pass all of the following scenarios:
 
 #### Lookup (if credentials available)
 
-14. `Lookup` for a known callsign returns a populated `CallsignRecord`.
-15. `GetCachedCallsign` returns the cached result after a successful lookup.
-16. `Lookup` for an unknown callsign returns `LOOKUP_STATE_NOT_FOUND`.
+15. `Lookup` for a known callsign returns a populated `CallsignRecord`.
+16. `GetCachedCallsign` returns the cached result after a successful lookup.
+17. `Lookup` for an unknown callsign returns `LOOKUP_STATE_NOT_FOUND`.
 
 #### Degradation
 
-17. Engine starts successfully with no QRZ credentials configured.
-18. Engine starts successfully with no rigctld configured.
-19. `LogQso` works when external integrations are unavailable.
+18. Engine starts successfully with no QRZ credentials configured.
+19. Engine starts successfully with no rigctld configured.
+20. `LogQso` works when external integrations are unavailable.
 
 ---
 
@@ -1270,7 +1295,7 @@ A conformant engine must pass all of the following scenarios:
 | **Location** | `src/dotnet/QsoRipper.Engine.DotNet/` |
 | **Language** | C# |
 | **gRPC framework** | Grpc.Tools + ASP.NET Core |
-| **Storage backend** | In-memory (managed state) |
+| **Storage backend** | In-memory (managed state) or SQLite (`QsoRipper.Engine.Storage.Sqlite`) |
 | **Build** | `dotnet build src/dotnet/QsoRipper.Engine.DotNet/QsoRipper.Engine.DotNet.csproj` |
 | **Run** | `dotnet run --project src/dotnet/QsoRipper.Engine.DotNet/QsoRipper.Engine.DotNet.csproj` |
 | **Test** | `dotnet test src/dotnet/QsoRipper.Engine.DotNet.Tests/` |
@@ -1315,3 +1340,12 @@ A conformant engine must pass all of the following scenarios:
 - Run `buf lint` to validate proto files. Run `buf breaking` to guard against incompatible schema changes.
 
 See `docs/architecture/data-model.md` for the complete proto conventions and field-addition guide.
+
+## Appendix C: Known Follow-Up Work
+
+The following gaps are documented tracking items. They do not affect the normative behaviour above; they identify places where individual reference engines do not yet fully meet this spec and are being closed in follow-up PRs.
+
+- **.NET engine — `SyncWithQrz` streaming granularity.** The .NET engine currently produces a single terminal `SyncWithQrzResponse` instead of per-phase progress messages. Matches the spec's RPC signature but loses UI progress fidelity vs. the Rust engine.
+- **.NET engine — QRZ ADIF field coverage.** The .NET `AdifCodec` does not yet parse/emit every QRZ-specific field the Rust mapper covers (e.g., `ARRL_SECT`, SKCC, QSL/LOTW/EQSL date and flag variants, `MY_LAT`/`MY_LON`, `MY_ARRL_SECT`, `MY_CQ_ZONE`/`MY_ITU_ZONE`). Missing fields round-trip via `extra_fields` today, but should graduate to dedicated domain columns.
+- **.NET engine — Phase 3 `STATUS` call.** The .NET sync currently computes metadata from locally-merged results rather than calling QRZ `STATUS`. The Rust engine calls `STATUS` with local-fallback per §7.3 Phase 3; .NET should follow suit.
+- **.NET engine — `DeleteQsoAsync` parity.** The .NET `QrzLogbookClient` does not yet expose a delete helper matching the Rust client's semantics; currently local-only deletes are fully supported but remote `ACTION=DELETE` is not wired.
