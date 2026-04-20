@@ -397,59 +397,55 @@ impl LogbookService for DeveloperLogbookService {
         let engine = self.runtime_config.logbook_engine().await;
         let request = request.into_inner();
 
-        // When the caller requests QRZ deletion, look up the QSO first so we
-        // can grab the qrz_logid before removing the local row.
-        let (qrz_delete_success, qrz_delete_error) = if request.delete_from_qrz {
-            match engine.get_qso(&request.local_id).await {
-                Ok(qso) => match qso.qrz_logid.as_deref() {
-                    Some(logid) if !logid.is_empty() => {
-                        match self.build_qrz_logbook_client().await {
-                            Ok(client) => match client.delete_qso(logid).await {
-                                Ok(()) => (true, None),
-                                Err(err) => (false, Some(format!("QRZ delete failed: {err}"))),
-                            },
-                            Err(err) => (false, Some(err)),
-                        }
-                    }
-                    _ => (
-                        false,
-                        Some("QSO has no QRZ logid — it may not have been synced yet.".into()),
-                    ),
-                },
-                Err(_) => (
-                    false,
-                    Some("Could not look up QSO to retrieve QRZ logid.".into()),
-                ),
-            }
-        } else {
-            (true, None)
-        };
-
-        // Always delete locally, even if the QRZ delete failed — the user
-        // explicitly asked to remove it from the local logbook.
-        engine
-            .delete_qso(&request.local_id)
+        // Soft-delete the local row. When the caller asked for QRZ deletion
+        // we mark pending_remote_delete so the next SyncWithQrz removes it
+        // from QRZ during sync Phase 2. Restore before sync cancels it.
+        let deleted = engine
+            .delete_qso(&request.local_id, request.delete_from_qrz)
             .await
             .map_err(map_logbook_error)?;
+
+        let has_logid = deleted
+            .qrz_logid
+            .as_deref()
+            .is_some_and(|s| !s.is_empty());
+        let queued = request.delete_from_qrz && has_logid;
+        let qrz_delete_error = if request.delete_from_qrz && !has_logid {
+            Some("QSO has no QRZ logid — it may not have been synced yet.".into())
+        } else {
+            None
+        };
 
         Ok(Response::new(DeleteQsoResponse {
             success: true,
             error: None,
-            qrz_delete_success,
+            // Legacy fields: synchronous QRZ delete is no longer performed.
+            qrz_delete_success: false,
             qrz_delete_error,
-            remote_delete_queued: false,
+            remote_delete_queued: queued,
         }))
     }
 
     async fn restore_qso(
         &self,
-        _request: Request<RestoreQsoRequest>,
+        request: Request<RestoreQsoRequest>,
     ) -> Result<Response<RestoreQsoResponse>, Status> {
-        // Soft-delete / restore semantics are scheduled for a follow-up PR once
-        // storage migrations and sync phase changes land. See tracking issue.
-        Err(Status::unimplemented(
-            "RestoreQso is not yet implemented on the Rust engine",
-        ))
+        let engine = self.runtime_config.logbook_engine().await;
+        let request = request.into_inner();
+        if request.local_id.trim().is_empty() {
+            return Err(Status::invalid_argument(
+                "RestoreQso requires a non-empty local_id.",
+            ));
+        }
+        let restored = engine
+            .restore_qso(&request.local_id)
+            .await
+            .map_err(map_logbook_error)?;
+        Ok(Response::new(RestoreQsoResponse {
+            success: true,
+            error: None,
+            restored: Some(restored),
+        }))
     }
 
     async fn get_qso(
@@ -1067,6 +1063,9 @@ fn map_logbook_error(error: LogbookError) -> Status {
         LogbookError::NotFound(local_id) => {
             Status::not_found(format!("QSO '{local_id}' was not found."))
         }
+        LogbookError::AlreadyDeleted(local_id) => Status::failed_precondition(format!(
+            "QSO '{local_id}' is deleted; restore it before updating."
+        )),
         LogbookError::Storage(StorageError::Duplicate { entity, key }) => {
             Status::already_exists(format!("{entity} '{key}' already exists."))
         }
@@ -1194,7 +1193,7 @@ mod tests {
         GetCachedCallsignRequest, GetCurrentSpaceWeatherRequest, GetDxccEntityRequest,
         GetQsoRequest, GetSyncStatusRequest, ImportAdifRequest, ImportAdifResponse,
         ListQsosRequest, LogQsoRequest, LookupRequest, QsoSortOrder, RefreshSpaceWeatherRequest,
-        StreamLookupRequest, UpdateQsoRequest,
+        RestoreQsoRequest, StreamLookupRequest, UpdateQsoRequest,
     };
     use tokio_stream::StreamExt;
     use tonic::transport::Channel;
@@ -1511,18 +1510,51 @@ mod tests {
         .into_inner();
 
         assert!(delete_response.success);
-        assert!(delete_response.qrz_delete_success);
+        assert!(!delete_response.qrz_delete_success);
         assert!(delete_response.qrz_delete_error.is_none());
+        assert!(!delete_response.remote_delete_queued);
 
-        let get_error = LogbookService::get_qso(
+        // After soft-delete the record is still loadable by id but carries
+        // a deleted_at tombstone.
+        let get_after_delete = LogbookService::get_qso(
             service,
             Request::new(GetQsoRequest {
-                local_id: log_response.local_id,
+                local_id: log_response.local_id.clone(),
             }),
         )
         .await
-        .expect_err("deleted record should not load");
-        assert_eq!(Code::NotFound, get_error.code());
+        .expect("get after soft-delete")
+        .into_inner();
+        let after_delete_qso = get_after_delete.qso.expect("soft-deleted record");
+        assert!(after_delete_qso.deleted_at.is_some());
+        assert!(!after_delete_qso.pending_remote_delete);
+
+        // Restoring clears the tombstone and pending flag.
+        let restore_response = LogbookService::restore_qso(
+            service,
+            Request::new(RestoreQsoRequest {
+                local_id: log_response.local_id.clone(),
+            }),
+        )
+        .await
+        .expect("restore response")
+        .into_inner();
+        assert!(restore_response.success);
+        let restored = restore_response.restored.expect("restored record present");
+        assert!(restored.deleted_at.is_none());
+        assert!(!restored.pending_remote_delete);
+
+        // Final hard-delete via storage is not exposed; soft-delete it again
+        // and assert ListQsos default filter hides it.
+        let _ = LogbookService::delete_qso(
+            service,
+            Request::new(DeleteQsoRequest {
+                local_id: log_response.local_id,
+                delete_from_qrz: false,
+            }),
+        )
+        .await
+        .expect("re-delete");
     }
 
     async fn grpc_logbook_client(
