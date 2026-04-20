@@ -12,7 +12,9 @@ use std::{fs, future::Future, io, net::SocketAddr, path::PathBuf, sync::Arc};
 use qsoripper_core::adif::{parse_adi_qsos, serialize_adi_qsos};
 use qsoripper_core::application::logbook::LogbookError;
 use qsoripper_core::lookup::QRZ_USER_AGENT_ENV_VAR;
-use qsoripper_core::storage::{EngineStorage, QsoListQuery, QsoSortOrder, StorageError};
+use qsoripper_core::storage::{
+    DeletedRecordsFilter, EngineStorage, QsoListQuery, QsoSortOrder, StorageError,
+};
 use qsoripper_storage_memory::MemoryStorage;
 use qsoripper_storage_sqlite::SqliteStorageBuilder;
 use tokio_stream::wrappers::{ReceiverStream, TcpListenerStream};
@@ -30,7 +32,8 @@ use qsoripper_core::proto::qsoripper::services::{
     space_weather_service_server::{SpaceWeatherService, SpaceWeatherServiceServer},
     station_profile_service_server::StationProfileServiceServer,
     AdifChunk, ApplyRuntimeConfigRequest, ApplyRuntimeConfigResponse, BatchLookupRequest,
-    BatchLookupResponse, DeleteQsoRequest, DeleteQsoResponse, EngineInfo, ExportAdifRequest,
+    BatchLookupResponse, DeleteQsoRequest, DeleteQsoResponse,
+    DeletedRecordsFilter as ProtoDeletedRecordsFilter, EngineInfo, ExportAdifRequest,
     ExportAdifResponse, GetCachedCallsignRequest, GetCachedCallsignResponse,
     GetCurrentSpaceWeatherRequest, GetCurrentSpaceWeatherResponse, GetDxccEntityRequest,
     GetDxccEntityResponse, GetEngineInfoRequest, GetEngineInfoResponse, GetQsoRequest,
@@ -1092,6 +1095,19 @@ fn qso_list_query_from_request(request: &ListQsosRequest) -> Result<QsoListQuery
         Err(_) => return Err(Box::new(Status::invalid_argument("Invalid sort order."))),
     };
 
+    let deleted_filter = match ProtoDeletedRecordsFilter::try_from(request.deleted_filter) {
+        Ok(ProtoDeletedRecordsFilter::Unspecified | ProtoDeletedRecordsFilter::ActiveOnly) => {
+            DeletedRecordsFilter::ActiveOnly
+        }
+        Ok(ProtoDeletedRecordsFilter::DeletedOnly) => DeletedRecordsFilter::DeletedOnly,
+        Ok(ProtoDeletedRecordsFilter::All) => DeletedRecordsFilter::All,
+        Err(_) => {
+            return Err(Box::new(Status::invalid_argument(
+                "Invalid deleted_filter value.",
+            )))
+        }
+    };
+
     Ok(QsoListQuery {
         after: request.after,
         before: request.before,
@@ -1105,6 +1121,7 @@ fn qso_list_query_from_request(request: &ListQsosRequest) -> Result<QsoListQuery
         limit: (request.limit > 0).then_some(request.limit),
         offset: request.offset,
         sort,
+        deleted_filter,
     })
 }
 

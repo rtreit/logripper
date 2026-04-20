@@ -11,7 +11,9 @@ CREATE TABLE IF NOT EXISTS qsos (
     created_at_ms INTEGER,
     updated_at_ms INTEGER,
     sync_status INTEGER NOT NULL,
-    record BLOB NOT NULL
+    record BLOB NOT NULL,
+    deleted_at_ms INTEGER,
+    pending_remote_delete INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE INDEX IF NOT EXISTS idx_qsos_station_callsign ON qsos (station_callsign);
@@ -21,6 +23,7 @@ CREATE INDEX IF NOT EXISTS idx_qsos_band ON qsos (band);
 CREATE INDEX IF NOT EXISTS idx_qsos_mode ON qsos (mode);
 CREATE INDEX IF NOT EXISTS idx_qsos_contest_id ON qsos (contest_id);
 CREATE INDEX IF NOT EXISTS idx_qsos_sync_status ON qsos (sync_status);
+CREATE INDEX IF NOT EXISTS idx_qsos_deleted_at_ms ON qsos (deleted_at_ms);
 
 CREATE TABLE IF NOT EXISTS sync_metadata (
     id INTEGER PRIMARY KEY CHECK (id = 1),

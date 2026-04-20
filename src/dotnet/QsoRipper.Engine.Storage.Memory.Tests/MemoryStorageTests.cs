@@ -556,5 +556,79 @@ public sealed class MemoryStorageTests
             StoredAt = DateTimeOffset.UtcNow,
         };
     }
+
+    // ──────────────────────────────────────────────
+    //  Soft-delete & restore
+    // ──────────────────────────────────────────────
+
+    [Fact]
+    public async Task SoftDelete_keeps_row_with_tombstone_set()
+    {
+        await _storage.Logbook.InsertQsoAsync(MakeQso("s1", "W1AW", Band._20M, Mode.Ft8, "2026-02-01T00:00:00Z"));
+        var ok = await _storage.Logbook.SoftDeleteQsoAsync("s1", DateTimeOffset.Parse("2026-02-02T00:00:00Z", System.Globalization.CultureInfo.InvariantCulture), pendingRemoteDelete: true);
+        Assert.True(ok);
+
+        var fetched = await _storage.Logbook.GetQsoAsync("s1");
+        Assert.NotNull(fetched);
+        Assert.NotNull(fetched!.DeletedAt);
+        Assert.True(fetched.PendingRemoteDelete);
+    }
+
+    [Fact]
+    public async Task ListQsos_active_only_excludes_soft_deleted_by_default()
+    {
+        await _storage.Logbook.InsertQsoAsync(MakeQso("a", "W1AW", Band._20M, Mode.Ft8, "2026-02-01T00:00:00Z"));
+        await _storage.Logbook.InsertQsoAsync(MakeQso("b", "W1NEW", Band._20M, Mode.Ft8, "2026-02-02T00:00:00Z"));
+        await _storage.Logbook.SoftDeleteQsoAsync("a", DateTimeOffset.UtcNow, pendingRemoteDelete: false);
+
+        var active = await _storage.Logbook.ListQsosAsync(new QsoListQuery());
+        Assert.Single(active);
+        Assert.Equal("b", active[0].LocalId);
+
+        var deleted = await _storage.Logbook.ListQsosAsync(new QsoListQuery { DeletedFilter = DeletedRecordsFilter.DeletedOnly });
+        Assert.Single(deleted);
+        Assert.Equal("a", deleted[0].LocalId);
+
+        var all = await _storage.Logbook.ListQsosAsync(new QsoListQuery { DeletedFilter = DeletedRecordsFilter.All });
+        Assert.Equal(2, all.Count);
+    }
+
+    [Fact]
+    public async Task GetCounts_excludes_soft_deleted_rows()
+    {
+        await _storage.Logbook.InsertQsoAsync(MakeQso("a", "W1AW", Band._20M, Mode.Ft8, "2026-02-01T00:00:00Z", SyncStatus.LocalOnly));
+        await _storage.Logbook.InsertQsoAsync(MakeQso("b", "W1NEW", Band._20M, Mode.Ft8, "2026-02-02T00:00:00Z", SyncStatus.LocalOnly));
+        await _storage.Logbook.SoftDeleteQsoAsync("b", DateTimeOffset.UtcNow, pendingRemoteDelete: false);
+
+        var counts = await _storage.Logbook.GetCountsAsync();
+        Assert.Equal(1, counts.LocalQsoCount);
+        Assert.Equal(1, counts.PendingUploadCount);
+    }
+
+    [Fact]
+    public async Task Restore_clears_tombstone_and_pending_flag()
+    {
+        await _storage.Logbook.InsertQsoAsync(MakeQso("r1", "W1AW", Band._20M, Mode.Ft8, "2026-03-01T00:00:00Z"));
+        await _storage.Logbook.SoftDeleteQsoAsync("r1", DateTimeOffset.UtcNow, pendingRemoteDelete: true);
+
+        Assert.True(await _storage.Logbook.RestoreQsoAsync("r1"));
+
+        var fetched = await _storage.Logbook.GetQsoAsync("r1");
+        Assert.NotNull(fetched);
+        Assert.Null(fetched!.DeletedAt);
+        Assert.False(fetched.PendingRemoteDelete);
+    }
+
+    [Fact]
+    public async Task SoftDelete_returns_false_for_missing_row()
+    {
+        Assert.False(await _storage.Logbook.SoftDeleteQsoAsync("missing", DateTimeOffset.UtcNow, pendingRemoteDelete: false));
+    }
+
+    [Fact]
+    public async Task Restore_returns_false_for_missing_row()
+    {
+        Assert.False(await _storage.Logbook.RestoreQsoAsync("missing"));
+    }
 }
 #pragma warning restore CA1707

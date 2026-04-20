@@ -562,6 +562,12 @@ internal sealed class ManagedEngineState
                 Sort = request.Sort == QsoRipper.Services.QsoSortOrder.OldestFirst
                     ? Storage.QsoSortOrder.OldestFirst
                     : Storage.QsoSortOrder.NewestFirst,
+                DeletedFilter = request.DeletedFilter switch
+                {
+                    QsoRipper.Services.DeletedRecordsFilter.DeletedOnly => Storage.DeletedRecordsFilter.DeletedOnly,
+                    QsoRipper.Services.DeletedRecordsFilter.All => Storage.DeletedRecordsFilter.All,
+                    _ => Storage.DeletedRecordsFilter.ActiveOnly,
+                },
             };
 
             return Sync(_storage.Logbook.ListQsosAsync(storageQuery));
