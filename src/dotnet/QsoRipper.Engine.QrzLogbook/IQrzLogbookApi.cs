@@ -33,6 +33,13 @@ public interface IQrzLogbookApi
     /// keep <c>SyncMetadata</c> aligned with what QRZ actually has.
     /// </summary>
     Task<QrzLogbookStatus> GetStatusAsync();
+
+    /// <summary>
+    /// Delete a remote QSO by its QRZ logid via the <c>DELETE</c> action.
+    /// Implementations must treat QRZ "not found"-style failures as success
+    /// so the queued-remote-delete sync loop is idempotent.
+    /// </summary>
+    Task DeleteQsoAsync(string logid);
 }
 
 /// <summary>

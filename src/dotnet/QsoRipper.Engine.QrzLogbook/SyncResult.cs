@@ -28,4 +28,16 @@ public sealed record SyncResult
 
     /// <summary>Semicolon-delimited error messages from partial failures, or <c>null</c> when clean.</summary>
     public string? ErrorSummary { get; init; }
+
+    /// <summary>
+    /// Number of remote-delete operations successfully pushed to QRZ in
+    /// the Phase 2.5 queued-remote-delete loop.
+    /// </summary>
+    public uint RemoteDeletesPushed { get; init; }
+
+    /// <summary>
+    /// Number of remote QSO downloads skipped because their <c>QrzLogid</c>
+    /// matches a soft-deleted local row. Counted in Phase 1.
+    /// </summary>
+    public uint DeletesSkippedRemote { get; init; }
 }

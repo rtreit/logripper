@@ -611,6 +611,112 @@ public sealed class QrzSyncEngineTests
         Assert.Equal(SyncStatus.Synced, all[0].SyncStatus);
     }
 
+    // -- Soft-delete sync integration ---------------------------------------
+
+    [Fact]
+    public async Task Download_skips_remote_matching_soft_deleted_local()
+    {
+        // A previously-synced local row was soft-deleted. The next sync
+        // must NOT resurrect it from QRZ.
+        var store = CreateStore();
+        var local = MakeLocalQso("K7ABC", BaseTime, Band._20M, Mode.Ft8, SyncStatus.Synced);
+        local.QrzLogid = "LOG-DELETED";
+        await store.Logbook.InsertQsoAsync(local);
+        await store.Logbook.SoftDeleteQsoAsync(local.LocalId, DateTimeOffset.UtcNow, pendingRemoteDelete: false);
+
+        var remote = MakeRemoteQso("K7ABC", BaseTime, Band._20M, Mode.Ft8, "LOG-DELETED");
+        var api = new FakeQrzLogbookApi { FetchResult = [remote] };
+        var engine = new QrzSyncEngine(api);
+
+        var result = await engine.ExecuteSyncAsync(store.Logbook, fullSync: true);
+
+        Assert.Equal(0u, result.DownloadedCount);
+        Assert.Equal(1u, result.DeletesSkippedRemote);
+
+        var all = await store.Logbook.ListQsosAsync(new QsoListQuery
+        {
+            DeletedFilter = DeletedRecordsFilter.All,
+        });
+        Assert.Single(all);
+        Assert.NotNull(all[0].DeletedAt);
+    }
+
+    [Fact]
+    public async Task PushPendingRemoteDeletes_calls_qrz_and_clears_local_flags()
+    {
+        var store = CreateStore();
+        var local = MakeLocalQso("JA1ZZZ", BaseTime, Band._40M, Mode.Cw, SyncStatus.Synced);
+        local.QrzLogid = "LOG-PENDING";
+        await store.Logbook.InsertQsoAsync(local);
+        await store.Logbook.SoftDeleteQsoAsync(local.LocalId, DateTimeOffset.UtcNow, pendingRemoteDelete: true);
+
+        var api = new FakeQrzLogbookApi();
+        var engine = new QrzSyncEngine(api);
+
+        var result = await engine.ExecuteSyncAsync(store.Logbook, fullSync: true);
+
+        Assert.Equal(1u, result.RemoteDeletesPushed);
+        Assert.Null(result.ErrorSummary);
+        Assert.Single(api.DeletedLogids);
+        Assert.Equal("LOG-PENDING", api.DeletedLogids[0]);
+
+        var all = await store.Logbook.ListQsosAsync(new QsoListQuery
+        {
+            DeletedFilter = DeletedRecordsFilter.All,
+        });
+        Assert.Single(all);
+        Assert.NotNull(all[0].DeletedAt);
+        Assert.False(all[0].PendingRemoteDelete);
+        Assert.True(string.IsNullOrEmpty(all[0].QrzLogid));
+    }
+
+    [Fact]
+    public async Task PushPendingRemoteDeletes_does_not_call_when_pending_flag_unset()
+    {
+        var store = CreateStore();
+        var local = MakeLocalQso("K7ABC", BaseTime, Band._20M, Mode.Ft8, SyncStatus.Synced);
+        local.QrzLogid = "LOG-LOCAL-ONLY-TRASH";
+        await store.Logbook.InsertQsoAsync(local);
+        await store.Logbook.SoftDeleteQsoAsync(local.LocalId, DateTimeOffset.UtcNow, pendingRemoteDelete: false);
+
+        var api = new FakeQrzLogbookApi();
+        var engine = new QrzSyncEngine(api);
+
+        await engine.ExecuteSyncAsync(store.Logbook, fullSync: true);
+
+        Assert.Empty(api.DeletedLogids);
+    }
+
+    [Fact]
+    public async Task PushPendingRemoteDeletes_preserves_state_on_failure()
+    {
+        var store = CreateStore();
+        var local = MakeLocalQso("DL1ABC", BaseTime, Band._20M, Mode.Ssb, SyncStatus.Synced);
+        local.QrzLogid = "LOG-FAIL";
+        await store.Logbook.InsertQsoAsync(local);
+        await store.Logbook.SoftDeleteQsoAsync(local.LocalId, DateTimeOffset.UtcNow, pendingRemoteDelete: true);
+
+        var api = new FakeQrzLogbookApi
+        {
+            DeleteException = new QrzLogbookException("server angry"),
+        };
+        var engine = new QrzSyncEngine(api);
+
+        var result = await engine.ExecuteSyncAsync(store.Logbook, fullSync: true);
+
+        Assert.Equal(0u, result.RemoteDeletesPushed);
+        Assert.NotNull(result.ErrorSummary);
+
+        var all = await store.Logbook.ListQsosAsync(new QsoListQuery
+        {
+            DeletedFilter = DeletedRecordsFilter.All,
+        });
+        Assert.Single(all);
+        Assert.NotNull(all[0].DeletedAt);
+        Assert.True(all[0].PendingRemoteDelete);
+        Assert.Equal("LOG-FAIL", all[0].QrzLogid);
+    }
+
     // -- Helpers ------------------------------------------------------------
 
     private static MemoryStorage CreateStore() => new();
@@ -703,6 +809,21 @@ public sealed class QrzSyncEngineTests
             }
 
             return Task.FromResult(new QrzLogbookStatus(StatusOwner, StatusQsoCount));
+        }
+
+        public List<string> DeletedLogids { get; } = [];
+
+        public Exception? DeleteException { get; set; }
+
+        public Task DeleteQsoAsync(string logid)
+        {
+            DeletedLogids.Add(logid);
+            if (DeleteException is not null)
+            {
+                return Task.FromException(DeleteException);
+            }
+
+            return Task.CompletedTask;
         }
     }
 }

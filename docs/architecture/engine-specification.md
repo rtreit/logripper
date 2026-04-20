@@ -1049,10 +1049,11 @@ The QRZ logbook sync is a three-phase operation:
       - `CONFLICT_POLICY_UNSPECIFIED` — engines MUST treat the zero value as `FLAG_FOR_REVIEW` (the safe, non-destructive default) per §6.3.
    d. If unmatched, insert as a new local record with `sync_status = SYNCED` and populate `qrz_logid` from the remote record.
 4. Filter ghost records: remote QSOs missing required fields (callsign, timestamp) are skipped without incrementing any counter.
+5. **Soft-delete suppression:** before matching, engines MUST load the full local record set including soft-deleted rows (see §7.8) and build the set of `qrz_logid` values associated with locally soft-deleted QSOs. Any remote QSO whose `qrz_logid` is in that set MUST be skipped (no insert, no merge), and the engine MUST increment the `deletes_skipped_remote` counter on the sync result. This prevents resurrection of QSOs the operator has trashed locally before the queued remote-delete (Phase 2.5) has propagated.
 
 #### Phase 2: Upload
 
-1. Query local QSOs with `sync_status` in (`NOT_SYNCED`, `MODIFIED`).
+1. Query local QSOs with `sync_status` in (`NOT_SYNCED`, `MODIFIED`). Soft-deleted rows MUST NOT be uploaded as inserts/updates regardless of `sync_status`; they are handled by Phase 2.5.
 2. For each QSO, serialize to ADIF and call the QRZ logbook API:
    - If `sync_status = NOT_SYNCED` (new record, no `qrz_logid`), use `ACTION=INSERT`.
    - If `sync_status = MODIFIED` and the record has a `qrz_logid`, use the documented replace form `ACTION=INSERT&OPTION=REPLACE,LOGID:<logid>`. Engines MUST NOT use the undocumented `ACTION=REPLACE` form, which can silently produce duplicate inserts on the remote logbook.
@@ -1060,6 +1061,18 @@ The QRZ logbook sync is a three-phase operation:
 3. Accept both `RESULT=OK` (insert) and `RESULT=REPLACE` (update) as success indicators when parsing the QRZ response.
 4. On success, set `sync_status = SYNCED` and store the returned `LOGID` (or the supplied one for a REPLACE that echoes nothing) in `qrz_logid`.
 5. On per-QSO failure, log the error and continue with remaining QSOs.
+
+#### Phase 2.5: Push pending remote deletes
+
+1. Query local QSOs where `deleted_at IS NOT NULL AND pending_remote_delete = true AND qrz_logid` is non-empty.
+2. For each such row, call the QRZ logbook API `ACTION=DELETE&KEY=<api_key>&LOGID=<qrz_logid>`.
+3. Treat the following responses as success (the remote row is gone or never existed — the operator's intent is satisfied):
+   - `RESULT=OK`
+   - `RESULT=FAIL&REASON=<text>` where `<text>` matches a not-found indicator (case-insensitive substring match on `not found`, `no such`, `does not exist`, or `no record`)
+   - HTTP 404 from the QRZ endpoint
+4. On success, the engine MUST clear `pending_remote_delete` and clear `qrz_logid` (so a future re-sync cannot re-target a now-detached logid) while leaving `deleted_at` set so the row remains in the trash view. Increment the `remote_deletes_pushed` counter.
+5. On other failures (network, authentication, unrecognized REASON), the engine MUST leave `pending_remote_delete = true` and `qrz_logid` intact so the next sync retries. Append a description of the failure to the sync error summary.
+6. Authentication errors MUST propagate from the QRZ adapter as auth-failure exceptions (not collapsed into "not found"); engines surface them in the same way as other Phase 2 auth errors.
 
 #### Phase 3: Metadata
 
@@ -1403,4 +1416,3 @@ The following gaps are documented tracking items. They do not affect the normati
 
 - **.NET engine — `SyncWithQrz` streaming granularity.** The .NET engine currently produces a single terminal `SyncWithQrzResponse` instead of per-phase progress messages. Matches the spec's RPC signature but loses UI progress fidelity vs. the Rust engine.
 - **.NET engine — QRZ ADIF field coverage.** The .NET `AdifCodec` does not yet parse/emit every QRZ-specific field the Rust mapper covers (e.g., `ARRL_SECT`, SKCC, QSL/LOTW/EQSL date and flag variants, `MY_LAT`/`MY_LON`, `MY_ARRL_SECT`, `MY_CQ_ZONE`/`MY_ITU_ZONE`). Missing fields round-trip via `extra_fields` today, but should graduate to dedicated domain columns.
-- **Both engines — soft-delete with restore.** The proto contracts expose `QsoRecord.deleted_at` (field 73), `QsoRecord.pending_remote_delete` (field 74), the tri-state `DeletedRecordsFilter` on `ListQsosRequest`, `DeleteQsoResponse.remote_delete_queued` (field 5), and the `RestoreQso` RPC. Both engines currently return `UNIMPLEMENTED` for `RestoreQso` and still perform hard local deletes. The full soft-delete semantics — setting `deleted_at` instead of row removal, honouring `deleted_filter` in `ListQsos`, rejecting updates to soft-deleted rows, ignoring soft-deleted rows in `ImportAdif` duplicate matching, skipping soft-deleted rows in sync Phase 1 download, and queuing QRZ `ACTION=DELETE` via `pending_remote_delete` in sync Phase 2 — are scheduled for a follow-up PR on both engines in lockstep. Storage backends also need `ALTER TABLE ADD COLUMN` migration paths for the two new columns. Treat the new `DeleteQsoResponse.qrz_delete_success` / `qrz_delete_error` fields as deprecated once the queued-delete path lands; `remote_delete_queued` will be the canonical signal. Tracked in #289.

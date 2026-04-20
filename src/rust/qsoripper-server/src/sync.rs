@@ -4,7 +4,7 @@
 //! **Phase 2** — Upload local-only and modified QSOs to QRZ.
 //! **Phase 3** — Update sync metadata with the current timestamp.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use qsoripper_core::domain::qso::new_local_id;
 use qsoripper_core::proto::qsoripper::domain::{ConflictPolicy, QsoRecord, SyncStatus};
@@ -12,7 +12,7 @@ use qsoripper_core::proto::qsoripper::services::SyncWithQrzResponse;
 use qsoripper_core::qrz_logbook::{
     QrzLogbookClient, QrzLogbookError, QrzLogbookStatus, QrzUploadResult,
 };
-use qsoripper_core::storage::{LogbookStore, QsoListQuery, SyncMetadata};
+use qsoripper_core::storage::{DeletedRecordsFilter, LogbookStore, QsoListQuery, SyncMetadata};
 use tokio::sync::mpsc;
 use tonic::Status;
 
@@ -68,6 +68,10 @@ pub(crate) trait QrzLogbookApi: Send + Sync {
 
     /// Query the remote logbook for the current owner callsign and QSO count.
     async fn fetch_status(&self) -> Result<QrzLogbookStatus, QrzLogbookError>;
+
+    /// Delete a remote QSO by its QRZ logid. Implementations should treat
+    /// "not found" as success so the queued-remote-delete loop is idempotent.
+    async fn delete_qso(&self, logid: &str) -> Result<(), QrzLogbookError>;
 }
 
 #[tonic::async_trait]
@@ -91,6 +95,10 @@ impl QrzLogbookApi for QrzLogbookClient {
     async fn fetch_status(&self) -> Result<QrzLogbookStatus, QrzLogbookError> {
         QrzLogbookClient::test_connection(self).await
     }
+
+    async fn delete_qso(&self, logid: &str) -> Result<(), QrzLogbookError> {
+        QrzLogbookClient::delete_qso(self, logid).await
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -101,6 +109,10 @@ struct SyncCounters {
     downloaded: u32,
     uploaded: u32,
     conflicts: u32,
+    /// Number of remote rows skipped because they match a soft-deleted local row.
+    deletes_skipped_remote: u32,
+    /// Number of queued remote deletes that were pushed to QRZ in Phase 2.
+    remote_deletes_pushed: u32,
     errors: Vec<String>,
 }
 
@@ -110,6 +122,8 @@ impl SyncCounters {
             downloaded: 0,
             uploaded: 0,
             conflicts: 0,
+            deletes_skipped_remote: 0,
+            remote_deletes_pushed: 0,
             errors: Vec::new(),
         }
     }
@@ -147,6 +161,8 @@ pub(crate) async fn execute_sync(
 
     upload_phase(client, store, progress_tx, &mut counters).await;
 
+    push_pending_remote_deletes(client, store, progress_tx, &mut counters).await;
+
     update_metadata(client, store, &metadata, &mut counters).await;
 
     let error_summary = if counters.errors.is_empty() {
@@ -156,10 +172,12 @@ pub(crate) async fn execute_sync(
     };
 
     eprintln!(
-        "[sync] Sync completed: downloaded={} uploaded={} conflicts={} errors={}",
+        "[sync] Sync completed: downloaded={} uploaded={} conflicts={} remote_deletes_pushed={} deletes_skipped_remote={} errors={}",
         counters.downloaded,
         counters.uploaded,
         counters.conflicts,
+        counters.remote_deletes_pushed,
+        counters.deletes_skipped_remote,
         counters.errors.len(),
     );
 
@@ -195,8 +213,17 @@ async fn download_phase(
         }
     };
 
-    // Load all local QSOs for matching and sync-policy decisions.
-    let local_qsos = match store.list_qsos(&QsoListQuery::default()).await {
+    // Load all local QSOs (including soft-deleted) so we can both match
+    // against active rows AND honor user intent: any remote row whose
+    // qrz_logid matches a soft-deleted local row must be skipped, otherwise
+    // the next sync would resurrect the trashed QSO.
+    let local_qsos = match store
+        .list_qsos(&QsoListQuery {
+            deleted_filter: DeletedRecordsFilter::All,
+            ..QsoListQuery::default()
+        })
+        .await
+    {
         Ok(qsos) => qsos,
         Err(err) => {
             send_complete(
@@ -210,6 +237,12 @@ async fn download_phase(
             return None;
         }
     };
+
+    // Partition into active (used for matching) and deleted (used as a skip
+    // set keyed by qrz_logid). We don't fuzzy-skip on deleted rows; QRZ
+    // logid is the only signal stable enough to safely suppress a download.
+    let (active_local, deleted_logids) = partition_local_for_sync(&local_qsos);
+    let local_qsos = active_local;
 
     // If the local logbook is empty, force a full remote fetch even for
     // incremental sync requests. This recovers from stale metadata and gives
@@ -254,10 +287,35 @@ async fn download_phase(
     .await;
 
     // Build lookup indexes.
-    let (mut by_qrz_logid, mut by_key) = build_local_indexes(&local_qsos);
+    let (by_qrz_logid, by_key) = build_local_indexes(&local_qsos);
 
-    // Process each remote QSO.
-    for remote in &remote_qsos {
+    process_remote_qsos(
+        &remote_qsos,
+        &deleted_logids,
+        by_qrz_logid,
+        by_key,
+        store,
+        conflict_policy,
+        counters,
+    )
+    .await;
+
+    Some(metadata)
+}
+
+/// Iterate downloaded remote QSOs, applying the soft-delete skip set, then
+/// either inserting a new row or merging with the matched local one.
+#[allow(clippy::too_many_arguments)]
+async fn process_remote_qsos(
+    remote_qsos: &[QsoRecord],
+    deleted_logids: &HashSet<String>,
+    mut by_qrz_logid: LogidIndex,
+    mut by_key: FuzzyIndex,
+    store: &dyn LogbookStore,
+    conflict_policy: ConflictPolicy,
+    counters: &mut SyncCounters,
+) {
+    for remote in remote_qsos {
         // Defense-in-depth: skip records that lack the minimum fields needed
         // for matching and storage. These are artefacts of ADIF
         // header/trailer fragments that slip through the parser.
@@ -266,6 +324,15 @@ async fn download_phase(
         }
 
         let remote_logid = extract_qrz_logid(remote);
+
+        // Skip remote rows that match a soft-deleted local row. The user
+        // intentionally trashed it; download must not resurrect it.
+        if let Some(logid) = remote_logid.as_deref() {
+            if deleted_logids.contains(logid) {
+                counters.deletes_skipped_remote += 1;
+                continue;
+            }
+        }
 
         let local_match = remote_logid
             .as_deref()
@@ -297,8 +364,6 @@ async fn download_phase(
             }
         }
     }
-
-    Some(metadata)
 }
 
 /// Insert a QSO downloaded from QRZ that has no local match.
@@ -426,6 +491,90 @@ async fn upload_phase(
                 counters
                     .errors
                     .push(format!("Upload failed for {}: {err}", qso.worked_callsign));
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Phase 2.5 — Push queued remote deletes
+// ---------------------------------------------------------------------------
+
+/// Push every locally soft-deleted QSO whose `pending_remote_delete` flag is
+/// set to QRZ. On success (including QRZ "not found"), clears `qrz_logid`
+/// and `pending_remote_delete` while keeping `deleted_at` set.
+async fn push_pending_remote_deletes(
+    client: &dyn QrzLogbookApi,
+    store: &dyn LogbookStore,
+    progress_tx: &mpsc::Sender<Result<SyncWithQrzResponse, Status>>,
+    counters: &mut SyncCounters,
+) {
+    let candidates = match store
+        .list_qsos(&QsoListQuery {
+            deleted_filter: DeletedRecordsFilter::DeletedOnly,
+            ..QsoListQuery::default()
+        })
+        .await
+    {
+        Ok(qsos) => qsos,
+        Err(err) => {
+            eprintln!("[sync] Failed to load deleted QSOs for remote-delete pass: {err}");
+            counters
+                .errors
+                .push(format!("List deleted QSOs failed: {err}"));
+            return;
+        }
+    };
+
+    let pending: Vec<&QsoRecord> = candidates
+        .iter()
+        .filter(|q| {
+            q.pending_remote_delete && !q.qrz_logid.as_deref().unwrap_or("").trim().is_empty()
+        })
+        .collect();
+
+    if pending.is_empty() {
+        return;
+    }
+
+    send_progress(
+        progress_tx,
+        &format!("Pushing {} queued remote delete(s)…", pending.len()),
+        counters.downloaded,
+        counters.uploaded,
+        counters.conflicts,
+    )
+    .await;
+
+    for qso in pending {
+        let logid = qso.qrz_logid.as_deref().unwrap_or("").to_string();
+        match client.delete_qso(&logid).await {
+            Ok(()) => {
+                let mut cleared = qso.clone();
+                cleared.qrz_logid = None;
+                cleared.pending_remote_delete = false;
+                if let Err(err) = store.update_qso(&cleared).await {
+                    eprintln!(
+                        "[sync] Remote delete succeeded for {} but local clear failed: {err}",
+                        qso.worked_callsign
+                    );
+                    counters.errors.push(format!(
+                        "Remote delete cleared for {} failed locally: {err}",
+                        qso.worked_callsign
+                    ));
+                } else {
+                    counters.remote_deletes_pushed += 1;
+                }
+            }
+            Err(err) => {
+                eprintln!(
+                    "[sync] Remote delete failed for logid {logid} ({}): {err}",
+                    qso.worked_callsign
+                );
+                counters.errors.push(format!(
+                    "Remote delete failed for {}: {err}",
+                    qso.worked_callsign
+                ));
             }
         }
     }
@@ -643,6 +792,27 @@ fn build_local_indexes(local_qsos: &[QsoRecord]) -> (LogidIndex, FuzzyIndex) {
     (by_qrz_logid, by_key)
 }
 
+/// Split rows fetched with `DeletedRecordsFilter::All` into:
+/// 1. Active rows usable for matching (returned as a Vec).
+/// 2. A `HashSet<String>` of QRZ logids belonging to soft-deleted rows.
+///    Phase 1 download uses this set to skip resurrecting trashed QSOs.
+fn partition_local_for_sync(local_qsos: &[QsoRecord]) -> (Vec<QsoRecord>, HashSet<String>) {
+    let mut active: Vec<QsoRecord> = Vec::with_capacity(local_qsos.len());
+    let mut deleted_logids: HashSet<String> = HashSet::new();
+    for qso in local_qsos {
+        if qso.deleted_at.is_some() {
+            if let Some(logid) = qso.qrz_logid.as_deref() {
+                if !logid.is_empty() {
+                    deleted_logids.insert(logid.to_string());
+                }
+            }
+        } else {
+            active.push(qso.clone());
+        }
+    }
+    (active, deleted_logids)
+}
+
 /// Extract the QRZ logbook record ID from a QSO.
 ///
 /// Checks the dedicated `qrz_logid` field first (populated by the ADIF
@@ -754,7 +924,7 @@ mod tests {
         Band, ConflictPolicy, Mode, QsoRecord, SyncStatus,
     };
     use qsoripper_core::qrz_logbook::{QrzLogbookError, QrzLogbookStatus, QrzUploadResult};
-    use qsoripper_core::storage::{LogbookStore, QsoListQuery, SyncMetadata};
+    use qsoripper_core::storage::{DeletedRecordsFilter, LogbookStore, QsoListQuery, SyncMetadata};
     use qsoripper_storage_memory::MemoryStorage;
     use tokio::sync::mpsc;
 
@@ -768,6 +938,8 @@ mod tests {
         replace_calls: Mutex<Vec<(String, String)>>, // (logid, local_id)
         replace_results: Mutex<Vec<Result<QrzUploadResult, QrzLogbookError>>>,
         status_result: Mutex<Option<Result<QrzLogbookStatus, QrzLogbookError>>>,
+        delete_calls: Mutex<Vec<String>>,
+        delete_results: Mutex<Vec<Result<(), QrzLogbookError>>>,
     }
 
     impl MockQrzApi {
@@ -784,6 +956,8 @@ mod tests {
                     owner: String::new(),
                     qso_count: 0,
                 }))),
+                delete_calls: Mutex::new(Vec::new()),
+                delete_results: Mutex::new(Vec::new()),
             }
         }
 
@@ -849,6 +1023,16 @@ mod tests {
                     })
                 })
         }
+
+        async fn delete_qso(&self, logid: &str) -> Result<(), QrzLogbookError> {
+            let mut results = self.delete_results.lock().unwrap();
+            self.delete_calls.lock().unwrap().push(logid.to_string());
+            if results.is_empty() {
+                Ok(())
+            } else {
+                results.remove(0)
+            }
+        }
     }
 
     /// Capturing mock that records what `since` value was passed to `fetch_qsos`.
@@ -884,6 +1068,10 @@ mod tests {
                 owner: String::new(),
                 qso_count: 0,
             })
+        }
+
+        async fn delete_qso(&self, _logid: &str) -> Result<(), QrzLogbookError> {
+            Ok(())
         }
     }
 
@@ -1831,5 +2019,170 @@ mod tests {
 
         let all = store.list_qsos(&QsoListQuery::default()).await.unwrap();
         assert!(all.is_empty());
+    }
+
+    // -- Soft-delete sync integration ---------------------------------------
+
+    /// Phase 1 must skip remote downloads whose qrz_logid matches a
+    /// soft-deleted local row, otherwise trashed QSOs would be resurrected.
+    #[tokio::test]
+    async fn download_skips_remote_matching_soft_deleted_local() {
+        let store = MemoryStorage::new();
+
+        // Locally have one QSO that's already synced (qrz_logid set), then
+        // soft-delete it. It should NOT be re-downloaded by Phase 1.
+        let mut local = make_qso("W1AW", "K7ABC", Band::Band20m, Mode::Ft8, 1_700_000_000);
+        local.qrz_logid = Some("LOG-DELETED".into());
+        local.sync_status = SyncStatus::Synced as i32;
+        store.insert_qso(&local).await.unwrap();
+        let soft_deleted = store
+            .soft_delete_qso(&local.local_id, 1_700_000_500_000, false)
+            .await
+            .unwrap();
+        assert!(soft_deleted);
+
+        let mut remote = make_qso("W1AW", "K7ABC", Band::Band20m, Mode::Ft8, 1_700_000_000);
+        remote.qrz_logid = Some("LOG-DELETED".into());
+        let api = MockQrzApi::new(Ok(vec![remote]), vec![]);
+
+        let (tx, rx) = mpsc::channel(16);
+        execute_sync(&api, &store, true, ConflictPolicy::LastWriteWins, &tx).await;
+        drop(tx);
+
+        let final_msg = collect_final(rx).await;
+        assert!(final_msg.complete);
+        assert_eq!(final_msg.downloaded_records, 0);
+
+        // The local row stays soft-deleted (deleted_at preserved).
+        let after = store
+            .list_qsos(&QsoListQuery {
+                deleted_filter: DeletedRecordsFilter::All,
+                ..QsoListQuery::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(after.len(), 1);
+        assert!(after[0].deleted_at.is_some());
+    }
+
+    /// Phase 2.5 must call QRZ delete for every soft-deleted row whose
+    /// `pending_remote_delete` flag is set, then clear the flag + qrz_logid
+    /// while keeping `deleted_at` set.
+    #[tokio::test]
+    async fn push_pending_remote_deletes_succeeds_and_clears_flags() {
+        let store = MemoryStorage::new();
+
+        let mut local = make_qso("W1AW", "JA1ZZZ", Band::Band40m, Mode::Cw, 1_700_000_100);
+        local.qrz_logid = Some("LOG-PENDING".into());
+        local.sync_status = SyncStatus::Synced as i32;
+        store.insert_qso(&local).await.unwrap();
+        store
+            .soft_delete_qso(&local.local_id, 1_700_000_600_000, true)
+            .await
+            .unwrap();
+
+        let api = MockQrzApi::new(Ok(vec![]), vec![]);
+
+        let (tx, rx) = mpsc::channel(16);
+        execute_sync(&api, &store, true, ConflictPolicy::LastWriteWins, &tx).await;
+        drop(tx);
+
+        let final_msg = collect_final(rx).await;
+        assert!(final_msg.complete, "sync should complete cleanly");
+        assert!(final_msg.error.is_none(), "no errors expected");
+
+        // QRZ delete was invoked exactly once for the queued logid.
+        let calls: Vec<String> = api.delete_calls.lock().unwrap().clone();
+        assert_eq!(calls.as_slice(), &["LOG-PENDING".to_string()]);
+
+        // Local row keeps tombstone, but qrz_logid + pending_remote_delete are cleared.
+        let after = store
+            .list_qsos(&QsoListQuery {
+                deleted_filter: DeletedRecordsFilter::All,
+                ..QsoListQuery::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(after.len(), 1);
+        assert!(after[0].deleted_at.is_some());
+        assert!(!after[0].pending_remote_delete);
+        assert!(after[0].qrz_logid.is_none() || after[0].qrz_logid.as_deref() == Some(""));
+    }
+
+    /// Soft-deleted rows with `pending_remote_delete = false` (e.g. local-only
+    /// trash) must NOT trigger a QRZ delete call.
+    #[tokio::test]
+    async fn push_pending_remote_deletes_skips_when_flag_unset() {
+        let store = MemoryStorage::new();
+
+        let mut local = make_qso("W1AW", "K7ABC", Band::Band20m, Mode::Ft8, 1_700_000_000);
+        local.qrz_logid = Some("LOG-LOCAL-ONLY-TRASH".into());
+        local.sync_status = SyncStatus::Synced as i32;
+        store.insert_qso(&local).await.unwrap();
+        store
+            .soft_delete_qso(&local.local_id, 1_700_000_700_000, false)
+            .await
+            .unwrap();
+
+        let api = MockQrzApi::new(Ok(vec![]), vec![]);
+
+        let (tx, rx) = mpsc::channel(16);
+        execute_sync(&api, &store, true, ConflictPolicy::LastWriteWins, &tx).await;
+        drop(tx);
+        let _ = collect_final(rx).await;
+
+        let calls = api.delete_calls.lock().unwrap();
+        assert!(
+            calls.is_empty(),
+            "no remote delete should be attempted when pending flag is false"
+        );
+    }
+
+    /// When QRZ returns an error for a queued delete, the local pending flag
+    /// must remain set so the next sync retries.
+    #[tokio::test]
+    async fn push_pending_remote_deletes_preserves_state_on_failure() {
+        let store = MemoryStorage::new();
+
+        let mut local = make_qso("W1AW", "DL1ABC", Band::Band20m, Mode::Ssb, 1_700_000_200);
+        local.qrz_logid = Some("LOG-FAIL".into());
+        local.sync_status = SyncStatus::Synced as i32;
+        store.insert_qso(&local).await.unwrap();
+        store
+            .soft_delete_qso(&local.local_id, 1_700_000_800_000, true)
+            .await
+            .unwrap();
+
+        let api = MockQrzApi::new(Ok(vec![]), vec![]);
+        api.delete_results
+            .lock()
+            .unwrap()
+            .push(Err(QrzLogbookError::ApiError("server angry".into())));
+
+        let (tx, rx) = mpsc::channel(16);
+        execute_sync(&api, &store, true, ConflictPolicy::LastWriteWins, &tx).await;
+        drop(tx);
+
+        let final_msg = collect_final(rx).await;
+        assert!(final_msg.complete);
+        assert!(
+            final_msg.error.is_some(),
+            "failed remote delete should surface in summary"
+        );
+
+        let after = store
+            .list_qsos(&QsoListQuery {
+                deleted_filter: DeletedRecordsFilter::All,
+                ..QsoListQuery::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(after.len(), 1);
+        assert!(after[0].deleted_at.is_some());
+        assert!(
+            after[0].pending_remote_delete,
+            "pending flag must remain set so the next sync retries"
+        );
+        assert_eq!(after[0].qrz_logid.as_deref(), Some("LOG-FAIL"));
     }
 }

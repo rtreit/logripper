@@ -188,6 +188,47 @@ public sealed class QrzLogbookClient : IQrzLogbookApi, IDisposable
         return new QrzLogbookStatus(owner, qsoCount);
     }
 
+    /// <inheritdoc />
+    public async Task DeleteQsoAsync(string logid)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(logid);
+
+        var formFields = new List<KeyValuePair<string, string>>(3)
+        {
+            new("ACTION", "DELETE"),
+            new("KEY", _apiKey),
+            new("LOGID", logid),
+        };
+
+        string body;
+        try
+        {
+            body = await PostFormAsync(formFields).ConfigureAwait(false);
+        }
+        catch (QrzLogbookException ex) when (ex.Message.StartsWith("HTTP 404", StringComparison.Ordinal))
+        {
+            // Already gone server-side — treat as success.
+            return;
+        }
+
+        var map = QrzResponseParser.ParseKeyValueResponse(body);
+        try
+        {
+            QrzResponseParser.CheckResult(map);
+        }
+        catch (QrzLogbookAuthException)
+        {
+            throw;
+        }
+        catch (QrzLogbookException ex) when (QrzResponseParser.IsNotFoundError(ex.Message))
+        {
+            // QRZ says the record is already gone — treat as success so the
+            // queued-remote-delete loop can clear local pending flags and
+            // doesn't loop forever.
+            return;
+        }
+    }
+
     /// <inheritdoc cref="IDisposable.Dispose"/>
     public void Dispose()
     {

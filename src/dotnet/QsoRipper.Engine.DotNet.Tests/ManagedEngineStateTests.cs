@@ -1101,6 +1101,8 @@ public sealed class ManagedEngineStateTests : IDisposable
 
         public Task<QrzLogbookStatus> GetStatusAsync() =>
             Task.FromResult(new QrzLogbookStatus("K7RND", (uint)_logIdCounter));
+
+        public Task DeleteQsoAsync(string logid) => Task.CompletedTask;
     }
 
     private sealed class FakeMalformedQrzLogbookApi : IQrzLogbookApi
@@ -1114,6 +1116,8 @@ public sealed class ManagedEngineStateTests : IDisposable
 
         public Task<QrzLogbookStatus> GetStatusAsync() =>
             Task.FromResult(new QrzLogbookStatus("K7RND", 0));
+
+        public Task DeleteQsoAsync(string logid) => Task.CompletedTask;
     }
 }
 #pragma warning restore CA1707

@@ -282,6 +282,57 @@ public sealed class QrzLogbookClientTests
         }
     }
 
+    // -- DELETE --------------------------------------------------------------
+
+    [Fact]
+    public async Task Delete_sends_action_delete_with_logid()
+    {
+        var (client, handler) = CreateClient("RESULT=OK");
+
+        using (client)
+        {
+            await client.DeleteQsoAsync("123456");
+        }
+
+        Assert.Contains("ACTION=DELETE", handler.CapturedBody);
+        Assert.Contains("LOGID=123456", handler.CapturedBody);
+    }
+
+    [Fact]
+    public async Task Delete_treats_not_found_reason_as_success()
+    {
+        var (client, _) = CreateClient("RESULT=FAIL&REASON=record not found");
+
+        using (client)
+        {
+            // Should NOT throw — queued-remote-delete loop relies on this.
+            await client.DeleteQsoAsync("000000");
+        }
+    }
+
+    [Fact]
+    public async Task Delete_propagates_other_failure_reasons()
+    {
+        var (client, _) = CreateClient("RESULT=FAIL&REASON=bad record format");
+
+        using (client)
+        {
+            var ex = await Assert.ThrowsAsync<QrzLogbookException>(() => client.DeleteQsoAsync("000000"));
+            Assert.Contains("bad record format", ex.Message, StringComparison.OrdinalIgnoreCase);
+        }
+    }
+
+    [Fact]
+    public async Task Delete_propagates_auth_failure()
+    {
+        var (client, _) = CreateClient("RESULT=FAIL&REASON=invalid api key");
+
+        using (client)
+        {
+            await Assert.ThrowsAsync<QrzLogbookAuthException>(() => client.DeleteQsoAsync("000000"));
+        }
+    }
+
     // -- Client helper --------------------------------------------------------
 
     private static (QrzLogbookClient Client, CapturingHandler Handler) CreateClient(string responseBody)

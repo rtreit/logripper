@@ -64,6 +64,8 @@ public sealed class QrzSyncEngine
         uint downloaded = 0;
         uint uploaded = 0;
         uint conflicts = 0;
+        uint remoteDeletesPushed = 0;
+        uint deletesSkippedRemote = 0;
 
         // ---------------------------------------------------------------
         // Phase 1 — Download from QRZ
@@ -80,10 +82,18 @@ public sealed class QrzSyncEngine
             errors.Add($"Failed to read sync metadata: {ex.Message}");
         }
 
-        IReadOnlyList<QsoRecord> localQsos;
+        IReadOnlyList<QsoRecord> localQsosAll;
         try
         {
-            localQsos = await store.ListQsosAsync(new QsoListQuery { Sort = QsoSortOrder.OldestFirst }).ConfigureAwait(false);
+            // Load active + soft-deleted rows so we can both match against
+            // active rows AND skip remote downloads whose qrz_logid belongs
+            // to a soft-deleted local row (otherwise trashed QSOs would be
+            // resurrected on the next sync).
+            localQsosAll = await store.ListQsosAsync(new QsoListQuery
+            {
+                Sort = QsoSortOrder.OldestFirst,
+                DeletedFilter = DeletedRecordsFilter.All,
+            }).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -91,6 +101,24 @@ public sealed class QrzSyncEngine
             {
                 ErrorSummary = $"Failed to load local QSOs: {ex.Message}",
             };
+        }
+
+        var deletedLogids = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var localQsos = new List<QsoRecord>(localQsosAll.Count);
+        foreach (var qso in localQsosAll)
+        {
+            if (qso.DeletedAt is not null)
+            {
+                var logid = ExtractQrzLogid(qso);
+                if (!string.IsNullOrWhiteSpace(logid))
+                {
+                    deletedLogids.Add(logid);
+                }
+            }
+            else
+            {
+                localQsos.Add(qso);
+            }
         }
 
         // Force full fetch when local logbook is empty (first sync or data loss recovery).
@@ -121,6 +149,13 @@ public sealed class QrzSyncEngine
             }
 
             var remoteLogid = ExtractQrzLogid(remote);
+
+            // Phase 1 skip: don't resurrect soft-deleted local rows.
+            if (remoteLogid is not null && deletedLogids.Contains(remoteLogid))
+            {
+                deletesSkippedRemote++;
+                continue;
+            }
 
             // Try match by QRZ logid first, then fuzzy match.
             var localMatch = remoteLogid is not null && byLogid.TryGetValue(remoteLogid, out var logidMatch)
@@ -237,6 +272,56 @@ public sealed class QrzSyncEngine
         }
 
         // ---------------------------------------------------------------
+        // Phase 2.5 — Push queued remote deletes to QRZ
+        // ---------------------------------------------------------------
+
+        IReadOnlyList<QsoRecord> pendingRemoteDeletes;
+        try
+        {
+            var deletedRows = await store.ListQsosAsync(new QsoListQuery
+            {
+                Sort = QsoSortOrder.OldestFirst,
+                DeletedFilter = DeletedRecordsFilter.DeletedOnly,
+            }).ConfigureAwait(false);
+            pendingRemoteDeletes = deletedRows
+                .Where(q => q.PendingRemoteDelete && !string.IsNullOrWhiteSpace(q.QrzLogid))
+                .ToList();
+        }
+        catch (Exception ex)
+        {
+            errors.Add($"Failed to list deleted QSOs for remote-delete pass: {ex.Message}");
+            pendingRemoteDeletes = [];
+        }
+
+        foreach (var qso in pendingRemoteDeletes)
+        {
+            try
+            {
+                await _client.DeleteQsoAsync(qso.QrzLogid).ConfigureAwait(false);
+
+                // Success (including QRZ "not found"): clear local pending
+                // flags but keep the deleted_at tombstone so the row stays
+                // in the trash view.
+                var cleared = qso.Clone();
+                cleared.QrzLogid = string.Empty;
+                cleared.PendingRemoteDelete = false;
+                try
+                {
+                    await store.UpdateQsoAsync(cleared).ConfigureAwait(false);
+                    remoteDeletesPushed++;
+                }
+                catch (Exception ex)
+                {
+                    errors.Add($"Remote delete cleared for {qso.WorkedCallsign} failed locally: {ex.Message}");
+                }
+            }
+            catch (Exception ex)
+            {
+                errors.Add($"Remote delete failed for {qso.WorkedCallsign}: {ex.Message}");
+            }
+        }
+
+        // ---------------------------------------------------------------
         // Phase 3 — Refresh metadata from authoritative QRZ STATUS
         // ---------------------------------------------------------------
         // Mirrors src/rust/qsoripper-server/src/sync.rs::refresh_metadata:
@@ -300,6 +385,8 @@ public sealed class QrzSyncEngine
             RemoteQsoCount = remoteCount,
             RemoteOwner = string.IsNullOrWhiteSpace(remoteOwner) ? null : remoteOwner,
             ErrorSummary = errors.Count > 0 ? string.Join("; ", errors) : null,
+            RemoteDeletesPushed = remoteDeletesPushed,
+            DeletesSkippedRemote = deletesSkippedRemote,
         };
     }
 
