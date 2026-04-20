@@ -170,14 +170,24 @@ internal sealed partial class SettingsView : Window
     {
         public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
         {
-            return value is ConflictPolicy policy ? (int)policy : 0;
+            return value switch
+            {
+                ConflictPolicy.LastWriteWins => 0,
+                ConflictPolicy.FlagForReview => 1,
+                _ => 1,
+            };
         }
 
         public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture)
         {
-            return value is int index && Enum.IsDefined(typeof(ConflictPolicy), index)
-                ? (ConflictPolicy)index
-                : ConflictPolicy.LastWriteWins;
+            return value is int index
+                ? index switch
+                {
+                    0 => ConflictPolicy.LastWriteWins,
+                    1 => ConflictPolicy.FlagForReview,
+                    _ => ConflictPolicy.FlagForReview,
+                }
+                : ConflictPolicy.FlagForReview;
         }
     }
 }

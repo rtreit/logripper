@@ -541,7 +541,7 @@ async fn resolve_modified_conflict(
                 );
             }
         }
-        ConflictPolicy::FlagForReview => {
+        ConflictPolicy::Unspecified | ConflictPolicy::FlagForReview => {
             let mut conflicted = local.clone();
             conflicted.sync_status = SyncStatus::Conflict as i32;
             match store.update_qso(&conflicted).await {
