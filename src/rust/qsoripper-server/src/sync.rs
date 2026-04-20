@@ -1015,8 +1015,7 @@ mod tests {
         assert_eq!(
             replace_calls.len(),
             1,
-            "modified QSO must use REPLACE, got replace_calls={:?}",
-            replace_calls
+            "modified QSO must use REPLACE, got replace_calls={replace_calls:?}"
         );
         assert_eq!(
             replace_calls[0].0, "QRZ-EXISTING",
@@ -1062,8 +1061,7 @@ mod tests {
         let replace_calls = api.replace_calls.lock().unwrap().clone();
         assert!(
             replace_calls.is_empty(),
-            "should NOT have called REPLACE without a logid: {:?}",
-            replace_calls
+            "should NOT have called REPLACE without a logid: {replace_calls:?}"
         );
         let saved = store.get_qso(&q.local_id).await.unwrap().unwrap();
         assert_eq!(saved.qrz_logid.as_deref(), Some("QRZ-NEW"));
