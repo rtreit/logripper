@@ -40,9 +40,8 @@ use qsoripper_core::proto::qsoripper::services::{
     ListQsosResponse, LogQsoRequest, LogQsoResponse, LookupRequest, LookupResponse,
     QsoSortOrder as ProtoQsoSortOrder, RefreshSpaceWeatherRequest, RefreshSpaceWeatherResponse,
     ResetRuntimeConfigRequest, ResetRuntimeConfigResponse, RestoreQsoRequest, RestoreQsoResponse,
-    StreamLookupRequest,
-    StreamLookupResponse, SyncWithQrzRequest, SyncWithQrzResponse, TestRigConnectionRequest,
-    TestRigConnectionResponse, UpdateQsoRequest, UpdateQsoResponse,
+    StreamLookupRequest, StreamLookupResponse, SyncWithQrzRequest, SyncWithQrzResponse,
+    TestRigConnectionRequest, TestRigConnectionResponse, UpdateQsoRequest, UpdateQsoResponse,
 };
 use qsoripper_core::rig_control::{
     RigControlProvider, RigctldConfig, RigctldProvider, DEFAULT_RIGCTLD_HOST, DEFAULT_RIGCTLD_PORT,
