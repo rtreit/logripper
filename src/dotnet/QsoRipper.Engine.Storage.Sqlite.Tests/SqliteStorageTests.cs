@@ -1,4 +1,5 @@
 using Google.Protobuf.WellKnownTypes;
+using Microsoft.Data.Sqlite;
 using QsoRipper.Domain;
 using QsoRipper.Engine.Storage;
 using QsoRipper.Engine.Storage.Sqlite;
@@ -92,6 +93,44 @@ public sealed class SqliteStorageTests : IDisposable
 
         Assert.Equal(StorageErrorKind.Duplicate, ex.Kind);
         Assert.Contains("dup", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Insert_check_constraint_violation_throws_Backend_not_Duplicate()
+    {
+        // Use a file-based DB so we can add a CHECK constraint via a second connection.
+        var dbPath = Path.Combine(Path.GetTempPath(), $"qsoripper-check-test-{Guid.NewGuid():N}.db");
+        try
+        {
+            using var storage = new SqliteStorageBuilder().Path(dbPath).Build();
+
+            // Add a CHECK constraint that rejects worked_callsign = 'BLOCKED'.
+            using (var adminConn = new SqliteConnection($"Data Source={dbPath}"))
+            {
+                adminConn.Open();
+                using var cmd = adminConn.CreateCommand();
+                cmd.CommandText =
+                    "CREATE TRIGGER check_worked_callsign BEFORE INSERT ON qsos " +
+                    "BEGIN SELECT RAISE(ABORT, 'CHECK: worked_callsign blocked') " +
+                    "WHERE NEW.worked_callsign = 'BLOCKED'; END;";
+                cmd.ExecuteNonQuery();
+            }
+
+            var qso = MakeQso("chk1", "BLOCKED", Band._20M, Mode.Cw, "2026-01-15T12:00:00Z");
+            var ex = await Assert.ThrowsAsync<StorageException>(
+                () => storage.Logbook.InsertQsoAsync(qso).AsTask());
+
+            Assert.Equal(StorageErrorKind.Backend, ex.Kind);
+            Assert.Contains("Constraint violation", ex.Message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            if (File.Exists(dbPath))
+            {
+                File.Delete(dbPath);
+            }
+        }
     }
 
     [Fact]
