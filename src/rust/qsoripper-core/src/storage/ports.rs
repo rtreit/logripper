@@ -27,6 +27,25 @@ pub trait LogbookStore: Send + Sync {
     /// Delete a QSO by local ID. Returns `true` when a row was removed.
     async fn delete_qso(&self, local_id: &str) -> Result<bool, StorageError>;
 
+    /// Soft-delete a QSO by local ID, setting `deleted_at` and optionally
+    /// queuing it for remote QRZ delete on the next sync. Returns `true` when
+    /// a row was found and updated.
+    ///
+    /// `deleted_at_ms` is the wall-clock millisecond stamp recorded as the
+    /// tombstone time. `pending_remote_delete` should be `true` when the row
+    /// has a `qrz_logid` and the caller asked for remote deletion.
+    async fn soft_delete_qso(
+        &self,
+        local_id: &str,
+        deleted_at_ms: i64,
+        pending_remote_delete: bool,
+    ) -> Result<bool, StorageError>;
+
+    /// Restore a previously soft-deleted QSO. Clears `deleted_at` and
+    /// `pending_remote_delete`. Returns `true` when a row was found and
+    /// restored.
+    async fn restore_qso(&self, local_id: &str) -> Result<bool, StorageError>;
+
     /// Load a single QSO by local ID.
     async fn get_qso(&self, local_id: &str) -> Result<Option<QsoRecord>, StorageError>;
 

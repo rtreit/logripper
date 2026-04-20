@@ -1,9 +1,9 @@
 //! Builder for configuring the `SQLite` storage adapter.
 
-use crate::migrations::INITIAL_SCHEMA;
+use crate::migrations::{INITIAL_SCHEMA, SOFT_DELETE_MIGRATION};
 use crate::SqliteStorage;
 use qsoripper_core::storage::StorageError;
-use sqlite::Connection;
+use sqlite::{Connection, ConnectionThreadSafe, State, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -83,11 +83,52 @@ impl SqliteStorageBuilder {
         connection
             .execute(INITIAL_SCHEMA)
             .map_err(map_sqlite_error)?;
+        apply_soft_delete_migration(&connection)?;
 
         Ok(SqliteStorage {
             connection: Mutex::new(connection),
         })
     }
+}
+
+/// Apply the soft-delete migration only when the columns are missing.
+/// `SQLite` has no `ALTER TABLE ADD COLUMN IF NOT EXISTS`, so we probe
+/// `pragma_table_info` first and skip the migration on databases that
+/// already carry the columns.
+fn apply_soft_delete_migration(connection: &ConnectionThreadSafe) -> Result<(), StorageError> {
+    if has_column(connection, "qsos", "deleted_at_ms")?
+        && has_column(connection, "qsos", "pending_remote_delete")?
+    {
+        // Index creation is `IF NOT EXISTS` already and cheap, but skipping
+        // the entire script avoids the `ALTER TABLE` failure path.
+        connection
+            .execute("CREATE INDEX IF NOT EXISTS idx_qsos_deleted_at_ms ON qsos (deleted_at_ms);")
+            .map_err(map_sqlite_error)?;
+        return Ok(());
+    }
+
+    connection
+        .execute(SOFT_DELETE_MIGRATION)
+        .map_err(map_sqlite_error)?;
+    Ok(())
+}
+
+fn has_column(
+    connection: &ConnectionThreadSafe,
+    table: &str,
+    column: &str,
+) -> Result<bool, StorageError> {
+    let mut statement = connection
+        .prepare("SELECT 1 FROM pragma_table_info(?) WHERE name = ? LIMIT 1")
+        .map_err(map_sqlite_error)?;
+    statement
+        .bind((1, Value::String(table.to_string())))
+        .map_err(map_sqlite_error)?;
+    statement
+        .bind((2, Value::String(column.to_string())))
+        .map_err(map_sqlite_error)?;
+    let state = statement.next().map_err(map_sqlite_error)?;
+    Ok(matches!(state, State::Row))
 }
 
 fn ensure_parent_directory(path: &Path) -> Result<(), StorageError> {

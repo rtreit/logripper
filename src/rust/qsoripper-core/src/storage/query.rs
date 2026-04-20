@@ -3,6 +3,18 @@
 use crate::proto::qsoripper::domain::{Band, LookupResult, Mode};
 use prost_types::Timestamp;
 
+/// Soft-delete visibility filter for QSO list queries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DeletedRecordsFilter {
+    /// Only return rows that are not soft-deleted (default behavior).
+    #[default]
+    ActiveOnly,
+    /// Only return rows that have a `deleted_at` tombstone set (trash view).
+    DeletedOnly,
+    /// Return all rows regardless of soft-delete state.
+    All,
+}
+
 /// Filter and pagination options for listing QSOs from persistent storage.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QsoListQuery {
@@ -24,6 +36,8 @@ pub struct QsoListQuery {
     pub offset: u32,
     /// Requested sort order.
     pub sort: QsoSortOrder,
+    /// Visibility filter for soft-deleted rows. Defaults to `ActiveOnly`.
+    pub deleted_filter: DeletedRecordsFilter,
 }
 
 impl Default for QsoListQuery {
@@ -38,6 +52,7 @@ impl Default for QsoListQuery {
             limit: None,
             offset: 0,
             sort: QsoSortOrder::NewestFirst,
+            deleted_filter: DeletedRecordsFilter::ActiveOnly,
         }
     }
 }

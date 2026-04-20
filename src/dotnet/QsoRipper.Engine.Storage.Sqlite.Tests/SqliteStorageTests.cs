@@ -707,5 +707,125 @@ public sealed class SqliteStorageTests : IDisposable
             StoredAt = DateTimeOffset.UtcNow,
         };
     }
+
+    // ──────────────────────────────────────────────
+    //  Soft-delete & restore
+    // ──────────────────────────────────────────────
+
+    [Fact]
+    public async Task SoftDelete_marks_row_and_keeps_it_persisted()
+    {
+        var qso = MakeQso("soft1", "W1AW", Band._20M, Mode.Ft8, "2026-02-01T00:00:00Z", SyncStatus.Synced);
+        qso.QrzLogid = "remote-1";
+        await _storage.Logbook.InsertQsoAsync(qso);
+
+        var deletedAt = DateTimeOffset.Parse("2026-02-02T00:00:00Z", System.Globalization.CultureInfo.InvariantCulture);
+        var ok = await _storage.Logbook.SoftDeleteQsoAsync("soft1", deletedAt, pendingRemoteDelete: true);
+        Assert.True(ok);
+
+        var fetched = await _storage.Logbook.GetQsoAsync("soft1");
+        Assert.NotNull(fetched);
+        Assert.NotNull(fetched!.DeletedAt);
+        Assert.Equal(deletedAt.ToUnixTimeSeconds(), fetched.DeletedAt.Seconds);
+        Assert.True(fetched.PendingRemoteDelete);
+    }
+
+    [Fact]
+    public async Task ListQsos_default_filter_excludes_soft_deleted()
+    {
+        await _storage.Logbook.InsertQsoAsync(MakeQso("a", "W1AW", Band._20M, Mode.Ft8, "2026-02-01T00:00:00Z"));
+        await _storage.Logbook.InsertQsoAsync(MakeQso("b", "W1NEW", Band._20M, Mode.Ft8, "2026-02-02T00:00:00Z"));
+        await _storage.Logbook.SoftDeleteQsoAsync("b", DateTimeOffset.UtcNow, pendingRemoteDelete: false);
+
+        var active = await _storage.Logbook.ListQsosAsync(new QsoListQuery());
+        Assert.Single(active);
+        Assert.Equal("a", active[0].LocalId);
+
+        var deletedOnly = await _storage.Logbook.ListQsosAsync(new QsoListQuery { DeletedFilter = DeletedRecordsFilter.DeletedOnly });
+        Assert.Single(deletedOnly);
+        Assert.Equal("b", deletedOnly[0].LocalId);
+
+        var all = await _storage.Logbook.ListQsosAsync(new QsoListQuery { DeletedFilter = DeletedRecordsFilter.All });
+        Assert.Equal(2, all.Count);
+    }
+
+    [Fact]
+    public async Task GetCounts_excludes_soft_deleted_rows()
+    {
+        await _storage.Logbook.InsertQsoAsync(MakeQso("c1", "W1AW", Band._20M, Mode.Ft8, "2026-02-01T00:00:00Z", SyncStatus.LocalOnly));
+        await _storage.Logbook.InsertQsoAsync(MakeQso("c2", "W1NEW", Band._20M, Mode.Ft8, "2026-02-02T00:00:00Z", SyncStatus.LocalOnly));
+        await _storage.Logbook.SoftDeleteQsoAsync("c2", DateTimeOffset.UtcNow, pendingRemoteDelete: false);
+
+        var counts = await _storage.Logbook.GetCountsAsync();
+        Assert.Equal(1, counts.LocalQsoCount);
+        Assert.Equal(1, counts.PendingUploadCount);
+    }
+
+    [Fact]
+    public async Task Restore_clears_tombstone_and_pending_flag()
+    {
+        var qso = MakeQso("r1", "W1AW", Band._20M, Mode.Ft8, "2026-03-01T00:00:00Z");
+        await _storage.Logbook.InsertQsoAsync(qso);
+        await _storage.Logbook.SoftDeleteQsoAsync("r1", DateTimeOffset.UtcNow, pendingRemoteDelete: true);
+
+        var ok = await _storage.Logbook.RestoreQsoAsync("r1");
+        Assert.True(ok);
+
+        var fetched = await _storage.Logbook.GetQsoAsync("r1");
+        Assert.NotNull(fetched);
+        Assert.Null(fetched!.DeletedAt);
+        Assert.False(fetched.PendingRemoteDelete);
+    }
+
+    [Fact]
+    public async Task SoftDelete_returns_false_for_missing_row()
+    {
+        var ok = await _storage.Logbook.SoftDeleteQsoAsync("missing", DateTimeOffset.UtcNow, pendingRemoteDelete: false);
+        Assert.False(ok);
+    }
+
+    [Fact]
+    public async Task Restore_returns_false_for_missing_row()
+    {
+        var ok = await _storage.Logbook.RestoreQsoAsync("missing");
+        Assert.False(ok);
+    }
+
+    [Fact]
+    public async Task Migration_idempotent_when_storage_reopens_existing_file()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"qsoripper-soft-delete-{Guid.NewGuid():N}.db");
+        try
+        {
+            using (var first = new SqliteStorageBuilder().Path(path).Build())
+            {
+                var qso = MakeQso("p1", "W1AW", Band._20M, Mode.Ft8, "2026-04-01T00:00:00Z");
+                await first.Logbook.InsertQsoAsync(qso);
+                await first.Logbook.SoftDeleteQsoAsync("p1", DateTimeOffset.UtcNow, pendingRemoteDelete: false);
+            }
+
+            using (var second = new SqliteStorageBuilder().Path(path).Build())
+            {
+                // Reopening must not throw and must preserve the soft-delete state.
+                var fetched = await second.Logbook.GetQsoAsync("p1");
+                Assert.NotNull(fetched);
+                Assert.NotNull(fetched!.DeletedAt);
+            }
+        }
+        finally
+        {
+            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+            if (File.Exists(path))
+            {
+                try
+                {
+                    File.Delete(path);
+                }
+                catch (IOException)
+                {
+                }
+            }
+        }
+    }
 }
 #pragma warning restore CA1707
