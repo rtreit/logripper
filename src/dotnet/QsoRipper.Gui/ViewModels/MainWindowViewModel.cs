@@ -21,6 +21,7 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
 {
     private static readonly TimeSpan PreferredEngineSwitchTimeout = TimeSpan.FromSeconds(1.5);
     private static readonly TimeSpan SpaceWeatherRefreshInterval = TimeSpan.FromHours(1);
+    private static readonly TimeSpan RigPollInterval = TimeSpan.FromMilliseconds(500);
 
     private readonly IEngineClient _engine;
     private readonly SwitchableEngineClient? _switchableEngine;
@@ -141,7 +142,7 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
         ActiveEngineText = BuildEngineText(engineProfile, endpoint);
         UpdateUtcClock();
         _utcTimer = CreateUtcTimer();
-        _rigTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
+        _rigTimer = new DispatcherTimer { Interval = RigPollInterval };
         _rigTimer.Tick += OnRigTimerTick;
         _spaceWeatherTimer = new DispatcherTimer { Interval = SpaceWeatherRefreshInterval };
         _spaceWeatherTimer.Tick += OnSpaceWeatherTimerTick;
@@ -170,7 +171,7 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
 
         UpdateUtcClock();
         _utcTimer = CreateUtcTimer();
-        _rigTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
+        _rigTimer = new DispatcherTimer { Interval = RigPollInterval };
         _rigTimer.Tick += OnRigTimerTick;
         _spaceWeatherTimer = new DispatcherTimer { Interval = SpaceWeatherRefreshInterval };
         _spaceWeatherTimer.Tick += OnSpaceWeatherTimerTick;
