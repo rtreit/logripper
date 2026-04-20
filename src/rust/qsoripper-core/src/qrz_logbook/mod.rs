@@ -1359,9 +1359,15 @@ mod tests {
         assert!(body.contains("ACTION=INSERT"));
         // OPTION=REPLACE,LOGID:555444333 — the comma and colon are URL-encoded
         // so we just verify the discriminating substrings are present.
-        assert!(body.contains("OPTION=REPLACE"), "missing OPTION=REPLACE: {body}");
+        assert!(
+            body.contains("OPTION=REPLACE"),
+            "missing OPTION=REPLACE: {body}"
+        );
         assert!(body.contains("LOGID"), "missing logid in OPTION: {body}");
-        assert!(body.contains("555444333"), "missing logid value in OPTION: {body}");
+        assert!(
+            body.contains("555444333"),
+            "missing logid value in OPTION: {body}"
+        );
     }
 
     #[tokio::test]

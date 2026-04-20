@@ -1005,7 +1005,10 @@ mod tests {
 
         let final_msg = collect_final(rx).await;
         assert!(final_msg.complete);
-        assert_eq!(final_msg.uploaded_records, 1, "should have uploaded the modified QSO");
+        assert_eq!(
+            final_msg.uploaded_records, 1,
+            "should have uploaded the modified QSO"
+        );
         assert!(final_msg.error.is_none(), "error: {:?}", final_msg.error);
 
         let replace_calls = api.replace_calls.lock().unwrap().clone();
@@ -1225,12 +1228,11 @@ mod tests {
             q.qrz_logid = Some("QRZ002".into());
             q
         };
-        let api = MockQrzApi::new(Ok(vec![remote1, remote2]), vec![]).with_status(Ok(
-            QrzLogbookStatus {
+        let api =
+            MockQrzApi::new(Ok(vec![remote1, remote2]), vec![]).with_status(Ok(QrzLogbookStatus {
                 owner: String::new(),
                 qso_count: 2,
-            },
-        ));
+            }));
 
         let (tx, rx) = mpsc::channel(16);
         execute_sync(&api, &store, true, ConflictPolicy::LastWriteWins, &tx).await;
