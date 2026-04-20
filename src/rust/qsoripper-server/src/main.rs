@@ -1,5 +1,6 @@
 //! Runnable tonic gRPC host for the `QsoRipper` Rust engine.
 
+mod repair;
 mod runtime_config;
 mod setup;
 mod station_profile_support;
@@ -77,6 +78,27 @@ where
     );
     let sync_scheduler = Arc::new(sync_scheduler::SyncScheduler::new());
     sync_scheduler.start(runtime_config.clone());
+
+    // One-shot QRZ logid backfill + duplicate collapse. Older builds never
+    // mapped APP_QRZLOG_LOGID into qrz_logid, so QRZ pulls produced rows
+    // that subsequent syncs duplicated whenever fuzzy matching missed.
+    // Repair is idempotent — clean stores are a no-op.
+    {
+        let logbook_engine = runtime_config.logbook_engine().await;
+        match repair::backfill_qrz_logids(logbook_engine.logbook_store()).await {
+            Ok(report) => {
+                if !report.is_no_op() {
+                    eprintln!(
+                        "[repair] QRZ logid backfill: backfilled={}, duplicates_removed={}, merged_groups={}",
+                        report.backfilled, report.duplicates_removed, report.merged_groups,
+                    );
+                }
+            }
+            Err(err) => {
+                eprintln!("[repair] QRZ logid backfill failed (continuing startup): {err}");
+            }
+        }
+    }
     let logbook_service =
         DeveloperLogbookService::new(runtime_config.clone(), sync_scheduler.clone());
     let lookup_service = DeveloperLookupService::new(runtime_config.clone());

@@ -28,8 +28,15 @@ type FuzzyIndex = HashMap<(String, i32, i32), Vec<QsoRecord>>;
 // Constants
 // ---------------------------------------------------------------------------
 
-/// Extra-field key that QRZ ADIF responses use for the logbook record ID.
-const QRZ_LOGID_EXTRA_FIELD: &str = "APP_QRZ_LOGID";
+/// Extra-field keys that historical QRZ ADIF responses may carry for the
+/// logbook record id. The canonical key per the QRZ Logbook API is
+/// `APP_QRZLOG_LOGID`; `APP_QRZ_LOGID` is kept as a legacy alias because
+/// older internal builds wrote that variant. The ADIF mapper now extracts
+/// either alias into [`QsoRecord::qrz_logid`] directly, so this fallback is
+/// only exercised against records that bypass the mapper (e.g. ones that
+/// were already persisted before the mapper started recognising the field
+/// and have not yet been backfilled by [`crate::repair::backfill_qrz_logids`]).
+const QRZ_LOGID_EXTRA_FIELDS: &[&str] = &["APP_QRZLOG_LOGID", "APP_QRZ_LOGID"];
 
 /// Maximum time difference (seconds) for fuzzy timestamp matching.
 const TIMESTAMP_TOLERANCE_SECONDS: i64 = 60;
@@ -584,18 +591,23 @@ fn build_local_indexes(local_qsos: &[QsoRecord]) -> (LogidIndex, FuzzyIndex) {
 
 /// Extract the QRZ logbook record ID from a QSO.
 ///
-/// Checks the dedicated `qrz_logid` field first, then falls back to
-/// `extra_fields["APP_QRZ_LOGID"]`.
+/// Checks the dedicated `qrz_logid` field first (populated by the ADIF
+/// mapper), then falls back to the historical `extra_fields` aliases for
+/// records that were persisted before the mapper recognised the field.
 fn extract_qrz_logid(qso: &QsoRecord) -> Option<String> {
     if let Some(logid) = qso.qrz_logid.as_deref() {
         if !logid.is_empty() {
             return Some(logid.to_string());
         }
     }
-    qso.extra_fields
-        .get(QRZ_LOGID_EXTRA_FIELD)
-        .filter(|v| !v.is_empty())
-        .cloned()
+    for key in QRZ_LOGID_EXTRA_FIELDS {
+        if let Some(value) = qso.extra_fields.get(*key) {
+            if !value.is_empty() {
+                return Some(value.clone());
+            }
+        }
+    }
+    None
 }
 
 /// Find a local QSO matching by worked callsign, band, mode, and timestamp
@@ -1213,9 +1225,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn extract_logid_from_extra_fields() {
+    async fn extract_logid_from_extra_fields_canonical_key() {
         let qso = QsoRecord {
-            extra_fields: [(super::QRZ_LOGID_EXTRA_FIELD.into(), "EX123".into())]
+            extra_fields: [("APP_QRZLOG_LOGID".into(), "EX123".into())]
                 .into_iter()
                 .collect(),
             ..QsoRecord::default()
@@ -1226,10 +1238,23 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn extract_logid_from_extra_fields_legacy_alias() {
+        let qso = QsoRecord {
+            extra_fields: [("APP_QRZ_LOGID".into(), "LEGACY".into())]
+                .into_iter()
+                .collect(),
+            ..QsoRecord::default()
+        };
+
+        let logid = super::extract_qrz_logid(&qso);
+        assert_eq!(logid.as_deref(), Some("LEGACY"));
+    }
+
+    #[tokio::test]
     async fn extract_logid_prefers_dedicated_field() {
         let qso = QsoRecord {
             qrz_logid: Some("DIRECT".into()),
-            extra_fields: [(super::QRZ_LOGID_EXTRA_FIELD.into(), "EXTRA".into())]
+            extra_fields: [("APP_QRZLOG_LOGID".into(), "EXTRA".into())]
                 .into_iter()
                 .collect(),
             ..QsoRecord::default()
