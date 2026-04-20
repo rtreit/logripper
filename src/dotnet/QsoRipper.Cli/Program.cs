@@ -31,33 +31,47 @@ if (needsCallsign && string.IsNullOrEmpty(arguments.Callsign))
 try
 {
     using var channel = GrpcChannel.ForAddress(endpointUri!);
-
-    return arguments.Command switch
+    using var cancellationSource = new CancellationTokenSource();
+    ConsoleCancelEventHandler cancelHandler = (_, eventArgs) =>
     {
-        "status" => await StatusCommand.RunAsync(
-            channel,
-            arguments.Endpoint,
-            arguments.EngineProfile,
-            arguments.JsonOutput),
-        "space-weather" => await SpaceWeatherCommand.RunAsync(channel, arguments.Refresh, arguments.JsonOutput),
-        "lookup" => await LookupCommand.RunAsync(channel, arguments.Callsign!, arguments.SkipCache, arguments.JsonOutput),
-        "stream-lookup" => await StreamLookupCommand.RunAsync(channel, arguments.Callsign!, arguments.SkipCache),
-        "cache-check" => await CacheCheckCommand.RunAsync(channel, arguments.Callsign!, arguments.JsonOutput),
-        "log" => await LogQsoCommand.RunAsync(channel, arguments.Callsign!, arguments.RemainingArgs),
-        "get" => await GetQsoCommand.RunAsync(channel, arguments.Callsign!, arguments.JsonOutput),
-        "list" => await ListQsosCommand.RunAsync(channel, arguments.RemainingArgs, arguments.JsonOutput),
-        "update" => await UpdateQsoCommand.RunAsync(channel, arguments.Callsign!, arguments.RemainingArgs),
-        "delete" => await DeleteQsoCommand.RunAsync(channel, arguments.Callsign!),
-        "import" => await ImportAdifCommand.RunAsync(channel, arguments.Callsign ?? arguments.RemainingArgs.FirstOrDefault() ?? "", arguments.Refresh),
-        "export" => await ExportAdifCommand.RunAsync(channel, arguments.RemainingArgs),
-        "config" => await ConfigCommand.RunAsync(channel, arguments.RemainingArgs, arguments.JsonOutput),
-        "setup" => await SetupCommand.RunAsync(channel, arguments),
-        "sync" => await SyncCommand.RunAsync(channel, arguments.Force),
-        "sync-status" => await SyncStatusCommand.RunAsync(channel, arguments.JsonOutput),
-        "rig-status" => await RigStatusCommand.RunAsync(channel, arguments.JsonOutput),
-        "test-logbook" => await TestLogbookCommand.RunAsync(channel, arguments.RemainingArgs),
-        _ => ShowHelp($"Unknown command: {arguments.Command}")
+        eventArgs.Cancel = true;
+        cancellationSource.Cancel();
     };
+    Console.CancelKeyPress += cancelHandler;
+
+    try
+    {
+        return arguments.Command switch
+        {
+            "status" => await StatusCommand.RunAsync(
+                channel,
+                arguments.Endpoint,
+                arguments.EngineProfile,
+                arguments.JsonOutput),
+            "space-weather" => await SpaceWeatherCommand.RunAsync(channel, arguments.Refresh, arguments.JsonOutput),
+            "lookup" => await LookupCommand.RunAsync(channel, arguments.Callsign!, arguments.SkipCache, arguments.JsonOutput),
+            "stream-lookup" => await StreamLookupCommand.RunAsync(channel, arguments.Callsign!, arguments.SkipCache, cancellationSource.Token),
+            "cache-check" => await CacheCheckCommand.RunAsync(channel, arguments.Callsign!, arguments.JsonOutput),
+            "log" => await LogQsoCommand.RunAsync(channel, arguments.Callsign!, arguments.RemainingArgs),
+            "get" => await GetQsoCommand.RunAsync(channel, arguments.Callsign!, arguments.JsonOutput),
+            "list" => await ListQsosCommand.RunAsync(channel, arguments.RemainingArgs, arguments.JsonOutput, cancellationSource.Token),
+            "update" => await UpdateQsoCommand.RunAsync(channel, arguments.Callsign!, arguments.RemainingArgs),
+            "delete" => await DeleteQsoCommand.RunAsync(channel, arguments.Callsign!),
+            "import" => await ImportAdifCommand.RunAsync(channel, arguments.Callsign ?? arguments.RemainingArgs.FirstOrDefault() ?? "", arguments.Refresh, cancellationSource.Token),
+            "export" => await ExportAdifCommand.RunAsync(channel, arguments.RemainingArgs, cancellationSource.Token),
+            "config" => await ConfigCommand.RunAsync(channel, arguments.RemainingArgs, arguments.JsonOutput),
+            "setup" => await SetupCommand.RunAsync(channel, arguments),
+            "sync" => await SyncCommand.RunAsync(channel, arguments.Force, cancellationSource.Token),
+            "sync-status" => await SyncStatusCommand.RunAsync(channel, arguments.JsonOutput),
+            "rig-status" => await RigStatusCommand.RunAsync(channel, arguments.JsonOutput),
+            "test-logbook" => await TestLogbookCommand.RunAsync(channel, arguments.RemainingArgs),
+            _ => ShowHelp($"Unknown command: {arguments.Command}")
+        };
+    }
+    finally
+    {
+        Console.CancelKeyPress -= cancelHandler;
+    }
 }
 catch (RpcException ex) when (ex.StatusCode == StatusCode.Unavailable)
 {
@@ -70,6 +84,11 @@ catch (RpcException ex)
 {
     Console.Error.WriteLine($"gRPC error: {ex.Status.Detail} ({ex.StatusCode})");
     return 1;
+}
+catch (OperationCanceledException)
+{
+    Console.Error.WriteLine("Operation canceled.");
+    return 130;
 }
 
 static int ShowHelp(string? error = null)

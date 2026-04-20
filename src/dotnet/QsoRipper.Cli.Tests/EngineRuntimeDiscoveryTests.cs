@@ -116,6 +116,40 @@ public sealed class EngineRuntimeDiscoveryTests
         }
     }
 
+    [Fact]
+    public void DiscoverLocalEnginesTreatsConnectionRefusedAsNotRunning()
+    {
+        var runtimeDirectory = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        Directory.CreateDirectory(runtimeDirectory);
+        try
+        {
+            WriteState(Path.Combine(runtimeDirectory, "qsoripper-engine-local-dotnet.json"), new
+            {
+                displayName = "QsoRipper .NET Engine",
+                engine = KnownEngineProfiles.LocalDotNet,
+                engineId = "dotnet-aspnet",
+                listenAddress = "127.0.0.1:1",
+                pid = Environment.ProcessId,
+                startedAtUtc = DateTimeOffset.UtcNow.ToString("O"),
+            });
+
+            var entries = EngineRuntimeDiscovery.DiscoverLocalEngines(new EngineRuntimeDiscoveryOptions
+            {
+                RuntimeDirectory = runtimeDirectory,
+                ValidateTcpReachability = true,
+                TcpProbeTimeout = TimeSpan.FromMilliseconds(100),
+            });
+
+            var entry = Assert.Single(entries);
+            Assert.True(entry.IsProcessAlive);
+            Assert.False(entry.IsRunning);
+        }
+        finally
+        {
+            Directory.Delete(runtimeDirectory, recursive: true);
+        }
+    }
+
     private static void WriteState(string path, object payload)
     {
         File.WriteAllText(path, JsonSerializer.Serialize(payload));

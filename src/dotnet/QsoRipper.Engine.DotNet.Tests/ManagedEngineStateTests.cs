@@ -2,6 +2,7 @@ using System.Net.Http;
 using System.Reflection;
 using System.Text;
 using Google.Protobuf.WellKnownTypes;
+using Grpc.Core;
 using QsoRipper.Domain;
 using QsoRipper.Engine.DotNet;
 using QsoRipper.Engine.QrzLogbook;
@@ -139,6 +140,39 @@ public sealed class ManagedEngineStateTests : IDisposable
         Assert.Equal(0u, afterSync.PendingUpload);
         Assert.Equal(1u, afterSync.QrzQsoCount);
         Assert.Equal("K7RND", afterSync.QrzLogbookOwner);
+    }
+
+    [Fact]
+    public void Sync_with_qrz_unexpected_exception_does_not_include_stack_trace()
+    {
+        var storage = new MemoryStorage();
+        var syncEngine = new QrzSyncEngine(new FakeMalformedQrzLogbookApi());
+        var state = new ManagedEngineState(
+            Path.Combine(_tempDirectory, "config.toml"),
+            storage,
+            lookupCoordinator: null,
+            rigControlMonitor: null,
+            spaceWeatherMonitor: null,
+            syncEngine: syncEngine);
+
+        state.SaveSetup(new SaveSetupRequest
+        {
+            QrzLogbookApiKey = "api-key",
+            StationProfile = new StationProfile
+            {
+                ProfileName = "Home",
+                StationCallsign = "K7RND",
+                OperatorCallsign = "K7RND",
+                Grid = "CN87"
+            }
+        });
+
+        var response = state.SyncWithQrz();
+
+        Assert.True(response.Complete);
+        Assert.False(string.IsNullOrWhiteSpace(response.Error));
+        Assert.DoesNotContain("\n", response.Error, StringComparison.Ordinal);
+        Assert.DoesNotContain(" at ", response.Error, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -628,6 +662,22 @@ public sealed class ManagedEngineStateTests : IDisposable
         Assert.Equal(14074UL, stored.FrequencyKhz);
     }
 
+    [Fact]
+    public async Task Import_adif_grpc_converts_post_await_validation_errors_to_invalid_argument()
+    {
+        var state = CreateState();
+        var service = new ManagedLogbookGrpcService(state);
+        var stream = new TestAsyncStreamReader<ImportAdifRequest>([
+            new ImportAdifRequest()
+        ]);
+
+        var ex = await Assert.ThrowsAsync<RpcException>(
+            () => service.ImportAdif(stream, new TestServerCallContext()));
+
+        Assert.Equal(StatusCode.InvalidArgument, ex.StatusCode);
+        Assert.Equal("chunk is required.", ex.Status.Detail);
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(_tempDirectory))
@@ -714,6 +764,47 @@ public sealed class ManagedEngineStateTests : IDisposable
         public RigSnapshot GetSnapshot() => factory();
     }
 
+    private sealed class TestAsyncStreamReader<T>(IReadOnlyList<T> items)
+        : IAsyncStreamReader<T>
+    {
+        private int _index = -1;
+
+        public T Current => items[_index];
+
+        public Task<bool> MoveNext(CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            _index++;
+            return Task.FromResult(_index < items.Count);
+        }
+    }
+
+    private sealed class TestServerCallContext : ServerCallContext
+    {
+        private readonly Metadata _responseTrailers = [];
+        private readonly Dictionary<object, object> _userState = [];
+        private WriteOptions? _writeOptions;
+        private Status _status;
+
+        protected override string MethodCore => "test";
+        protected override string HostCore => "localhost";
+        protected override string PeerCore => "test-peer";
+        protected override DateTime DeadlineCore => DateTime.UtcNow.AddMinutes(1);
+        protected override Metadata RequestHeadersCore => [];
+        protected override CancellationToken CancellationTokenCore => CancellationToken.None;
+        protected override Metadata ResponseTrailersCore => _responseTrailers;
+        protected override Status StatusCore { get => _status; set => _status = value; }
+        protected override WriteOptions? WriteOptionsCore { get => _writeOptions; set => _writeOptions = value; }
+        protected override AuthContext AuthContextCore => new("none", []);
+
+        protected override ContextPropagationToken CreatePropagationTokenCore(ContextPropagationOptions? options) =>
+            throw new NotSupportedException();
+
+        protected override Task WriteResponseHeadersAsyncCore(Metadata responseHeaders) => Task.CompletedTask;
+
+        protected override IDictionary<object, object> UserStateCore => _userState;
+    }
+
     /// <summary>
     /// Minimal in-memory fake for <see cref="IQrzLogbookApi"/> that records uploads and returns empty fetches.
     /// </summary>
@@ -735,6 +826,16 @@ public sealed class ManagedEngineStateTests : IDisposable
             var logId = $"FAKE-{Interlocked.Increment(ref _logIdCounter)}";
             return Task.FromResult(logId);
         }
+    }
+
+    private sealed class FakeMalformedQrzLogbookApi : IQrzLogbookApi
+    {
+        public Task<List<QsoRecord>> FetchQsosAsync(string? sinceDateYmd)
+            => Task.FromResult(new List<QsoRecord> { null! });
+
+        public Task<string> UploadQsoAsync(QsoRecord qso) => Task.FromResult("FAKE-1");
+
+        public Task<string> UpdateQsoAsync(QsoRecord qso) => Task.FromResult("FAKE-1");
     }
 }
 #pragma warning restore CA1707

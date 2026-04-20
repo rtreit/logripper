@@ -7,14 +7,18 @@ namespace QsoRipper.Cli.Commands;
 
 internal static class StreamLookupCommand
 {
-    public static async Task<int> RunAsync(GrpcChannel channel, string callsign, bool skipCache)
+    public static async Task<int> RunAsync(
+        GrpcChannel channel,
+        string callsign,
+        bool skipCache,
+        CancellationToken cancellationToken = default)
     {
         var client = new LookupService.LookupServiceClient(channel);
         using var call = client.StreamLookup(new StreamLookupRequest
         {
             Callsign = callsign,
             SkipCache = skipCache,
-        });
+        }, cancellationToken: cancellationToken);
 
         Console.WriteLine($"Streaming lookup for {callsign}...");
         Console.WriteLine();
@@ -22,7 +26,7 @@ internal static class StreamLookupCommand
         var stopwatch = Stopwatch.StartNew();
         LookupResult? lastResult = null;
 
-        while (await call.ResponseStream.MoveNext(CancellationToken.None))
+        while (await call.ResponseStream.MoveNext(cancellationToken))
         {
             var update = call.ResponseStream.Current.Result ?? new LookupResult();
             var state = update.State;

@@ -2,7 +2,7 @@
 
 use anyhow::Context;
 use chrono::{NaiveDate, NaiveDateTime, NaiveTime};
-use tonic::transport::Channel;
+use tonic::transport::{Channel, Endpoint};
 
 use qsoripper_core::domain::band::{band_from_adif, band_to_adif};
 use qsoripper_core::domain::mode::{mode_from_adif, mode_to_adif};
@@ -22,12 +22,9 @@ use crate::form::{LogForm, BANDS, MODES};
 type LookupEnrichment = Option<(Option<String>, Option<String>, Option<u32>, Option<u32>)>;
 
 /// Create a tonic transport channel connected to the given endpoint URI.
-pub(crate) async fn create_channel(endpoint: &str) -> anyhow::Result<Channel> {
-    Channel::from_shared(endpoint.to_string())
-        .context("invalid endpoint URI")?
-        .connect()
-        .await
-        .context("failed to connect to qsoripper-server")
+pub(crate) fn create_channel(endpoint: &str) -> anyhow::Result<Channel> {
+    let endpoint = Endpoint::from_shared(endpoint.to_string()).context("invalid endpoint URI")?;
+    Ok(endpoint.connect_lazy())
 }
 
 /// Log a QSO from the form and return the engine-assigned `local_id`.
@@ -460,5 +457,17 @@ fn resolve_mode(mode_str: &str) -> (Mode, Option<&'static str>) {
         "FT4" => (Mode::Mfsk, Some("FT4")),
         "PSK31" => (Mode::Psk, Some("PSK31")),
         s => (mode_from_adif(s).unwrap_or(Mode::Unspecified), None),
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::create_channel;
+
+    #[tokio::test]
+    async fn create_channel_does_not_require_server_to_be_online() {
+        let channel_result = create_channel("http://127.0.0.1:9");
+        assert!(channel_result.is_ok());
     }
 }

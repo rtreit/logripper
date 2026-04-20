@@ -19,6 +19,7 @@ public sealed class QrzXmlProvider : ICallsignProvider
     private readonly string _baseUrl;
     private readonly string _userAgent;
     private readonly Lock _sessionLock = new();
+    private Task<string?>? _pendingLoginTask;
     private string? _sessionKey;
 
     public string ProviderName => "QRZ XML";
@@ -198,18 +199,34 @@ public sealed class QrzXmlProvider : ICallsignProvider
 
     private async Task<string?> EnsureSessionKeyAsync(CancellationToken ct)
     {
-        string? existing;
+        Task<string?> loginTask;
         lock (_sessionLock)
         {
-            existing = _sessionKey;
+            if (_sessionKey is { } existing)
+            {
+                return existing;
+            }
+
+            loginTask = _pendingLoginTask ??= LoginAsync(ct);
         }
 
-        if (existing is not null)
+        try
         {
-            return existing;
+            return await loginTask.ConfigureAwait(false);
         }
-
-        return await LoginAsync(ct).ConfigureAwait(false);
+        finally
+        {
+            if (loginTask.IsCompleted)
+            {
+                lock (_sessionLock)
+                {
+                    if (ReferenceEquals(_pendingLoginTask, loginTask))
+                    {
+                        _pendingLoginTask = null;
+                    }
+                }
+            }
+        }
     }
 
     /// <summary>

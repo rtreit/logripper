@@ -1,3 +1,5 @@
+using System.Text;
+using System.Text.Json;
 using Grpc.Net.Client;
 using QsoRipper.Domain;
 using QsoRipper.Services;
@@ -81,36 +83,45 @@ internal static class RigStatusCommand
         var freqMhz = snapshot.FrequencyHz > 0
             ? FormattableString.Invariant($"{snapshot.FrequencyHz / 1_000_000.0:F3}")
             : "";
-        var freqDisplay = freqMhz.Length > 0 ? $"{freqMhz} MHz" : "";
-        var band = snapshot.Band != Band.Unspecified ? EnumHelpers.FormatBand(snapshot.Band) : "";
-        var mode = snapshot.Mode != Mode.Unspecified ? EnumHelpers.FormatMode(snapshot.Mode) : "";
-        var rawMode = snapshot.HasRawMode ? snapshot.RawMode : "";
+        Console.WriteLine(BuildConnectedJsonPayload(snapshot, freqMhz));
+        return 0;
+    }
 
-        var parts = new List<string> { "\"status\":\"connected\"" };
-        if (freqMhz.Length > 0)
+    internal static string BuildConnectedJsonPayload(RigSnapshot snapshot, string frequencyMhz)
+    {
+        using var stream = new MemoryStream();
+        using var writer = new Utf8JsonWriter(stream);
+        writer.WriteStartObject();
+        writer.WriteString("status", "connected");
+
+        if (frequencyMhz.Length > 0)
         {
-            parts.Add($"\"frequencyHz\":{snapshot.FrequencyHz}");
-            parts.Add($"\"frequencyDisplay\":\"{freqDisplay}\"");
-            parts.Add($"\"frequencyMhz\":\"{freqMhz}\"");
+            writer.WriteNumber("frequencyHz", snapshot.FrequencyHz);
+            writer.WriteString("frequencyDisplay", $"{frequencyMhz} MHz");
+            writer.WriteString("frequencyMhz", frequencyMhz);
         }
 
+        var band = snapshot.Band != Band.Unspecified ? EnumHelpers.FormatBand(snapshot.Band) : "";
         if (band.Length > 0)
         {
-            parts.Add($"\"band\":\"{band}\"");
+            writer.WriteString("band", band);
         }
 
+        var mode = snapshot.Mode != Mode.Unspecified ? EnumHelpers.FormatMode(snapshot.Mode) : "";
         if (mode.Length > 0)
         {
-            parts.Add($"\"mode\":\"{mode}\"");
+            writer.WriteString("mode", mode);
         }
 
+        var rawMode = snapshot.HasRawMode ? snapshot.RawMode : "";
         if (rawMode.Length > 0)
         {
-            parts.Add($"\"rawMode\":\"{rawMode}\"");
+            writer.WriteString("rawMode", rawMode);
         }
 
-        Console.WriteLine("{" + string.Join(",", parts) + "}");
-        return 0;
+        writer.WriteEndObject();
+        writer.Flush();
+        return Encoding.UTF8.GetString(stream.GetBuffer(), 0, checked((int)stream.Length));
     }
 
     private static string FormatStatus(RigConnectionStatus status)

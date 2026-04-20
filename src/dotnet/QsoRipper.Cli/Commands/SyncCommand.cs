@@ -5,15 +5,18 @@ namespace QsoRipper.Cli.Commands;
 
 internal static class SyncCommand
 {
-    public static async Task<int> RunAsync(GrpcChannel channel, bool force)
+    public static async Task<int> RunAsync(
+        GrpcChannel channel,
+        bool force,
+        CancellationToken cancellationToken = default)
     {
         var client = new LogbookService.LogbookServiceClient(channel);
         var request = new SyncWithQrzRequest { FullSync = force };
-        using var call = client.SyncWithQrz(request);
+        using var call = client.SyncWithQrz(request, cancellationToken: cancellationToken);
 
         SyncWithQrzResponse? last = null;
 
-        while (await call.ResponseStream.MoveNext(CancellationToken.None))
+        while (await call.ResponseStream.MoveNext(cancellationToken))
         {
             var update = call.ResponseStream.Current;
 

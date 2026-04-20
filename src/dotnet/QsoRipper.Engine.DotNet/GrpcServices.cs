@@ -321,13 +321,13 @@ internal sealed class ManagedLogbookGrpcService(ManagedEngineState state)
         return Task.FromResult(state.GetSyncStatus());
     }
 
-    public override Task<ImportAdifResponse> ImportAdif(
+    public override async Task<ImportAdifResponse> ImportAdif(
         IAsyncStreamReader<ImportAdifRequest> requestStream,
         ServerCallContext context)
     {
         try
         {
-            return ImportAdifCoreAsync(requestStream, context);
+            return await ImportAdifCoreAsync(requestStream, context);
         }
         catch (InvalidOperationException ex)
         {

@@ -71,26 +71,43 @@ internal sealed partial class MainWindow : Window
     {
         base.OnOpened(e);
         GuiPerformanceTrace.Write(nameof(OnOpened) + ".start");
-        ClampToCurrentScreen();
-        if (!IsInspectionMode)
+        try
         {
-            // Prime menu access keys immediately so it completes before
-            // the user can interact. Must run before the async first-run
-            // check which yields the UI thread.
-            Dispatcher.UIThread.Post(PrimeMenuAccessKeys, DispatcherPriority.Background);
-            GuiPerformanceTrace.Write(nameof(OnOpened) + ".afterScheduleMenuAccessKeys");
-            ApplyPersistedGridLayout();
-            GuiPerformanceTrace.Write(nameof(OnOpened) + ".afterApplyPersistedGridLayout");
+            ClampToCurrentScreen();
+            if (!IsInspectionMode)
+            {
+                GuiPerformanceTrace.Write(nameof(OnOpened) + ".afterScheduleMenuAccessKeys");
+                ApplyPersistedGridLayout();
+                GuiPerformanceTrace.Write(nameof(OnOpened) + ".afterApplyPersistedGridLayout");
+                if (DataContext is MainWindowViewModel vm)
+                {
+                    vm.ApplyPreferences(_preferencesStore.Load());
+                    GuiPerformanceTrace.Write(nameof(OnOpened) + ".afterApplyPreferences");
+                    await vm.CheckFirstRunAsync();
+                    GuiPerformanceTrace.Write(nameof(OnOpened) + ".afterCheckFirstRun");
+                }
+
+                Dispatcher.UIThread.Post(PrimeMenuAccessKeys, DispatcherPriority.Background);
+            }
+
+            EnsureColumnHeadersFit();
+        }
+        catch (ObjectDisposedException ex)
+        {
+            GuiPerformanceTrace.Write(nameof(OnOpened) + ".error", ex.ToString());
             if (DataContext is MainWindowViewModel vm)
             {
-                vm.ApplyPreferences(_preferencesStore.Load());
-                GuiPerformanceTrace.Write(nameof(OnOpened) + ".afterApplyPreferences");
-                await vm.CheckFirstRunAsync();
-                GuiPerformanceTrace.Write(nameof(OnOpened) + ".afterCheckFirstRun");
+                vm.StatusMessage = "Error: startup did not fully complete.";
             }
         }
-
-        EnsureColumnHeadersFit();
+        catch (InvalidOperationException ex)
+        {
+            GuiPerformanceTrace.Write(nameof(OnOpened) + ".error", ex.ToString());
+            if (DataContext is MainWindowViewModel vm)
+            {
+                vm.StatusMessage = "Error: startup did not fully complete.";
+            }
+        }
     }
 
     protected override void OnClosed(EventArgs e)
@@ -483,7 +500,26 @@ internal sealed partial class MainWindow : Window
 
     private async void OnSettingsRequested(object? sender, EventArgs e)
     {
-        await ShowSettingsDialogAsync();
+        try
+        {
+            await ShowSettingsDialogAsync();
+        }
+        catch (ObjectDisposedException ex)
+        {
+            GuiPerformanceTrace.Write(nameof(OnSettingsRequested) + ".error", ex.ToString());
+            if (_viewModel is not null)
+            {
+                _viewModel.StatusMessage = "Error: unable to open settings.";
+            }
+        }
+        catch (InvalidOperationException ex)
+        {
+            GuiPerformanceTrace.Write(nameof(OnSettingsRequested) + ".error", ex.ToString());
+            if (_viewModel is not null)
+            {
+                _viewModel.StatusMessage = "Error: unable to open settings.";
+            }
+        }
     }
 
     private void OnLoggerFocusRequested(object? sender, EventArgs e)
