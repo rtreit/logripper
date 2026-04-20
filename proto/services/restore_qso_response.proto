@@ -1,0 +1,15 @@
+syntax = "proto3";
+
+package qsoripper.services;
+
+import "domain/qso_record.proto";
+
+option csharp_namespace = "QsoRipper.Services";
+
+message RestoreQsoResponse {
+  bool success = 1;
+  optional string error = 2;
+  // The fully restored QSO record (with deleted_at/pending_remote_delete
+  // cleared and updated_at bumped). Absent on failure.
+  optional qsoripper.domain.QsoRecord restored = 3;
+}

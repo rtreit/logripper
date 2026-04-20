@@ -7,6 +7,7 @@ option csharp_namespace = "QsoRipper.Services";
 import "domain/band.proto";
 import "domain/mode.proto";
 import "google/protobuf/timestamp.proto";
+import "services/deleted_records_filter.proto";
 import "services/qso_sort_order.proto";
 
 message ListQsosRequest {
@@ -19,4 +20,6 @@ message ListQsosRequest {
   uint32 limit = 7;  // 0 = no limit
   uint32 offset = 8;
   QsoSortOrder sort = 9;
+  // Controls inclusion of soft-deleted rows. Unspecified = ACTIVE_ONLY.
+  DeletedRecordsFilter deleted_filter = 10;
 }

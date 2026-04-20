@@ -18,6 +18,8 @@ import "services/list_qsos_request.proto";
 import "services/list_qsos_response.proto";
 import "services/log_qso_request.proto";
 import "services/log_qso_response.proto";
+import "services/restore_qso_request.proto";
+import "services/restore_qso_response.proto";
 import "services/sync_with_qrz_request.proto";
 import "services/sync_with_qrz_response.proto";
 import "services/update_qso_request.proto";
@@ -52,9 +54,22 @@ service LogbookService {
 
   // Delete a QSO from the local logbook.
   //
-  // Setting delete_from_qrz=true also removes the record from QRZ (permanent, irreversible).
-  // Prompt the user before calling with delete_from_qrz=true.
+  // Under the soft-delete model, this always sets deleted_at and hides the
+  // row from ListQsos (default filter). Setting delete_from_qrz=true marks
+  // the row pending_remote_delete so the next SyncWithQrz removes it from
+  // QRZ; the response's remote_delete_queued=true indicates this. Users
+  // can reverse the decision via RestoreQso before the next sync runs.
+  // After a successful remote delete, the local row remains soft-deleted
+  // (trashed) and can still be restored locally, but QRZ no longer has a
+  // copy.
   rpc DeleteQso(DeleteQsoRequest) returns (DeleteQsoResponse);
+
+  // Restore a soft-deleted QSO. Clears deleted_at and pending_remote_delete.
+  // If the remote copy on QRZ was already deleted (qrz_logid cleared), the
+  // restored row is marked sync_status=LOCAL_ONLY so the next sync re-uploads
+  // it as a new record. Returns FAILED_PRECONDITION if the row is not
+  // currently soft-deleted.
+  rpc RestoreQso(RestoreQsoRequest) returns (RestoreQsoResponse);
 
   // Get a single QSO by local UUID.
   // Returns NOT_FOUND if local_id does not exist.
