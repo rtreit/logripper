@@ -490,7 +490,7 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
     {
         if (!IsWizardOpen)
         {
-            CloseTransientPanels();
+            CloseTransientPanels(restoreGridFocus: false);
             SearchFocusRequested?.Invoke(this, EventArgs.Empty);
         }
     }
@@ -500,7 +500,7 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
     {
         if (!IsWizardOpen)
         {
-            CloseTransientPanels();
+            CloseTransientPanels(restoreGridFocus: false);
             Logger.FocusLogger();
         }
     }
@@ -510,7 +510,7 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
     {
         if (!IsWizardOpen)
         {
-            CloseTransientPanels();
+            CloseTransientPanels(restoreGridFocus: false);
             GridFocusRequested?.Invoke(this, EventArgs.Empty);
         }
     }
@@ -652,7 +652,7 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
     }
 
     [RelayCommand]
-    private void CloseCallsignCard()
+    private void CloseCallsignCard(bool restoreFocus = true)
     {
         if (CallsignCard is { } card)
         {
@@ -663,6 +663,11 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
         var wasLoggerFocused = IsLoggerFocused;
         IsCallsignCardOpen = false;
         CallsignCard = null;
+
+        if (!restoreFocus)
+        {
+            return;
+        }
 
         if (wasLoggerFocused)
         {
@@ -720,7 +725,22 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
 
     private async void OnQsoLogged(object? sender, EventArgs e)
     {
-        await RecentQsos.RefreshAsync();
+        try
+        {
+            await RecentQsos.RefreshAsync();
+        }
+        catch (Grpc.Core.RpcException)
+        {
+            StatusMessage = "Ready (refresh failed)";
+        }
+        catch (ObjectDisposedException)
+        {
+            StatusMessage = "Ready (engine restarting...)";
+        }
+        catch (InvalidOperationException)
+        {
+            StatusMessage = "Ready (refresh failed)";
+        }
     }
 
     private void OnLoggerFocusRequested(object? sender, EventArgs e)
@@ -738,7 +758,8 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
                 if (snapshot.Status == QsoRipper.Domain.RigConnectionStatus.Connected)
                 {
                     var freqMhz = snapshot.FrequencyHz / 1_000_000.0;
-                    RigStatusText = $"Rig: {freqMhz.ToString("F3", CultureInfo.InvariantCulture)} {snapshot.Mode}";
+                    var modeDisplay = ProtoEnumDisplay.ForMode(snapshot.Mode);
+                    RigStatusText = $"Rig: {freqMhz.ToString("F3", CultureInfo.InvariantCulture)} {modeDisplay}";
                     Logger.ApplyRigSnapshot(snapshot);
                 }
                 else
@@ -751,11 +772,26 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
         {
             RigStatusText = "Rig: error";
         }
+        catch (ObjectDisposedException)
+        {
+            RigStatusText = "Rig: unavailable";
+        }
     }
 
     private async void OnSpaceWeatherTimerTick(object? sender, EventArgs e)
     {
-        await FetchSpaceWeatherAsync();
+        try
+        {
+            await FetchSpaceWeatherAsync();
+        }
+        catch (ObjectDisposedException)
+        {
+            SpaceWeatherText = "Weather: unavailable";
+        }
+        catch (InvalidOperationException)
+        {
+            SpaceWeatherText = "Weather: error";
+        }
     }
 
     private async Task FetchSpaceWeatherAsync()
@@ -795,12 +831,15 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
     }
 
     [RelayCommand]
-    private void CloseTransientPanels()
+    private void CloseTransientPanels(bool restoreGridFocus = true)
     {
         IsSortChooserOpen = false;
         IsColumnChooserOpen = false;
-        CloseCallsignCard();
-        GridFocusRequested?.Invoke(this, EventArgs.Empty);
+        CloseCallsignCard(restoreFocus: false);
+        if (restoreGridFocus)
+        {
+            GridFocusRequested?.Invoke(this, EventArgs.Empty);
+        }
     }
 
     [RelayCommand]

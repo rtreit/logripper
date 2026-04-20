@@ -16,3 +16,7 @@ jobs:
   dotnet:
     name: .NET Quality
     uses: ./.github/workflows/dotnet-quality.yml
+
+  win32:
+    name: Win32 Quality
+    uses: ./.github/workflows/win32-quality.yml

@@ -17,6 +17,14 @@ namespace QsoRipper.Gui.Views;
 
 internal sealed partial class MainWindow : Window
 {
+    private enum FocusArea
+    {
+        None,
+        Grid,
+        Logger,
+        Search
+    }
+
     private readonly RecentQsoGridLayoutStore _gridLayoutStore = new();
     private readonly UiPreferencesStore _preferencesStore = new();
     private readonly MenuItem? _fileMenuItem;
@@ -30,6 +38,7 @@ internal sealed partial class MainWindow : Window
     private bool _gridLayoutApplied;
     private bool _menuAccessKeysPrimed;
     private bool _loggedFirstRecentQsoRow;
+    private FocusArea _lastFocusArea = FocusArea.Grid;
     private Dictionary<RecentQsoGridColumn, DataGridColumn> _columnMap = [];
     internal bool IsInspectionMode { get; set; }
 
@@ -46,6 +55,12 @@ internal sealed partial class MainWindow : Window
         if (_recentQsoGrid is not null)
         {
             _recentQsoGrid.LoadingRow += OnRecentQsoGridLoadingRow;
+            _recentQsoGrid.GotFocus += OnGridGotFocus;
+        }
+
+        if (_recentQsoSearchBox is not null)
+        {
+            _recentQsoSearchBox.GotFocus += OnSearchGotFocus;
         }
 
         DataContextChanged += OnDataContextChanged;
@@ -56,24 +71,43 @@ internal sealed partial class MainWindow : Window
     {
         base.OnOpened(e);
         GuiPerformanceTrace.Write(nameof(OnOpened) + ".start");
-        ClampToCurrentScreen();
-        if (!IsInspectionMode)
+        try
         {
-            GuiPerformanceTrace.Write(nameof(OnOpened) + ".afterScheduleMenuAccessKeys");
-            ApplyPersistedGridLayout();
-            GuiPerformanceTrace.Write(nameof(OnOpened) + ".afterApplyPersistedGridLayout");
-            if (DataContext is MainWindowViewModel vm)
+            ClampToCurrentScreen();
+            if (!IsInspectionMode)
             {
-                vm.ApplyPreferences(_preferencesStore.Load());
-                GuiPerformanceTrace.Write(nameof(OnOpened) + ".afterApplyPreferences");
-                await vm.CheckFirstRunAsync();
-                GuiPerformanceTrace.Write(nameof(OnOpened) + ".afterCheckFirstRun");
+                GuiPerformanceTrace.Write(nameof(OnOpened) + ".afterScheduleMenuAccessKeys");
+                ApplyPersistedGridLayout();
+                GuiPerformanceTrace.Write(nameof(OnOpened) + ".afterApplyPersistedGridLayout");
+                if (DataContext is MainWindowViewModel vm)
+                {
+                    vm.ApplyPreferences(_preferencesStore.Load());
+                    GuiPerformanceTrace.Write(nameof(OnOpened) + ".afterApplyPreferences");
+                    await vm.CheckFirstRunAsync();
+                    GuiPerformanceTrace.Write(nameof(OnOpened) + ".afterCheckFirstRun");
+                }
+
+                Dispatcher.UIThread.Post(PrimeMenuAccessKeys, DispatcherPriority.Background);
             }
 
-            Dispatcher.UIThread.Post(PrimeMenuAccessKeys, DispatcherPriority.Background);
+            EnsureColumnHeadersFit();
         }
-
-        EnsureColumnHeadersFit();
+        catch (ObjectDisposedException ex)
+        {
+            GuiPerformanceTrace.Write(nameof(OnOpened) + ".error", ex.ToString());
+            if (DataContext is MainWindowViewModel vm)
+            {
+                vm.StatusMessage = "Error: startup did not fully complete.";
+            }
+        }
+        catch (InvalidOperationException ex)
+        {
+            GuiPerformanceTrace.Write(nameof(OnOpened) + ".error", ex.ToString());
+            if (DataContext is MainWindowViewModel vm)
+            {
+                vm.StatusMessage = "Error: startup did not fully complete.";
+            }
+        }
     }
 
     protected override void OnClosed(EventArgs e)
@@ -84,6 +118,7 @@ internal sealed partial class MainWindow : Window
         if (_viewModel is not null)
         {
             _viewModel.PropertyChanged -= OnViewModelPropertyChanged;
+            _viewModel.RecentQsos.PropertyChanged -= OnRecentQsosPropertyChanged;
             _viewModel.SearchFocusRequested -= OnSearchFocusRequested;
             _viewModel.GridFocusRequested -= OnGridFocusRequested;
             _viewModel.SettingsRequested -= OnSettingsRequested;
@@ -139,22 +174,10 @@ internal sealed partial class MainWindow : Window
             return;
         }
 
-        base.OnKeyDown(e);
-
-        if (e.Handled || _viewModel is null || _viewModel.IsWizardOpen)
-        {
-            return;
-        }
-
-        if (string.Equals(e.KeySymbol, "/", StringComparison.Ordinal)
-            && e.Source is not TextBox
-            && !(_recentQsoSearchBox?.IsFocused ?? false))
-        {
-            FocusRecentQsoSearchBox();
-            e.Handled = true;
-            return;
-        }
-
+        // Close open panels on Escape BEFORE base.OnKeyDown so the Menu
+        // control cannot consume the key first (Alt+Enter activates the
+        // menu bar; a subsequent Escape would deactivate it instead of
+        // closing the inspector/card if we let base handle it first).
         if (e.Key == Key.Escape)
         {
             if (_viewModel.IsFullQsoCardOpen)
@@ -182,7 +205,32 @@ internal sealed partial class MainWindow : Window
             {
                 _viewModel.ToggleInspectorCommand.Execute(null);
                 e.Handled = true;
+                return;
             }
+
+            if (IsFocusWithinLogger())
+            {
+                _viewModel.Logger.ClearCommand.Execute(null);
+                _viewModel.Logger.FocusLogger();
+                e.Handled = true;
+                return;
+            }
+        }
+
+        base.OnKeyDown(e);
+
+        if (e.Handled || _viewModel is null || _viewModel.IsWizardOpen)
+        {
+            return;
+        }
+
+        if (string.Equals(e.KeySymbol, "/", StringComparison.Ordinal)
+            && e.Source is not TextBox
+            && !(_recentQsoSearchBox?.IsFocused ?? false))
+        {
+            FocusRecentQsoSearchBox();
+            e.Handled = true;
+            return;
         }
     }
 
@@ -366,12 +414,22 @@ internal sealed partial class MainWindow : Window
         _menuAccessKeysPrimed = true;
 
         // Avalonia access-key mode does not fully initialize until a menu has been shown once.
+        // Save focused element so we can restore it after the prime cycle.
         Dispatcher.UIThread.Post(
             () =>
             {
+                var previousFocus = FocusManager?.GetFocusedElement() as Control;
                 _fileMenuItem.IsSubMenuOpen = true;
                 Dispatcher.UIThread.Post(
-                    () => _fileMenuItem.IsSubMenuOpen = false,
+                    () =>
+                    {
+                        _fileMenuItem.IsSubMenuOpen = false;
+                        // Restore focus so the menu prime doesn't steal it
+                        // from whatever the user focused in the meantime.
+                        Dispatcher.UIThread.Post(
+                            () => previousFocus?.Focus(),
+                            DispatcherPriority.Background);
+                    },
                     DispatcherPriority.Background);
             },
             DispatcherPriority.Background);
@@ -394,6 +452,7 @@ internal sealed partial class MainWindow : Window
         if (_viewModel is not null)
         {
             _viewModel.PropertyChanged += OnViewModelPropertyChanged;
+            _viewModel.RecentQsos.PropertyChanged += OnRecentQsosPropertyChanged;
             _viewModel.SearchFocusRequested += OnSearchFocusRequested;
             _viewModel.GridFocusRequested += OnGridFocusRequested;
             _viewModel.SettingsRequested += OnSettingsRequested;
@@ -421,9 +480,12 @@ internal sealed partial class MainWindow : Window
             return;
         }
 
-        // Defer focus so the current key event finishes processing first —
-        // synchronous Focus() during a KeyBinding handler doesn't reliably
-        // move focus away from the active TextBox.
+        _lastFocusArea = FocusArea.Grid;
+
+        // Defer focus at Background priority so the current key event and any
+        // visual-tree changes (e.g. inspector panel collapse) finish first.
+        // Input priority was too early — Avalonia's focus cleanup after removing
+        // the inspector content could re-steal focus after our call.
         Dispatcher.UIThread.Post(
             () =>
             {
@@ -433,12 +495,31 @@ internal sealed partial class MainWindow : Window
                     _recentQsoGrid.SelectedIndex = 0;
                 }
             },
-            DispatcherPriority.Input);
+            DispatcherPriority.Background);
     }
 
     private async void OnSettingsRequested(object? sender, EventArgs e)
     {
-        await ShowSettingsDialogAsync();
+        try
+        {
+            await ShowSettingsDialogAsync();
+        }
+        catch (ObjectDisposedException ex)
+        {
+            GuiPerformanceTrace.Write(nameof(OnSettingsRequested) + ".error", ex.ToString());
+            if (_viewModel is not null)
+            {
+                _viewModel.StatusMessage = "Error: unable to open settings.";
+            }
+        }
+        catch (InvalidOperationException ex)
+        {
+            GuiPerformanceTrace.Write(nameof(OnSettingsRequested) + ".error", ex.ToString());
+            if (_viewModel is not null)
+            {
+                _viewModel.StatusMessage = "Error: unable to open settings.";
+            }
+        }
     }
 
     private void OnLoggerFocusRequested(object? sender, EventArgs e)
@@ -446,6 +527,7 @@ internal sealed partial class MainWindow : Window
         var loggerBox = this.FindControl<TextBox>("LoggerCallsignBox");
         if (loggerBox is not null)
         {
+            _lastFocusArea = FocusArea.Logger;
             Dispatcher.UIThread.Post(() =>
             {
                 loggerBox.Focus();
@@ -482,8 +564,19 @@ internal sealed partial class MainWindow : Window
     {
         if (_viewModel is not null)
         {
+            _lastFocusArea = FocusArea.Logger;
             _viewModel.IsLoggerFocused = true;
         }
+    }
+
+    private void OnGridGotFocus(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        _lastFocusArea = FocusArea.Grid;
+    }
+
+    private void OnSearchGotFocus(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        _lastFocusArea = FocusArea.Search;
     }
 
     private void OnLoggerLostFocus(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
@@ -496,24 +589,31 @@ internal sealed partial class MainWindow : Window
                 return;
             }
 
-            var focused = FocusManager?.GetFocusedElement() as Control;
-            var loggerPanel = this.FindControl<Border>("LoggerPanel");
-            // Check if focus moved to another control within the logger panel
-            bool isStillInLogger = false;
-            var parent = focused;
-            while (parent is not null)
-            {
-                if (parent == loggerPanel)
-                {
-                    isStillInLogger = true;
-                    break;
-                }
+            _viewModel.IsLoggerFocused = IsFocusWithinLogger();
+        }, DispatcherPriority.Background);
+    }
 
-                parent = parent.Parent as Control;
+    private bool IsFocusWithinLogger()
+    {
+        var loggerPanel = this.FindControl<Border>("LoggerPanel");
+        return IsFocusWithin(loggerPanel);
+    }
+
+    private bool IsFocusWithin(Control? root)
+    {
+        var focused = FocusManager?.GetFocusedElement() as Control;
+        var parent = focused;
+        while (parent is not null)
+        {
+            if (parent == root)
+            {
+                return true;
             }
 
-            _viewModel.IsLoggerFocused = isStillInLogger;
-        }, DispatcherPriority.Background);
+            parent = parent.Parent as Control;
+        }
+
+        return false;
     }
 
     private void FocusRecentQsoSearchBox()
@@ -522,6 +622,8 @@ internal sealed partial class MainWindow : Window
         {
             return;
         }
+
+        _lastFocusArea = FocusArea.Search;
 
         Dispatcher.UIThread.Post(
             () =>
@@ -980,13 +1082,13 @@ internal sealed partial class MainWindow : Window
     private void CloseSortChooser()
     {
         _viewModel!.IsSortChooserOpen = false;
-        _recentQsoGrid?.Focus();
+        RestoreLastFocusArea();
     }
 
     private void CloseColumnChooser()
     {
         _viewModel!.IsColumnChooserOpen = false;
-        _recentQsoGrid?.Focus();
+        RestoreLastFocusArea();
     }
 
     private void NavigateFocusInPanel<T>(string panelName, bool forward) where T : Control
@@ -1031,6 +1133,30 @@ internal sealed partial class MainWindow : Window
         {
             FocusFirstInPanel<CheckBox>("ColumnChooserPanel");
         }
+        else if ((e.PropertyName == nameof(MainWindowViewModel.IsHelpOpen) && _viewModel?.IsHelpOpen == false)
+            || (e.PropertyName == nameof(MainWindowViewModel.IsFullQsoCardOpen) && _viewModel?.IsFullQsoCardOpen == false)
+            || (e.PropertyName == nameof(MainWindowViewModel.IsCallsignCardOpen) && _viewModel?.IsCallsignCardOpen == false)
+            || (e.PropertyName == nameof(MainWindowViewModel.IsInspectorOpen) && _viewModel?.IsInspectorOpen == false))
+        {
+            RestoreLastFocusArea();
+        }
+    }
+
+    private void OnRecentQsosPropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (_viewModel is null || e.PropertyName != nameof(RecentQsoListViewModel.IsDeletePending))
+        {
+            return;
+        }
+
+        if (_viewModel.RecentQsos.IsDeletePending)
+        {
+            FocusFirstInPanel<Button>("DeleteConfirmOverlay");
+        }
+        else
+        {
+            RestoreLastFocusArea();
+        }
     }
 
     private void FocusFirstInPanel<T>(string panelName) where T : Control
@@ -1043,5 +1169,28 @@ internal sealed partial class MainWindow : Window
                 first?.Focus();
             },
             DispatcherPriority.Loaded);
+    }
+
+    private void RestoreLastFocusArea()
+    {
+        Dispatcher.UIThread.Post(
+            () => RestoreFocusArea(_lastFocusArea),
+            DispatcherPriority.Background);
+    }
+
+    private void RestoreFocusArea(FocusArea area)
+    {
+        switch (area)
+        {
+            case FocusArea.Logger:
+                _viewModel?.Logger.FocusLogger();
+                break;
+            case FocusArea.Search:
+                FocusRecentQsoSearchBox();
+                break;
+            case FocusArea.Grid:
+                OnGridFocusRequested(this, EventArgs.Empty);
+                break;
+        }
     }
 }

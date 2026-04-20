@@ -30,6 +30,7 @@ use qsoripper_core::proto::qsoripper::services::{
     LogQsoRequest, LookupRequest, UpdateQsoRequest,
 };
 
+use crate::register_qso_list_allocation;
 use crate::types::{
     str_to_buf, QsrLogQsoRequest, QsrLogQsoResult, QsrLookupResult, QsrQsoDetail, QsrQsoList,
     QsrQsoSummary, QsrRigStatus, QsrRstReport, QsrSpaceWeather, QsrUpdateQsoRequest,
@@ -241,8 +242,9 @@ impl QsrClient {
             }
         }
 
+        let allocation_len = items.len();
         #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
-        let count = items.len() as i32;
+        let count = allocation_len as i32;
 
         if items.is_empty() {
             out.items = std::ptr::null_mut();
@@ -251,6 +253,7 @@ impl QsrClient {
             let boxed = items.into_boxed_slice();
             out.count = count;
             out.items = Box::into_raw(boxed).cast::<QsrQsoSummary>();
+            register_qso_list_allocation(out.items, allocation_len);
         }
 
         0

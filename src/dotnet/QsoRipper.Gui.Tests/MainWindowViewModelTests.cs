@@ -9,6 +9,36 @@ namespace QsoRipper.Gui.Tests;
 public sealed class MainWindowViewModelTests
 {
     [Fact]
+    public void FocusLoggerCommandDoesNotRequestGridFocus()
+    {
+        using var viewModel = new MainWindowViewModel(new FakeEngineClient());
+        var loggerFocusRequests = 0;
+        var gridFocusRequests = 0;
+        viewModel.LoggerFocusRequested += (_, _) => loggerFocusRequests++;
+        viewModel.GridFocusRequested += (_, _) => gridFocusRequests++;
+
+        viewModel.FocusLoggerCommand.Execute(null);
+
+        Assert.Equal(1, loggerFocusRequests);
+        Assert.Equal(0, gridFocusRequests);
+    }
+
+    [Fact]
+    public void FocusSearchCommandDoesNotRequestGridFocus()
+    {
+        using var viewModel = new MainWindowViewModel(new FakeEngineClient());
+        var searchFocusRequests = 0;
+        var gridFocusRequests = 0;
+        viewModel.SearchFocusRequested += (_, _) => searchFocusRequests++;
+        viewModel.GridFocusRequested += (_, _) => gridFocusRequests++;
+
+        viewModel.FocusSearchCommand.Execute(null);
+
+        Assert.Equal(1, searchFocusRequests);
+        Assert.Equal(0, gridFocusRequests);
+    }
+
+    [Fact]
     public async Task CheckFirstRunAsyncCompletesBeforeSlowSyncStatusFinishes()
     {
         var syncStatusSource = new TaskCompletionSource<GetSyncStatusResponse>(TaskCreationOptions.RunContinuationsAsynchronously);

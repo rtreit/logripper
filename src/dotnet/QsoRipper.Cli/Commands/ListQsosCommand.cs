@@ -11,7 +11,11 @@ internal static class ListQsosCommand
 {
     private const int CommentColumnWidth = 40;
 
-    public static async Task<int> RunAsync(GrpcChannel channel, string[] args, bool jsonOutput = false)
+    public static async Task<int> RunAsync(
+        GrpcChannel channel,
+        string[] args,
+        bool jsonOutput = false,
+        CancellationToken cancellationToken = default)
     {
         if (!TryParseArgs(args, out var request, out var displayOptions, out var error))
         {
@@ -20,13 +24,13 @@ internal static class ListQsosCommand
         }
 
         var client = new LogbookService.LogbookServiceClient(channel);
-        using var call = client.ListQsos(request);
+        using var call = client.ListQsos(request, cancellationToken: cancellationToken);
 
         if (jsonOutput)
         {
             var records = new List<Google.Protobuf.IMessage>();
 
-            while (await call.ResponseStream.MoveNext(CancellationToken.None))
+            while (await call.ResponseStream.MoveNext(cancellationToken))
             {
                 var qso = call.ResponseStream.Current.Qso;
                 if (qso is not null)
@@ -43,7 +47,7 @@ internal static class ListQsosCommand
 
         var count = 0u;
 
-        while (await call.ResponseStream.MoveNext(CancellationToken.None))
+        while (await call.ResponseStream.MoveNext(cancellationToken))
         {
             var qso = call.ResponseStream.Current.Qso;
             if (qso is null)

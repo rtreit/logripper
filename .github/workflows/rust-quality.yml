@@ -7,7 +7,6 @@ on:
     paths:
       - ".github/workflows/rust-quality.yml"
       - "rust-toolchain.toml"
-      - "src/c/**"
       - "src/rust/**"
       - "proto/**"
   pull_request:

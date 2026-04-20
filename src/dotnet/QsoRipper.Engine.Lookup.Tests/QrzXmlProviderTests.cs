@@ -47,6 +47,24 @@ public sealed class QrzXmlProviderTests
         Assert.Equal("Managed Agent/1.0", loginQuery["agent"]);
     }
 
+    [Fact]
+    public async Task Concurrent_first_lookups_share_single_login()
+    {
+        using var handler = new ConcurrentLoginCountingHandler();
+        using var httpClient = new HttpClient(handler);
+        var provider = new QrzXmlProvider(httpClient, "demo-user", "demo-password", userAgent: "Managed Agent/1.0");
+
+        var results = await Task.WhenAll(
+            provider.LookupAsync("W1AW"),
+            provider.LookupAsync("K7RND"));
+
+        var first = results[0];
+        var second = results[1];
+        Assert.Equal(ProviderLookupState.Found, first.State);
+        Assert.Equal(ProviderLookupState.Found, second.State);
+        Assert.Equal(1, handler.LoginRequestCount);
+    }
+
     private static HttpResponseMessage CreateXmlResponse(string body)
     {
         return new HttpResponseMessage(HttpStatusCode.OK)
@@ -79,6 +97,52 @@ public sealed class QrzXmlProviderTests
             RequestUris.Add(request.RequestUri!);
             Assert.NotEmpty(_responses);
             return Task.FromResult(_responses.Dequeue());
+        }
+    }
+
+    private sealed class ConcurrentLoginCountingHandler : HttpMessageHandler
+    {
+        private int _loginRequestCount;
+
+        public int LoginRequestCount => _loginRequestCount;
+
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            Assert.NotNull(request.RequestUri);
+            var query = ParseQuery(request.RequestUri!);
+            if (query.ContainsKey("username"))
+            {
+                Interlocked.Increment(ref _loginRequestCount);
+                await Task.Delay(TimeSpan.FromMilliseconds(40), cancellationToken);
+                return CreateXmlResponse(
+                    """
+                    <?xml version="1.0" encoding="utf-8" ?>
+                    <QRZDatabase version="1.34" xmlns="http://xmldata.qrz.com">
+                        <Session>
+                            <Key>abc123</Key>
+                        </Session>
+                    </QRZDatabase>
+                    """);
+            }
+
+            if (query.ContainsKey("s") && query.ContainsKey("callsign"))
+            {
+                Assert.True(query.TryGetValue("callsign", out var callsign));
+                return CreateXmlResponse(
+                    $"""
+                    <?xml version="1.0" encoding="utf-8" ?>
+                    <QRZDatabase version="1.34" xmlns="http://xmldata.qrz.com">
+                        <Callsign>
+                            <call>{callsign}</call>
+                        </Callsign>
+                        <Session>
+                            <Key>abc123</Key>
+                        </Session>
+                    </QRZDatabase>
+                    """);
+            }
+
+            throw new InvalidOperationException($"Unexpected request URI: {request.RequestUri}");
         }
     }
 }

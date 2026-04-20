@@ -43,6 +43,10 @@
 #define WM_APP_LOOKUP_DONE   (WM_APP + 1)
 #define WM_APP_RIG_DONE      (WM_APP + 2)
 #define WM_APP_QSO_LOADED    (WM_APP + 3)
+#define WM_APP_LOG_DONE      (WM_APP + 4)
+#define WM_APP_WEATHER_DONE  (WM_APP + 5)
+#define WM_APP_QSO_DETAIL_DONE (WM_APP + 6)
+#define WM_APP_QSO_DELETE_DONE (WM_APP + 7)
 
 /* ── Color palette (Win2K classic theme) ────────────────────────────────── */
 
@@ -164,6 +168,39 @@ typedef struct {
     char mode[16];
 } RigPollResult;
 
+typedef struct {
+    HWND hwnd;
+} SpaceWeatherArg;
+
+typedef struct {
+    int has_data;
+    double k_index;
+    double solar_flux;
+    int sunspot_number;
+} SpaceWeatherResult;
+
+typedef struct {
+    HWND hwnd;
+    char local_id[64];
+} QsoDetailLoadArg;
+
+typedef struct {
+    int loaded;
+    char local_id[64];
+    QsrQsoDetail detail;
+} QsoDetailLoadResult;
+
+typedef struct {
+    HWND hwnd;
+    char local_id[64];
+    char callsign[16];
+} QsoDeleteArg;
+
+typedef struct {
+    int ok;
+    char callsign[16];
+} QsoDeleteResult;
+
 /* ── Recent QSO record ─────────────────────────────────────────────────── */
 
 typedef struct {
@@ -257,6 +294,7 @@ typedef struct {
     int  lookup_in_progress;
     int  lookup_not_found;
     char lookup_error[128];
+    int  log_in_progress;
 
     /* Recent QSOs (heap-allocated; grows as needed) */
     RecentQso *recent_qsos;
@@ -273,6 +311,7 @@ typedef struct {
     double solar_flux;
     int sunspot_number;
     int has_weather;
+    int weather_loading;
 
     /* Rig control */
     int  rig_enabled;
@@ -286,6 +325,8 @@ typedef struct {
 
     /* Editing existing QSO */
     char editing_local_id[64];
+    int qso_detail_loading;
+    int qso_delete_in_progress;
 
     /* Lookup debounce */
     ULONGLONG last_callsign_change;
@@ -379,6 +420,9 @@ static int   FieldMaxLen(enum Field f);
 static void  DrawField(HDC, int, int, int, const char *, int, int, int, int);
 static void  DrawCycleField(HDC, int, int, int, const char *, int, int, int);
 static void  ApplyModeDefaults(void);
+static int   UiTextToWide(const char *text, int len, wchar_t *wbuf, int wbuf_len);
+static void  ApplyRigPollResult(const RigPollResult *res);
+static void  ApplyLoadedQsoDetail(const char *local_id, const QsrQsoDetail *detail);
 
 /* ── Utility: safe string helpers ──────────────────────────────────────── */
 
@@ -693,6 +737,130 @@ char *qsr_test_run_qr_command(const char *args)
 {
     return RunQrCommand(args);
 }
+
+int qsr_test_ui_text_to_wide(const char *text, wchar_t *wbuf, int wbuf_len)
+{
+    if (!text || !wbuf || wbuf_len <= 0) return 0;
+    return UiTextToWide(text, -1, wbuf, wbuf_len);
+}
+
+UINT qsr_test_ui_text_codepage(void)
+{
+    return CP_UTF8;
+}
+
+void qsr_test_reset_state(void)
+{
+    InitState();
+    ZeroMemory(&g_backend, sizeof(g_backend));
+}
+
+void qsr_test_set_backend_ffi(struct QsrClient *client,
+                              fn_qsr_log_qso log_qso_fn,
+                              fn_qsr_update_qso update_qso_fn)
+{
+    g_backend.mode = BACKEND_FFI;
+    g_backend.pf_log_qso = log_qso_fn;
+    g_backend.pf_update_qso = update_qso_fn;
+    backend_ffi_gate_init(&g_backend.ffi_gate, client);
+}
+
+void qsr_test_set_backend_ffi_get_delete_weather(struct QsrClient *client,
+                                                 fn_qsr_get_qso get_qso_fn,
+                                                 fn_qsr_delete_qso delete_qso_fn,
+                                                 fn_qsr_get_space_weather get_space_weather_fn)
+{
+    g_backend.mode = BACKEND_FFI;
+    g_backend.pf_get_qso = get_qso_fn;
+    g_backend.pf_delete_qso = delete_qso_fn;
+    g_backend.pf_get_space_weather = get_space_weather_fn;
+    backend_ffi_gate_init(&g_backend.ffi_gate, client);
+}
+
+void qsr_test_set_form_basics(const char *callsign, const char *date, const char *time_str)
+{
+    if (callsign) safe_strcpy(g_state.callsign, sizeof(g_state.callsign), callsign);
+    if (date) safe_strcpy(g_state.date, sizeof(g_state.date), date);
+    if (time_str) safe_strcpy(g_state.time_str, sizeof(g_state.time_str), time_str);
+}
+
+void qsr_test_set_band_mode_indices(int band_idx, int mode_idx)
+{
+    if (band_idx >= 0 && band_idx < NUM_BANDS) g_state.band_idx = band_idx;
+    if (mode_idx >= 0 && mode_idx < NUM_MODES) g_state.mode_idx = mode_idx;
+}
+
+void qsr_test_set_freq_field(const char *freq)
+{
+    if (freq) safe_strcpy(g_state.freq_mhz, sizeof(g_state.freq_mhz), freq);
+}
+
+void qsr_test_set_selected_recent_qso(const char *local_id, const char *callsign)
+{
+    free(g_state.recent_qsos);
+    g_state.recent_qsos = (RecentQso *)calloc(1, sizeof(RecentQso));
+    if (!g_state.recent_qsos) {
+        g_state.recent_count = 0;
+        g_state.recent_capacity = 0;
+        g_state.qso_selected = -1;
+        return;
+    }
+    if (local_id) safe_strcpy(g_state.recent_qsos[0].local_id, sizeof(g_state.recent_qsos[0].local_id), local_id);
+    if (callsign) safe_strcpy(g_state.recent_qsos[0].callsign, sizeof(g_state.recent_qsos[0].callsign), callsign);
+    g_state.recent_count = 1;
+    g_state.recent_capacity = 1;
+    g_state.qso_selected = 0;
+}
+
+void qsr_test_set_focused_field(enum Field field)
+{
+    if (field >= 0 && field < FIELD_COUNT) {
+        g_state.focused_field = field;
+    }
+}
+
+void qsr_test_set_rig_enabled(int enabled)
+{
+    g_state.rig_enabled = enabled;
+}
+
+void qsr_test_apply_rig_result(int connected, const char *freq_display,
+                               const char *freq_mhz, const char *band, const char *mode)
+{
+    RigPollResult res;
+    ZeroMemory(&res, sizeof(res));
+    res.connected = connected;
+    if (freq_display) safe_strcpy(res.freq_display, sizeof(res.freq_display), freq_display);
+    if (freq_mhz) safe_strcpy(res.freq_mhz, sizeof(res.freq_mhz), freq_mhz);
+    if (band) safe_strcpy(res.band, sizeof(res.band), band);
+    if (mode) safe_strcpy(res.mode, sizeof(res.mode), mode);
+    ApplyRigPollResult(&res);
+}
+
+const char *qsr_test_get_freq_field(void)
+{
+    return g_state.freq_mhz;
+}
+
+void qsr_test_invoke_log_qso(void)
+{
+    LogQso();
+}
+
+void qsr_test_invoke_load_selected_qso(void)
+{
+    LoadSelectedQso();
+}
+
+void qsr_test_invoke_delete_selected_qso(void)
+{
+    DeleteSelectedQso();
+}
+
+void qsr_test_invoke_fetch_space_weather(void)
+{
+    FetchSpaceWeather();
+}
 #endif
 
 /* Append a properly quoted Windows command-line argument to cmd.
@@ -785,6 +953,11 @@ static int FieldMaxLen(enum Field f)
 
 /* ── GDI drawing helpers ───────────────────────────────────────────────── */
 
+static int UiTextToWide(const char *text, int len, wchar_t *wbuf, int wbuf_len)
+{
+    return MultiByteToWideChar(CP_UTF8, 0, text, len, wbuf, wbuf_len);
+}
+
 static void DrawText_A(HDC hdc, int x, int y, COLORREF fg, const char *text)
 {
     SetTextColor(hdc, fg);
@@ -792,7 +965,7 @@ static void DrawText_A(HDC hdc, int x, int y, COLORREF fg, const char *text)
     int len = (int)strlen(text);
     /* Convert to wide */
     wchar_t wbuf[1024];
-    int wlen = MultiByteToWideChar(CP_ACP, 0, text, len, wbuf, 1024);
+    int wlen = UiTextToWide(text, len, wbuf, 1024);
     TextOutW(hdc, x, y, wbuf, wlen);
 }
 
@@ -803,7 +976,7 @@ static void DrawText_A_BG(HDC hdc, int x, int y, COLORREF fg, COLORREF bg, const
     SetBkMode(hdc, OPAQUE);
     int len = (int)strlen(text);
     wchar_t wbuf[1024];
-    int wlen = MultiByteToWideChar(CP_ACP, 0, text, len, wbuf, 1024);
+    int wlen = UiTextToWide(text, len, wbuf, 1024);
     TextOutW(hdc, x, y, wbuf, wlen);
     SetBkMode(hdc, TRANSPARENT);
 }
@@ -1145,6 +1318,57 @@ static void ReleaseFfiClient(void)
     backend_ffi_gate_release(&g_backend.ffi_gate);
 }
 
+typedef struct {
+    HWND hwnd;
+    int is_update;
+    QsrLogQsoRequest req;
+    QsrUpdateQsoRequest ureq;
+    char callsign[32];
+    int band_idx;
+    int mode_idx;
+} LogQsoThreadArg;
+
+typedef struct {
+    int is_update;
+    int success;
+    char callsign[32];
+    int band_idx;
+    int mode_idx;
+} LogQsoResultMsg;
+
+static unsigned __stdcall LogQsoThread(void *param)
+{
+    LogQsoThreadArg *arg = (LogQsoThreadArg *)param;
+    LogQsoResultMsg *res = (LogQsoResultMsg *)calloc(1, sizeof(LogQsoResultMsg));
+    if (!res) {
+        free(arg);
+        return 0;
+    }
+
+    res->is_update = arg->is_update;
+    res->band_idx = arg->band_idx;
+    res->mode_idx = arg->mode_idx;
+    safe_strcpy(res->callsign, sizeof(res->callsign), arg->callsign);
+
+    struct QsrClient *ffi_client = NULL;
+    if (AcquireFfiClient(&ffi_client)) {
+        if (arg->is_update) {
+            res->success = (g_backend.pf_update_qso(ffi_client, &arg->ureq) == 0);
+        } else {
+            QsrLogQsoResult log_res;
+            memset(&log_res, 0, sizeof(log_res));
+            res->success = (g_backend.pf_log_qso(ffi_client, &arg->req, &log_res) == 0);
+        }
+        ReleaseFfiClient();
+    }
+
+    if (!PostMessage(arg->hwnd, WM_APP_LOG_DONE, 0, (LPARAM)res))
+        free(res);
+
+    free(arg);
+    return 0;
+}
+
 static void LogQso(void)
 {
     if (g_state.callsign[0] == 0) {
@@ -1162,36 +1386,40 @@ static void LogQso(void)
     }
 
     if (g_backend.mode == BACKEND_FFI) {
-        struct QsrClient *ffi_client = NULL;
-        if (!AcquireFfiClient(&ffi_client)) {
-            SetStatus("Backend unavailable (shutting down)", 1);
+        if (g_state.log_in_progress) {
+            SetStatus("Log/update already in progress", 1);
             return;
         }
-        if (is_update) {
-            QsrUpdateQsoRequest ureq;
-            memset(&ureq, 0, sizeof(ureq));
-            safe_strcpy((char *)ureq.local_id, sizeof(ureq.local_id), g_state.editing_local_id);
-            fill_log_request(&ureq.qso);
-            if (g_backend.pf_update_qso(ffi_client, &ureq) == 0) {
-                SetStatus("QSO updated", 0);
-            } else {
-                SetStatus("Failed to update QSO", 1);
-            }
-        } else {
-            QsrLogQsoRequest req;
-            QsrLogQsoResult res;
-            fill_log_request(&req);
-            if (g_backend.pf_log_qso(ffi_client, &req, &res) == 0) {
-                char msg[128];
-                snprintf(msg, sizeof(msg), "Logged %s on %s %s",
-                          g_state.callsign, BANDS[g_state.band_idx],
-                          MODES[g_state.mode_idx]);
-                SetStatus(msg, 0);
-            } else {
-                SetStatus("Failed to log QSO", 1);
-            }
+        LogQsoThreadArg *arg = (LogQsoThreadArg *)calloc(1, sizeof(LogQsoThreadArg));
+        if (!arg) {
+            SetStatus("Failed to allocate logging task", 1);
+            return;
         }
-        ReleaseFfiClient();
+
+        arg->hwnd = g_state.hwnd;
+        arg->is_update = is_update;
+        arg->band_idx = g_state.band_idx;
+        arg->mode_idx = g_state.mode_idx;
+        safe_strcpy(arg->callsign, sizeof(arg->callsign), g_state.callsign);
+
+        if (is_update) {
+            safe_strcpy((char *)arg->ureq.local_id, sizeof(arg->ureq.local_id), g_state.editing_local_id);
+            fill_log_request(&arg->ureq.qso);
+        } else {
+            fill_log_request(&arg->req);
+        }
+
+        g_state.log_in_progress = 1;
+        HANDLE h = (HANDLE)_beginthreadex(NULL, 0, LogQsoThread, arg, 0, NULL);
+        if (h) {
+            CloseHandle(h);
+        } else {
+            g_state.log_in_progress = 0;
+            free(arg);
+            SetStatus("Failed to start background logging", 1);
+            return;
+        }
+        return;
     } else {
         /* CLI path */
         char cmd[4096];
@@ -1531,25 +1759,88 @@ static unsigned __stdcall RigPollThread(void *param)
     return 0;
 }
 
+static void ApplyRigPollResult(const RigPollResult *res)
+{
+    if (!res) return;
+    if (g_state.rig_enabled) {
+        g_state.rig_connected = res->connected;
+        if (res->connected) {
+            safe_strcpy(g_state.rig_freq_display, sizeof(g_state.rig_freq_display), res->freq_display);
+            safe_strcpy(g_state.rig_freq_mhz, sizeof(g_state.rig_freq_mhz), res->freq_mhz);
+            safe_strcpy(g_state.rig_band, sizeof(g_state.rig_band), res->band);
+            safe_strcpy(g_state.rig_mode, sizeof(g_state.rig_mode), res->mode);
+            /* Auto-fill band/mode defaults when callsign is empty */
+            if (g_state.callsign[0] == 0) {
+                for (int bi = 0; bi < NUM_BANDS; bi++) {
+                    if (_stricmp(BANDS[bi], res->band) == 0) {
+                        g_state.band_idx = bi;
+                        break;
+                    }
+                }
+                for (int mi = 0; mi < NUM_MODES; mi++) {
+                    if (_stricmp(MODES[mi], res->mode) == 0) {
+                        g_state.mode_idx = mi;
+                        ApplyModeDefaults();
+                        break;
+                    }
+                }
+            }
+            if (res->freq_display[0] && g_state.focused_field != FIELD_FREQ)
+                safe_strcpy(g_state.freq_mhz, sizeof(g_state.freq_mhz), res->freq_display);
+        }
+    }
+}
+
 /* ── FFI integration: Fetch space weather ──────────────────────────────── */
+
+static unsigned __stdcall SpaceWeatherThread(void *param)
+{
+    SpaceWeatherArg *arg = (SpaceWeatherArg *)param;
+    SpaceWeatherResult *res = (SpaceWeatherResult *)calloc(1, sizeof(SpaceWeatherResult));
+    if (!res) { free(arg); return 0; }
+
+    struct QsrClient *ffi_client = NULL;
+    QsrSpaceWeather sw;
+    memset(&sw, 0, sizeof(sw));
+    if (AcquireFfiClient(&ffi_client) &&
+        g_backend.pf_get_space_weather(ffi_client, &sw) == 0 &&
+        sw.has_data) {
+        res->has_data = 1;
+        res->k_index = sw.k_index;
+        res->solar_flux = sw.solar_flux;
+        res->sunspot_number = sw.sunspot_number;
+    }
+    if (ffi_client) {
+        ReleaseFfiClient();
+    }
+
+    if (!PostMessage(arg->hwnd, WM_APP_WEATHER_DONE, 0, (LPARAM)res))
+        free(res);
+
+    free(arg);
+    return 0;
+}
 
 static void FetchSpaceWeather(void)
 {
     if (g_backend.mode == BACKEND_FFI) {
-        struct QsrClient *ffi_client = NULL;
-        QsrSpaceWeather sw;
-        memset(&sw, 0, sizeof(sw));
-        if (AcquireFfiClient(&ffi_client) &&
-            g_backend.pf_get_space_weather(ffi_client, &sw) == 0 &&
-            sw.has_data) {
-            g_state.k_index = sw.k_index;
-            g_state.solar_flux = sw.solar_flux;
-            g_state.sunspot_number = sw.sunspot_number;
-            g_state.has_weather = 1;
+        if (g_state.weather_loading) {
+            return;
         }
-        if (ffi_client) {
-            ReleaseFfiClient();
+        SpaceWeatherArg *arg = (SpaceWeatherArg *)calloc(1, sizeof(SpaceWeatherArg));
+        if (!arg) {
+            return;
         }
+        arg->hwnd = g_state.hwnd;
+        g_state.weather_loading = 1;
+        HANDLE h = (HANDLE)_beginthreadex(NULL, 0, SpaceWeatherThread, arg, 0, NULL);
+        if (h) {
+            CloseHandle(h);
+        } else {
+            g_state.weather_loading = 0;
+            free(arg);
+        }
+        return;
     } else {
         /* CLI path */
         char *out = RunQrCommand("space-weather --json");
@@ -1565,6 +1856,107 @@ static void FetchSpaceWeather(void)
 }
 
 /* ── FFI integration: Load selected QSO into form ──────────────────────── */
+
+static unsigned __stdcall QsoDetailLoadThread(void *param)
+{
+    QsoDetailLoadArg *arg = (QsoDetailLoadArg *)param;
+    QsoDetailLoadResult *res = (QsoDetailLoadResult *)calloc(1, sizeof(QsoDetailLoadResult));
+    if (!res) { free(arg); return 0; }
+
+    safe_strcpy(res->local_id, sizeof(res->local_id), arg->local_id);
+    struct QsrClient *ffi_client = NULL;
+    if (AcquireFfiClient(&ffi_client) &&
+        g_backend.pf_get_qso(ffi_client, arg->local_id, &res->detail) == 0) {
+        res->loaded = 1;
+    }
+    if (ffi_client) {
+        ReleaseFfiClient();
+    }
+
+    if (!PostMessage(arg->hwnd, WM_APP_QSO_DETAIL_DONE, 0, (LPARAM)res))
+        free(res);
+
+    free(arg);
+    return 0;
+}
+
+static void ApplyLoadedQsoDetail(const char *local_id, const QsrQsoDetail *detail)
+{
+    if (!local_id || !detail) return;
+
+    ClearForm();
+
+    safe_strcpy(g_state.callsign, sizeof(g_state.callsign), (const char *)detail->callsign);
+
+    /* Match band to index */
+    {
+        const char *b = (const char *)detail->band;
+        for (int i = 0; i < NUM_BANDS; i++) {
+            if (_stricmp(BANDS[i], b) == 0) { g_state.band_idx = i; break; }
+        }
+    }
+
+    /* Match mode to index */
+    {
+        const char *m = (const char *)detail->mode;
+        for (int i = 0; i < NUM_MODES; i++) {
+            if (_stricmp(MODES[i], m) == 0) { g_state.mode_idx = i; break; }
+        }
+    }
+
+    safe_strcpy(g_state.date,     sizeof(g_state.date),     (const char *)detail->date);
+    safe_strcpy(g_state.time_str, sizeof(g_state.time_str), (const char *)detail->time);
+
+    if (detail->freq_mhz[0])
+        freq_to_radio_style((const char *)detail->freq_mhz, g_state.freq_mhz, sizeof(g_state.freq_mhz));
+    else
+        { char _tmp[32]; snprintf(_tmp, sizeof(_tmp), "%.5f", BAND_DEFAULT_FREQS[g_state.band_idx]); freq_to_radio_style(_tmp, g_state.freq_mhz, sizeof(g_state.freq_mhz)); }
+
+    if (detail->rst_sent[0])
+        safe_strcpy(g_state.rst_sent, sizeof(g_state.rst_sent), (const char *)detail->rst_sent);
+    else
+        safe_strcpy(g_state.rst_sent, sizeof(g_state.rst_sent), "59");
+
+    if (detail->rst_rcvd[0])
+        safe_strcpy(g_state.rst_rcvd, sizeof(g_state.rst_rcvd), (const char *)detail->rst_rcvd);
+    else
+        safe_strcpy(g_state.rst_rcvd, sizeof(g_state.rst_rcvd), "59");
+
+    if (detail->time_off[0])
+        safe_strcpy(g_state.time_off, sizeof(g_state.time_off), (const char *)detail->time_off);
+
+    safe_strcpy(g_state.comment,       sizeof(g_state.comment),       (const char *)detail->comment);
+    safe_strcpy(g_state.notes,          sizeof(g_state.notes),          (const char *)detail->notes);
+    safe_strcpy(g_state.worked_name,    sizeof(g_state.worked_name),    (const char *)detail->worked_name);
+    safe_strcpy(g_state.tx_power,       sizeof(g_state.tx_power),       (const char *)detail->tx_power);
+    safe_strcpy(g_state.submode,        sizeof(g_state.submode),        (const char *)detail->submode);
+    safe_strcpy(g_state.contest_id,     sizeof(g_state.contest_id),     (const char *)detail->contest_id);
+    safe_strcpy(g_state.serial_sent,    sizeof(g_state.serial_sent),    (const char *)detail->serial_sent);
+    safe_strcpy(g_state.serial_rcvd,    sizeof(g_state.serial_rcvd),    (const char *)detail->serial_rcvd);
+    safe_strcpy(g_state.exchange_sent,  sizeof(g_state.exchange_sent),  (const char *)detail->exchange_sent);
+    safe_strcpy(g_state.exchange_rcvd,  sizeof(g_state.exchange_rcvd),  (const char *)detail->exchange_rcvd);
+    safe_strcpy(g_state.prop_mode,      sizeof(g_state.prop_mode),      (const char *)detail->prop_mode);
+    safe_strcpy(g_state.sat_name,       sizeof(g_state.sat_name),       (const char *)detail->sat_name);
+    safe_strcpy(g_state.sat_mode,       sizeof(g_state.sat_mode),       (const char *)detail->sat_mode);
+    safe_strcpy(g_state.iota,           sizeof(g_state.iota),           (const char *)detail->iota);
+    safe_strcpy(g_state.arrl_section,   sizeof(g_state.arrl_section),   (const char *)detail->arrl_section);
+    safe_strcpy(g_state.worked_state,   sizeof(g_state.worked_state),   (const char *)detail->worked_state);
+    safe_strcpy(g_state.worked_county,  sizeof(g_state.worked_county),  (const char *)detail->worked_county);
+    safe_strcpy(g_state.skcc,           sizeof(g_state.skcc),           (const char *)detail->skcc);
+
+    safe_strcpy(g_state.editing_local_id, sizeof(g_state.editing_local_id), local_id);
+
+    g_state.cursor_pos[FIELD_CALLSIGN] = (int)strlen(g_state.callsign);
+    g_state.cursor_pos[FIELD_RST_SENT] = (int)strlen(g_state.rst_sent);
+    g_state.cursor_pos[FIELD_RST_RCVD] = (int)strlen(g_state.rst_rcvd);
+    g_state.cursor_pos[FIELD_FREQ]     = (int)strlen(g_state.freq_mhz);
+    g_state.cursor_pos[FIELD_DATE]     = (int)strlen(g_state.date);
+    g_state.cursor_pos[FIELD_TIME]     = (int)strlen(g_state.time_str);
+
+    g_state.qso_list_focused = 0;
+    SetFocusField(FIELD_CALLSIGN);
+    SetStatus("QSO loaded for editing", 0);
+}
 
 static void LoadSelectedQso(void)
 {
@@ -1583,14 +1975,27 @@ static void LoadSelectedQso(void)
     int loaded = 0;
 
     if (g_backend.mode == BACKEND_FFI) {
-        struct QsrClient *ffi_client = NULL;
-        if (AcquireFfiClient(&ffi_client) &&
-            g_backend.pf_get_qso(ffi_client, q->local_id, &detail) == 0) {
-            loaded = 1;
+        if (g_state.qso_detail_loading) {
+            SetStatus("QSO load already in progress", 1);
+            return;
         }
-        if (ffi_client) {
-            ReleaseFfiClient();
+        QsoDetailLoadArg *arg = (QsoDetailLoadArg *)calloc(1, sizeof(QsoDetailLoadArg));
+        if (!arg) {
+            SetStatus("Failed to allocate QSO load task", 1);
+            return;
         }
+        arg->hwnd = g_state.hwnd;
+        safe_strcpy(arg->local_id, sizeof(arg->local_id), q->local_id);
+        g_state.qso_detail_loading = 1;
+        HANDLE h = (HANDLE)_beginthreadex(NULL, 0, QsoDetailLoadThread, arg, 0, NULL);
+        if (h) {
+            CloseHandle(h);
+        } else {
+            g_state.qso_detail_loading = 0;
+            free(arg);
+            SetStatus("Failed to start background QSO load", 1);
+        }
+        return;
     } else {
         /* CLI path */
         char cmd[256];
@@ -1663,82 +2068,32 @@ static void LoadSelectedQso(void)
         return;
     }
 
-    ClearForm();
-
-    safe_strcpy(g_state.callsign, sizeof(g_state.callsign), (const char *)detail.callsign);
-
-    /* Match band to index */
-    {
-        const char *b = (const char *)detail.band;
-        for (int i = 0; i < NUM_BANDS; i++) {
-            if (_stricmp(BANDS[i], b) == 0) { g_state.band_idx = i; break; }
-        }
-    }
-
-    /* Match mode to index */
-    {
-        const char *m = (const char *)detail.mode;
-        for (int i = 0; i < NUM_MODES; i++) {
-            if (_stricmp(MODES[i], m) == 0) { g_state.mode_idx = i; break; }
-        }
-    }
-
-    safe_strcpy(g_state.date,     sizeof(g_state.date),     (const char *)detail.date);
-    safe_strcpy(g_state.time_str, sizeof(g_state.time_str), (const char *)detail.time);
-
-    if (detail.freq_mhz[0])
-        freq_to_radio_style((const char *)detail.freq_mhz, g_state.freq_mhz, sizeof(g_state.freq_mhz));
-    else
-        { char _tmp[32]; snprintf(_tmp, sizeof(_tmp), "%.5f", BAND_DEFAULT_FREQS[g_state.band_idx]); freq_to_radio_style(_tmp, g_state.freq_mhz, sizeof(g_state.freq_mhz)); }
-
-    if (detail.rst_sent[0])
-        safe_strcpy(g_state.rst_sent, sizeof(g_state.rst_sent), (const char *)detail.rst_sent);
-    else
-        safe_strcpy(g_state.rst_sent, sizeof(g_state.rst_sent), "59");
-
-    if (detail.rst_rcvd[0])
-        safe_strcpy(g_state.rst_rcvd, sizeof(g_state.rst_rcvd), (const char *)detail.rst_rcvd);
-    else
-        safe_strcpy(g_state.rst_rcvd, sizeof(g_state.rst_rcvd), "59");
-
-    if (detail.time_off[0])
-        safe_strcpy(g_state.time_off, sizeof(g_state.time_off), (const char *)detail.time_off);
-
-    safe_strcpy(g_state.comment,       sizeof(g_state.comment),       (const char *)detail.comment);
-    safe_strcpy(g_state.notes,          sizeof(g_state.notes),          (const char *)detail.notes);
-    safe_strcpy(g_state.worked_name,    sizeof(g_state.worked_name),    (const char *)detail.worked_name);
-    safe_strcpy(g_state.tx_power,       sizeof(g_state.tx_power),       (const char *)detail.tx_power);
-    safe_strcpy(g_state.submode,        sizeof(g_state.submode),        (const char *)detail.submode);
-    safe_strcpy(g_state.contest_id,     sizeof(g_state.contest_id),     (const char *)detail.contest_id);
-    safe_strcpy(g_state.serial_sent,    sizeof(g_state.serial_sent),    (const char *)detail.serial_sent);
-    safe_strcpy(g_state.serial_rcvd,    sizeof(g_state.serial_rcvd),    (const char *)detail.serial_rcvd);
-    safe_strcpy(g_state.exchange_sent,  sizeof(g_state.exchange_sent),  (const char *)detail.exchange_sent);
-    safe_strcpy(g_state.exchange_rcvd,  sizeof(g_state.exchange_rcvd),  (const char *)detail.exchange_rcvd);
-    safe_strcpy(g_state.prop_mode,      sizeof(g_state.prop_mode),      (const char *)detail.prop_mode);
-    safe_strcpy(g_state.sat_name,       sizeof(g_state.sat_name),       (const char *)detail.sat_name);
-    safe_strcpy(g_state.sat_mode,       sizeof(g_state.sat_mode),       (const char *)detail.sat_mode);
-    safe_strcpy(g_state.iota,           sizeof(g_state.iota),           (const char *)detail.iota);
-    safe_strcpy(g_state.arrl_section,   sizeof(g_state.arrl_section),   (const char *)detail.arrl_section);
-    safe_strcpy(g_state.worked_state,   sizeof(g_state.worked_state),   (const char *)detail.worked_state);
-    safe_strcpy(g_state.worked_county,  sizeof(g_state.worked_county),  (const char *)detail.worked_county);
-    safe_strcpy(g_state.skcc,           sizeof(g_state.skcc),           (const char *)detail.skcc);
-
-    safe_strcpy(g_state.editing_local_id, sizeof(g_state.editing_local_id), q->local_id);
-
-    g_state.cursor_pos[FIELD_CALLSIGN] = (int)strlen(g_state.callsign);
-    g_state.cursor_pos[FIELD_RST_SENT] = (int)strlen(g_state.rst_sent);
-    g_state.cursor_pos[FIELD_RST_RCVD] = (int)strlen(g_state.rst_rcvd);
-    g_state.cursor_pos[FIELD_FREQ]     = (int)strlen(g_state.freq_mhz);
-    g_state.cursor_pos[FIELD_DATE]     = (int)strlen(g_state.date);
-    g_state.cursor_pos[FIELD_TIME]     = (int)strlen(g_state.time_str);
-
-    g_state.qso_list_focused = 0;
-    SetFocusField(FIELD_CALLSIGN);
-
-    SetStatus("QSO loaded for editing", 0);
+    ApplyLoadedQsoDetail(q->local_id, &detail);
 }
 
 /* ── FFI integration: Delete selected QSO ──────────────────────────────── */
+
+static unsigned __stdcall QsoDeleteThread(void *param)
+{
+    QsoDeleteArg *arg = (QsoDeleteArg *)param;
+    QsoDeleteResult *res = (QsoDeleteResult *)calloc(1, sizeof(QsoDeleteResult));
+    if (!res) { free(arg); return 0; }
+
+    safe_strcpy(res->callsign, sizeof(res->callsign), arg->callsign);
+    struct QsrClient *ffi_client = NULL;
+    if (AcquireFfiClient(&ffi_client)) {
+        res->ok = (g_backend.pf_delete_qso(ffi_client, arg->local_id) == 0);
+    }
+    if (ffi_client) {
+        ReleaseFfiClient();
+    }
+
+    if (!PostMessage(arg->hwnd, WM_APP_QSO_DELETE_DONE, 0, (LPARAM)res))
+        free(res);
+
+    free(arg);
+    return 0;
+}
 
 static void DeleteSelectedQso(void)
 {
@@ -1753,11 +2108,29 @@ static void DeleteSelectedQso(void)
 
     int ok = 0;
     if (g_backend.mode == BACKEND_FFI) {
-        struct QsrClient *ffi_client = NULL;
-        if (AcquireFfiClient(&ffi_client)) {
-            ok = (g_backend.pf_delete_qso(ffi_client, q->local_id) == 0);
-            ReleaseFfiClient();
+        if (g_state.qso_delete_in_progress) {
+            SetStatus("Delete already in progress", 1);
+            return;
         }
+        QsoDeleteArg *arg = (QsoDeleteArg *)calloc(1, sizeof(QsoDeleteArg));
+        if (!arg) {
+            SetStatus("Failed to allocate delete task", 1);
+            return;
+        }
+        arg->hwnd = g_state.hwnd;
+        safe_strcpy(arg->local_id, sizeof(arg->local_id), q->local_id);
+        safe_strcpy(arg->callsign, sizeof(arg->callsign), q->callsign);
+        g_state.qso_delete_in_progress = 1;
+        HANDLE h = (HANDLE)_beginthreadex(NULL, 0, QsoDeleteThread, arg, 0, NULL);
+        if (h) {
+            CloseHandle(h);
+        } else {
+            g_state.qso_delete_in_progress = 0;
+            free(arg);
+            SetStatus("Failed to start background delete", 1);
+            return;
+        }
+        return;
     } else {
         char cmd[256];
         snprintf(cmd, sizeof(cmd), "delete \"%s\" --json", q->local_id);
@@ -3374,6 +3747,33 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         SetTimer(hwnd, TIMER_ID, TIMER_MS, NULL);
         break;
 
+    case WM_APP_LOG_DONE:
+    {
+        LogQsoResultMsg *res = (LogQsoResultMsg *)lParam;
+        g_state.log_in_progress = 0;
+        if (res) {
+            if (res->success) {
+                if (res->is_update) {
+                    SetStatus("QSO updated", 0);
+                } else {
+                    char status_msg[128];
+                    snprintf(status_msg, sizeof(status_msg), "Logged %s on %s %s",
+                             res->callsign, BANDS[res->band_idx], MODES[res->mode_idx]);
+                    SetStatus(status_msg, 0);
+                }
+            } else {
+                SetStatus(res->is_update ? "Failed to update QSO" : "Failed to log QSO", 1);
+            }
+            free(res);
+        } else {
+            SetStatus("Failed to log QSO", 1);
+        }
+        ClearForm();
+        RefreshQsoList();
+        InvalidateRect(hwnd, NULL, FALSE);
+        break;
+    }
+
     case WM_APP_LOOKUP_DONE:
     {
         LookupResultMsg *res = (LookupResultMsg *)lParam;
@@ -3413,36 +3813,8 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
     {
         RigPollResult *res = (RigPollResult *)lParam;
         g_state.rig_poll_in_progress = 0;
-        if (res) {
-            if (g_state.rig_enabled) {
-                g_state.rig_connected = res->connected;
-                if (res->connected) {
-                    safe_strcpy(g_state.rig_freq_display, sizeof(g_state.rig_freq_display), res->freq_display);
-                    safe_strcpy(g_state.rig_freq_mhz, sizeof(g_state.rig_freq_mhz), res->freq_mhz);
-                    safe_strcpy(g_state.rig_band, sizeof(g_state.rig_band), res->band);
-                    safe_strcpy(g_state.rig_mode, sizeof(g_state.rig_mode), res->mode);
-                    /* Auto-fill band/mode/freq when callsign is empty */
-                    if (g_state.callsign[0] == 0) {
-                        for (int bi = 0; bi < NUM_BANDS; bi++) {
-                            if (_stricmp(BANDS[bi], res->band) == 0) {
-                                g_state.band_idx = bi;
-                                break;
-                            }
-                        }
-                        for (int mi = 0; mi < NUM_MODES; mi++) {
-                            if (_stricmp(MODES[mi], res->mode) == 0) {
-                                g_state.mode_idx = mi;
-                                ApplyModeDefaults();
-                                break;
-                            }
-                        }
-                        if (res->freq_display[0])
-                            safe_strcpy(g_state.freq_mhz, sizeof(g_state.freq_mhz), res->freq_display);
-                    }
-                }
-            }
-            free(res);
-        }
+        ApplyRigPollResult(res);
+        if (res) free(res);
         InvalidateRect(hwnd, NULL, FALSE);
         break;
     }
@@ -3458,6 +3830,64 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             g_state.recent_capacity = res->capacity;
             free(res);
         }
+        InvalidateRect(hwnd, NULL, FALSE);
+        break;
+    }
+
+    case WM_APP_WEATHER_DONE:
+    {
+        SpaceWeatherResult *res = (SpaceWeatherResult *)lParam;
+        g_state.weather_loading = 0;
+        if (res) {
+            if (res->has_data) {
+                g_state.k_index = res->k_index;
+                g_state.solar_flux = res->solar_flux;
+                g_state.sunspot_number = res->sunspot_number;
+                g_state.has_weather = 1;
+            }
+            free(res);
+        }
+        InvalidateRect(hwnd, NULL, FALSE);
+        break;
+    }
+
+    case WM_APP_QSO_DETAIL_DONE:
+    {
+        QsoDetailLoadResult *res = (QsoDetailLoadResult *)lParam;
+        g_state.qso_detail_loading = 0;
+        if (res) {
+            if (res->loaded) {
+                ApplyLoadedQsoDetail(res->local_id, &res->detail);
+            } else {
+                SetStatus("Failed to load QSO data", 1);
+            }
+            free(res);
+        } else {
+            SetStatus("Failed to load QSO data", 1);
+        }
+        InvalidateRect(hwnd, NULL, FALSE);
+        break;
+    }
+
+    case WM_APP_QSO_DELETE_DONE:
+    {
+        QsoDeleteResult *res = (QsoDeleteResult *)lParam;
+        g_state.qso_delete_in_progress = 0;
+        if (res) {
+            if (res->ok) {
+                char msg[128];
+                snprintf(msg, sizeof(msg), "Deleted QSO with %s", res->callsign);
+                SetStatus(msg, 0);
+            } else {
+                SetStatus("Failed to delete QSO", 1);
+            }
+            free(res);
+        } else {
+            SetStatus("Failed to delete QSO", 1);
+        }
+        g_state.qso_selected = -1;
+        g_state.confirm_delete_visible = 0;
+        RefreshQsoList();
         InvalidateRect(hwnd, NULL, FALSE);
         break;
     }

@@ -272,6 +272,12 @@ public static partial class EngineRuntimeDiscovery
 
             return client.Connected;
         }
+        catch (AggregateException ex) when (
+            ex.InnerException is SocketException ||
+            ex.InnerException is IOException)
+        {
+            return false;
+        }
         catch (SocketException)
         {
             return false;

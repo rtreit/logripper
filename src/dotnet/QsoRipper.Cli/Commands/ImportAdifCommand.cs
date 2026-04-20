@@ -9,7 +9,11 @@ internal static class ImportAdifCommand
 {
     private const int ChunkSize = 65536;
 
-    public static async Task<int> RunAsync(GrpcChannel channel, string filePath, bool refresh)
+    public static async Task<int> RunAsync(
+        GrpcChannel channel,
+        string filePath,
+        bool refresh,
+        CancellationToken cancellationToken = default)
     {
         if (!File.Exists(filePath))
         {
@@ -18,16 +22,19 @@ internal static class ImportAdifCommand
         }
 
         var client = new LogbookService.LogbookServiceClient(channel);
-        using var call = client.ImportAdif();
+        using var call = client.ImportAdif(cancellationToken: cancellationToken);
         await using var input = File.OpenRead(filePath);
 
-        await foreach (var request in ReadRequestsAsync(input, refresh))
+        await foreach (var request in ReadRequestsAsync(input, refresh, cancellationToken))
         {
+            cancellationToken.ThrowIfCancellationRequested();
+#pragma warning disable CA2016 // gRPC stream writer doesn't expose a CancellationToken overload
             await call.RequestStream.WriteAsync(request);
+#pragma warning restore CA2016
         }
 
-        await call.RequestStream.CompleteAsync();
-        var response = await call.ResponseAsync;
+        await call.RequestStream.CompleteAsync().WaitAsync(cancellationToken);
+        var response = await call.ResponseAsync.WaitAsync(cancellationToken);
 
         Console.WriteLine($"Imported:  {response.RecordsImported}");
         Console.WriteLine($"Updated:   {response.RecordsUpdated}");

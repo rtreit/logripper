@@ -4,6 +4,7 @@ use std::time::Duration;
 
 use tokio::sync::{mpsc, watch};
 use tokio::time;
+use tonic::transport::Channel;
 
 use crate::app::{CallsignInfo, RecentQso, RigInfo, SpaceWeatherInfo};
 use crate::grpc;
@@ -91,7 +92,7 @@ pub(crate) fn spawn_clock_task(tx: mpsc::UnboundedSender<AppEvent>) {
 pub(crate) fn spawn_lookup_task(
     mut lookup_rx: watch::Receiver<String>,
     event_tx: mpsc::UnboundedSender<AppEvent>,
-    endpoint: String,
+    channel: Channel,
 ) {
     tokio::spawn(async move {
         loop {
@@ -108,10 +109,10 @@ pub(crate) fn spawn_lookup_task(
             if current != callsign {
                 continue;
             }
-            let result = match grpc::create_channel(&endpoint).await {
-                Ok(ch) => grpc::lookup_callsign(ch, &callsign).await.ok().flatten(),
-                Err(_) => None,
-            };
+            let result = grpc::lookup_callsign(channel.clone(), &callsign)
+                .await
+                .ok()
+                .flatten();
             if event_tx.send(AppEvent::LookupResult(result)).is_err() {
                 break;
             }
@@ -126,7 +127,7 @@ pub(crate) fn spawn_lookup_task(
 pub(crate) fn spawn_rig_poll_task(
     mut enabled_rx: watch::Receiver<bool>,
     event_tx: mpsc::UnboundedSender<AppEvent>,
-    endpoint: String,
+    channel: Channel,
 ) {
     tokio::spawn(async move {
         let mut interval = time::interval(Duration::from_secs(1));
@@ -139,10 +140,7 @@ pub(crate) fn spawn_rig_poll_task(
             if !enabled {
                 continue;
             }
-            let result = match grpc::create_channel(&endpoint).await {
-                Ok(ch) => grpc::get_rig_snapshot(ch).await.ok().flatten(),
-                Err(_) => None,
-            };
+            let result = grpc::get_rig_snapshot(channel.clone()).await.ok().flatten();
             if event_tx.send(AppEvent::RigSnapshot(result)).is_err() {
                 break;
             }

@@ -81,6 +81,7 @@ if(BUILD_TESTING)
     add_executable(qsoripper-win32-cli-exitcode-regression
         tests/cli_exit_code_regression.c
         src/main.c
+        src/backend_ffi_gate.c
     )
 
     target_include_directories(qsoripper-win32-cli-exitcode-regression PRIVATE ${FFI_INCLUDE})
@@ -103,5 +104,30 @@ if(BUILD_TESTING)
     add_test(
         NAME win32-cli-exitcode-regression
         COMMAND qsoripper-win32-cli-exitcode-regression
+    )
+
+    add_executable(qsoripper-win32-issue-regressions
+        tests/win32_issue_regressions.c
+        src/main.c
+        src/backend_ffi_gate.c
+    )
+    target_include_directories(qsoripper-win32-issue-regressions PRIVATE ${FFI_INCLUDE})
+    target_link_libraries(qsoripper-win32-issue-regressions PRIVATE
+        user32 gdi32 shell32 comctl32
+    )
+    target_compile_definitions(qsoripper-win32-issue-regressions PRIVATE
+        UNICODE _UNICODE QSORIPPER_WIN32_TESTING
+    )
+    if(MSVC)
+        target_compile_options(qsoripper-win32-issue-regressions PRIVATE
+            /W4
+            /analyze
+        )
+    else()
+        target_compile_options(qsoripper-win32-issue-regressions PRIVATE -Wall -Wextra)
+    endif()
+    add_test(
+        NAME win32-issue-regressions
+        COMMAND qsoripper-win32-issue-regressions
     )
 endif()
