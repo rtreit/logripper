@@ -17,7 +17,7 @@ use ratatui::{backend::CrosstermBackend, Terminal};
 use tokio::sync::{mpsc, watch};
 
 use app::App;
-use events::{spawn_clock_task, spawn_key_task, spawn_lookup_task, spawn_rig_poll_task, AppEvent};
+use events::{spawn_clock_task, spawn_key_task, spawn_lookup_task, spawn_rig_poll_task, spawn_space_weather_task, AppEvent};
 use form::{AdvancedTab, Field, LogForm, BANDS, MODES};
 
 const ENGINE_ENV_VAR: &str = "QSORIPPER_ENGINE";
@@ -143,17 +143,9 @@ async fn run<B: ratatui::backend::Backend>(
     spawn_clock_task(event_tx.clone());
     spawn_lookup_task(lookup_rx, event_tx.clone(), channel.clone());
     spawn_rig_poll_task(rig_enabled_rx, event_tx.clone(), channel.clone());
+    spawn_space_weather_task(event_tx.clone(), channel.clone());
 
-    // Prefetch space weather and recent QSOs on startup.
-    {
-        let tx = event_tx.clone();
-        let channel = channel.clone();
-        tokio::spawn(async move {
-            if let Ok(sw) = grpc::get_space_weather(channel).await {
-                let _ = tx.send(AppEvent::SpaceWeather(sw));
-            }
-        });
-    }
+    // Prefetch recent QSOs on startup.
     {
         let tx = event_tx.clone();
         let channel = channel.clone();
@@ -203,7 +195,9 @@ fn handle_event_with_channel(
         }
         AppEvent::LookupResult(result) => apply_lookup_result(app, result),
         AppEvent::SpaceWeather(sw) => {
-            app.space_weather = sw;
+            if sw.is_some() {
+                app.space_weather = sw;
+            }
         }
         AppEvent::RigSnapshot(rig) => {
             apply_rig_snapshot(app, rig);

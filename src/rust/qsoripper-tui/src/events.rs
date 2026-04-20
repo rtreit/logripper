@@ -120,6 +120,30 @@ pub(crate) fn spawn_lookup_task(
     });
 }
 
+/// Spawn a background task that fetches space weather once per hour.
+///
+/// Fires immediately on startup and then every 3600 seconds. Errors and empty responses
+/// are silently discarded so stale data is never cleared by a transient failure.
+pub(crate) fn spawn_space_weather_task(
+    event_tx: mpsc::UnboundedSender<AppEvent>,
+    channel: Channel,
+) {
+    tokio::spawn(async move {
+        let mut interval = time::interval(Duration::from_secs(3600));
+        loop {
+            interval.tick().await;
+            if event_tx.is_closed() {
+                break;
+            }
+            if let Ok(Some(sw)) = grpc::get_space_weather(channel.clone()).await {
+                if event_tx.send(AppEvent::SpaceWeather(Some(sw))).is_err() {
+                    break;
+                }
+            }
+        }
+    });
+}
+
 /// Spawn a rig control polling task that fetches rig snapshots every second.
 ///
 /// The poll is gated by `enabled_rx`: when the value is `false`, the task pauses
