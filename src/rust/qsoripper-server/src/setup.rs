@@ -1110,8 +1110,9 @@ impl PersistedSyncConfig {
 
     fn from_proto(sync_config: &SyncConfig) -> Self {
         let conflict_policy = match ConflictPolicy::try_from(sync_config.conflict_policy) {
+            Ok(ConflictPolicy::LastWriteWins) => "last_write_wins".to_string(),
             Ok(ConflictPolicy::FlagForReview) => "flag_for_review".to_string(),
-            _ => "last_write_wins".to_string(),
+            _ => "flag_for_review".to_string(),
         };
         Self {
             auto_sync_enabled: sync_config.auto_sync_enabled,
@@ -3090,6 +3091,17 @@ station_callsign = "K7RND"
 
         let back = persisted.to_proto();
         assert_eq!(300, back.sync_interval_seconds);
+    }
+
+    #[test]
+    fn persisted_sync_config_treats_unspecified_policy_as_flag_for_review() {
+        let proto = SyncConfig {
+            conflict_policy: ConflictPolicy::Unspecified as i32,
+            ..Default::default()
+        };
+
+        let persisted = super::PersistedSyncConfig::from_proto(&proto);
+        assert_eq!("flag_for_review", persisted.conflict_policy);
     }
 
     #[test]

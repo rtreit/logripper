@@ -109,7 +109,8 @@ internal sealed class ManagedEngineState
         _hasQrzXmlPassword = _qrzXmlPassword is not null;
         _qrzLogbookApiKey = NormalizeOptional(_persistedSetup.QrzLogbookApiKey);
         _hasQrzLogbookApiKey = _qrzLogbookApiKey is not null;
-        _syncConfig = _persistedSetup.SyncConfig.Clone();
+        _syncConfig = NormalizeSyncConfig(_persistedSetup.SyncConfig);
+        _persistedSetup.SyncConfig = _syncConfig.Clone();
         _rigControl = _persistedSetup.RigControl?.Clone();
         _stationProfiles = _persistedSetup.StationProfiles
             .Select(static entry => new ManagedPersistedStationProfile
@@ -318,7 +319,7 @@ internal sealed class ManagedEngineState
 
             if (request.SyncConfig is not null)
             {
-                _syncConfig = request.SyncConfig.Clone();
+                _syncConfig = NormalizeSyncConfig(request.SyncConfig);
                 _persistedSetup.SyncConfig = _syncConfig.Clone();
             }
 
@@ -1709,6 +1710,17 @@ internal sealed class ManagedEngineState
     private static string? NormalizeOptional(string? value)
     {
         return string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+    }
+
+    private static SyncConfig NormalizeSyncConfig(SyncConfig config)
+    {
+        var normalized = config.Clone();
+        if (normalized.ConflictPolicy == ConflictPolicy.Unspecified)
+        {
+            normalized.ConflictPolicy = ConflictPolicy.FlagForReview;
+        }
+
+        return normalized;
     }
 
     private static bool IsTimestampUnset(Timestamp? value)
