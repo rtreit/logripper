@@ -145,6 +145,19 @@ internal static class QrzResponseParser
             || reason.Contains("api key required", StringComparison.OrdinalIgnoreCase)
             || reason.Contains("access denied", StringComparison.OrdinalIgnoreCase);
     }
+
+    /// <summary>
+    /// Detect QRZ "logid does not exist"-style failure reasons. The DELETE
+    /// path treats these as success so the queued-remote-delete loop is
+    /// idempotent against rows that were already removed remotely.
+    /// </summary>
+    internal static bool IsNotFoundError(string reason)
+    {
+        return reason.Contains("not found", StringComparison.OrdinalIgnoreCase)
+            || reason.Contains("no such", StringComparison.OrdinalIgnoreCase)
+            || reason.Contains("does not exist", StringComparison.OrdinalIgnoreCase)
+            || reason.Contains("no record", StringComparison.OrdinalIgnoreCase);
+    }
 }
 
 /// <summary>
