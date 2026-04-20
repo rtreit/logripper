@@ -7,6 +7,14 @@ option csharp_namespace = "QsoRipper.Services";
 message DeleteQsoResponse {
   bool success = 1;
   optional string error = 2;
+  // Deprecated under the soft-delete model: remote delete is now queued
+  // and executed by the next sync's Phase 2 rather than synchronously
+  // during DeleteQso. These fields remain populated only when the engine
+  // performs an immediate remote delete (legacy path, may be removed).
   bool qrz_delete_success = 3;
   optional string qrz_delete_error = 4;
+  // True when delete_from_qrz=true was honored and the row was marked
+  // pending_remote_delete for the next sync to process. A subsequent
+  // RestoreQso before the next sync cancels the queued delete.
+  bool remote_delete_queued = 5;
 }
