@@ -7,6 +7,26 @@ namespace QsoRipper.Gui.Tests;
 public sealed class RecentQsoItemViewModelTests
 {
     [Fact]
+    public void GridRstColumnsUseStructuredRstWhenRawIsMissing()
+    {
+        var item = RecentQsoItemViewModel.FromQso(new QsoRecord
+        {
+            LocalId = "qso-rst",
+            WorkedCallsign = "PW5K",
+            StationCallsign = "K7RND",
+            UtcTimestamp = Timestamp.FromDateTimeOffset(new DateTimeOffset(2026, 4, 20, 3, 30, 0, TimeSpan.Zero)),
+            Band = Band._20M,
+            Mode = Mode.Cw,
+            RstSent = new RstReport { Readability = 5, Strength = 3, Tone = 9 },
+            RstReceived = new RstReport { Readability = 5, Strength = 9, Tone = 9 },
+        });
+
+        Assert.Equal("539", item.RstSent);
+        Assert.Equal("599", item.RstReceived);
+        Assert.Equal("539/599", item.Rst);
+    }
+
+    [Fact]
     public void SortKeysTrackEditableFieldChanges()
     {
         var item = RecentQsoItemViewModel.FromQso(new QsoRecord

@@ -76,6 +76,10 @@ internal sealed partial class MainWindow : Window
             ClampToCurrentScreen();
             if (!IsInspectionMode)
             {
+                // Prime menu access keys immediately so it completes before
+                // the user can interact. Must run before the async first-run
+                // check which yields the UI thread.
+                Dispatcher.UIThread.Post(PrimeMenuAccessKeys, DispatcherPriority.Background);
                 GuiPerformanceTrace.Write(nameof(OnOpened) + ".afterScheduleMenuAccessKeys");
                 ApplyPersistedGridLayout();
                 GuiPerformanceTrace.Write(nameof(OnOpened) + ".afterApplyPersistedGridLayout");
@@ -86,8 +90,6 @@ internal sealed partial class MainWindow : Window
                     await vm.CheckFirstRunAsync();
                     GuiPerformanceTrace.Write(nameof(OnOpened) + ".afterCheckFirstRun");
                 }
-
-                Dispatcher.UIThread.Post(PrimeMenuAccessKeys, DispatcherPriority.Background);
             }
 
             EnsureColumnHeadersFit();
@@ -182,7 +184,7 @@ internal sealed partial class MainWindow : Window
         {
             if (_viewModel.IsFullQsoCardOpen)
             {
-                _viewModel.ToggleFullQsoCardCommand.Execute(null);
+                _viewModel.FullQsoCard?.CloseCommand.Execute(null);
                 e.Handled = true;
                 return;
             }
@@ -1133,6 +1135,11 @@ internal sealed partial class MainWindow : Window
         {
             FocusFirstInPanel<CheckBox>("ColumnChooserPanel");
         }
+        else if (e.PropertyName == nameof(MainWindowViewModel.IsFullQsoCardOpen)
+            && _viewModel?.IsFullQsoCardOpen == true)
+        {
+            FocusFullQsoCard();
+        }
         else if ((e.PropertyName == nameof(MainWindowViewModel.IsHelpOpen) && _viewModel?.IsHelpOpen == false)
             || (e.PropertyName == nameof(MainWindowViewModel.IsFullQsoCardOpen) && _viewModel?.IsFullQsoCardOpen == false)
             || (e.PropertyName == nameof(MainWindowViewModel.IsCallsignCardOpen) && _viewModel?.IsCallsignCardOpen == false)
@@ -1140,6 +1147,16 @@ internal sealed partial class MainWindow : Window
         {
             RestoreLastFocusArea();
         }
+    }
+
+    private void FocusFullQsoCard()
+    {
+        Dispatcher.UIThread.Post(
+            () => this.GetVisualDescendants()
+                .OfType<FullQsoCardView>()
+                .LastOrDefault()?
+                .FocusInitialField(),
+            DispatcherPriority.Background);
     }
 
     private void OnRecentQsosPropertyChanged(object? sender, PropertyChangedEventArgs e)

@@ -3,94 +3,542 @@
              xmlns:vm="using:QsoRipper.Gui.ViewModels"
              x:Class="QsoRipper.Gui.Views.FullQsoCardView"
              x:DataType="vm:FullQsoCardViewModel">
+  <UserControl.KeyBindings>
+    <KeyBinding Gesture="Ctrl+Enter" Command="{Binding SaveCommand}" />
+    <KeyBinding Gesture="Escape" Command="{Binding CloseCommand}" />
+  </UserControl.KeyBindings>
+
+  <UserControl.Styles>
+    <Style Selector="TextBlock.fieldLabel">
+      <Setter Property="Opacity" Value="0.72" />
+      <Setter Property="FontSize" Value="11" />
+      <Setter Property="Margin" Value="0,0,0,4" />
+    </Style>
+
+    <Style Selector="TextBox.mono, ComboBox.mono">
+      <Setter Property="FontFamily" Value="Cascadia Mono, Consolas, monospace" />
+    </Style>
+
+    <Style Selector="Border.infoPanel">
+      <Setter Property="CornerRadius" Value="8" />
+      <Setter Property="Padding" Value="10" />
+      <Setter Property="Background" Value="{DynamicResource SystemControlBackgroundAltMediumLowBrush}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource SystemControlForegroundBaseMediumLowBrush}" />
+      <Setter Property="BorderThickness" Value="1" />
+    </Style>
+  </UserControl.Styles>
 
   <Border Background="{DynamicResource SystemControlBackgroundAltHighBrush}"
-          CornerRadius="8" Padding="20" MinWidth="480" MaxWidth="560"
+          CornerRadius="12"
+          Width="1120"
+          Height="720"
+          Padding="20"
           BorderBrush="{DynamicResource SystemControlForegroundBaseMediumLowBrush}"
-          BorderThickness="1" BoxShadow="0 8 24 0 #40000000">
+          BorderThickness="1"
+          BoxShadow="0 12 36 0 #40000000">
     <DockPanel>
-      <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Spacing="8" Margin="0,0,0,12">
-        <TextBlock Text="Full QSO Entry" FontSize="16" FontWeight="SemiBold"
-                   VerticalAlignment="Center" />
-        <TextBlock Text="(Esc to close)" FontSize="11" Opacity="0.5"
-                   VerticalAlignment="Center" />
-      </StackPanel>
+      <Grid DockPanel.Dock="Top"
+            ColumnDefinitions="*,Auto"
+            RowDefinitions="Auto,Auto"
+            ColumnSpacing="12"
+            Margin="0,0,0,14">
+        <StackPanel Grid.Row="0" Grid.Column="0" Spacing="4">
+          <StackPanel Orientation="Horizontal" Spacing="8">
+            <TextBlock Text="{Binding CardTitle}" FontSize="20" FontWeight="SemiBold" />
+            <Border Classes="infoPanel" Padding="8,2">
+              <TextBlock Text="{Binding ModeBadgeText}" FontSize="11" />
+            </Border>
+          </StackPanel>
+          <TextBlock Text="{Binding CardSubtitle}" Opacity="0.72" />
+          <TextBlock Text="{Binding SectionHint}" FontSize="11" Opacity="0.6" />
+        </StackPanel>
 
-      <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal"
-                  Spacing="10" HorizontalAlignment="Right" Margin="0,12,0,0">
-        <Button Content="Cancel" MinWidth="80" Command="{Binding CloseCommand}" />
-        <Button Content="Log QSO" MinWidth="80" Classes="accent"
-                Command="{Binding Logger.LogQsoCommand}" />
-      </StackPanel>
+        <TextBlock Grid.Row="0"
+                   Grid.Column="1"
+                   Text="{Binding StatusText}"
+                   Foreground="#FFB347"
+                   VerticalAlignment="Top"
+                   TextAlignment="Right"
+                   MaxWidth="260"
+                   TextWrapping="Wrap" />
+      </Grid>
 
-      <ScrollViewer VerticalScrollBarVisibility="Auto">
-        <Grid ColumnDefinitions="Auto,*,16,Auto,*"
-              RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto"
-              RowSpacing="6" ColumnSpacing="8">
-          <!-- Left column -->
-          <TextBlock Grid.Row="0" Grid.Column="0" Text="Callsign" Opacity="0.6" VerticalAlignment="Center" />
-          <TextBox Grid.Row="0" Grid.Column="1"
-                   Text="{Binding Logger.Callsign, Mode=TwoWay}"
-                   FontWeight="SemiBold" />
+      <Grid DockPanel.Dock="Bottom"
+            ColumnDefinitions="*,Auto,Auto"
+            ColumnSpacing="10"
+            Margin="0,14,0,0">
+        <Button Grid.Column="1"
+                Content="Cancel"
+                MinWidth="90"
+                Command="{Binding CloseCommand}" />
+        <Button Grid.Column="2"
+                Content="{Binding SaveButtonText}"
+                MinWidth="120"
+                Classes="accent"
+                IsEnabled="{Binding !IsSaving}"
+                Command="{Binding SaveCommand}" />
+      </Grid>
 
-          <TextBlock Grid.Row="1" Grid.Column="0" Text="Band" Opacity="0.6" VerticalAlignment="Center" />
-          <TextBlock Grid.Row="1" Grid.Column="1"
-                     Text="{Binding Logger.BandLabel}" FontSize="13"
-                     Foreground="#FFB347" VerticalAlignment="Center" />
+      <TabControl x:Name="CardTabs"
+                  SelectionChanged="OnCardTabsSelectionChanged"
+                  SelectedIndex="{Binding SelectedTabIndex, Mode=TwoWay}">
+        <TabItem Header="Core">
+          <ScrollViewer VerticalScrollBarVisibility="Auto">
+            <Grid ColumnDefinitions="*,*" ColumnSpacing="18" Margin="0,8,0,0">
+              <StackPanel Spacing="10">
+                <StackPanel>
+                  <TextBlock Classes="fieldLabel" Text="Worked callsign" />
+                  <TextBox x:Name="WorkedCallsignBox"
+                           Text="{Binding WorkedCallsign, Mode=TwoWay}"
+                           FontSize="18"
+                           FontWeight="SemiBold"
+                           Classes="mono" />
+                </StackPanel>
 
-          <TextBlock Grid.Row="2" Grid.Column="0" Text="Mode" Opacity="0.6" VerticalAlignment="Center" />
-          <TextBlock Grid.Row="2" Grid.Column="1"
-                     Text="{Binding Logger.ModeLabel}" FontSize="13"
-                     Foreground="#77DD77" VerticalAlignment="Center" />
+                <Grid ColumnDefinitions="*,*" ColumnSpacing="10">
+                  <StackPanel>
+                    <TextBlock Classes="fieldLabel" Text="UTC start" />
+                    <TextBox Text="{Binding UtcStartText, Mode=TwoWay}" Classes="mono" />
+                  </StackPanel>
+                  <StackPanel Grid.Column="1">
+                    <TextBlock Classes="fieldLabel" Text="UTC end" />
+                    <TextBox Text="{Binding UtcEndText, Mode=TwoWay}" Classes="mono" />
+                  </StackPanel>
+                </Grid>
 
-          <TextBlock Grid.Row="3" Grid.Column="0" Text="Freq" Opacity="0.6" VerticalAlignment="Center" />
-          <TextBox Grid.Row="3" Grid.Column="1"
-                   Text="{Binding Logger.FrequencyMhz, Mode=TwoWay}"
-                   FontFamily="Cascadia Mono, Consolas, monospace" />
+                <Grid ColumnDefinitions="*,*" ColumnSpacing="10">
+                  <StackPanel>
+                    <TextBlock Classes="fieldLabel" Text="Band" />
+                    <ComboBox ItemsSource="{Binding BandOptions}"
+                              SelectedItem="{Binding SelectedBand, Mode=TwoWay}" />
+                  </StackPanel>
+                  <StackPanel Grid.Column="1">
+                    <TextBlock Classes="fieldLabel" Text="Mode" />
+                    <ComboBox ItemsSource="{Binding ModeOptions}"
+                              SelectedItem="{Binding SelectedMode, Mode=TwoWay}" />
+                  </StackPanel>
+                </Grid>
 
-          <TextBlock Grid.Row="4" Grid.Column="0" Text="RST Sent" Opacity="0.6" VerticalAlignment="Center" />
-          <TextBox Grid.Row="4" Grid.Column="1"
-                   Text="{Binding Logger.RstSent, Mode=TwoWay}" />
+                <Grid ColumnDefinitions="*,*" ColumnSpacing="10">
+                  <StackPanel>
+                    <TextBlock Classes="fieldLabel" Text="Frequency (MHz)" />
+                    <TextBox Text="{Binding FrequencyMhz, Mode=TwoWay}" Classes="mono" />
+                  </StackPanel>
+                  <StackPanel Grid.Column="1">
+                    <TextBlock Classes="fieldLabel" Text="Submode" />
+                    <TextBox Text="{Binding Submode, Mode=TwoWay}" Classes="mono" />
+                  </StackPanel>
+                </Grid>
 
-          <TextBlock Grid.Row="5" Grid.Column="0" Text="RST Rcvd" Opacity="0.6" VerticalAlignment="Center" />
-          <TextBox Grid.Row="5" Grid.Column="1"
-                   Text="{Binding Logger.RstRcvd, Mode=TwoWay}" />
+                <Grid ColumnDefinitions="*,*" ColumnSpacing="10">
+                  <StackPanel>
+                    <TextBlock Classes="fieldLabel" Text="RST sent" />
+                    <TextBox Text="{Binding RstSent, Mode=TwoWay}" Classes="mono" />
+                  </StackPanel>
+                  <StackPanel Grid.Column="1">
+                    <TextBlock Classes="fieldLabel" Text="RST received" />
+                    <TextBox Text="{Binding RstReceived, Mode=TwoWay}" Classes="mono" />
+                  </StackPanel>
+                </Grid>
+              </StackPanel>
 
-          <TextBlock Grid.Row="6" Grid.Column="0" Text="Comment" Opacity="0.6" VerticalAlignment="Center" />
-          <TextBox Grid.Row="6" Grid.Column="1"
-                   Text="{Binding Logger.Comment, Mode=TwoWay}" />
+              <StackPanel Grid.Column="1" Spacing="10">
+                <StackPanel>
+                  <TextBlock Classes="fieldLabel" Text="Station callsign" />
+                  <TextBox Text="{Binding StationCallsign, Mode=TwoWay}" Classes="mono" />
+                </StackPanel>
 
-          <TextBlock Grid.Row="7" Grid.Column="0" Text="Notes" Opacity="0.6" VerticalAlignment="Center" />
-          <TextBox Grid.Row="7" Grid.Column="1"
-                   Text="{Binding Logger.Notes, Mode=TwoWay}" AcceptsReturn="True"
-                   Height="48" TextWrapping="Wrap" />
+                <StackPanel>
+                  <TextBlock Classes="fieldLabel" Text="TX power" />
+                  <TextBox Text="{Binding TxPower, Mode=TwoWay}" />
+                </StackPanel>
 
-          <!-- Right column -->
-          <TextBlock Grid.Row="0" Grid.Column="3" Text="Name" Opacity="0.6" VerticalAlignment="Center" />
-          <TextBox Grid.Row="0" Grid.Column="4"
-                   Text="{Binding Name, Mode=TwoWay}" />
+                <StackPanel>
+                  <TextBlock Classes="fieldLabel" Text="Comment" />
+                  <TextBox Text="{Binding Comment, Mode=TwoWay}" AcceptsReturn="True" Height="88" TextWrapping="Wrap" />
+                </StackPanel>
 
-          <TextBlock Grid.Row="1" Grid.Column="3" Text="Grid" Opacity="0.6" VerticalAlignment="Center" />
-          <TextBox Grid.Row="1" Grid.Column="4"
-                   Text="{Binding GridSquare, Mode=TwoWay}" />
+                <StackPanel>
+                  <TextBlock Classes="fieldLabel" Text="Notes" />
+                  <TextBox Text="{Binding Notes, Mode=TwoWay}" AcceptsReturn="True" Height="140" TextWrapping="Wrap" />
+                </StackPanel>
+              </StackPanel>
+            </Grid>
+          </ScrollViewer>
+        </TabItem>
 
-          <TextBlock Grid.Row="2" Grid.Column="3" Text="Country" Opacity="0.6" VerticalAlignment="Center" />
-          <TextBox Grid.Row="2" Grid.Column="4"
-                   Text="{Binding Country, Mode=TwoWay}" />
+        <TabItem Header="Lookup">
+          <ScrollViewer VerticalScrollBarVisibility="Auto">
+            <Grid ColumnDefinitions="*,*" ColumnSpacing="18" Margin="0,8,0,0">
+              <StackPanel Spacing="10">
+                <StackPanel>
+                  <TextBlock Classes="fieldLabel" Text="Worked operator callsign" />
+                  <TextBox x:Name="LookupOperatorCallsignBox"
+                           Text="{Binding WorkedOperatorCallsign, Mode=TwoWay}"
+                           Classes="mono" />
+                </StackPanel>
 
-          <TextBlock Grid.Row="3" Grid.Column="3" Text="State" Opacity="0.6" VerticalAlignment="Center" />
-          <TextBox Grid.Row="3" Grid.Column="4"
-                   Text="{Binding State, Mode=TwoWay}" />
+                <StackPanel>
+                  <TextBlock Classes="fieldLabel" Text="Worked operator name" />
+                  <TextBox Text="{Binding WorkedOperatorName, Mode=TwoWay}" />
+                </StackPanel>
 
-          <TextBlock Grid.Row="4" Grid.Column="3" Text="Contest" Opacity="0.6" VerticalAlignment="Center" />
-          <TextBox Grid.Row="4" Grid.Column="4"
-                   Text="{Binding Logger.ContestId, Mode=TwoWay}" />
+                <Grid ColumnDefinitions="*,*" ColumnSpacing="10">
+                  <StackPanel>
+                    <TextBlock Classes="fieldLabel" Text="Grid" />
+                    <TextBox Text="{Binding WorkedGrid, Mode=TwoWay}" Classes="mono" />
+                  </StackPanel>
+                  <StackPanel Grid.Column="1">
+                    <TextBlock Classes="fieldLabel" Text="Country" />
+                    <TextBox Text="{Binding WorkedCountry, Mode=TwoWay}" />
+                  </StackPanel>
+                </Grid>
 
-          <TextBlock Grid.Row="5" Grid.Column="3" Text="Exchange" Opacity="0.6" VerticalAlignment="Center" />
-          <TextBox Grid.Row="5" Grid.Column="4"
-                   Text="{Binding Logger.ExchangeSent, Mode=TwoWay}" />
-        </Grid>
-      </ScrollViewer>
+                <Grid ColumnDefinitions="*,*" ColumnSpacing="10">
+                  <StackPanel>
+                    <TextBlock Classes="fieldLabel" Text="DXCC" />
+                    <TextBox Text="{Binding WorkedDxcc, Mode=TwoWay}" Classes="mono" />
+                  </StackPanel>
+                  <StackPanel Grid.Column="1">
+                    <TextBlock Classes="fieldLabel" Text="State / province" />
+                    <TextBox Text="{Binding WorkedState, Mode=TwoWay}" />
+                  </StackPanel>
+                </Grid>
+
+                <Grid ColumnDefinitions="*,*" ColumnSpacing="10">
+                  <StackPanel>
+                    <TextBlock Classes="fieldLabel" Text="CQ zone" />
+                    <TextBox Text="{Binding WorkedCqZone, Mode=TwoWay}" Classes="mono" />
+                  </StackPanel>
+                  <StackPanel Grid.Column="1">
+                    <TextBlock Classes="fieldLabel" Text="ITU zone" />
+                    <TextBox Text="{Binding WorkedItuZone, Mode=TwoWay}" Classes="mono" />
+                  </StackPanel>
+                </Grid>
+              </StackPanel>
+
+              <StackPanel Grid.Column="1" Spacing="10">
+                <StackPanel>
+                  <TextBlock Classes="fieldLabel" Text="County" />
+                  <TextBox Text="{Binding WorkedCounty, Mode=TwoWay}" />
+                </StackPanel>
+
+                <Grid ColumnDefinitions="*,*" ColumnSpacing="10">
+                  <StackPanel>
+                    <TextBlock Classes="fieldLabel" Text="IOTA" />
+                    <TextBox Text="{Binding WorkedIota, Mode=TwoWay}" Classes="mono" />
+                  </StackPanel>
+                  <StackPanel Grid.Column="1">
+                    <TextBlock Classes="fieldLabel" Text="Continent" />
+                    <TextBox Text="{Binding WorkedContinent, Mode=TwoWay}" Classes="mono" />
+                  </StackPanel>
+                </Grid>
+
+                <Grid ColumnDefinitions="*,*" ColumnSpacing="10">
+                  <StackPanel>
+                    <TextBlock Classes="fieldLabel" Text="ARRL section" />
+                    <TextBox Text="{Binding WorkedArrlSection, Mode=TwoWay}" Classes="mono" />
+                  </StackPanel>
+                  <StackPanel Grid.Column="1">
+                    <TextBlock Classes="fieldLabel" Text="SKCC" />
+                    <TextBox Text="{Binding Skcc, Mode=TwoWay}" Classes="mono" />
+                  </StackPanel>
+                </Grid>
+
+                <Border Classes="infoPanel">
+                  <StackPanel Spacing="4">
+                    <TextBlock Text="Lookup Summary" FontWeight="SemiBold" />
+                    <TextBlock Text="{Binding WorkedOperatorName}" />
+                    <TextBlock Text="{Binding WorkedCountry}" Opacity="0.75" />
+                    <TextBlock Text="{Binding WorkedGrid}" Classes="mono" Opacity="0.75" />
+                  </StackPanel>
+                </Border>
+              </StackPanel>
+            </Grid>
+          </ScrollViewer>
+        </TabItem>
+
+        <TabItem Header="QSL">
+          <ScrollViewer VerticalScrollBarVisibility="Auto">
+            <Grid ColumnDefinitions="*,*" ColumnSpacing="18" Margin="0,8,0,0">
+              <StackPanel Spacing="10">
+                <Grid ColumnDefinitions="*,*" ColumnSpacing="10">
+                  <StackPanel>
+                    <TextBlock Classes="fieldLabel" Text="QSL sent status" />
+                    <ComboBox x:Name="QslSentStatusBox"
+                              ItemsSource="{Binding QslStatusOptions}"
+                              SelectedItem="{Binding SelectedQslSentStatus, Mode=TwoWay}" />
+                  </StackPanel>
+                  <StackPanel Grid.Column="1">
+                    <TextBlock Classes="fieldLabel" Text="QSL sent date" />
+                    <TextBox Text="{Binding QslSentDateText, Mode=TwoWay}" Classes="mono" />
+                  </StackPanel>
+                </Grid>
+
+                <Grid ColumnDefinitions="*,*" ColumnSpacing="10">
+                  <StackPanel>
+                    <TextBlock Classes="fieldLabel" Text="QSL received status" />
+                    <ComboBox ItemsSource="{Binding QslStatusOptions}"
+                              SelectedItem="{Binding SelectedQslReceivedStatus, Mode=TwoWay}" />
+                  </StackPanel>
+                  <StackPanel Grid.Column="1">
+                    <TextBlock Classes="fieldLabel" Text="QSL received date" />
+                    <TextBox Text="{Binding QslReceivedDateText, Mode=TwoWay}" Classes="mono" />
+                  </StackPanel>
+                </Grid>
+
+                <Border Classes="infoPanel">
+                  <Grid ColumnDefinitions="*,*" RowDefinitions="Auto,Auto" RowSpacing="10" ColumnSpacing="10">
+                    <CheckBox Content="LoTW sent"
+                              IsThreeState="True"
+                              IsChecked="{Binding LotwSent, Mode=TwoWay}" />
+                    <CheckBox Grid.Column="1"
+                              Content="LoTW received"
+                              IsThreeState="True"
+                              IsChecked="{Binding LotwReceived, Mode=TwoWay}" />
+                    <CheckBox Grid.Row="1"
+                              Content="eQSL sent"
+                              IsThreeState="True"
+                              IsChecked="{Binding EqslSent, Mode=TwoWay}" />
+                    <CheckBox Grid.Row="1"
+                              Grid.Column="1"
+                              Content="eQSL received"
+                              IsThreeState="True"
+                              IsChecked="{Binding EqslReceived, Mode=TwoWay}" />
+                  </Grid>
+                </Border>
+              </StackPanel>
+
+              <StackPanel Grid.Column="1" Spacing="10">
+                <StackPanel>
+                  <TextBlock Classes="fieldLabel" Text="QRZ log ID" />
+                  <TextBox Text="{Binding QrzLogId, Mode=TwoWay}" Classes="mono" />
+                </StackPanel>
+
+                <StackPanel>
+                  <TextBlock Classes="fieldLabel" Text="QRZ book ID" />
+                  <TextBox Text="{Binding QrzBookId, Mode=TwoWay}" Classes="mono" />
+                </StackPanel>
+
+                <Border Classes="infoPanel">
+                  <StackPanel Spacing="4">
+                    <TextBlock Text="Tri-state confirmations" FontWeight="SemiBold" />
+                    <TextBlock Text="Leave unchecked/indeterminate to keep the field unset. Use Space to cycle Yes / No / blank." Opacity="0.72" TextWrapping="Wrap" />
+                  </StackPanel>
+                </Border>
+              </StackPanel>
+            </Grid>
+          </ScrollViewer>
+        </TabItem>
+
+        <TabItem Header="Contest">
+          <ScrollViewer VerticalScrollBarVisibility="Auto">
+            <Grid ColumnDefinitions="*,*" ColumnSpacing="18" Margin="0,8,0,0">
+              <StackPanel Spacing="10">
+                <StackPanel>
+                  <TextBlock Classes="fieldLabel" Text="Contest ID" />
+                  <TextBox x:Name="ContestIdBox"
+                           Text="{Binding ContestId, Mode=TwoWay}"
+                           Classes="mono" />
+                </StackPanel>
+
+                <Grid ColumnDefinitions="*,*" ColumnSpacing="10">
+                  <StackPanel>
+                    <TextBlock Classes="fieldLabel" Text="Serial sent" />
+                    <TextBox Text="{Binding SerialSent, Mode=TwoWay}" Classes="mono" />
+                  </StackPanel>
+                  <StackPanel Grid.Column="1">
+                    <TextBlock Classes="fieldLabel" Text="Serial received" />
+                    <TextBox Text="{Binding SerialReceived, Mode=TwoWay}" Classes="mono" />
+                  </StackPanel>
+                </Grid>
+
+                <Grid ColumnDefinitions="*,*" ColumnSpacing="10">
+                  <StackPanel>
+                    <TextBlock Classes="fieldLabel" Text="Exchange sent" />
+                    <TextBox Text="{Binding ExchangeSent, Mode=TwoWay}" />
+                  </StackPanel>
+                  <StackPanel Grid.Column="1">
+                    <TextBlock Classes="fieldLabel" Text="Exchange received" />
+                    <TextBox Text="{Binding ExchangeReceived, Mode=TwoWay}" />
+                  </StackPanel>
+                </Grid>
+
+                <StackPanel>
+                  <TextBlock Classes="fieldLabel" Text="Propagation mode" />
+                  <TextBox Text="{Binding PropMode, Mode=TwoWay}" Classes="mono" />
+                </StackPanel>
+              </StackPanel>
+
+              <StackPanel Grid.Column="1" Spacing="10">
+                <Grid ColumnDefinitions="*,*" ColumnSpacing="10">
+                  <StackPanel>
+                    <TextBlock Classes="fieldLabel" Text="Satellite name" />
+                    <TextBox Text="{Binding SatName, Mode=TwoWay}" Classes="mono" />
+                  </StackPanel>
+                  <StackPanel Grid.Column="1">
+                    <TextBlock Classes="fieldLabel" Text="Satellite mode" />
+                    <TextBox Text="{Binding SatMode, Mode=TwoWay}" Classes="mono" />
+                  </StackPanel>
+                </Grid>
+
+                <Border Classes="infoPanel">
+                  <StackPanel Spacing="4">
+                    <TextBlock Text="Keyboard flow" FontWeight="SemiBold" />
+                    <TextBlock Text="Band/mode combos support quick type-to-select. Use Alt+1..6 to jump between sections without tabbing through the whole form." Opacity="0.72" TextWrapping="Wrap" />
+                  </StackPanel>
+                </Border>
+              </StackPanel>
+            </Grid>
+          </ScrollViewer>
+        </TabItem>
+
+        <TabItem Header="Station">
+          <ScrollViewer VerticalScrollBarVisibility="Auto">
+            <Grid ColumnDefinitions="*,*" ColumnSpacing="18" Margin="0,8,0,0">
+              <StackPanel Spacing="10">
+                <Border Classes="infoPanel">
+                  <StackPanel Spacing="4">
+                    <TextBlock Text="Local station snapshot" FontWeight="SemiBold" />
+                    <TextBlock Text="These values are captured for the logging station, not the worked callsign. New QSOs start from the active station profile when one is configured." Opacity="0.72" TextWrapping="Wrap" />
+                  </StackPanel>
+                </Border>
+
+                <Grid ColumnDefinitions="*,*" ColumnSpacing="10">
+                  <StackPanel>
+                    <TextBlock Classes="fieldLabel" Text="Snapshot station callsign" />
+                    <TextBox x:Name="StationCallsignSnapshotBox"
+                             Text="{Binding SnapshotStationCallsign, Mode=TwoWay}"
+                             Classes="mono" />
+                  </StackPanel>
+                  <StackPanel Grid.Column="1">
+                    <TextBlock Classes="fieldLabel" Text="Snapshot operator callsign" />
+                    <TextBox Text="{Binding SnapshotOperatorCallsign, Mode=TwoWay}" Classes="mono" />
+                  </StackPanel>
+                </Grid>
+
+                <StackPanel>
+                  <TextBlock Classes="fieldLabel" Text="Snapshot operator name" />
+                  <TextBox Text="{Binding SnapshotOperatorName, Mode=TwoWay}" />
+                </StackPanel>
+
+                <Grid ColumnDefinitions="*,*" ColumnSpacing="10">
+                  <StackPanel>
+                    <TextBlock Classes="fieldLabel" Text="Snapshot grid" />
+                    <TextBox Text="{Binding SnapshotGrid, Mode=TwoWay}" Classes="mono" />
+                  </StackPanel>
+                  <StackPanel Grid.Column="1">
+                    <TextBlock Classes="fieldLabel" Text="Snapshot country" />
+                    <TextBox Text="{Binding SnapshotCountry, Mode=TwoWay}" />
+                  </StackPanel>
+                </Grid>
+
+                <Grid ColumnDefinitions="*,*" ColumnSpacing="10">
+                  <StackPanel>
+                    <TextBlock Classes="fieldLabel" Text="Snapshot state" />
+                    <TextBox Text="{Binding SnapshotState, Mode=TwoWay}" />
+                  </StackPanel>
+                  <StackPanel Grid.Column="1">
+                    <TextBlock Classes="fieldLabel" Text="Snapshot county" />
+                    <TextBox Text="{Binding SnapshotCounty, Mode=TwoWay}" />
+                  </StackPanel>
+                </Grid>
+              </StackPanel>
+
+              <StackPanel Grid.Column="1" Spacing="10">
+                <CheckBox Content="Show advanced snapshot fields"
+                          IsChecked="{Binding ShowAdvancedStationFields, Mode=TwoWay}" />
+
+                <Border Classes="infoPanel" IsVisible="{Binding ShowAdvancedStationFields}">
+                  <StackPanel Spacing="4">
+                    <TextBlock Text="Advanced station details" FontWeight="SemiBold" />
+                    <TextBlock Text="Rare profile and zone fields stay tucked away unless they already have values or you want to edit them." Opacity="0.72" TextWrapping="Wrap" />
+                  </StackPanel>
+                </Border>
+
+                <StackPanel Spacing="10" IsVisible="{Binding ShowAdvancedStationFields}">
+                  <StackPanel>
+                    <TextBlock Classes="fieldLabel" Text="Snapshot profile" />
+                    <TextBox x:Name="StationProfileBox"
+                             Text="{Binding SnapshotProfileName, Mode=TwoWay}" />
+                  </StackPanel>
+
+                  <Grid ColumnDefinitions="*,*" ColumnSpacing="10">
+                    <StackPanel>
+                      <TextBlock Classes="fieldLabel" Text="Snapshot ARRL section" />
+                      <TextBox Text="{Binding SnapshotArrlSection, Mode=TwoWay}" Classes="mono" />
+                    </StackPanel>
+                    <StackPanel Grid.Column="1">
+                      <TextBlock Classes="fieldLabel" Text="Snapshot DXCC" />
+                      <TextBox Text="{Binding SnapshotDxcc, Mode=TwoWay}" Classes="mono" />
+                    </StackPanel>
+                  </Grid>
+
+                  <Grid ColumnDefinitions="*,*" ColumnSpacing="10">
+                    <StackPanel>
+                      <TextBlock Classes="fieldLabel" Text="Snapshot CQ zone" />
+                      <TextBox Text="{Binding SnapshotCqZone, Mode=TwoWay}" Classes="mono" />
+                    </StackPanel>
+                    <StackPanel Grid.Column="1">
+                      <TextBlock Classes="fieldLabel" Text="Snapshot ITU zone" />
+                      <TextBox Text="{Binding SnapshotItuZone, Mode=TwoWay}" Classes="mono" />
+                    </StackPanel>
+                  </Grid>
+
+                  <Grid ColumnDefinitions="*,*" ColumnSpacing="10">
+                    <StackPanel>
+                      <TextBlock Classes="fieldLabel" Text="Latitude" />
+                      <TextBox Text="{Binding SnapshotLatitude, Mode=TwoWay}" Classes="mono" />
+                    </StackPanel>
+                    <StackPanel Grid.Column="1">
+                      <TextBlock Classes="fieldLabel" Text="Longitude" />
+                      <TextBox Text="{Binding SnapshotLongitude, Mode=TwoWay}" Classes="mono" />
+                    </StackPanel>
+                  </Grid>
+                </StackPanel>
+              </StackPanel>
+            </Grid>
+          </ScrollViewer>
+        </TabItem>
+
+        <TabItem Header="Metadata">
+          <ScrollViewer VerticalScrollBarVisibility="Auto">
+            <Grid ColumnDefinitions="320,*" ColumnSpacing="18" Margin="0,8,0,0">
+              <StackPanel Spacing="10">
+                <StackPanel>
+                  <TextBlock Classes="fieldLabel" Text="Local ID" />
+                  <TextBox Text="{Binding LocalId}" IsReadOnly="True" Classes="mono" />
+                </StackPanel>
+
+                <StackPanel>
+                  <TextBlock Classes="fieldLabel" Text="Sync status" />
+                  <TextBox Text="{Binding SyncStatusText}" IsReadOnly="True" Classes="mono" />
+                </StackPanel>
+
+                <StackPanel>
+                  <TextBlock Classes="fieldLabel" Text="Created" />
+                  <TextBox Text="{Binding CreatedAtText}" IsReadOnly="True" Classes="mono" />
+                </StackPanel>
+
+                <StackPanel>
+                  <TextBlock Classes="fieldLabel" Text="Updated" />
+                  <TextBox Text="{Binding UpdatedAtText}" IsReadOnly="True" Classes="mono" />
+                </StackPanel>
+              </StackPanel>
+
+              <StackPanel Grid.Column="1" Spacing="10">
+                <TextBlock Classes="fieldLabel" Text="Extra ADIF fields (KEY=value per line)" />
+                <TextBox x:Name="ExtraFieldsBox"
+                         Text="{Binding ExtraFieldsText, Mode=TwoWay}"
+                         AcceptsReturn="True"
+                         Height="360"
+                         TextWrapping="NoWrap"
+                         Classes="mono" />
+              </StackPanel>
+            </Grid>
+          </ScrollViewer>
+        </TabItem>
+      </TabControl>
     </DockPanel>
   </Border>
 </UserControl>
