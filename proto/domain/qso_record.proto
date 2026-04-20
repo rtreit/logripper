@@ -81,6 +81,17 @@ message QsoRecord {
   google.protobuf.Timestamp updated_at = 71;
   SyncStatus sync_status = 72;
 
+  // --- Soft delete ---
+  // When set, this row is soft-deleted (in the trash). It is excluded from
+  // ListQsos by default and from upload/import-duplicate matching. The row
+  // persists until explicitly purged, allowing restore via RestoreQso.
+  optional google.protobuf.Timestamp deleted_at = 73;
+  // When true, this soft-deleted row also has a pending remote delete that
+  // the next sync's Phase 2 should execute against QRZ (ACTION=DELETE,
+  // LOGID:<qrz_logid>). Ignored when deleted_at is unset or qrz_logid is
+  // empty. Cleared once the remote delete succeeds (or QRZ reports 404).
+  bool pending_remote_delete = 74;
+
   // --- ADIF round-trip overflow ---
   // Stores ADIF fields not mapped to dedicated proto fields,
   // preserving them for lossless re-export. Key = ADIF field name (uppercase).

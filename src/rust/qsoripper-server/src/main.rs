@@ -39,7 +39,8 @@ use qsoripper_core::proto::qsoripper::services::{
     GetSyncStatusResponse, ImportAdifRequest, ImportAdifResponse, ListQsosRequest,
     ListQsosResponse, LogQsoRequest, LogQsoResponse, LookupRequest, LookupResponse,
     QsoSortOrder as ProtoQsoSortOrder, RefreshSpaceWeatherRequest, RefreshSpaceWeatherResponse,
-    ResetRuntimeConfigRequest, ResetRuntimeConfigResponse, StreamLookupRequest,
+    ResetRuntimeConfigRequest, ResetRuntimeConfigResponse, RestoreQsoRequest, RestoreQsoResponse,
+    StreamLookupRequest,
     StreamLookupResponse, SyncWithQrzRequest, SyncWithQrzResponse, TestRigConnectionRequest,
     TestRigConnectionResponse, UpdateQsoRequest, UpdateQsoResponse,
 };
@@ -434,7 +435,19 @@ impl LogbookService for DeveloperLogbookService {
             error: None,
             qrz_delete_success,
             qrz_delete_error,
+            remote_delete_queued: false,
         }))
+    }
+
+    async fn restore_qso(
+        &self,
+        _request: Request<RestoreQsoRequest>,
+    ) -> Result<Response<RestoreQsoResponse>, Status> {
+        // Soft-delete / restore semantics are scheduled for a follow-up PR once
+        // storage migrations and sync phase changes land. See tracking issue.
+        Err(Status::unimplemented(
+            "RestoreQso is not yet implemented on the Rust engine",
+        ))
     }
 
     async fn get_qso(
