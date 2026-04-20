@@ -1111,7 +1111,6 @@ impl PersistedSyncConfig {
     fn from_proto(sync_config: &SyncConfig) -> Self {
         let conflict_policy = match ConflictPolicy::try_from(sync_config.conflict_policy) {
             Ok(ConflictPolicy::LastWriteWins) => "last_write_wins".to_string(),
-            Ok(ConflictPolicy::FlagForReview) => "flag_for_review".to_string(),
             _ => "flag_for_review".to_string(),
         };
         Self {
