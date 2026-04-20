@@ -312,6 +312,7 @@ typedef struct {
     int sunspot_number;
     int has_weather;
     int weather_loading;
+    ULONGLONG last_weather_refresh;
 
     /* Rig control */
     int  rig_enabled;
@@ -3553,6 +3554,15 @@ static void OnTimer(HWND hwnd)
         }
     }
 
+    /* Space weather: refresh every hour */
+    if (!g_state.weather_loading) {
+        ULONGLONG now_sw = GetTickCount64();
+        if (now_sw - g_state.last_weather_refresh >= 3600000ULL) {
+            g_state.last_weather_refresh = now_sw;
+            FetchSpaceWeather();
+        }
+    }
+
     InvalidateRect(hwnd, NULL, FALSE);
 }
 
@@ -3646,6 +3656,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
 
         /* Kick off async data loads so the window appears immediately */
         RefreshQsoListAsync(hwnd);
+        g_state.last_weather_refresh = GetTickCount64();
         FetchSpaceWeather();
         if (g_backend.mode == BACKEND_FFI)
             SetStatus("Connected via gRPC (FFI)", 0);

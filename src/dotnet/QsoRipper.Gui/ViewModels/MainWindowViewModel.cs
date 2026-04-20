@@ -20,6 +20,7 @@ namespace QsoRipper.Gui.ViewModels;
 internal sealed partial class MainWindowViewModel : ObservableObject, IDisposable
 {
     private static readonly TimeSpan PreferredEngineSwitchTimeout = TimeSpan.FromSeconds(1.5);
+    private static readonly TimeSpan SpaceWeatherRefreshInterval = TimeSpan.FromHours(1);
 
     private readonly IEngineClient _engine;
     private readonly SwitchableEngineClient? _switchableEngine;
@@ -142,7 +143,7 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
         _utcTimer = CreateUtcTimer();
         _rigTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
         _rigTimer.Tick += OnRigTimerTick;
-        _spaceWeatherTimer = new DispatcherTimer { Interval = TimeSpan.FromMinutes(5) };
+        _spaceWeatherTimer = new DispatcherTimer { Interval = SpaceWeatherRefreshInterval };
         _spaceWeatherTimer.Tick += OnSpaceWeatherTimerTick;
     }
 
@@ -171,7 +172,7 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
         _utcTimer = CreateUtcTimer();
         _rigTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
         _rigTimer.Tick += OnRigTimerTick;
-        _spaceWeatherTimer = new DispatcherTimer { Interval = TimeSpan.FromMinutes(5) };
+        _spaceWeatherTimer = new DispatcherTimer { Interval = SpaceWeatherRefreshInterval };
         _spaceWeatherTimer.Tick += OnSpaceWeatherTimerTick;
     }
 
@@ -782,19 +783,25 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
     {
         try
         {
-            await FetchSpaceWeatherAsync();
+            // Periodic refresh: preserve stale data on failure so a transient
+            // network error never clears good weather readings.
+            await FetchSpaceWeatherAsync(preserveOnFailure: true);
         }
         catch (ObjectDisposedException)
         {
-            SpaceWeatherText = "Weather: unavailable";
+            // Timer fired after disposal; ignore.
+        }
+        catch (Grpc.Core.RpcException)
+        {
+            // Transient network failure — keep existing weather data.
         }
         catch (InvalidOperationException)
         {
-            SpaceWeatherText = "Weather: error";
+            // Engine not ready — keep existing weather data.
         }
     }
 
-    private async Task FetchSpaceWeatherAsync()
+    private async Task FetchSpaceWeatherAsync(bool preserveOnFailure = false)
     {
         try
         {
@@ -819,12 +826,12 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
 
                 SpaceWeatherText = parts.Count > 0 ? string.Join(" ", parts) : "Weather: no data";
             }
-            else
+            else if (!preserveOnFailure)
             {
                 SpaceWeatherText = "Weather: unavailable";
             }
         }
-        catch (Grpc.Core.RpcException)
+        catch (Grpc.Core.RpcException) when (!preserveOnFailure)
         {
             SpaceWeatherText = "Weather: error";
         }

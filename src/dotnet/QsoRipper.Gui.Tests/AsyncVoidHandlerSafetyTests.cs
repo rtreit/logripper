@@ -15,7 +15,26 @@ public sealed class AsyncVoidHandlerSafetyTests
         AssertMethodContains(source, "OnRigTimerTick", "catch (ObjectDisposedException)");
 
         AssertMethodContains(source, "OnSpaceWeatherTimerTick", "try");
-        AssertMethodContains(source, "OnSpaceWeatherTimerTick", "catch");
+        AssertMethodContains(source, "OnSpaceWeatherTimerTick", "catch (ObjectDisposedException)");
+        AssertMethodContains(source, "OnSpaceWeatherTimerTick", "catch (Grpc.Core.RpcException)");
+    }
+
+    [Fact]
+    public void MainWindowViewModel_space_weather_timer_uses_hourly_refresh_interval()
+    {
+        var source = File.ReadAllText(GetSourcePath("src", "dotnet", "QsoRipper.Gui", "ViewModels", "MainWindowViewModel.cs"));
+
+        Assert.Contains("SpaceWeatherRefreshInterval = TimeSpan.FromHours(1)", source, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void MainWindowViewModel_space_weather_periodic_refresh_preserves_stale_data_on_failure()
+    {
+        var source = File.ReadAllText(GetSourcePath("src", "dotnet", "QsoRipper.Gui", "ViewModels", "MainWindowViewModel.cs"));
+
+        // Periodic timer must call FetchSpaceWeatherAsync with preserveOnFailure so that
+        // a transient network error does not overwrite good weather readings with an error string.
+        AssertMethodContains(source, "OnSpaceWeatherTimerTick", "preserveOnFailure: true");
     }
 
     [Fact]
