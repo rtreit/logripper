@@ -133,11 +133,14 @@ public sealed class QrzLogbookClient : IQrzLogbookApi, IDisposable
 
         var adifRecord = AdifCodec.SerializeSingleQso(qso);
 
+        // Per docs/integrations/qrz-logbook-api.md the documented way to
+        // update an existing QSO is ACTION=INSERT with
+        // OPTION=REPLACE,LOGID:<id>. The API returns RESULT=REPLACE.
         var formFields = new List<KeyValuePair<string, string>>(4)
         {
-            new("ACTION", "REPLACE"),
+            new("ACTION", "INSERT"),
+            new("OPTION", $"REPLACE,LOGID:{qso.QrzLogid}"),
             new("KEY", _apiKey),
-            new("LOGID", qso.QrzLogid),
             new("ADIF", adifRecord),
         };
 
@@ -145,12 +148,13 @@ public sealed class QrzLogbookClient : IQrzLogbookApi, IDisposable
         var map = QrzResponseParser.ParseKeyValueResponse(body);
         QrzResponseParser.CheckResult(map);
 
-        if (!map.TryGetValue("LOGID", out var logid) || string.IsNullOrWhiteSpace(logid))
+        // QRZ echoes the same LOGID on REPLACE; if absent, fall back.
+        if (map.TryGetValue("LOGID", out var logid) && !string.IsNullOrWhiteSpace(logid))
         {
-            throw new QrzLogbookException("REPLACE response missing LOGID.");
+            return logid;
         }
 
-        return logid;
+        return qso.QrzLogid;
     }
 
     /// <inheritdoc cref="IDisposable.Dispose"/>

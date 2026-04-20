@@ -540,12 +540,31 @@ internal static class AdifCodec
             AppendOptional(sb, "MY_COUNTRY", snap.Country);
         }
 
+        // QRZ-specific round-trip fields. Without these the returned-logid
+        // dedup key is lost on ADIF round-trip, causing subsequent syncs to
+        // duplicate every QSO.
+        AppendOptional(sb, "APP_QRZLOG_LOGID", qso.QrzLogid);
+        AppendOptional(sb, "APP_QRZLOG_QSO_ID", qso.QrzBookid);
+
         // Round-trip: emit any extra fields the parser didn't map.
         foreach (var extra in qso.ExtraFields)
         {
+            // Skip keys we emitted via the dedicated proto fields so we
+            // never emit the same ADIF key twice.
+            if (IsQrzAppExtraKey(extra.Key))
+            {
+                continue;
+            }
+
             AppendField(sb, extra.Key, extra.Value);
         }
     }
+
+    private static bool IsQrzAppExtraKey(string key) =>
+        string.Equals(key, "APP_QRZLOG_LOGID", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(key, "APP_QRZ_LOGID", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(key, "APP_QRZLOG_QSO_ID", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(key, "APP_QRZ_BOOKID", StringComparison.OrdinalIgnoreCase);
 
     // -- Helpers -------------------------------------------------------------
 

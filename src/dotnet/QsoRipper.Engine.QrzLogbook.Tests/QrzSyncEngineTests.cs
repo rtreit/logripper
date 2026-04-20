@@ -422,6 +422,119 @@ public sealed class QrzSyncEngineTests
         Assert.Null(QrzSyncEngine.ExtractQrzLogid(qso));
     }
 
+    // -- ConflictPolicy -----------------------------------------------------
+
+    [Fact]
+    public async Task Merge_last_write_wins_overwrites_local_modifications()
+    {
+        var store = CreateStore();
+        var local = MakeLocalQso("W1AW", BaseTime, Band._20M, Mode.Ft8, SyncStatus.Modified);
+        local.QrzLogid = "700";
+        local.Notes = "Local edit that should be overwritten";
+        await store.Logbook.InsertQsoAsync(local);
+
+        var remote = MakeRemoteQso("W1AW", BaseTime, Band._20M, Mode.Ft8, "700");
+        remote.Notes = "Remote copy";
+
+        var api = new FakeQrzLogbookApi { FetchResult = [remote] };
+        var engine = new QrzSyncEngine(api);
+
+        var result = await engine.ExecuteSyncAsync(
+            store.Logbook,
+            fullSync: true,
+            ConflictPolicy.LastWriteWins);
+
+        Assert.Equal(0u, result.ConflictCount);
+        var all = await store.Logbook.ListQsosAsync(new QsoListQuery());
+        Assert.Single(all);
+        Assert.Equal("Remote copy", all[0].Notes);
+        Assert.Equal(SyncStatus.Synced, all[0].SyncStatus);
+    }
+
+    [Fact]
+    public async Task Merge_flag_for_review_preserves_local_and_marks_conflict()
+    {
+        var store = CreateStore();
+        var local = MakeLocalQso("W1AW", BaseTime, Band._20M, Mode.Ft8, SyncStatus.Modified);
+        local.QrzLogid = "800";
+        local.Notes = "Local operator edit";
+        await store.Logbook.InsertQsoAsync(local);
+
+        var remote = MakeRemoteQso("W1AW", BaseTime, Band._20M, Mode.Ft8, "800");
+        remote.Notes = "Remote that should NOT win";
+
+        var api = new FakeQrzLogbookApi { FetchResult = [remote] };
+        var engine = new QrzSyncEngine(api);
+
+        var result = await engine.ExecuteSyncAsync(
+            store.Logbook,
+            fullSync: true,
+            ConflictPolicy.FlagForReview);
+
+        Assert.Equal(1u, result.ConflictCount);
+        var all = await store.Logbook.ListQsosAsync(new QsoListQuery());
+        Assert.Single(all);
+        Assert.Equal("Local operator edit", all[0].Notes);
+        Assert.Equal(SyncStatus.Conflict, all[0].SyncStatus);
+        Assert.Equal("800", all[0].QrzLogid);
+    }
+
+    [Fact]
+    public async Task Merge_unspecified_policy_defaults_to_flag_for_review()
+    {
+        var store = CreateStore();
+        var local = MakeLocalQso("W1AW", BaseTime, Band._20M, Mode.Ft8, SyncStatus.Modified);
+        local.QrzLogid = "900";
+        local.Notes = "Local edit";
+        await store.Logbook.InsertQsoAsync(local);
+
+        var remote = MakeRemoteQso("W1AW", BaseTime, Band._20M, Mode.Ft8, "900");
+        remote.Notes = "Remote copy";
+
+        var api = new FakeQrzLogbookApi { FetchResult = [remote] };
+        var engine = new QrzSyncEngine(api);
+
+        // Unspecified must act like FlagForReview per engine spec §6.3.
+        var result = await engine.ExecuteSyncAsync(
+            store.Logbook,
+            fullSync: true,
+            ConflictPolicy.Unspecified);
+
+        Assert.Equal(1u, result.ConflictCount);
+        var all = await store.Logbook.ListQsosAsync(new QsoListQuery());
+        Assert.Equal("Local edit", all[0].Notes);
+        Assert.Equal(SyncStatus.Conflict, all[0].SyncStatus);
+    }
+
+    [Fact]
+    public async Task Merge_synced_local_always_accepts_remote_regardless_of_policy()
+    {
+        // When local is already Synced (no user edits since last sync), the
+        // remote is authoritative no matter what the conflict policy is, and
+        // the row is not counted as a conflict.
+        var store = CreateStore();
+        var local = MakeLocalQso("W1AW", BaseTime, Band._20M, Mode.Ft8, SyncStatus.Synced);
+        local.QrzLogid = "1000";
+        local.Notes = "Old synced value";
+        await store.Logbook.InsertQsoAsync(local);
+
+        var remote = MakeRemoteQso("W1AW", BaseTime, Band._20M, Mode.Ft8, "1000");
+        remote.Notes = "Fresh from QRZ";
+
+        var api = new FakeQrzLogbookApi { FetchResult = [remote] };
+        var engine = new QrzSyncEngine(api);
+
+        var result = await engine.ExecuteSyncAsync(
+            store.Logbook,
+            fullSync: true,
+            ConflictPolicy.FlagForReview);
+
+        Assert.Equal(0u, result.ConflictCount);
+        var all = await store.Logbook.ListQsosAsync(new QsoListQuery());
+        Assert.Equal("Fresh from QRZ", all[0].Notes);
+        Assert.Equal(SyncStatus.Synced, all[0].SyncStatus);
+    }
+
     // -- Helpers ------------------------------------------------------------
 
     private static MemoryStorage CreateStore() => new();

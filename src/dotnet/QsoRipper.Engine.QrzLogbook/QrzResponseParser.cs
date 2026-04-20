@@ -42,7 +42,8 @@ internal static class QrzResponseParser
             throw new QrzLogbookException("QRZ response missing RESULT field.");
         }
 
-        if (result.Equals("OK", StringComparison.OrdinalIgnoreCase))
+        if (result.Equals("OK", StringComparison.OrdinalIgnoreCase)
+            || result.Equals("REPLACE", StringComparison.OrdinalIgnoreCase))
         {
             return map;
         }
