@@ -17,7 +17,10 @@ use ratatui::{backend::CrosstermBackend, Terminal};
 use tokio::sync::{mpsc, watch};
 
 use app::App;
-use events::{spawn_clock_task, spawn_key_task, spawn_lookup_task, spawn_rig_poll_task, spawn_space_weather_task, AppEvent};
+use events::{
+    spawn_clock_task, spawn_key_task, spawn_lookup_task, spawn_rig_poll_task,
+    spawn_space_weather_task, AppEvent,
+};
 use form::{AdvancedTab, Field, LogForm, BANDS, MODES};
 
 const ENGINE_ENV_VAR: &str = "QSORIPPER_ENGINE";
