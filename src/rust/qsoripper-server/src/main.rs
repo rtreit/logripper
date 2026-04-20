@@ -405,10 +405,7 @@ impl LogbookService for DeveloperLogbookService {
             .await
             .map_err(map_logbook_error)?;
 
-        let has_logid = deleted
-            .qrz_logid
-            .as_deref()
-            .is_some_and(|s| !s.is_empty());
+        let has_logid = deleted.qrz_logid.as_deref().is_some_and(|s| !s.is_empty());
         let queued = request.delete_from_qrz && has_logid;
         let qrz_delete_error = if request.delete_from_qrz && !has_logid {
             Some("QSO has no QRZ logid — it may not have been synced yet.".into())
