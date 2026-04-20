@@ -256,6 +256,10 @@ internal sealed class ManagedLogbookGrpcService(ManagedEngineState state)
         {
             return Task.FromResult(state.UpdateQso(request));
         }
+        catch (QsoSoftDeletedException ex)
+        {
+            throw new RpcException(new Status(StatusCode.FailedPrecondition, ex.Message));
+        }
         catch (InvalidOperationException ex)
         {
             throw new RpcException(new Status(StatusCode.InvalidArgument, ex.Message));
@@ -264,24 +268,45 @@ internal sealed class ManagedLogbookGrpcService(ManagedEngineState state)
 
     public override Task<DeleteQsoResponse> DeleteQso(DeleteQsoRequest request, ServerCallContext context)
     {
-        var deleted = state.DeleteQso(request.LocalId);
+        var outcome = state.DeleteQso(request.LocalId, request.DeleteFromQrz);
         var response = new DeleteQsoResponse
         {
-            Success = deleted,
+            Success = outcome.Found,
+            // Legacy fields: synchronous QRZ delete is no longer performed.
             QrzDeleteSuccess = false,
+            RemoteDeleteQueued = outcome.RemoteDeleteQueued,
         };
 
-        if (!deleted)
+        if (!outcome.Found)
         {
             response.Error = $"QSO '{request.LocalId}' was not found.";
         }
-
-        if (request.DeleteFromQrz)
+        else if (outcome.MissingQrzLogid)
         {
-            response.QrzDeleteError = "Managed engine does not delete remote QRZ records.";
+            response.QrzDeleteError = "QSO has no QRZ logid — it may not have been synced yet.";
         }
 
         return Task.FromResult(response);
+    }
+
+    public override Task<RestoreQsoResponse> RestoreQso(RestoreQsoRequest request, ServerCallContext context)
+    {
+        if (string.IsNullOrWhiteSpace(request.LocalId))
+        {
+            throw new RpcException(new Status(StatusCode.InvalidArgument, "RestoreQso requires a non-empty local_id."));
+        }
+
+        var outcome = state.RestoreQso(request.LocalId);
+        if (!outcome.Found)
+        {
+            throw new RpcException(new Status(StatusCode.NotFound, $"QSO '{request.LocalId}' was not found."));
+        }
+
+        return Task.FromResult(new RestoreQsoResponse
+        {
+            Success = true,
+            Restored = outcome.Restored,
+        });
     }
 
     public override Task<GetQsoResponse> GetQso(GetQsoRequest request, ServerCallContext context)

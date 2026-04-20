@@ -1026,9 +1026,11 @@ Every logged QSO must carry station identity data. The station context system wo
 
 #### Deleting a QSO
 
-1. Client calls `DeleteQso` with `local_id`.
-2. Engine removes the record from storage.
-3. If the QSO had been synced to QRZ, the engine may optionally queue a remote delete (implementation-dependent).
+1. Client calls `DeleteQso` with `local_id` (and optional `delete_from_qrz` flag).
+2. Engine performs a **soft delete** — the row stays in storage with `deleted_at` set to now (UTC). See §7.8 for full semantics.
+3. If `delete_from_qrz = true` and the row has a non-empty `qrz_logid`, the engine sets `pending_remote_delete = true` so a future sync can issue the QRZ DELETE; this RPC does **not** call QRZ inline.
+4. Response includes `success`, `remote_delete_queued`. The legacy `qrz_delete_success`/`qrz_delete_error` fields stay false/empty (deprecated; do not consume).
+5. Re-deleting an already soft-deleted row succeeds idempotently and may upgrade `pending_remote_delete` from false to true.
 
 ### 7.3 Sync Lifecycle
 
@@ -1167,6 +1169,60 @@ Engines that persist `extra_fields` as an opaque blob MUST run a best-effort dat
 3. **Logs a summary** of how many rows were backfilled, how many duplicates were collapsed, and any per-row errors, but does not fail engine startup on per-row errors.
 
 This pass exists because an earlier engine revision failed to map QRZ app fields onto dedicated domain columns (see §7.5 Import), causing subsequent syncs to re-upload every QSO as a new record and multiplying the logbook. The repair pass is idempotent; engines that have already cleaned their data will do no work on subsequent startups.
+
+### 7.8 Soft-Delete and Restore
+
+QSOs are soft-deleted: `DeleteQso` marks the row with a tombstone instead of removing it. This preserves user data for an undo flow and lets a future sync push a corresponding remote delete to QRZ.
+
+#### Schema
+
+Every `QsoRecord` carries two soft-delete fields:
+
+- `deleted_at` (optional `Timestamp`): when set, the row is considered deleted. Null on active rows.
+- `pending_remote_delete` (bool): set to true when the local delete should be propagated to QRZ on the next sync. Cleared once the remote delete completes (or if the row is restored).
+
+Storage backends MUST persist both fields and MUST default `deleted_at` to null and `pending_remote_delete` to false for records written before this contract existed (idempotent migration on startup).
+
+#### DeleteQso semantics
+
+1. Resolve the row by `local_id`.
+2. Set `deleted_at = now (UTC)`.
+3. If `delete_from_qrz = true` AND the row has a non-empty `qrz_logid`, set `pending_remote_delete = true`. Otherwise leave it false.
+4. Persist via `SoftDeleteQso` storage path (no row removal).
+5. Return `success = true`, `remote_delete_queued = pending_remote_delete`.
+6. If `delete_from_qrz = true` but `qrz_logid` is empty, the response surfaces an explanatory `qrz_delete_error` — the row is still soft-deleted locally, just not queued for remote delete.
+7. Re-deleting an already soft-deleted row is an idempotent success. If the second call sets `delete_from_qrz = true` and the row has a logid, it MAY upgrade `pending_remote_delete` from false to true.
+8. The engine MUST NOT call the QRZ `ACTION=DELETE` API inline from this RPC. Remote delete is performed by the sync engine (§7.3 Phase 2).
+
+#### RestoreQso semantics
+
+1. Resolve the row by `local_id`. If not found, return `NOT_FOUND`.
+2. Clear both `deleted_at` and `pending_remote_delete` via the `RestoreQso` storage path.
+3. If the restored row has no `qrz_logid` and its `sync_status` was `SYNCED` (i.e., the QRZ-side state never actually existed for this local row), demote `sync_status` to `LOCAL_ONLY` so the next sync re-uploads it. Update `updated_at = now`.
+4. Return `success = true` and the restored `QsoRecord`.
+5. Restoring a row that is not soft-deleted is an idempotent success (no-op).
+6. Engines MAY refuse `RestoreQso` with `FAILED_PRECONDITION` while a sync is in flight.
+
+#### UpdateQso on a soft-deleted row
+
+`UpdateQso` MUST reject any attempt to modify a soft-deleted row with `FAILED_PRECONDITION`. The client must call `RestoreQso` first.
+
+#### Listing semantics
+
+- `ListQsos` defaults to `DeletedRecordsFilter::ACTIVE_ONLY` when the filter is `UNSPECIFIED`. Engines MUST exclude soft-deleted rows from the default list.
+- `DELETED_ONLY` returns only soft-deleted rows (the trash view).
+- `ALL` returns both. Trash UIs should request `DELETED_ONLY`; standard logbook views should rely on the default.
+- `GetQso` MUST return a soft-deleted row by id (so a trash UI can fetch a single deleted row by its `local_id`).
+
+#### Import / Export interaction
+
+- `ImportAdif` duplicate matching uses the default (active-only) listing so that soft-deleted rows do not block re-import of a corrected QSO. (A deleted dup is treated as absent.)
+- `ExportAdif` uses the default (active-only) listing so soft-deleted rows are not exported.
+
+#### Sync interaction
+
+- Sync Phase 1 (download) MUST skip a remote row whose `qrz_logid` matches a soft-deleted local row. The local user's delete intent wins. The sync summary SHOULD report skipped count.
+- Sync Phase 2 (upload) MUST, after the normal upload pass, iterate rows where `pending_remote_delete = true`, call QRZ `ACTION=DELETE&KEY=…&LOGID=…`, and on success or HTTP 404 ("logid not found") clear both `qrz_logid` and `pending_remote_delete` while leaving `deleted_at` set. On other failures, leave the flags and surface the error in the sync summary.
 
 ---
 

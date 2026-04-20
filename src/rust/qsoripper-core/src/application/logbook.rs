@@ -100,8 +100,9 @@ impl LogbookEngine {
     /// # Errors
     ///
     /// Returns [`LogbookError::Validation`] when the record is missing required
-    /// fields, [`LogbookError::NotFound`] when the local ID does not exist, and
-    /// [`LogbookError::Storage`] when the backend write fails.
+    /// fields, [`LogbookError::NotFound`] when the local ID does not exist,
+    /// [`LogbookError::AlreadyDeleted`] when the existing record is soft-deleted,
+    /// and [`LogbookError::Storage`] when the backend write fails.
     pub async fn update_qso(&self, mut qso: QsoRecord) -> Result<QsoRecord, LogbookError> {
         if qso.local_id.trim().is_empty() {
             return Err(LogbookError::Validation(
@@ -111,6 +112,9 @@ impl LogbookEngine {
 
         let existing = self.storage.logbook().get_qso(&qso.local_id).await?;
         let existing = existing.ok_or_else(|| LogbookError::NotFound(qso.local_id.clone()))?;
+        if existing.deleted_at.is_some() {
+            return Err(LogbookError::AlreadyDeleted(qso.local_id));
+        }
         materialize_station_snapshot_for_update(&mut qso, Some(&existing));
         normalize_qso_for_persistence(&mut qso);
         validate_qso_for_persistence(&qso)?;
@@ -126,26 +130,85 @@ impl LogbookEngine {
         }
     }
 
-    /// Delete a QSO by local identifier.
+    /// Soft-delete a QSO by local identifier, optionally queuing a remote delete
+    /// for the next QRZ sync. Returns the soft-deleted record.
     ///
     /// # Errors
     ///
     /// Returns [`LogbookError::Validation`] when the local ID is blank,
     /// [`LogbookError::NotFound`] when the record does not exist, and
-    /// [`LogbookError::Storage`] when the backend delete fails.
-    pub async fn delete_qso(&self, local_id: &str) -> Result<(), LogbookError> {
+    /// [`LogbookError::Storage`] when the backend write fails.
+    pub async fn delete_qso(
+        &self,
+        local_id: &str,
+        queue_remote_delete: bool,
+    ) -> Result<QsoRecord, LogbookError> {
         if local_id.trim().is_empty() {
             return Err(LogbookError::Validation(
                 "local_id is required when deleting a QSO.".into(),
             ));
         }
 
-        let deleted = self.storage.logbook().delete_qso(local_id).await?;
-        if deleted {
-            Ok(())
-        } else {
-            Err(LogbookError::NotFound(local_id.to_string()))
+        let existing = self.storage.logbook().get_qso(local_id).await?;
+        let mut existing = existing.ok_or_else(|| LogbookError::NotFound(local_id.to_string()))?;
+
+        // Idempotent: re-deleting an already soft-deleted row is a no-op
+        // success that may upgrade pending_remote_delete if the caller asks.
+        let already_deleted = existing.deleted_at.is_some();
+        let now = now_timestamp();
+        let pending =
+            queue_remote_delete && !existing.qrz_logid.as_deref().unwrap_or("").is_empty();
+
+        if !already_deleted {
+            existing.deleted_at = Some(now);
         }
+        if pending {
+            existing.pending_remote_delete = true;
+        }
+        existing.updated_at = Some(now);
+
+        let updated = self.storage.logbook().update_qso(&existing).await?;
+        if !updated {
+            return Err(LogbookError::NotFound(local_id.to_string()));
+        }
+        Ok(existing)
+    }
+
+    /// Restore a soft-deleted QSO by clearing `deleted_at` and
+    /// `pending_remote_delete`. Returns the restored record.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`LogbookError::Validation`] when the local ID is blank,
+    /// [`LogbookError::NotFound`] when the record does not exist, and
+    /// [`LogbookError::Storage`] when the backend write fails. Restoring a
+    /// row that is not soft-deleted is a no-op success.
+    pub async fn restore_qso(&self, local_id: &str) -> Result<QsoRecord, LogbookError> {
+        if local_id.trim().is_empty() {
+            return Err(LogbookError::Validation(
+                "local_id is required when restoring a QSO.".into(),
+            ));
+        }
+
+        let existing = self.storage.logbook().get_qso(local_id).await?;
+        let mut existing = existing.ok_or_else(|| LogbookError::NotFound(local_id.to_string()))?;
+
+        let was_deleted = existing.deleted_at.is_some();
+        existing.deleted_at = None;
+        existing.pending_remote_delete = false;
+
+        // If the row was never synced (no qrz_logid), restoring should mark it
+        // for upload again so a future sync picks it up.
+        if was_deleted && existing.qrz_logid.as_deref().unwrap_or("").is_empty() {
+            existing.sync_status = SyncStatus::LocalOnly as i32;
+        }
+        existing.updated_at = Some(now_timestamp());
+
+        let updated = self.storage.logbook().update_qso(&existing).await?;
+        if !updated {
+            return Err(LogbookError::NotFound(local_id.to_string()));
+        }
+        Ok(existing)
     }
 
     /// Retrieve a persisted QSO by local identifier.
@@ -385,6 +448,9 @@ pub enum LogbookError {
     /// The requested QSO could not be found in persistent storage.
     #[error("QSO '{0}' was not found.")]
     NotFound(String),
+    /// The QSO is soft-deleted and must be restored before it can be updated.
+    #[error("QSO '{0}' is deleted; restore it before updating.")]
+    AlreadyDeleted(String),
     /// The underlying storage layer failed to complete the requested operation.
     #[error(transparent)]
     Storage(#[from] StorageError),
