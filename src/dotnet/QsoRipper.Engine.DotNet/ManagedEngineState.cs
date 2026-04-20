@@ -627,7 +627,13 @@ internal sealed class ManagedEngineState
             var response = new GetSyncStatusResponse
             {
                 LocalQsoCount = (uint)counts.LocalQsoCount,
-                QrzQsoCount = _hasQrzLogbookApiKey ? (uint)(counts.LocalQsoCount - counts.PendingUploadCount) : 0,
+                // Prefer the authoritative remote count persisted by Phase 3 of sync.
+                // Fall back to (local - pending) only if no successful sync has run.
+                QrzQsoCount = _hasQrzLogbookApiKey
+                    ? (syncMeta.LastSync is null
+                        ? (uint)Math.Max(0, counts.LocalQsoCount - counts.PendingUploadCount)
+                        : (uint)Math.Max(0, syncMeta.QrzQsoCount))
+                    : 0,
                 PendingUpload = (uint)counts.PendingUploadCount,
                 IsSyncing = false,
                 AutoSyncEnabled = _syncConfig.AutoSyncEnabled && _hasQrzLogbookApiKey,
@@ -638,10 +644,22 @@ internal sealed class ManagedEngineState
                 response.LastSync = Timestamp.FromDateTimeOffset(lastSyncUtc);
             }
 
-            var active = GetEffectiveActiveProfileNoLock();
-            if (_hasQrzLogbookApiKey && !string.IsNullOrWhiteSpace(active?.StationCallsign))
+            // Prefer the QRZ-reported owner from Phase 3 STATUS; fall back to the
+            // active station's callsign when sync hasn't populated metadata yet.
+            if (_hasQrzLogbookApiKey)
             {
-                response.QrzLogbookOwner = active.StationCallsign;
+                if (!string.IsNullOrWhiteSpace(syncMeta.QrzLogbookOwner))
+                {
+                    response.QrzLogbookOwner = syncMeta.QrzLogbookOwner;
+                }
+                else
+                {
+                    var active = GetEffectiveActiveProfileNoLock();
+                    if (!string.IsNullOrWhiteSpace(active?.StationCallsign))
+                    {
+                        response.QrzLogbookOwner = active.StationCallsign;
+                    }
+                }
             }
 
             return response;

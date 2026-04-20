@@ -844,6 +844,9 @@ public sealed class ManagedEngineStateTests : IDisposable
             var logId = $"FAKE-{Interlocked.Increment(ref _logIdCounter)}";
             return Task.FromResult(logId);
         }
+
+        public Task<QrzLogbookStatus> GetStatusAsync() =>
+            Task.FromResult(new QrzLogbookStatus("K7RND", (uint)_logIdCounter));
     }
 
     private sealed class FakeMalformedQrzLogbookApi : IQrzLogbookApi
@@ -854,6 +857,9 @@ public sealed class ManagedEngineStateTests : IDisposable
         public Task<string> UploadQsoAsync(QsoRecord qso) => Task.FromResult("FAKE-1");
 
         public Task<string> UpdateQsoAsync(QsoRecord qso) => Task.FromResult("FAKE-1");
+
+        public Task<QrzLogbookStatus> GetStatusAsync() =>
+            Task.FromResult(new QrzLogbookStatus("K7RND", 0));
     }
 }
 #pragma warning restore CA1707

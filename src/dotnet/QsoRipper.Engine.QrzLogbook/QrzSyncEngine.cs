@@ -237,16 +237,54 @@ public sealed class QrzSyncEngine
         }
 
         // ---------------------------------------------------------------
-        // Phase 3 — Update sync metadata
+        // Phase 3 — Refresh metadata from authoritative QRZ STATUS
         // ---------------------------------------------------------------
+        // Mirrors src/rust/qsoripper-server/src/sync.rs::refresh_metadata:
+        // prefer the remote STATUS result; on failure fall back to estimating
+        // from local counts so metadata stays at least approximately correct.
+
+        uint? remoteCount = null;
+        string? remoteOwner = null;
+        try
+        {
+            var status = await _client.GetStatusAsync().ConfigureAwait(false);
+            remoteCount = status.QsoCount;
+            remoteOwner = string.IsNullOrWhiteSpace(status.Owner)
+                ? metadata.QrzLogbookOwner
+                : status.Owner;
+        }
+        catch (Exception ex)
+        {
+            errors.Add($"STATUS refresh failed: {ex.Message}");
+            remoteOwner = metadata.QrzLogbookOwner;
+        }
+
+        int qrzCountToPersist;
+        if (remoteCount is { } rc)
+        {
+            qrzCountToPersist = (int)Math.Min(rc, (uint)int.MaxValue);
+        }
+        else
+        {
+            try
+            {
+                var counts = await store.GetCountsAsync().ConfigureAwait(false);
+                qrzCountToPersist = Math.Max(0, counts.LocalQsoCount - counts.PendingUploadCount);
+            }
+            catch (Exception ex)
+            {
+                errors.Add($"Local count refresh failed: {ex.Message}");
+                qrzCountToPersist = metadata.QrzQsoCount;
+            }
+        }
 
         try
         {
             await store.UpsertSyncMetadataAsync(new SyncMetadata
             {
-                QrzQsoCount = metadata.QrzQsoCount,
+                QrzQsoCount = qrzCountToPersist,
                 LastSync = DateTimeOffset.UtcNow,
-                QrzLogbookOwner = metadata.QrzLogbookOwner,
+                QrzLogbookOwner = remoteOwner,
             }).ConfigureAwait(false);
         }
         catch (Exception ex)
@@ -259,6 +297,8 @@ public sealed class QrzSyncEngine
             DownloadedCount = downloaded,
             UploadedCount = uploaded,
             ConflictCount = conflicts,
+            RemoteQsoCount = remoteCount,
+            RemoteOwner = string.IsNullOrWhiteSpace(remoteOwner) ? null : remoteOwner,
             ErrorSummary = errors.Count > 0 ? string.Join("; ", errors) : null,
         };
     }

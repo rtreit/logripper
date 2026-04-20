@@ -26,4 +26,18 @@ public interface IQrzLogbookApi
     /// Returns the QRZ LOGID on success.
     /// </summary>
     Task<string> UpdateQsoAsync(QsoRecord qso);
+
+    /// <summary>
+    /// Calls the QRZ Logbook <c>STATUS</c> action and returns the authoritative
+    /// server-side QSO count and owner callsign. Used in Phase 3 of sync to
+    /// keep <c>SyncMetadata</c> aligned with what QRZ actually has.
+    /// </summary>
+    Task<QrzLogbookStatus> GetStatusAsync();
 }
+
+/// <summary>
+/// Result of a successful QRZ Logbook <c>STATUS</c> call.
+/// </summary>
+/// <param name="Owner">QRZ logbook owner callsign (from <c>CALLSIGN</c>, falling back to <c>OWNER</c>).</param>
+/// <param name="QsoCount">Total QSO count reported by QRZ.</param>
+public readonly record struct QrzLogbookStatus(string Owner, uint QsoCount);
