@@ -200,7 +200,10 @@ fn parse_kv_response(body: &str) -> HashMap<String, String> {
 /// [`QrzLogbookError`] variant when it is not.
 fn check_result(map: HashMap<String, String>) -> Result<HashMap<String, String>, QrzLogbookError> {
     match map.get("RESULT").map(String::as_str) {
-        Some("OK") => Ok(map),
+        // QRZ returns RESULT=OK for INSERT/FETCH/STATUS/DELETE successes and
+        // RESULT=REPLACE for `INSERT&OPTION=REPLACE,LOGID:...` successes.
+        // Treat both as success per docs/integrations/qrz-logbook-api.md.
+        Some("OK" | "REPLACE") => Ok(map),
         Some("FAIL") => {
             let reason = map
                 .get("REASON")
@@ -467,7 +470,7 @@ impl QrzLogbookClient {
             .map_err(QrzLogbookError::ParseError)
     }
 
-    /// Upload a single QSO to the QRZ Logbook.
+    /// Upload a single QSO to the QRZ Logbook as a new record.
     ///
     /// The QSO is serialized to an ADIF record string and sent via the
     /// `INSERT` action.
@@ -493,6 +496,55 @@ impl QrzLogbookClient {
         }
 
         Ok(QrzUploadResult { logid })
+    }
+
+    /// Replace an existing QSO on the QRZ Logbook in place.
+    ///
+    /// Per the QRZ Logbook API contract this is `ACTION=INSERT` with
+    /// `OPTION=REPLACE,LOGID:<id>`. The server keeps the same `LOGID`
+    /// rather than minting a new one. Modified QSOs that already have a
+    /// `qrz_logid` MUST go through this path instead of `upload_qso` to
+    /// avoid creating duplicate rows on QRZ.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error on network failure, authentication failure, or if
+    /// the QRZ API rejects the record (including when `logid` does not
+    /// match an existing record on QRZ).
+    pub async fn replace_qso(
+        &self,
+        logid: &str,
+        qso: &QsoRecord,
+    ) -> Result<QrzUploadResult, QrzLogbookError> {
+        if logid.is_empty() {
+            return Err(QrzLogbookError::ParseError(
+                "replace_qso called with empty logid".to_string(),
+            ));
+        }
+        let adif_record = AdifMapper::qso_to_adi(qso);
+        let option = format!("REPLACE,LOGID:{logid}");
+
+        let body = self
+            .post_form(&[
+                ("ACTION", "INSERT"),
+                ("OPTION", option.as_str()),
+                ("ADIF", &adif_record),
+            ])
+            .await?;
+        let map = parse_kv_response(&body);
+        let map = check_result(map)?;
+
+        // QRZ returns the same LOGID on REPLACE; if absent, fall back to the
+        // one we sent.
+        let returned_logid = map
+            .get("LOGID")
+            .cloned()
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| logid.to_string());
+
+        Ok(QrzUploadResult {
+            logid: returned_logid,
+        })
     }
 
     /// Delete a QSO from the QRZ Logbook by its logbook record ID.
@@ -1282,6 +1334,56 @@ mod tests {
     }
 
     // -- delete_qso integration ---------------------------------------------
+
+    #[tokio::test]
+    async fn replace_qso_sends_replace_option_with_logid() {
+        let (base_url, requests) =
+            spawn_logbook_server(&[("text/plain", "RESULT=REPLACE&LOGID=555444333")]).await;
+        let client = QrzLogbookClient::new(test_config(base_url)).expect("client");
+
+        let qso = QsoRecord {
+            worked_callsign: "W1AW".to_string(),
+            ..Default::default()
+        };
+        let result = client
+            .replace_qso("555444333", &qso)
+            .await
+            .expect("replace");
+
+        assert_eq!(
+            result.logid, "555444333",
+            "REPLACE should preserve the original logid"
+        );
+
+        let body = &requests.lock().expect("requests")[0];
+        assert!(body.contains("ACTION=INSERT"));
+        // OPTION=REPLACE,LOGID:555444333 — the comma and colon are URL-encoded
+        // so we just verify the discriminating substrings are present.
+        assert!(body.contains("OPTION=REPLACE"), "missing OPTION=REPLACE: {body}");
+        assert!(body.contains("LOGID"), "missing logid in OPTION: {body}");
+        assert!(body.contains("555444333"), "missing logid value in OPTION: {body}");
+    }
+
+    #[tokio::test]
+    async fn replace_qso_falls_back_to_supplied_logid_when_response_missing_it() {
+        let (base_url, _) = spawn_logbook_server(&[("text/plain", "RESULT=REPLACE")]).await;
+        let client = QrzLogbookClient::new(test_config(base_url)).expect("client");
+
+        let qso = QsoRecord::default();
+        let result = client.replace_qso("777", &qso).await.expect("replace");
+        assert_eq!(result.logid, "777");
+    }
+
+    #[tokio::test]
+    async fn replace_qso_rejects_empty_logid() {
+        let client =
+            QrzLogbookClient::new(test_config("http://127.0.0.1:1".to_string())).expect("client");
+        let err = client
+            .replace_qso("", &QsoRecord::default())
+            .await
+            .unwrap_err();
+        assert!(matches!(err, QrzLogbookError::ParseError(_)));
+    }
 
     #[tokio::test]
     async fn delete_qso_success() {
