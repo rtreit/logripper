@@ -267,6 +267,24 @@ impl AdifMapper {
                 "COMMENT" => qso.comment = Some(value_str.to_owned()),
                 "NOTES" => qso.notes = Some(value_str.to_owned()),
 
+                // --- QRZ-specific application fields ---
+                //
+                // QRZ Logbook returns each record with `<APP_QRZLOG_LOGID:N>`
+                // as the per-record identifier (and `<APP_QRZLOG_QSO_ID:N>`
+                // for the QRZ "book" id). These must land in the dedicated
+                // proto fields so QRZ-pull dedup matches by logid instead of
+                // falling back to fuzzy callsign+band+mode+timestamp matching
+                // (which is what created the duplicate-import regression).
+                // See docs/integrations/qrz-logbook-api.md for the canonical
+                // field names. `APP_QRZ_LOGID` is accepted as a legacy alias
+                // because earlier internal builds used that key.
+                "APP_QRZLOG_LOGID" | "APP_QRZ_LOGID" => {
+                    qso.qrz_logid = Some(value_str.to_owned());
+                }
+                "APP_QRZLOG_QSO_ID" | "APP_QRZ_BOOKID" => {
+                    qso.qrz_bookid = Some(value_str.to_owned());
+                }
+
                 // --- Everything else → extra_fields for round-trip ---
                 _ => {
                     qso.extra_fields.insert(key_upper, value_str.to_owned());
@@ -563,6 +581,18 @@ impl AdifMapper {
         }
         if let Some(v) = qso.notes.as_deref() {
             push_field(&mut fields, "NOTES", v);
+        }
+
+        // QRZ application fields (canonical names from the QRZ Logbook API).
+        if let Some(v) = qso.qrz_logid.as_deref() {
+            if !v.is_empty() {
+                push_field(&mut fields, "APP_QRZLOG_LOGID", v);
+            }
+        }
+        if let Some(v) = qso.qrz_bookid.as_deref() {
+            if !v.is_empty() {
+                push_field(&mut fields, "APP_QRZLOG_QSO_ID", v);
+            }
         }
 
         // Extra fields (round-trip overflow)
@@ -870,6 +900,14 @@ fn field_is_overridden(
             .is_some()
     } else if key.eq_ignore_ascii_case("QSO_DATE_OFF") || key.eq_ignore_ascii_case("TIME_OFF") {
         qso.utc_end_timestamp.is_some()
+    } else if key.eq_ignore_ascii_case("APP_QRZLOG_LOGID")
+        || key.eq_ignore_ascii_case("APP_QRZ_LOGID")
+    {
+        qso.qrz_logid.is_some()
+    } else if key.eq_ignore_ascii_case("APP_QRZLOG_QSO_ID")
+        || key.eq_ignore_ascii_case("APP_QRZ_BOOKID")
+    {
+        qso.qrz_bookid.is_some()
     } else {
         false
     }
@@ -1685,5 +1723,103 @@ mod tests {
             .map(|(_, v)| v.as_str())
             .collect();
         assert_eq!(skcc_out, vec!["999S"]);
+    }
+
+    // ---- QRZ-specific application fields ---------------------------------
+    //
+    // Regression coverage for the QRZ sync duplicate-import bug: the QRZ
+    // logbook returns each QSO with `<APP_QRZLOG_LOGID:N>` as the per-record
+    // identifier (and `<APP_QRZLOG_QSO_ID:N>` for the book id). Without these
+    // mappings, every pull from QRZ leaves `qrz_logid` empty, which forces
+    // the sync layer to fall back to fuzzy callsign+band+mode+timestamp
+    // matching and produces duplicate rows whenever any of those drift.
+
+    #[test]
+    fn record_to_qso_maps_app_qrzlog_logid_to_qrz_logid() {
+        let mut rec = Record::new();
+        rec.insert("CALL", "W1AW").unwrap();
+        rec.insert("APP_QRZLOG_LOGID", "987654321").unwrap();
+
+        let qso = AdifMapper::record_to_qso(&rec);
+        assert_eq!(
+            qso.qrz_logid.as_deref(),
+            Some("987654321"),
+            "APP_QRZLOG_LOGID must populate the dedicated qrz_logid field, not extra_fields"
+        );
+        assert!(
+            !qso.extra_fields.contains_key("APP_QRZLOG_LOGID"),
+            "QRZ logid should not be duplicated into extra_fields"
+        );
+    }
+
+    #[test]
+    fn record_to_qso_maps_legacy_app_qrz_logid_alias() {
+        let mut rec = Record::new();
+        rec.insert("CALL", "W1AW").unwrap();
+        rec.insert("APP_QRZ_LOGID", "12345").unwrap();
+
+        let qso = AdifMapper::record_to_qso(&rec);
+        assert_eq!(
+            qso.qrz_logid.as_deref(),
+            Some("12345"),
+            "Legacy APP_QRZ_LOGID alias should also populate qrz_logid"
+        );
+    }
+
+    #[test]
+    fn record_to_qso_maps_app_qrzlog_qso_id_to_qrz_bookid() {
+        let mut rec = Record::new();
+        rec.insert("CALL", "W1AW").unwrap();
+        rec.insert("APP_QRZLOG_QSO_ID", "BOOK-42").unwrap();
+
+        let qso = AdifMapper::record_to_qso(&rec);
+        assert_eq!(qso.qrz_bookid.as_deref(), Some("BOOK-42"));
+        assert!(!qso.extra_fields.contains_key("APP_QRZLOG_QSO_ID"));
+    }
+
+    #[test]
+    fn qso_to_adif_fields_emits_qrz_logid_and_bookid() {
+        let qso = crate::proto::qsoripper::domain::QsoRecord {
+            worked_callsign: "W1AW".into(),
+            qrz_logid: Some("987654321".into()),
+            qrz_bookid: Some("BOOK-1".into()),
+            ..Default::default()
+        };
+
+        let fields = AdifMapper::qso_to_adif_fields(&qso);
+        let logid = fields
+            .iter()
+            .find(|(k, _)| k == "APP_QRZLOG_LOGID")
+            .map(|(_, v)| v.as_str());
+        let bookid = fields
+            .iter()
+            .find(|(k, _)| k == "APP_QRZLOG_QSO_ID")
+            .map(|(_, v)| v.as_str());
+        assert_eq!(logid, Some("987654321"));
+        assert_eq!(bookid, Some("BOOK-1"));
+    }
+
+    #[test]
+    fn qrz_logid_round_trips_through_adif() {
+        let mut rec = Record::new();
+        rec.insert("CALL", "K7ABC").unwrap();
+        rec.insert("APP_QRZLOG_LOGID", "55555").unwrap();
+        rec.insert("APP_QRZLOG_QSO_ID", "BOOK-99").unwrap();
+
+        let qso = AdifMapper::record_to_qso(&rec);
+        let fields = AdifMapper::qso_to_adif_fields(&qso);
+
+        // Each field must appear exactly once on the way back out — never
+        // both as the dedicated mapping AND as a leftover extra_field.
+        let logid_count = fields
+            .iter()
+            .filter(|(k, _)| k == "APP_QRZLOG_LOGID")
+            .count();
+        let bookid_count = fields
+            .iter()
+            .filter(|(k, _)| k == "APP_QRZLOG_QSO_ID")
+            .count();
+        assert_eq!(logid_count, 1, "logid should round-trip exactly once");
+        assert_eq!(bookid_count, 1, "bookid should round-trip exactly once");
     }
 }

@@ -9,7 +9,9 @@ use std::collections::HashMap;
 use qsoripper_core::domain::qso::new_local_id;
 use qsoripper_core::proto::qsoripper::domain::{ConflictPolicy, QsoRecord, SyncStatus};
 use qsoripper_core::proto::qsoripper::services::SyncWithQrzResponse;
-use qsoripper_core::qrz_logbook::{QrzLogbookClient, QrzLogbookError, QrzUploadResult};
+use qsoripper_core::qrz_logbook::{
+    QrzLogbookClient, QrzLogbookError, QrzLogbookStatus, QrzUploadResult,
+};
 use qsoripper_core::storage::{LogbookStore, QsoListQuery, SyncMetadata};
 use tokio::sync::mpsc;
 use tonic::Status;
@@ -28,8 +30,15 @@ type FuzzyIndex = HashMap<(String, i32, i32), Vec<QsoRecord>>;
 // Constants
 // ---------------------------------------------------------------------------
 
-/// Extra-field key that QRZ ADIF responses use for the logbook record ID.
-const QRZ_LOGID_EXTRA_FIELD: &str = "APP_QRZ_LOGID";
+/// Extra-field keys that historical QRZ ADIF responses may carry for the
+/// logbook record id. The canonical key per the QRZ Logbook API is
+/// `APP_QRZLOG_LOGID`; `APP_QRZ_LOGID` is kept as a legacy alias because
+/// older internal builds wrote that variant. The ADIF mapper now extracts
+/// either alias into [`QsoRecord::qrz_logid`] directly, so this fallback is
+/// only exercised against records that bypass the mapper (e.g. ones that
+/// were already persisted before the mapper started recognising the field
+/// and have not yet been backfilled by [`crate::repair::backfill_qrz_logids`]).
+const QRZ_LOGID_EXTRA_FIELDS: &[&str] = &["APP_QRZLOG_LOGID", "APP_QRZ_LOGID"];
 
 /// Maximum time difference (seconds) for fuzzy timestamp matching.
 const TIMESTAMP_TOLERANCE_SECONDS: i64 = 60;
@@ -49,6 +58,16 @@ pub(crate) trait QrzLogbookApi: Send + Sync {
 
     /// Upload a single QSO and return its QRZ-assigned log ID.
     async fn upload_qso(&self, qso: &QsoRecord) -> Result<QrzUploadResult, QrzLogbookError>;
+
+    /// Replace an existing QSO on the remote logbook (preserves logid).
+    async fn replace_qso(
+        &self,
+        logid: &str,
+        qso: &QsoRecord,
+    ) -> Result<QrzUploadResult, QrzLogbookError>;
+
+    /// Query the remote logbook for the current owner callsign and QSO count.
+    async fn fetch_status(&self) -> Result<QrzLogbookStatus, QrzLogbookError>;
 }
 
 #[tonic::async_trait]
@@ -59,6 +78,18 @@ impl QrzLogbookApi for QrzLogbookClient {
 
     async fn upload_qso(&self, qso: &QsoRecord) -> Result<QrzUploadResult, QrzLogbookError> {
         QrzLogbookClient::upload_qso(self, qso).await
+    }
+
+    async fn replace_qso(
+        &self,
+        logid: &str,
+        qso: &QsoRecord,
+    ) -> Result<QrzUploadResult, QrzLogbookError> {
+        QrzLogbookClient::replace_qso(self, logid, qso).await
+    }
+
+    async fn fetch_status(&self) -> Result<QrzLogbookStatus, QrzLogbookError> {
+        QrzLogbookClient::test_connection(self).await
     }
 }
 
@@ -116,7 +147,7 @@ pub(crate) async fn execute_sync(
 
     upload_phase(client, store, progress_tx, &mut counters).await;
 
-    update_metadata(store, &metadata, &mut counters).await;
+    update_metadata(client, store, &metadata, &mut counters).await;
 
     let error_summary = if counters.errors.is_empty() {
         None
@@ -356,7 +387,19 @@ async fn upload_phase(
     );
 
     for qso in &pending_qsos {
-        match client.upload_qso(qso).await {
+        let is_modified = qso.sync_status == SyncStatus::Modified as i32;
+        let existing_logid = qso.qrz_logid.clone().filter(|s| !s.is_empty());
+
+        let result = match (is_modified, existing_logid.as_deref()) {
+            // Edited locally and we already know its QRZ logid -> REPLACE in
+            // place so QRZ keeps the same row instead of growing a duplicate.
+            (true, Some(logid)) => client.replace_qso(logid, qso).await,
+            // Either a brand-new QSO, or a "modified" QSO that somehow lost
+            // its logid (legacy data). Fall back to INSERT.
+            _ => client.upload_qso(qso).await,
+        };
+
+        match result {
             Ok(result) => {
                 let mut synced = qso.clone();
                 synced.qrz_logid = Some(result.logid);
@@ -393,22 +436,40 @@ async fn upload_phase(
 // ---------------------------------------------------------------------------
 
 async fn update_metadata(
+    client: &dyn QrzLogbookApi,
     store: &dyn LogbookStore,
     prev_metadata: &SyncMetadata,
     counters: &mut SyncCounters,
 ) {
     let now = chrono::Utc::now();
 
-    // Refresh the QRZ QSO count from what the local store now knows.
-    // After a successful bidirectional sync the number of locally-synced
-    // QSOs is the best available estimate of the remote logbook count.
-    let qrz_qso_count = match store.qso_counts().await {
-        Ok(counts) => counts
-            .local_qso_count
-            .saturating_sub(counts.pending_upload_count),
+    // Prefer the authoritative remote STATUS result. If QRZ's STATUS call
+    // fails (auth blip, transient network error) we fall back to estimating
+    // from local counts so metadata at least stays approximately correct.
+    let (qrz_qso_count, qrz_logbook_owner) = match client.fetch_status().await {
+        Ok(status) => {
+            let owner = if status.owner.is_empty() {
+                prev_metadata.qrz_logbook_owner.clone()
+            } else {
+                Some(status.owner)
+            };
+            (status.qso_count, owner)
+        }
         Err(err) => {
-            eprintln!("[sync] Failed to refresh local QSO counts: {err}");
-            prev_metadata.qrz_qso_count
+            eprintln!("[sync] STATUS call failed during metadata refresh: {err}");
+            counters
+                .errors
+                .push(format!("STATUS refresh failed: {err}"));
+            let fallback_count = match store.qso_counts().await {
+                Ok(counts) => counts
+                    .local_qso_count
+                    .saturating_sub(counts.pending_upload_count),
+                Err(err) => {
+                    eprintln!("[sync] Failed to refresh local QSO counts: {err}");
+                    prev_metadata.qrz_qso_count
+                }
+            };
+            (fallback_count, prev_metadata.qrz_logbook_owner.clone())
         }
     };
 
@@ -418,7 +479,7 @@ async fn update_metadata(
             seconds: now.timestamp(),
             nanos: 0,
         }),
-        qrz_logbook_owner: prev_metadata.qrz_logbook_owner.clone(),
+        qrz_logbook_owner,
     };
 
     if let Err(err) = store.upsert_sync_metadata(&updated).await {
@@ -584,18 +645,23 @@ fn build_local_indexes(local_qsos: &[QsoRecord]) -> (LogidIndex, FuzzyIndex) {
 
 /// Extract the QRZ logbook record ID from a QSO.
 ///
-/// Checks the dedicated `qrz_logid` field first, then falls back to
-/// `extra_fields["APP_QRZ_LOGID"]`.
+/// Checks the dedicated `qrz_logid` field first (populated by the ADIF
+/// mapper), then falls back to the historical `extra_fields` aliases for
+/// records that were persisted before the mapper recognised the field.
 fn extract_qrz_logid(qso: &QsoRecord) -> Option<String> {
     if let Some(logid) = qso.qrz_logid.as_deref() {
         if !logid.is_empty() {
             return Some(logid.to_string());
         }
     }
-    qso.extra_fields
-        .get(QRZ_LOGID_EXTRA_FIELD)
-        .filter(|v| !v.is_empty())
-        .cloned()
+    for key in QRZ_LOGID_EXTRA_FIELDS {
+        if let Some(value) = qso.extra_fields.get(*key) {
+            if !value.is_empty() {
+                return Some(value.clone());
+            }
+        }
+    }
+    None
 }
 
 /// Find a local QSO matching by worked callsign, band, mode, and timestamp
@@ -687,7 +753,7 @@ mod tests {
     use qsoripper_core::proto::qsoripper::domain::{
         Band, ConflictPolicy, Mode, QsoRecord, SyncStatus,
     };
-    use qsoripper_core::qrz_logbook::{QrzLogbookError, QrzUploadResult};
+    use qsoripper_core::qrz_logbook::{QrzLogbookError, QrzLogbookStatus, QrzUploadResult};
     use qsoripper_core::storage::{LogbookStore, QsoListQuery, SyncMetadata};
     use qsoripper_storage_memory::MemoryStorage;
     use tokio::sync::mpsc;
@@ -699,6 +765,9 @@ mod tests {
     struct MockQrzApi {
         fetch_result: Mutex<Option<Result<Vec<QsoRecord>, QrzLogbookError>>>,
         upload_results: Mutex<Vec<Result<QrzUploadResult, QrzLogbookError>>>,
+        replace_calls: Mutex<Vec<(String, String)>>, // (logid, local_id)
+        replace_results: Mutex<Vec<Result<QrzUploadResult, QrzLogbookError>>>,
+        status_result: Mutex<Option<Result<QrzLogbookStatus, QrzLogbookError>>>,
     }
 
     impl MockQrzApi {
@@ -709,7 +778,18 @@ mod tests {
             Self {
                 fetch_result: Mutex::new(Some(fetch)),
                 upload_results: Mutex::new(uploads),
+                replace_calls: Mutex::new(Vec::new()),
+                replace_results: Mutex::new(Vec::new()),
+                status_result: Mutex::new(Some(Ok(QrzLogbookStatus {
+                    owner: String::new(),
+                    qso_count: 0,
+                }))),
             }
+        }
+
+        fn with_status(self, status: Result<QrzLogbookStatus, QrzLogbookError>) -> Self {
+            *self.status_result.lock().unwrap() = Some(status);
+            self
         }
     }
 
@@ -736,6 +816,39 @@ mod tests {
                 results.remove(0)
             }
         }
+
+        async fn replace_qso(
+            &self,
+            logid: &str,
+            qso: &QsoRecord,
+        ) -> Result<QrzUploadResult, QrzLogbookError> {
+            self.replace_calls
+                .lock()
+                .unwrap()
+                .push((logid.to_string(), qso.local_id.clone()));
+            let mut results = self.replace_results.lock().unwrap();
+            if results.is_empty() {
+                // Default: succeed and echo the logid back.
+                Ok(QrzUploadResult {
+                    logid: logid.to_string(),
+                })
+            } else {
+                results.remove(0)
+            }
+        }
+
+        async fn fetch_status(&self) -> Result<QrzLogbookStatus, QrzLogbookError> {
+            self.status_result
+                .lock()
+                .unwrap()
+                .take()
+                .unwrap_or_else(|| {
+                    Ok(QrzLogbookStatus {
+                        owner: String::new(),
+                        qso_count: 0,
+                    })
+                })
+        }
     }
 
     /// Capturing mock that records what `since` value was passed to `fetch_qsos`.
@@ -753,6 +866,23 @@ mod tests {
         async fn upload_qso(&self, _qso: &QsoRecord) -> Result<QrzUploadResult, QrzLogbookError> {
             Ok(QrzUploadResult {
                 logid: "ignored".into(),
+            })
+        }
+
+        async fn replace_qso(
+            &self,
+            logid: &str,
+            _qso: &QsoRecord,
+        ) -> Result<QrzUploadResult, QrzLogbookError> {
+            Ok(QrzUploadResult {
+                logid: logid.to_string(),
+            })
+        }
+
+        async fn fetch_status(&self) -> Result<QrzLogbookStatus, QrzLogbookError> {
+            Ok(QrzLogbookStatus {
+                owner: String::new(),
+                qso_count: 0,
             })
         }
     }
@@ -856,6 +986,147 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn modified_qso_with_logid_uses_replace_not_insert() {
+        // Regression for the bug where Modified QSOs were uploaded via INSERT,
+        // producing a brand-new row on QRZ every sync instead of updating the
+        // existing one. The fix routes Modified + existing logid through the
+        // REPLACE (ACTION=INSERT&OPTION=REPLACE,LOGID:...) path.
+        let store = MemoryStorage::new();
+        let mut q = make_qso("W1AW", "K7EDIT", Band::Band20m, Mode::Ft8, 1_700_000_000);
+        q.qrz_logid = Some("QRZ-EXISTING".into());
+        q.sync_status = SyncStatus::Modified as i32;
+        store.insert_qso(&q).await.unwrap();
+
+        let api = MockQrzApi::new(Ok(vec![]), vec![]);
+
+        let (tx, rx) = mpsc::channel(16);
+        execute_sync(&api, &store, true, ConflictPolicy::LastWriteWins, &tx).await;
+        drop(tx);
+
+        let final_msg = collect_final(rx).await;
+        assert!(final_msg.complete);
+        assert_eq!(
+            final_msg.uploaded_records, 1,
+            "should have uploaded the modified QSO"
+        );
+        assert!(final_msg.error.is_none(), "error: {:?}", final_msg.error);
+
+        let replace_calls = api.replace_calls.lock().unwrap().clone();
+        assert_eq!(
+            replace_calls.len(),
+            1,
+            "modified QSO must use REPLACE, got replace_calls={replace_calls:?}"
+        );
+        assert_eq!(
+            replace_calls[0].0, "QRZ-EXISTING",
+            "REPLACE must be called with the existing QRZ logid"
+        );
+
+        let upload_results_remaining = api.upload_results.lock().unwrap().len();
+        assert_eq!(
+            upload_results_remaining, 0,
+            "INSERT path should never have been exercised for a modified QSO with a logid"
+        );
+
+        // Local row should remain Synced with the same logid intact.
+        let saved = store.get_qso(&q.local_id).await.unwrap().unwrap();
+        assert_eq!(saved.sync_status, SyncStatus::Synced as i32);
+        assert_eq!(saved.qrz_logid.as_deref(), Some("QRZ-EXISTING"));
+    }
+
+    #[tokio::test]
+    async fn modified_qso_without_logid_falls_back_to_insert() {
+        // Edge case: a QSO is flagged Modified but somehow has no logid
+        // (legacy data, migrations). We must still upload it, just via INSERT.
+        let store = MemoryStorage::new();
+        let mut q = make_qso("W1AW", "K7LEGACY", Band::Band40m, Mode::Cw, 1_700_010_000);
+        q.qrz_logid = None;
+        q.sync_status = SyncStatus::Modified as i32;
+        store.insert_qso(&q).await.unwrap();
+
+        let api = MockQrzApi::new(
+            Ok(vec![]),
+            vec![Ok(QrzUploadResult {
+                logid: "QRZ-NEW".into(),
+            })],
+        );
+
+        let (tx, rx) = mpsc::channel(16);
+        execute_sync(&api, &store, true, ConflictPolicy::LastWriteWins, &tx).await;
+        drop(tx);
+
+        let final_msg = collect_final(rx).await;
+        assert!(final_msg.complete);
+        assert_eq!(final_msg.uploaded_records, 1);
+        let replace_calls = api.replace_calls.lock().unwrap().clone();
+        assert!(
+            replace_calls.is_empty(),
+            "should NOT have called REPLACE without a logid: {replace_calls:?}"
+        );
+        let saved = store.get_qso(&q.local_id).await.unwrap().unwrap();
+        assert_eq!(saved.qrz_logid.as_deref(), Some("QRZ-NEW"));
+    }
+
+    #[tokio::test]
+    async fn update_metadata_uses_status_call_result() {
+        // Regression: Phase 3 used to derive qrz_qso_count from local counts
+        // and just copy the previous owner. Now it must call STATUS and use
+        // the remote-authoritative values.
+        let store = MemoryStorage::new();
+        let api = MockQrzApi::new(Ok(vec![]), vec![]).with_status(Ok(QrzLogbookStatus {
+            owner: "NEW_OWNER".to_string(),
+            qso_count: 4242,
+        }));
+
+        let (tx, rx) = mpsc::channel(16);
+        execute_sync(&api, &store, true, ConflictPolicy::LastWriteWins, &tx).await;
+        drop(tx);
+        let _ = collect_final(rx).await;
+
+        let meta = store.get_sync_metadata().await.unwrap();
+        assert_eq!(meta.qrz_qso_count, 4242);
+        assert_eq!(meta.qrz_logbook_owner.as_deref(), Some("NEW_OWNER"));
+    }
+
+    #[tokio::test]
+    async fn update_metadata_falls_back_when_status_call_fails() {
+        // If STATUS fails transiently we still want to finish sync with
+        // a best-effort count from the local store, rather than overwriting
+        // metadata with zero/garbage.
+        let store = MemoryStorage::new();
+
+        // Pre-seed some metadata so we can prove owner is preserved.
+        store
+            .upsert_sync_metadata(&SyncMetadata {
+                qrz_qso_count: 0,
+                last_sync: None,
+                qrz_logbook_owner: Some("ORIG_OWNER".into()),
+            })
+            .await
+            .unwrap();
+
+        // And pre-seed two already-synced local QSOs so count has something
+        // to derive from.
+        for cs in ["KA", "KB"] {
+            let mut q = make_qso("W1AW", cs, Band::Band20m, Mode::Ft8, 1_700_000_000);
+            q.sync_status = SyncStatus::Synced as i32;
+            store.insert_qso(&q).await.unwrap();
+        }
+
+        let api = MockQrzApi::new(Ok(vec![]), vec![])
+            .with_status(Err(QrzLogbookError::ApiError("boom".into())));
+
+        let (tx, rx) = mpsc::channel(16);
+        execute_sync(&api, &store, true, ConflictPolicy::LastWriteWins, &tx).await;
+        drop(tx);
+        let _ = collect_final(rx).await;
+
+        let meta = store.get_sync_metadata().await.unwrap();
+        assert_eq!(meta.qrz_logbook_owner.as_deref(), Some("ORIG_OWNER"));
+        assert_eq!(meta.qrz_qso_count, 2);
+    }
+
+    #[tokio::test]
     async fn mixed_sync_downloads_and_uploads() {
         let store = MemoryStorage::new();
 
@@ -955,7 +1226,11 @@ mod tests {
             q.qrz_logid = Some("QRZ002".into());
             q
         };
-        let api = MockQrzApi::new(Ok(vec![remote1, remote2]), vec![]);
+        let api =
+            MockQrzApi::new(Ok(vec![remote1, remote2]), vec![]).with_status(Ok(QrzLogbookStatus {
+                owner: String::new(),
+                qso_count: 2,
+            }));
 
         let (tx, rx) = mpsc::channel(16);
         execute_sync(&api, &store, true, ConflictPolicy::LastWriteWins, &tx).await;
@@ -966,7 +1241,7 @@ mod tests {
         assert!(metadata.last_sync.is_some(), "last_sync should be set");
         assert_eq!(
             metadata.qrz_qso_count, 2,
-            "qrz_qso_count should reflect the two synced remote QSOs"
+            "qrz_qso_count should come from STATUS"
         );
     }
 
@@ -1213,9 +1488,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn extract_logid_from_extra_fields() {
+    async fn extract_logid_from_extra_fields_canonical_key() {
         let qso = QsoRecord {
-            extra_fields: [(super::QRZ_LOGID_EXTRA_FIELD.into(), "EX123".into())]
+            extra_fields: [("APP_QRZLOG_LOGID".into(), "EX123".into())]
                 .into_iter()
                 .collect(),
             ..QsoRecord::default()
@@ -1226,10 +1501,23 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn extract_logid_from_extra_fields_legacy_alias() {
+        let qso = QsoRecord {
+            extra_fields: [("APP_QRZ_LOGID".into(), "LEGACY".into())]
+                .into_iter()
+                .collect(),
+            ..QsoRecord::default()
+        };
+
+        let logid = super::extract_qrz_logid(&qso);
+        assert_eq!(logid.as_deref(), Some("LEGACY"));
+    }
+
+    #[tokio::test]
     async fn extract_logid_prefers_dedicated_field() {
         let qso = QsoRecord {
             qrz_logid: Some("DIRECT".into()),
-            extra_fields: [(super::QRZ_LOGID_EXTRA_FIELD.into(), "EXTRA".into())]
+            extra_fields: [("APP_QRZLOG_LOGID".into(), "EXTRA".into())]
                 .into_iter()
                 .collect(),
             ..QsoRecord::default()

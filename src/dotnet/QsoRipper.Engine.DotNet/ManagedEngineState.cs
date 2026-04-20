@@ -583,7 +583,8 @@ internal sealed class ManagedEngineState
 
             try
             {
-                var result = Sync(_syncEngine.ExecuteSyncAsync(_storage.Logbook, fullSync));
+                var conflictPolicy = _syncConfig?.ConflictPolicy ?? ConflictPolicy.Unspecified;
+                var result = Sync(_syncEngine.ExecuteSyncAsync(_storage.Logbook, fullSync, conflictPolicy));
 
                 var syncResponse = new SyncWithQrzResponse
                 {
