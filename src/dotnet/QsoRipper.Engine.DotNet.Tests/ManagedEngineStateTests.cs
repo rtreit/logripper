@@ -143,6 +143,24 @@ public sealed class ManagedEngineStateTests : IDisposable
     }
 
     [Fact]
+    public void Save_setup_normalizes_unspecified_conflict_policy_to_flag_for_review()
+    {
+        var state = CreateState();
+
+        var response = state.SaveSetup(new SaveSetupRequest
+        {
+            SyncConfig = new SyncConfig
+            {
+                AutoSyncEnabled = true,
+                SyncIntervalSeconds = 300,
+                ConflictPolicy = ConflictPolicy.Unspecified
+            }
+        });
+
+        Assert.Equal(ConflictPolicy.FlagForReview, response.Status.SyncConfig.ConflictPolicy);
+    }
+
+    [Fact]
     public void Sync_with_qrz_unexpected_exception_does_not_include_stack_trace()
     {
         var storage = new MemoryStorage();

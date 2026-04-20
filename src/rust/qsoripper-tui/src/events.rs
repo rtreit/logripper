@@ -9,6 +9,8 @@ use tonic::transport::Channel;
 use crate::app::{CallsignInfo, RecentQso, RigInfo, SpaceWeatherInfo};
 use crate::grpc;
 
+const SPACE_WEATHER_REFRESH_INTERVAL: Duration = Duration::from_secs(60 * 60);
+
 /// Events produced by background tasks and forwarded to the main event loop.
 pub(crate) enum AppEvent {
     /// A key press received from the terminal.
@@ -115,6 +117,30 @@ pub(crate) fn spawn_lookup_task(
                 .flatten();
             if event_tx.send(AppEvent::LookupResult(result)).is_err() {
                 break;
+            }
+        }
+    });
+}
+
+/// Spawn a background task that fetches space weather once per hour.
+///
+/// Fires immediately on startup and then every [`SPACE_WEATHER_REFRESH_INTERVAL`]. Errors and
+/// empty responses are silently discarded so stale data is never cleared by a transient failure.
+pub(crate) fn spawn_space_weather_task(
+    event_tx: mpsc::UnboundedSender<AppEvent>,
+    channel: Channel,
+) {
+    tokio::spawn(async move {
+        let mut interval = time::interval(SPACE_WEATHER_REFRESH_INTERVAL);
+        loop {
+            interval.tick().await;
+            if event_tx.is_closed() {
+                break;
+            }
+            if let Ok(Some(sw)) = grpc::get_space_weather(channel.clone()).await {
+                if event_tx.send(AppEvent::SpaceWeather(Some(sw))).is_err() {
+                    break;
+                }
             }
         }
     });

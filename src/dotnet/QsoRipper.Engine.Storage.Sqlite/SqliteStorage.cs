@@ -99,9 +99,13 @@ public sealed class SqliteStorage : IEngineStorage, ILogbookStore, ILookupSnapsh
                 BindQsoParameters(cmd, qso);
                 cmd.ExecuteNonQuery();
             }
-            catch (SqliteException ex) when (ex.SqliteErrorCode == 19) // SQLITE_CONSTRAINT
+            catch (SqliteException ex) when (ex.SqliteExtendedErrorCode is 1555 or 2067) // SQLITE_CONSTRAINT_PRIMARYKEY / UNIQUE
             {
                 throw StorageException.Duplicate("QsoRecord", qso.LocalId);
+            }
+            catch (SqliteException ex) when (ex.SqliteErrorCode == 19) // other SQLITE_CONSTRAINT (NOT NULL, CHECK, FK)
+            {
+                throw StorageException.Backend($"Constraint violation inserting QsoRecord {qso.LocalId}: {ex.Message}");
             }
         }
 

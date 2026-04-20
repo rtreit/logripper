@@ -7,9 +7,12 @@ option csharp_namespace = "QsoRipper.Domain";
 // Controls how conflicts between local and remote QSO records are resolved
 // during a QRZ logbook sync.
 enum ConflictPolicy {
+  // Default / unset value. Engines should require an explicit policy before
+  // running sync conflict resolution.
+  CONFLICT_POLICY_UNSPECIFIED = 0;
   // Newer record wins based on UTC timestamp comparison.
-  CONFLICT_POLICY_LAST_WRITE_WINS = 0;
+  CONFLICT_POLICY_LAST_WRITE_WINS = 1;
   // Both versions are preserved and the local record is flagged as
   // SYNC_STATUS_CONFLICT for manual review.
-  CONFLICT_POLICY_FLAG_FOR_REVIEW = 1;
+  CONFLICT_POLICY_FLAG_FOR_REVIEW = 2;
 }

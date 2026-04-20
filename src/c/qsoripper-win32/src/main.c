@@ -312,6 +312,7 @@ typedef struct {
     int sunspot_number;
     int has_weather;
     int weather_loading;
+    ULONGLONG last_weather_refresh;
 
     /* Rig control */
     int  rig_enabled;
@@ -1156,9 +1157,11 @@ static void SetCurrentDateTime(void)
     SYSTEMTIME st;
     GetSystemTime(&st);
     snprintf(g_state.date, sizeof(g_state.date),
-              "%04d-%02d-%02d", st.wYear, st.wMonth, st.wDay);
+              "%04d-%02d-%02d",
+              (int)st.wYear, (int)st.wMonth, (int)st.wDay);
     snprintf(g_state.time_str, sizeof(g_state.time_str),
-              "%02d:%02d", st.wHour, st.wMinute);
+              "%02d:%02d",
+              (int)st.wHour, (int)st.wMinute);
 }
 
 /* ── Set focused field with select-all ──────────────────────────────────── */
@@ -1382,7 +1385,7 @@ static void LogQso(void)
         SYSTEMTIME st;
         GetSystemTime(&st);
         snprintf(g_state.time_off, sizeof(g_state.time_off),
-                  "%02d:%02d", st.wHour, st.wMinute);
+                  "%02d:%02d", (int)st.wHour, (int)st.wMinute);
     }
 
     if (g_backend.mode == BACKEND_FFI) {
@@ -2198,7 +2201,7 @@ static void PaintHeader(HDC hdc, RECT *rc)
         GetSystemTime(&st);
         char clk[32];
         snprintf(clk, sizeof(clk), "%02d:%02d:%02d UTC",
-                  st.wHour, st.wMinute, st.wSecond);
+                  (int)st.wHour, (int)st.wMinute, (int)st.wSecond);
         int tw = (int)strlen(clk) * cw;
         DrawText_A_BG(hdc, w - tw - cw, ch, CLR_YELLOW, CLR_HEADER_BG, clk);
     }
@@ -3551,6 +3554,15 @@ static void OnTimer(HWND hwnd)
         }
     }
 
+    /* Space weather: refresh every hour */
+    if (!g_state.weather_loading) {
+        ULONGLONG now_sw = GetTickCount64();
+        if (now_sw - g_state.last_weather_refresh >= 3600000ULL) {
+            g_state.last_weather_refresh = now_sw;
+            FetchSpaceWeather();
+        }
+    }
+
     InvalidateRect(hwnd, NULL, FALSE);
 }
 
@@ -3644,6 +3656,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
 
         /* Kick off async data loads so the window appears immediately */
         RefreshQsoListAsync(hwnd);
+        g_state.last_weather_refresh = GetTickCount64();
         FetchSpaceWeather();
         if (g_backend.mode == BACKEND_FFI)
             SetStatus("Connected via gRPC (FFI)", 0);
@@ -3875,9 +3888,9 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         g_state.qso_delete_in_progress = 0;
         if (res) {
             if (res->ok) {
-                char msg[128];
-                snprintf(msg, sizeof(msg), "Deleted QSO with %s", res->callsign);
-                SetStatus(msg, 0);
+                char status_msg[128];
+                snprintf(status_msg, sizeof(status_msg), "Deleted QSO with %s", res->callsign);
+                SetStatus(status_msg, 0);
             } else {
                 SetStatus("Failed to delete QSO", 1);
             }
