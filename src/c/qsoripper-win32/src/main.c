@@ -30,6 +30,8 @@
 #define TIMER_MS        100
 #define STATUS_LIFETIME_MS  3000
 #define LOOKUP_DEBOUNCE_MS  500
+#define RIG_POLL_MS         500
+#define SPACE_WEATHER_REFRESH_MS (60 * 60 * 1000ULL)
 /* Tuning / behaviour constants */
 #define MAX_FIELD_LEN   256
 
@@ -3538,10 +3540,10 @@ static void OnTimer(HWND hwnd)
         }
     }
 
-    /* Rig poll: every 500ms when enabled and no poll in flight */
+    /* Rig poll: every RIG_POLL_MS when enabled and no poll in flight */
     if (g_state.rig_enabled && !g_state.rig_poll_in_progress) {
         ULONGLONG now = GetTickCount64();
-        if (now - g_state.last_rig_poll >= 500) {
+        if (now - g_state.last_rig_poll >= RIG_POLL_MS) {
             g_state.last_rig_poll = now;
             RigPollArg *rarg = (RigPollArg *)malloc(sizeof(RigPollArg));
             if (rarg) {
@@ -3557,7 +3559,7 @@ static void OnTimer(HWND hwnd)
     /* Space weather: refresh every hour */
     if (!g_state.weather_loading) {
         ULONGLONG now_sw = GetTickCount64();
-        if (now_sw - g_state.last_weather_refresh >= 3600000ULL) {
+        if (now_sw - g_state.last_weather_refresh >= SPACE_WEATHER_REFRESH_MS) {
             g_state.last_weather_refresh = now_sw;
             FetchSpaceWeather();
         }
