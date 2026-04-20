@@ -336,6 +336,82 @@ public sealed class QrzSyncEngineTests
         Assert.True(after.LastSync.Value > DateTimeOffset.UtcNow.AddMinutes(-1));
     }
 
+    [Fact]
+    public async Task Sync_populates_metadata_from_status_call()
+    {
+        var store = CreateStore();
+        var api = new FakeQrzLogbookApi
+        {
+            FetchResult = [],
+            StatusOwner = "KC7AVA",
+            StatusQsoCount = 1234,
+        };
+        var engine = new QrzSyncEngine(api);
+
+        var result = await engine.ExecuteSyncAsync(store.Logbook, fullSync: true);
+
+        Assert.Equal(1, api.StatusCallCount);
+        Assert.Equal(1234u, result.RemoteQsoCount);
+        Assert.Equal("KC7AVA", result.RemoteOwner);
+
+        var meta = await store.Logbook.GetSyncMetadataAsync();
+        Assert.Equal(1234, meta.QrzQsoCount);
+        Assert.Equal("KC7AVA", meta.QrzLogbookOwner);
+    }
+
+    [Fact]
+    public async Task Sync_falls_back_to_local_count_when_status_fails()
+    {
+        var store = CreateStore();
+
+        // Seed one already-synced local QSO; after sync, total local == 1, pending == 0,
+        // so local fallback count = 1.
+        var synced = MakeLocalQso("W1AW", BaseTime, Band._20M, Mode.Ft8, SyncStatus.Synced);
+        synced.QrzLogid = "1001";
+        await store.Logbook.InsertQsoAsync(synced);
+
+        var api = new FakeQrzLogbookApi
+        {
+            FetchResult = [],
+            StatusException = new InvalidOperationException("STATUS unavailable"),
+        };
+        var engine = new QrzSyncEngine(api);
+
+        var result = await engine.ExecuteSyncAsync(store.Logbook, fullSync: true);
+
+        Assert.Null(result.RemoteQsoCount);
+        Assert.NotNull(result.ErrorSummary);
+        Assert.Contains("STATUS refresh failed", result.ErrorSummary);
+
+        var meta = await store.Logbook.GetSyncMetadataAsync();
+        Assert.Equal(1, meta.QrzQsoCount);
+    }
+
+    [Fact]
+    public async Task Sync_preserves_previous_owner_when_status_returns_empty_owner()
+    {
+        var store = CreateStore();
+        await store.Logbook.UpsertSyncMetadataAsync(new SyncMetadata
+        {
+            QrzLogbookOwner = "W1AW",
+            QrzQsoCount = 10,
+        });
+
+        var api = new FakeQrzLogbookApi
+        {
+            FetchResult = [],
+            StatusOwner = string.Empty,
+            StatusQsoCount = 11,
+        };
+        var engine = new QrzSyncEngine(api);
+
+        await engine.ExecuteSyncAsync(store.Logbook, fullSync: true);
+
+        var meta = await store.Logbook.GetSyncMetadataAsync();
+        Assert.Equal("W1AW", meta.QrzLogbookOwner);
+        Assert.Equal(11, meta.QrzQsoCount);
+    }
+
     // -- Incremental vs full ------------------------------------------------
 
     [Fact]
@@ -605,6 +681,28 @@ public sealed class QrzSyncEngineTests
         {
             UpdatedQsos.Add(qso);
             return Task.FromResult(UpdateLogid);
+        }
+
+        /// <summary>Configurable STATUS owner. Empty string mimics QRZ omitting the field.</summary>
+        public string StatusOwner { get; set; } = "K7TEST";
+
+        /// <summary>Configurable STATUS QSO count.</summary>
+        public uint StatusQsoCount { get; set; }
+
+        /// <summary>When non-null, <see cref="GetStatusAsync"/> throws this instead of returning.</summary>
+        public Exception? StatusException { get; set; }
+
+        public int StatusCallCount { get; private set; }
+
+        public Task<QrzLogbookStatus> GetStatusAsync()
+        {
+            StatusCallCount++;
+            if (StatusException is not null)
+            {
+                return Task.FromException<QrzLogbookStatus>(StatusException);
+            }
+
+            return Task.FromResult(new QrzLogbookStatus(StatusOwner, StatusQsoCount));
         }
     }
 }

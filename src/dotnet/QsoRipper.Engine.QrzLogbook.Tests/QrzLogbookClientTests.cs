@@ -210,6 +210,80 @@ public sealed class QrzLogbookClientTests
 
     // -- Helpers --------------------------------------------------------------
 
+    // -- STATUS --------------------------------------------------------------
+
+    [Fact]
+    public async Task GetStatus_sends_action_status_with_key()
+    {
+        var (client, handler) = CreateClient("RESULT=OK&CALLSIGN=KC7AVA&COUNT=500");
+
+        using (client)
+        {
+            await client.GetStatusAsync();
+        }
+
+        Assert.NotNull(handler.CapturedBody);
+        Assert.Contains("ACTION=STATUS", handler.CapturedBody!);
+        Assert.Contains($"KEY={FakeApiKey}", handler.CapturedBody!);
+    }
+
+    [Fact]
+    public async Task GetStatus_parses_callsign_and_count()
+    {
+        var (client, _) = CreateClient("RESULT=OK&CALLSIGN=KC7AVA&COUNT=500");
+
+        using (client)
+        {
+            var status = await client.GetStatusAsync();
+
+            Assert.Equal("KC7AVA", status.Owner);
+            Assert.Equal(500u, status.QsoCount);
+        }
+    }
+
+    [Fact]
+    public async Task GetStatus_falls_back_to_owner_field_when_callsign_missing()
+    {
+        // Some QRZ responses historically used OWNER instead of CALLSIGN.
+        var (client, _) = CreateClient("RESULT=OK&OWNER=W1AW&COUNT=42");
+
+        using (client)
+        {
+            var status = await client.GetStatusAsync();
+
+            Assert.Equal("W1AW", status.Owner);
+            Assert.Equal(42u, status.QsoCount);
+        }
+    }
+
+    [Fact]
+    public async Task GetStatus_defaults_count_to_zero_when_missing()
+    {
+        // A brand-new empty logbook may not include COUNT at all.
+        var (client, _) = CreateClient("RESULT=OK&CALLSIGN=N0CALL");
+
+        using (client)
+        {
+            var status = await client.GetStatusAsync();
+
+            Assert.Equal("N0CALL", status.Owner);
+            Assert.Equal(0u, status.QsoCount);
+        }
+    }
+
+    [Fact]
+    public async Task GetStatus_throws_auth_exception_on_invalid_api_key()
+    {
+        var (client, _) = CreateClient("RESULT=FAIL&REASON=invalid api key");
+
+        using (client)
+        {
+            await Assert.ThrowsAsync<QrzLogbookAuthException>(() => client.GetStatusAsync());
+        }
+    }
+
+    // -- Client helper --------------------------------------------------------
+
     private static (QrzLogbookClient Client, CapturingHandler Handler) CreateClient(string responseBody)
     {
         var handler = new CapturingHandler(responseBody);
