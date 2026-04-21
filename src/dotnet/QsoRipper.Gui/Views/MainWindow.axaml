@@ -58,7 +58,18 @@
       <Setter Property="BorderThickness" Value="0" />
       <Setter Property="SelectionMode" Value="Extended" />
       <Setter Property="IsReadOnly" Value="False" />
-      <Setter Property="Padding" Value="0,0,0,10" />
+      <Setter Property="ScrollViewer.AllowAutoHide" Value="False" />
+    </Style>
+
+    <!-- Make DataGrid horizontal scrollbar always visible (non-overlay) so its hint
+         track doesn't sit on top of the last row. -->
+    <Style Selector="DataGrid#RecentQsoGrid /template/ ScrollBar#PART_HorizontalScrollbar">
+      <Setter Property="AllowAutoHide" Value="False" />
+      <Setter Property="MinHeight" Value="12" />
+    </Style>
+    <Style Selector="DataGrid#RecentQsoGrid /template/ ScrollBar#PART_VerticalScrollbar">
+      <Setter Property="AllowAutoHide" Value="False" />
+      <Setter Property="MinWidth" Value="12" />
     </Style>
 
     <!-- Compact density: override Fluent theme MinHeight so RowHeight/ColumnHeaderHeight bindings control sizing -->
