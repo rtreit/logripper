@@ -5,6 +5,7 @@
              x:DataType="vm:FullQsoCardViewModel">
   <UserControl.KeyBindings>
     <KeyBinding Gesture="Ctrl+Enter" Command="{Binding SaveCommand}" />
+    <KeyBinding Gesture="Ctrl+S" Command="{Binding SaveCommand}" />
     <KeyBinding Gesture="Escape" Command="{Binding CloseCommand}" />
   </UserControl.KeyBindings>
 
@@ -79,7 +80,7 @@
                 Classes="accent"
                 IsEnabled="{Binding !IsSaving}"
                 Command="{Binding SaveCommand}"
-                ToolTip.Tip="Save and close (Ctrl+Enter)" />
+                ToolTip.Tip="Save and close (Ctrl+Enter / Ctrl+S)" />
       </Grid>
 
       <TabControl x:Name="CardTabs"

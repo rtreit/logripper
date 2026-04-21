@@ -206,6 +206,8 @@ Streams QSO records matching optional filter criteria.
 
 **Behavior:**
 - Apply filters from the request: time range (`after`/`before`), `callsign_filter`, `band_filter`, `mode_filter`, `contest_id`, `limit`, `offset`.
+- `after` and `before` are **inclusive** boundaries (`utc_timestamp_ms >= after` and `utc_timestamp_ms <= before`). A QSO whose timestamp exactly matches a boundary MUST be included.
+- `callsign_filter` is a case-insensitive substring match against **either** `station_callsign` **or** `worked_callsign`. The match is normalized via uppercase comparison so `"w1aw"` and `"W1AW"` behave identically regardless of database collation.
 - Sort by `QsoSortOrder` (default: newest first).
 - Stream one `ListQsosResponse` per matching QSO record.
 - An empty logbook produces zero stream messages (not an error).

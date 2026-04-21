@@ -28,6 +28,7 @@ internal sealed partial class MainWindow : Window
     private readonly RecentQsoGridLayoutStore _gridLayoutStore = new();
     private readonly UiPreferencesStore _preferencesStore = new();
     private readonly MenuItem? _fileMenuItem;
+    private readonly Menu? _appMenuBar;
     private readonly TextBox? _recentQsoSearchBox;
     private readonly DataGrid? _recentQsoGrid;
     private readonly double _preferredWidth;
@@ -50,6 +51,7 @@ internal sealed partial class MainWindow : Window
         _preferredMinWidth = MinWidth;
         _preferredMinHeight = MinHeight;
         _fileMenuItem = this.FindControl<MenuItem>("FileMenuItem");
+        _appMenuBar = this.FindControl<Menu>("AppMenuBar");
         _recentQsoSearchBox = this.FindControl<TextBox>("RecentQsoSearchBox");
         _recentQsoGrid = this.FindControl<DataGrid>("RecentQsoGrid");
         if (_recentQsoGrid is not null)
@@ -65,6 +67,109 @@ internal sealed partial class MainWindow : Window
 
         DataContextChanged += OnDataContextChanged;
         BuildColumnMap();
+
+        // Tunnel-phase Escape handler so overlay/menu/scrollviewer descendants
+        // cannot swallow Escape before we get a chance to close the active
+        // overlay. Without this, Escape inside the help overlay's ScrollViewer
+        // (and certain menu states) is consumed before bubbling reaches us.
+        AddHandler(KeyDownEvent, OnPreviewKeyDown, RoutingStrategies.Tunnel);
+        AddHandler(KeyUpEvent, OnPreviewKeyUp, RoutingStrategies.Tunnel);
+    }
+
+    private void OnPreviewKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (_viewModel is null || _viewModel.IsWizardOpen)
+        {
+            return;
+        }
+
+        // When an overlay is open, kill menu access-key tracking the moment
+        // Alt/F10 goes down. Setting e.Handled alone is not enough: Avalonia's
+        // AccessKeyHandler registers its listeners with handledEventsToo=true,
+        // so we must proactively close the menu to prevent it from stealing
+        // focus on the trailing Alt release.
+        if (IsAnyOverlayOpen()
+            && (e.Key == Key.LeftAlt || e.Key == Key.RightAlt || e.Key == Key.F10))
+        {
+            _appMenuBar?.Close();
+            // Do not mark Handled here: Alt is often paired with a hotkey
+            // (Alt+C, Alt+B, etc.) that still needs to route through the normal
+            // KeyBinding / OnKeyDown pipeline. We only want to cancel the
+            // standalone access-key activation, which we achieve by closing the
+            // menu synchronously and swallowing the trailing KeyUp below.
+        }
+
+        if (e.Key != Key.Escape)
+        {
+            return;
+        }
+
+        // Order matches the bubble-phase handler in OnKeyDown so behavior is
+        // identical regardless of which phase actually fires the close.
+        if (_viewModel.IsFullQsoCardOpen)
+        {
+            _viewModel.FullQsoCard?.CloseCommand.Execute(null);
+            e.Handled = true;
+            return;
+        }
+
+        if (_viewModel.IsHelpOpen)
+        {
+            _viewModel.ToggleHelpCommand.Execute(null);
+            e.Handled = true;
+            return;
+        }
+
+        if (_viewModel.IsCallsignCardOpen)
+        {
+            _viewModel.CloseCallsignCardCommand.Execute(null);
+            e.Handled = true;
+            return;
+        }
+
+        if (_viewModel.IsInspectorOpen)
+        {
+            _viewModel.ToggleInspectorCommand.Execute(null);
+            e.Handled = true;
+        }
+    }
+
+    private void OnPreviewKeyUp(object? sender, KeyEventArgs e)
+    {
+        // Tunnel-phase guard: when an overlay is open, force the menu closed
+        // and swallow standalone Alt/F10/LWin key releases before the
+        // AccessKeyHandler (which runs with handledEventsToo=true) can see
+        // them and activate menu access-key mode. This is what caused the
+        // "focus jumps to File menu" behaviour when reopening / reasserting
+        // Alt while the QSO card is showing.
+        if (_viewModel is null || _viewModel.IsWizardOpen)
+        {
+            return;
+        }
+
+        if (!IsAnyOverlayOpen())
+        {
+            return;
+        }
+
+        if (e.Key == Key.LeftAlt || e.Key == Key.RightAlt
+            || e.Key == Key.LWin || e.Key == Key.RWin
+            || e.Key == Key.F10)
+        {
+            _appMenuBar?.Close();
+            e.Handled = true;
+        }
+    }
+
+    private bool IsAnyOverlayOpen()
+    {
+        return _viewModel is not null
+            && (_viewModel.IsFullQsoCardOpen
+                || _viewModel.IsHelpOpen
+                || _viewModel.IsCallsignCardOpen
+                || _viewModel.IsInspectorOpen
+                || _viewModel.IsSortChooserOpen
+                || _viewModel.IsColumnChooserOpen);
     }
 
     protected override async void OnOpened(EventArgs e)
@@ -247,10 +352,13 @@ internal sealed partial class MainWindow : Window
         // releases so Avalonia's menu access-key mode does not activate
         // and steal focus from the callsign textbox. This is what causes
         // the "cursor blinks once then jumps to File menu" behaviour
-        // after opening the card via Alt+A.
+        // after opening the card via Alt+A. Also close the menu explicitly
+        // because AccessKeyHandler ignores Handled on events it registered
+        // with handledEventsToo=true.
         if (_viewModel?.IsFullQsoCardOpen == true
             && (e.Key == Key.LeftAlt || e.Key == Key.RightAlt || e.Key == Key.LWin))
         {
+            _appMenuBar?.Close();
             e.Handled = true;
             return;
         }
@@ -671,6 +779,7 @@ internal sealed partial class MainWindow : Window
         {
             _lastFocusArea = FocusArea.Logger;
             _viewModel.IsLoggerFocused = true;
+            _viewModel.ContextHintText = "Alt+C call · Alt+B band · Alt+M mode · F10 log · Esc clear · Alt+A card";
         }
     }
 
@@ -680,6 +789,7 @@ internal sealed partial class MainWindow : Window
         if (_viewModel is not null)
         {
             _viewModel.IsLoggerFocused = false;
+            _viewModel.ContextHintText = "F2 edit · Ctrl+D delete · F8 lookup · Alt+Enter inspect · F5 refresh";
         }
     }
 
@@ -689,6 +799,7 @@ internal sealed partial class MainWindow : Window
         if (_viewModel is not null)
         {
             _viewModel.IsLoggerFocused = false;
+            _viewModel.ContextHintText = "Esc clear · Enter search · F3 grid · Ctrl+N logger";
         }
     }
 
@@ -1270,6 +1381,10 @@ internal sealed partial class MainWindow : Window
         else if (e.PropertyName == nameof(MainWindowViewModel.IsFullQsoCardOpen)
             && _viewModel?.IsFullQsoCardOpen == true)
         {
+            // Proactively cancel any pending menu access-key tracking so the
+            // trailing Alt release from Alt+A cannot activate the File menu
+            // and steal focus from the card's callsign box.
+            _appMenuBar?.Close();
             FocusFullQsoCard();
         }
         else if ((e.PropertyName == nameof(MainWindowViewModel.IsHelpOpen) && _viewModel?.IsHelpOpen == false)

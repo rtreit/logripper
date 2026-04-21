@@ -58,6 +58,10 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
     private string _activeStationText = "Station: -";
 
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(WindowTitle))]
+    private string _stationCallsign = string.Empty;
+
+    [ObservableProperty]
     private string _activeEngineText = "Engine: -";
 
     [ObservableProperty]
@@ -128,6 +132,9 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
     [ObservableProperty]
     private bool _isLoggerFocused;
 
+    [ObservableProperty]
+    private string _contextHintText = "F3 grid · F4 search · Ctrl+N logger · Alt+A card · F1 help";
+
     internal MainWindowViewModel(EngineTargetProfile engineProfile, string endpoint)
     {
         ArgumentNullException.ThrowIfNull(engineProfile);
@@ -181,6 +188,14 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
     public RecentQsoListViewModel RecentQsos { get; }
 
     public QsoLoggerViewModel Logger { get; }
+
+    /// <summary>
+    /// Dynamic window title showing station callsign when available.
+    /// Format: "QsoRipper — K7RND" or just "QsoRipper" if no station set.
+    /// </summary>
+    public string WindowTitle => string.IsNullOrWhiteSpace(StationCallsign)
+        ? "QsoRipper"
+        : $"QsoRipper — {StationCallsign}";
 
     public bool HasEngineSwitchStatus =>
         !string.IsNullOrWhiteSpace(EngineSwitchStatusText)
@@ -1056,6 +1071,7 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
         ActiveLogText = BuildLogText(status);
         ActiveProfileText = BuildProfileText(activeProfile);
         ActiveStationText = BuildStationText(activeProfile);
+        StationCallsign = activeProfile?.StationCallsign?.Trim() ?? string.Empty;
     }
 
     private static string BuildLogText(QsoRipper.Services.SetupStatus status)

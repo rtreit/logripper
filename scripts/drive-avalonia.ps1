@@ -158,7 +158,7 @@ function Get-TopLevelWindow {
     while ([DateTime]::UtcNow -lt $deadline) {
         $windows = $root.FindAll([System.Windows.Automation.TreeScope]::Children, $condition)
         foreach ($window in $windows) {
-            if ([string]::IsNullOrWhiteSpace($WindowTitle) -or $window.Current.Name -ieq $WindowTitle) {
+            if ([string]::IsNullOrWhiteSpace($WindowTitle) -or $window.Current.Name -ieq $WindowTitle -or $window.Current.Name.StartsWith($WindowTitle, [StringComparison]::OrdinalIgnoreCase)) {
                 return $window
             }
         }

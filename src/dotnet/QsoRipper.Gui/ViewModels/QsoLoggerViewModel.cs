@@ -289,6 +289,7 @@ internal sealed partial class QsoLoggerViewModel : ObservableObject
             LogStatusText = $"Logged {callsign}";
             Clear();
             QsoLogged?.Invoke(this, EventArgs.Empty);
+            FocusLogger();
         }
         catch (Grpc.Core.RpcException ex)
         {

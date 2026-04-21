@@ -32,7 +32,7 @@ internal sealed partial class HelpOverlayViewModel : ObservableObject
             new("Alt+1\u20266", "Jump to tab (Core\u2026Metadata)"),
             new("Ctrl+Tab", "Next tab"),
             new("Ctrl+Shift+Tab", "Previous tab"),
-            new("Ctrl+Enter", "Save"),
+            new("Ctrl+Enter / Ctrl+S", "Save"),
             new("Esc", "Close card"),
         ]),
         new("Grid", [
@@ -42,6 +42,8 @@ internal sealed partial class HelpOverlayViewModel : ObservableObject
             new("F5", "Refresh"),
             new("F8", "Callsign card"),
             new("Alt+Enter", "Toggle inspector"),
+            new("Ctrl++ / Ctrl+-", "Zoom in / out"),
+            new("Ctrl+0", "Reset zoom"),
         ]),
         new("System", [
             new("F6", "Sync with QRZ"),
