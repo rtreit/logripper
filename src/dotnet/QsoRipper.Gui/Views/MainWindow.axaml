@@ -937,10 +937,17 @@
                 BorderBrush="{DynamicResource SystemControlForegroundBaseLowBrush}"
                 BorderThickness="1,0,0,0"
                 Padding="10,4">
-          <StackPanel Orientation="Horizontal"
-                      Spacing="10"
-                      VerticalAlignment="Center"
-                      ClipToBounds="True">
+          <DockPanel>
+            <TextBlock DockPanel.Dock="Right"
+                       Text="F1 Help"
+                       FontSize="11"
+                       Opacity="0.50"
+                       VerticalAlignment="Center"
+                       Margin="10,0,0,0" />
+            <StackPanel Orientation="Horizontal"
+                        Spacing="10"
+                        VerticalAlignment="Center"
+                        ClipToBounds="True">
             <TextBlock Text="{Binding RecentQsos.CountStatusText}" FontSize="11.5" />
             <TextBlock Text="|" Opacity="0.45" />
             <TextBlock Text="{Binding RecentQsos.FilterStatusText}" FontSize="11.5" TextTrimming="CharacterEllipsis" />
@@ -966,6 +973,7 @@
                        MaxWidth="240"
                        IsVisible="{Binding HasEngineSwitchStatus}" />
           </StackPanel>
+          </DockPanel>
         </Border>
       </Grid>
 

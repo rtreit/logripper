@@ -71,13 +71,15 @@
         <Button Grid.Column="1"
                 Content="Cancel"
                 MinWidth="90"
-                Command="{Binding CloseCommand}" />
+                Command="{Binding CloseCommand}"
+                ToolTip.Tip="Discard and close (Esc)" />
         <Button Grid.Column="2"
                 Content="{Binding SaveButtonText}"
                 MinWidth="120"
                 Classes="accent"
                 IsEnabled="{Binding !IsSaving}"
-                Command="{Binding SaveCommand}" />
+                Command="{Binding SaveCommand}"
+                ToolTip.Tip="Save and close (Ctrl+Enter)" />
       </Grid>
 
       <TabControl x:Name="CardTabs"

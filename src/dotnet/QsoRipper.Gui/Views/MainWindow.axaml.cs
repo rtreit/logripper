@@ -255,6 +255,15 @@ internal sealed partial class MainWindow : Window
             return;
         }
 
+        // Swallow standalone Alt releases after Alt-field jumps (Alt+C/B/M)
+        // so the menu access-key mode does not steal focus from the logger.
+        if ((e.Key == Key.LeftAlt || e.Key == Key.RightAlt)
+            && _lastFocusArea == FocusArea.Logger)
+        {
+            e.Handled = true;
+            return;
+        }
+
         // Always swallow F10 KeyUp — it triggers Log QSO via KeyBinding on
         // KeyDown, but the KeyUp would otherwise activate Avalonia's menu
         // access-key mode (F10 is a standard menu activation key).

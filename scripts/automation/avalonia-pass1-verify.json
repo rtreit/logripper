@@ -1,0 +1,48 @@
+{
+  "inspectSurface": "MainWindow",
+  "window": {
+    "title": "QsoRipper",
+    "x": 80,
+    "y": 80,
+    "width": 1280,
+    "height": 760
+  },
+  "actions": [
+    { "type": "wait", "milliseconds": 1000 },
+    { "type": "screenshot", "path": "after-main-window.png" },
+    { "type": "dump-tree", "path": "after-main-window-tree.json" },
+
+    { "comment": "Open File menu",
+      "type": "click", "name": "File", "controlType": "MenuItem" },
+    { "type": "wait", "milliseconds": 400 },
+    { "type": "screenshot", "path": "after-file-menu.png" },
+    { "type": "send-keys", "keys": "{ESC}" },
+    { "type": "wait", "milliseconds": 200 },
+
+    { "comment": "Open View menu",
+      "type": "click", "name": "View", "controlType": "MenuItem" },
+    { "type": "wait", "milliseconds": 400 },
+    { "type": "screenshot", "path": "after-view-menu.png" },
+    { "type": "send-keys", "keys": "{ESC}" },
+    { "type": "wait", "milliseconds": 200 },
+
+    { "comment": "Open Help menu",
+      "type": "click", "name": "Help", "controlType": "MenuItem" },
+    { "type": "wait", "milliseconds": 400 },
+    { "type": "screenshot", "path": "after-help-menu.png" },
+    { "type": "send-keys", "keys": "{ESC}" },
+    { "type": "wait", "milliseconds": 200 },
+
+    { "comment": "Open QSO Card to check tab numbers",
+      "type": "send-keys", "keys": "%a" },
+    { "type": "wait", "milliseconds": 800 },
+    { "type": "screenshot", "path": "after-qso-card-core.png" },
+    { "type": "send-keys", "keys": "%4" },
+    { "type": "wait", "milliseconds": 400 },
+    { "type": "screenshot", "path": "after-qso-card-contest.png" },
+    { "type": "send-keys", "keys": "{ESC}" },
+    { "type": "wait", "milliseconds": 300 },
+
+    { "type": "screenshot", "path": "after-final.png" }
+  ]
+}

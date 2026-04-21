@@ -1,0 +1,86 @@
+{
+  "inspectSurface": "MainWindow",
+  "window": {
+    "title": "QsoRipper",
+    "x": 80,
+    "y": 80,
+    "width": 1280,
+    "height": 760
+  },
+  "actions": [
+    { "type": "wait", "milliseconds": 1000 },
+    { "type": "screenshot", "path": "00-main-baseline.png" },
+
+    { "comment": "Open Help overlay with F1",
+      "type": "send-keys", "keys": "{F1}" },
+    { "type": "wait", "milliseconds": 600 },
+    { "type": "screenshot", "path": "01-help-overlay.png" },
+    { "type": "dump-tree", "path": "01-help-overlay-tree.json" },
+    { "type": "send-keys", "keys": "{ESC}" },
+    { "type": "wait", "milliseconds": 400 },
+
+    { "comment": "Open Full QSO Card — Core tab",
+      "type": "send-keys", "keys": "%a" },
+    { "type": "wait", "milliseconds": 800 },
+    { "type": "screenshot", "path": "02-qso-card-core.png" },
+    { "type": "dump-tree", "path": "02-qso-card-tree.json" },
+
+    { "comment": "Switch to Lookup tab",
+      "type": "send-keys", "keys": "%2" },
+    { "type": "wait", "milliseconds": 500 },
+    { "type": "screenshot", "path": "03-qso-card-lookup.png" },
+
+    { "comment": "Switch to QSL tab",
+      "type": "send-keys", "keys": "%3" },
+    { "type": "wait", "milliseconds": 500 },
+    { "type": "screenshot", "path": "04-qso-card-qsl.png" },
+
+    { "comment": "Switch to Contest tab",
+      "type": "send-keys", "keys": "%4" },
+    { "type": "wait", "milliseconds": 500 },
+    { "type": "screenshot", "path": "05-qso-card-contest.png" },
+
+    { "comment": "Switch to Station tab",
+      "type": "send-keys", "keys": "%5" },
+    { "type": "wait", "milliseconds": 500 },
+    { "type": "screenshot", "path": "06-qso-card-station.png" },
+
+    { "comment": "Switch to Metadata tab",
+      "type": "send-keys", "keys": "%6" },
+    { "type": "wait", "milliseconds": 500 },
+    { "type": "screenshot", "path": "07-qso-card-metadata.png" },
+
+    { "comment": "Close QSO card",
+      "type": "send-keys", "keys": "{ESC}" },
+    { "type": "wait", "milliseconds": 500 },
+
+    { "comment": "Select W1AW row and open callsign card with F8",
+      "type": "click", "name": "W1AW", "controlType": "Text" },
+    { "type": "wait", "milliseconds": 400 },
+    { "type": "send-keys", "keys": "{F8}" },
+    { "type": "wait", "milliseconds": 2000 },
+    { "type": "screenshot", "path": "08-callsign-card.png" },
+    { "type": "dump-tree", "path": "08-callsign-card-tree.json" },
+    { "type": "send-keys", "keys": "{ESC}" },
+    { "type": "wait", "milliseconds": 500 },
+
+    { "comment": "Open Inspector",
+      "type": "send-keys", "keys": "%{ENTER}" },
+    { "type": "wait", "milliseconds": 600 },
+    { "type": "screenshot", "path": "09-inspector.png" },
+    { "type": "dump-tree", "path": "09-inspector-tree.json" },
+    { "type": "send-keys", "keys": "%{ENTER}" },
+    { "type": "wait", "milliseconds": 400 },
+
+    { "comment": "Delete confirm",
+      "type": "click", "name": "W1AW", "controlType": "Text" },
+    { "type": "wait", "milliseconds": 300 },
+    { "type": "send-keys", "keys": "^d" },
+    { "type": "wait", "milliseconds": 500 },
+    { "type": "screenshot", "path": "10-delete-confirm.png" },
+    { "type": "send-keys", "keys": "{ESC}" },
+    { "type": "wait", "milliseconds": 400 },
+
+    { "type": "screenshot", "path": "11-final.png" }
+  ]
+}

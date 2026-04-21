@@ -79,7 +79,7 @@ internal sealed partial class FullQsoCardViewModel : ObservableObject, IDisposab
     public string CardTitle => IsEditingExisting ? "QSO Card - Edit" : "QSO Card - New";
     public string CardSubtitle => IsEditingExisting
         ? "Editing the selected QSO. Ctrl+Enter saves, Esc closes."
-        : "Advanced entry for a new QSO. Ctrl+Enter logs, Esc closes.";
+        : "Advanced entry for a new QSO. Ctrl+Enter / F10 logs, Esc closes.";
     public string SaveButtonText => IsEditingExisting ? "Save Changes" : "Log QSO";
     public string ModeBadgeText => IsEditingExisting ? "Edit Existing" : "New Contact";
     public string SectionHint { get; } = SectionHintText;
