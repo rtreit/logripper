@@ -20,10 +20,17 @@ internal sealed partial class HelpOverlayViewModel : ObservableObject
             new("Esc", "Close overlay / clear"),
         ]),
         new("QSO Logging", [
-            new("Ctrl+Enter", "Log QSO"),
+            new("Ctrl+Enter / F10", "Log QSO"),
             new("Alt+A / Ctrl+L", "Open QSO Card"),
             new("F7", "Reset QSO timer"),
             new("\u2190 / \u2192", "Cycle band/mode (when focused)"),
+        ]),
+        new("QSO Card", [
+            new("Alt+1\u20266", "Jump to tab (Core\u2026Metadata)"),
+            new("Ctrl+Tab", "Next tab"),
+            new("Ctrl+Shift+Tab", "Previous tab"),
+            new("Ctrl+Enter", "Save"),
+            new("Esc", "Close card"),
         ]),
         new("Grid", [
             new("F2", "Edit selected cell"),

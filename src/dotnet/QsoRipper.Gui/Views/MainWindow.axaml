@@ -27,6 +27,7 @@
     <KeyBinding Gesture="F8" Command="{Binding OpenCallsignCardCommand}" />
     <KeyBinding Gesture="F6" Command="{Binding SyncNowCommand}" />
     <KeyBinding Gesture="Ctrl+Enter" Command="{Binding Logger.LogQsoCommand}" />
+    <KeyBinding Gesture="F10" Command="{Binding Logger.LogQsoCommand}" />
     <KeyBinding Gesture="Ctrl+N" Command="{Binding FocusLoggerCommand}" />
     <KeyBinding Gesture="Ctrl+R" Command="{Binding ToggleRigControlCommand}" />
     <KeyBinding Gesture="Ctrl+W" Command="{Binding ToggleSpaceWeatherCommand}" />
@@ -134,7 +135,7 @@
         <MenuItem Header="_Reset Zoom" InputGesture="Ctrl+0"
                   Command="{Binding RecentQsos.ResetZoomCommand}" />
         <Separator />
-        <MenuItem Header="_Sort Columns..." InputGesture="Ctrl+Shift+S"
+        <MenuItem Header="_Sort..." InputGesture="Ctrl+Shift+S"
                   Command="{Binding ToggleSortChooserCommand}" />
         <MenuItem Header="_Choose Columns..." InputGesture="Ctrl+H"
                   Command="{Binding ToggleColumnChooserCommand}" />
@@ -155,6 +156,10 @@
                   Command="{Binding SwitchToDotNetEngineCommand}" />
         <MenuItem Header="_Refresh Engine Status"
                   Command="{Binding RefreshEngineAvailabilityCommand}" />
+      </MenuItem>
+      <MenuItem Header="_Help">
+        <MenuItem Header="_Keyboard Shortcuts" InputGesture="F1"
+                  Command="{Binding ToggleHelpCommand}" />
       </MenuItem>
     </Menu>
       <TextBlock HorizontalAlignment="Right"
@@ -239,13 +244,15 @@
                     Content="Sort"
                     Command="{Binding ToggleSortChooserCommand}"
                     MinHeight="28"
-                    MinWidth="54" />
+                    MinWidth="54"
+                    ToolTip.Tip="Sort columns (Ctrl+Shift+S)" />
             <Button x:Name="ColumnsButton"
                     AutomationProperties.AutomationId="ColumnsButton"
                     Content="Cols"
                     Command="{Binding ToggleColumnChooserCommand}"
                     MinHeight="28"
-                    MinWidth="54" />
+                    MinWidth="54"
+                    ToolTip.Tip="Choose columns (Ctrl+H)" />
           </StackPanel>
         </Grid>
 
@@ -337,7 +344,7 @@
                       Classes="accent"
                       MinHeight="28" MinWidth="54"
                       VerticalAlignment="Bottom"
-                      ToolTip.Tip="Log QSO (Ctrl+Enter)" />
+                      ToolTip.Tip="Log QSO (Ctrl+Enter / F10)" />
 
               <Button Grid.Column="8"
                       Content="Clear"

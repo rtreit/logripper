@@ -249,7 +249,16 @@ internal sealed partial class MainWindow : Window
         // the "cursor blinks once then jumps to File menu" behaviour
         // after opening the card via Alt+A.
         if (_viewModel?.IsFullQsoCardOpen == true
-            && (e.Key == Key.LeftAlt || e.Key == Key.RightAlt || e.Key == Key.LWin || e.Key == Key.F10))
+            && (e.Key == Key.LeftAlt || e.Key == Key.RightAlt || e.Key == Key.LWin))
+        {
+            e.Handled = true;
+            return;
+        }
+
+        // Always swallow F10 KeyUp — it triggers Log QSO via KeyBinding on
+        // KeyDown, but the KeyUp would otherwise activate Avalonia's menu
+        // access-key mode (F10 is a standard menu activation key).
+        if (e.Key == Key.F10)
         {
             e.Handled = true;
             return;

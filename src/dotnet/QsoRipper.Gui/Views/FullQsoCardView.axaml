@@ -83,7 +83,7 @@
       <TabControl x:Name="CardTabs"
                   SelectionChanged="OnCardTabsSelectionChanged"
                   SelectedIndex="{Binding SelectedTabIndex, Mode=TwoWay}">
-        <TabItem Header="Core">
+        <TabItem Header="1 Core">
           <ScrollViewer VerticalScrollBarVisibility="Auto">
             <Grid ColumnDefinitions="*,*" ColumnSpacing="18" Margin="0,8,0,0">
               <StackPanel Spacing="10">
@@ -168,7 +168,7 @@
           </ScrollViewer>
         </TabItem>
 
-        <TabItem Header="Lookup">
+        <TabItem Header="2 Lookup">
           <ScrollViewer VerticalScrollBarVisibility="Auto">
             <Grid ColumnDefinitions="*,*" ColumnSpacing="18" Margin="0,8,0,0">
               <StackPanel Spacing="10">
@@ -271,7 +271,7 @@
           </ScrollViewer>
         </TabItem>
 
-        <TabItem Header="QSL">
+        <TabItem Header="3 QSL">
           <ScrollViewer VerticalScrollBarVisibility="Auto">
             <Grid ColumnDefinitions="*,*" ColumnSpacing="18" Margin="0,8,0,0">
               <StackPanel Spacing="10">
@@ -344,7 +344,7 @@
           </ScrollViewer>
         </TabItem>
 
-        <TabItem Header="Contest">
+        <TabItem Header="4 Contest">
           <ScrollViewer VerticalScrollBarVisibility="Auto">
             <Grid ColumnDefinitions="*,*" ColumnSpacing="18" Margin="0,8,0,0">
               <StackPanel Spacing="10">
@@ -406,7 +406,7 @@
           </ScrollViewer>
         </TabItem>
 
-        <TabItem Header="Station">
+        <TabItem Header="5 Station">
           <ScrollViewer VerticalScrollBarVisibility="Auto">
             <Grid ColumnDefinitions="*,*"
                   RowDefinitions="Auto,Auto,Auto,Auto,Auto"
@@ -547,7 +547,7 @@
           </ScrollViewer>
         </TabItem>
 
-        <TabItem Header="Metadata">
+        <TabItem Header="6 Metadata">
           <ScrollViewer VerticalScrollBarVisibility="Auto">
             <Grid ColumnDefinitions="320,*" ColumnSpacing="18" Margin="0,8,0,0">
               <StackPanel Spacing="10">
