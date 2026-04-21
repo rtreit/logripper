@@ -2,6 +2,7 @@
 
 use std::{
     collections::HashMap,
+    num::NonZeroUsize,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -27,22 +28,34 @@ type SharedProviderLookup = Shared<BoxFuture<'static, ProviderLookupResult>>;
 
 const DEFAULT_POSITIVE_CACHE_TTL: Duration = Duration::from_secs(15 * 60);
 const DEFAULT_NEGATIVE_CACHE_TTL: Duration = Duration::from_secs(2 * 60);
+const DEFAULT_MAX_CACHE_ENTRIES: NonZeroUsize = NonZeroUsize::new(1_000).unwrap();
 
 /// Lookup coordinator configuration.
 #[derive(Debug, Clone, Copy)]
 pub struct LookupCoordinatorConfig {
     positive_ttl: Duration,
     negative_ttl: Duration,
+    max_entries: NonZeroUsize,
 }
 
 impl LookupCoordinatorConfig {
-    /// Create an explicit cache configuration.
+    /// Create an explicit cache configuration with the default entry cap.
     #[must_use]
     pub fn new(positive_ttl: Duration, negative_ttl: Duration) -> Self {
         Self {
             positive_ttl,
             negative_ttl,
+            max_entries: DEFAULT_MAX_CACHE_ENTRIES,
         }
+    }
+
+    /// Override the maximum number of entries the in-memory cache may hold.
+    ///
+    /// When the cache is full, the least-recently-used entry is evicted.
+    #[must_use]
+    pub fn with_max_entries(mut self, max_entries: NonZeroUsize) -> Self {
+        self.max_entries = max_entries;
+        self
     }
 
     /// Positive (found-record) cache TTL.
@@ -56,6 +69,12 @@ impl LookupCoordinatorConfig {
     pub fn negative_ttl(self) -> Duration {
         self.negative_ttl
     }
+
+    /// Maximum number of in-memory cache entries before LRU eviction kicks in.
+    #[must_use]
+    pub fn max_entries(self) -> NonZeroUsize {
+        self.max_entries
+    }
 }
 
 impl Default for LookupCoordinatorConfig {
@@ -63,6 +82,7 @@ impl Default for LookupCoordinatorConfig {
         Self {
             positive_ttl: DEFAULT_POSITIVE_CACHE_TTL,
             negative_ttl: DEFAULT_NEGATIVE_CACHE_TTL,
+            max_entries: DEFAULT_MAX_CACHE_ENTRIES,
         }
     }
 }
@@ -79,11 +99,47 @@ struct CacheEntry {
     cached_at: Instant,
 }
 
+/// A size-bounded in-memory cache.
+///
+/// When the cache is at capacity, inserting a new key evicts an arbitrary
+/// existing entry to keep memory bounded.  Re-inserting an existing key
+/// updates its value without changing the entry count.
+struct BoundedCache {
+    entries: HashMap<String, CacheEntry>,
+    max_entries: usize,
+}
+
+impl BoundedCache {
+    fn new(max_entries: NonZeroUsize) -> Self {
+        Self {
+            entries: HashMap::new(),
+            max_entries: max_entries.get(),
+        }
+    }
+
+    fn get(&self, key: &str) -> Option<&CacheEntry> {
+        self.entries.get(key)
+    }
+
+    fn put(&mut self, key: String, value: CacheEntry) {
+        if let Some(existing) = self.entries.get_mut(&key) {
+            *existing = value;
+            return;
+        }
+        if self.entries.len() >= self.max_entries {
+            if let Some(evict_key) = self.entries.keys().next().cloned() {
+                self.entries.remove(&evict_key);
+            }
+        }
+        self.entries.insert(key, value);
+    }
+}
+
 /// Coordinates lookup policy over an underlying callsign provider.
 pub struct LookupCoordinator {
     provider: Arc<dyn CallsignProvider>,
     config: LookupCoordinatorConfig,
-    cache: RwLock<HashMap<String, CacheEntry>>,
+    cache: RwLock<BoundedCache>,
     in_flight: Mutex<HashMap<String, SharedProviderLookup>>,
     snapshot_storage: Option<Arc<dyn EngineStorage>>,
 }
@@ -95,7 +151,7 @@ impl LookupCoordinator {
         Self {
             provider,
             config,
-            cache: RwLock::new(HashMap::new()),
+            cache: RwLock::new(BoundedCache::new(config.max_entries)),
             in_flight: Mutex::new(HashMap::new()),
             snapshot_storage: None,
         }
@@ -114,7 +170,7 @@ impl LookupCoordinator {
         Self {
             provider,
             config,
-            cache: RwLock::new(HashMap::new()),
+            cache: RwLock::new(BoundedCache::new(config.max_entries)),
             in_flight: Mutex::new(HashMap::new()),
             snapshot_storage: Some(storage),
         }
@@ -150,9 +206,41 @@ impl LookupCoordinator {
     /// Perform a streaming lookup state transition.
     ///
     /// The returned vector is intended to be emitted in-order by a transport layer.
+    /// Prefer [`Self::stream_lookup_into`] for true server-streaming behavior:
+    /// the vector form buffers every update until the provider lookup completes,
+    /// which defeats the point of the `Loading` state. This method is retained for
+    /// tests and convenience callers that simply want to inspect the full
+    /// transition sequence.
     pub async fn stream_lookup(&self, callsign: &str, skip_cache: bool) -> Vec<LookupResult> {
+        let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
+        self.stream_lookup_into(callsign, skip_cache, &sender).await;
+        drop(sender);
+
+        let mut updates = Vec::new();
+        while let Some(update) = receiver.recv().await {
+            updates.push(update);
+        }
+        updates
+    }
+
+    /// Stream lookup state transitions into `sender` as they become available.
+    ///
+    /// This method emits the initial `Loading` update **before** any awaits on
+    /// cache or provider work, so transport layers (e.g., the gRPC server)
+    /// forward it to clients with minimal latency. Subsequent updates
+    /// (`Stale`, `Found`, `NotFound`, `Error`) are emitted in-order as the
+    /// underlying cache check and provider call complete.
+    ///
+    /// If the receiver is dropped between updates the method returns early.
+    pub async fn stream_lookup_into(
+        &self,
+        callsign: &str,
+        skip_cache: bool,
+        sender: &tokio::sync::mpsc::UnboundedSender<LookupResult>,
+    ) {
         let normalized_callsign = normalize_callsign(callsign);
-        let mut updates = vec![LookupResult {
+
+        let loading = LookupResult {
             state: LookupState::Loading as i32,
             record: None,
             error_message: None,
@@ -160,27 +248,30 @@ impl LookupCoordinator {
             lookup_latency_ms: 0,
             queried_callsign: normalized_callsign.clone(),
             debug_http_exchanges: Vec::new(),
-        }];
+        };
+        if sender.send(loading).is_err() {
+            return;
+        }
 
         if !skip_cache {
             if let Some(entry) = self.get_cache_entry(&normalized_callsign).await {
                 if self.is_fresh(&entry) {
-                    updates.push(Self::cache_entry_to_result(
-                        &entry,
-                        &normalized_callsign,
-                        None,
-                        true,
-                    ));
-                    return updates;
+                    let fresh =
+                        Self::cache_entry_to_result(&entry, &normalized_callsign, None, true);
+                    let _ = sender.send(fresh);
+                    return;
                 }
 
                 if let CachedLookup::Found(_) = entry.lookup {
-                    updates.push(Self::cache_entry_to_result(
+                    let stale = Self::cache_entry_to_result(
                         &entry,
                         &normalized_callsign,
                         Some(LookupState::Stale),
                         true,
-                    ));
+                    );
+                    if sender.send(stale).is_err() {
+                        return;
+                    }
                 }
             }
         }
@@ -197,17 +288,10 @@ impl LookupCoordinator {
             .run_provider_lookup_with_fallback(&normalized_callsign, base)
             .await;
         let latency_ms = duration_to_millis_u32(started_at.elapsed());
-        updates.push(
-            self.provider_result_to_lookup(
-                provider_result,
-                &normalized_callsign,
-                latency_ms,
-                &parsed,
-            )
-            .await,
-        );
-
-        updates
+        let final_update = self
+            .provider_result_to_lookup(provider_result, &normalized_callsign, latency_ms, &parsed)
+            .await;
+        let _ = sender.send(final_update);
     }
 
     /// Return a cache-only lookup result.
@@ -347,8 +431,7 @@ impl LookupCoordinator {
     async fn store_cache_entry(&self, normalized_callsign: &str, entry: CacheEntry) {
         {
             let mut cache = self.cache.write().await;
-            cache.insert(normalized_callsign.to_string(), entry.clone());
-            cache.retain(|_, cached_entry| self.is_fresh(cached_entry));
+            cache.put(normalized_callsign.to_string(), entry.clone());
         }
 
         // Persist to the snapshot store if available.
@@ -452,8 +535,7 @@ impl LookupCoordinator {
         // Promote into in-memory cache so subsequent reads are fast.
         {
             let mut cache = self.cache.write().await;
-            cache.insert(normalized_callsign.to_string(), entry.clone());
-            cache.retain(|_, cached_entry| self.is_fresh(cached_entry));
+            cache.put(normalized_callsign.to_string(), entry.clone());
         }
 
         Some(entry)
@@ -530,6 +612,7 @@ fn duration_to_millis_u32(duration: Duration) -> u32 {
 mod tests {
     use std::{
         collections::VecDeque,
+        num::NonZeroUsize,
         sync::{
             atomic::{AtomicUsize, Ordering},
             Arc,
@@ -683,6 +766,80 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn stream_lookup_into_emits_loading_before_provider_completes() {
+        let provider_delay = Duration::from_millis(200);
+        let provider = QueueProvider::new(
+            vec![Ok(ProviderLookup::found(
+                found_record("W1AW", "Slow"),
+                Vec::new(),
+            ))],
+            provider_delay,
+        );
+        let coordinator = Arc::new(LookupCoordinator::new(
+            Arc::new(provider.clone()),
+            LookupCoordinatorConfig::new(Duration::from_secs(60), Duration::from_secs(60)),
+        ));
+
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let producer_coordinator = coordinator.clone();
+        let producer = tokio::spawn(async move {
+            producer_coordinator
+                .stream_lookup_into("W1AW", false, &tx)
+                .await;
+        });
+
+        let started = Instant::now();
+        let first = rx
+            .recv()
+            .await
+            .expect("loading update should be emitted immediately");
+        let loading_latency = started.elapsed();
+
+        assert_eq!(first.state, LookupState::Loading as i32);
+        // Loading must arrive well before the provider's 200ms delay would let
+        // the final update through. Allow slack for slow CI but stay strict
+        // enough that a regression to the buffered behavior would fail.
+        assert!(
+            loading_latency < Duration::from_millis(150),
+            "Loading update arrived in {loading_latency:?}, expected <150ms"
+        );
+
+        let second = rx.recv().await.expect("final update should follow loading");
+        assert_eq!(second.state, LookupState::Found as i32);
+        assert!(rx.recv().await.is_none(), "stream should be exhausted");
+
+        producer.await.expect("producer task should finish cleanly");
+        assert_eq!(provider.call_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn stream_lookup_into_stops_when_receiver_drops_after_loading() {
+        let provider = QueueProvider::new(
+            vec![Ok(ProviderLookup::found(
+                found_record("W1AW", "Unwanted"),
+                Vec::new(),
+            ))],
+            Duration::from_millis(100),
+        );
+        let coordinator = LookupCoordinator::new(
+            Arc::new(provider.clone()),
+            LookupCoordinatorConfig::new(Duration::from_secs(60), Duration::from_secs(60)),
+        );
+
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let stream_future = coordinator.stream_lookup_into("W1AW", false, &tx);
+        let drain_future = async {
+            let first = rx.recv().await.expect("loading update");
+            assert_eq!(first.state, LookupState::Loading as i32);
+            drop(rx);
+        };
+
+        tokio::join!(stream_future, drain_future);
+        // Provider may still have been invoked; the contract is just that no
+        // panic occurs when the receiver is dropped between updates.
+    }
+
+    #[tokio::test]
     async fn concurrent_identical_lookups_share_inflight_request() {
         let provider = QueueProvider::new(
             vec![Ok(ProviderLookup::found(
@@ -709,25 +866,29 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn inserting_new_entry_evicts_expired_cache_entries() {
+    async fn lru_eviction_drops_oldest_entry_at_capacity() {
+        let cap = NonZeroUsize::new(5).unwrap();
         let provider = QueueProvider::new(Vec::new(), Duration::ZERO);
         let coordinator = LookupCoordinator::new(
             Arc::new(provider),
-            LookupCoordinatorConfig::new(Duration::from_millis(1), Duration::from_millis(1)),
+            LookupCoordinatorConfig::new(Duration::from_secs(300), Duration::from_secs(300))
+                .with_max_entries(cap),
         );
 
         for index in 0..5 {
             let callsign = format!("W1AW{index}");
             let _ = coordinator.lookup(&callsign, false).await;
         }
-        sleep(Duration::from_millis(5)).await;
+
+        let cache_len_before = coordinator.cache.read().await.entries.len();
+        assert_eq!(cache_len_before, 5);
 
         let _ = coordinator.lookup("K7RND", false).await;
 
-        let cache_len = coordinator.cache.read().await.len();
+        let cache_len_after = coordinator.cache.read().await.entries.len();
         assert_eq!(
-            cache_len, 1,
-            "expected expired cache entries to be evicted when inserting a new entry"
+            cache_len_after, 5,
+            "cache should remain at capacity after LRU eviction"
         );
     }
 

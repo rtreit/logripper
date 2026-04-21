@@ -5,6 +5,7 @@ using Avalonia.Media;
 using CommunityToolkit.Mvvm.ComponentModel;
 using Google.Protobuf.WellKnownTypes;
 using QsoRipper.Domain;
+using QsoRipper.EngineSelection;
 using QsoRipper.Gui.Utilities;
 
 namespace QsoRipper.Gui.ViewModels;
@@ -200,9 +201,20 @@ internal sealed class RecentQsoItemViewModel : ObservableObject, IEditableObject
             {
                 _utcEndSortKey = ParseUtcSortKey(value);
                 OnPropertyChanged(nameof(UtcEndSortKey));
+                OnPropertyChanged(nameof(DurationDisplay));
             }
         }
     }
+
+    /// <summary>
+    /// Calculated QSO duration when both start and end timestamps are present.
+    /// Returns an em dash when the duration cannot be calculated so the column reads cleanly.
+    /// See https://github.com/rtreit/qsoripper/issues/201.
+    /// </summary>
+    public string DurationDisplay =>
+        QsoDurationFormatter.Format(
+            _sourceQso.UtcTimestamp?.ToDateTimeOffset(),
+            _sourceQso.UtcEndTimestamp?.ToDateTimeOffset()) ?? "—";
 
     public string CqZone
     {
@@ -385,6 +397,7 @@ internal sealed class RecentQsoItemViewModel : ObservableObject, IEditableObject
         State = NoteOrNull(_sourceQso.WorkedState) ?? string.Empty;
         County = ParseCountyName(_sourceQso.WorkedCounty);
         Comment = NoteOrNull(_sourceQso.Comment) ?? "-";
+        OnPropertyChanged(nameof(DurationDisplay));
         RecomputeDirty();
     }
 

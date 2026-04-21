@@ -1,0 +1,6 @@
+#include <windows.h>
+#include "app.h"
+
+// Application icon. The .ico embeds multiple resolutions so Windows can pick
+// the right size for the title bar, taskbar, Alt+Tab, and Explorer.
+IDI_APP_ICON ICON "qsoripper.ico"

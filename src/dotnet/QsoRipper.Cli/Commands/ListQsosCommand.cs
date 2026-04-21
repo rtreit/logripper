@@ -2,6 +2,7 @@ using Grpc.Core;
 using Grpc.Net.Client;
 using QsoRipper.Cli;
 using QsoRipper.Domain;
+using QsoRipper.EngineSelection;
 using QsoRipper.Services;
 using static QsoRipper.Cli.EnumHelpers;
 
@@ -81,6 +82,11 @@ internal static class ListQsosCommand
 
         header += $" {"Freq",-10} {"Grid",-8}";
 
+        if (options.ShowDuration)
+        {
+            header += $" {"Duration",-10}";
+        }
+
         if (options.ShowComment)
         {
             header += $" {"Comment",-40}";
@@ -111,6 +117,12 @@ internal static class ListQsosCommand
         var grid = qso.HasWorkedGrid ? qso.WorkedGrid : "";
         row += $" {freq,-10} {grid,-8}";
 
+        if (options.ShowDuration)
+        {
+            var duration = FormatDuration(qso) ?? "";
+            row += $" {duration,-10}";
+        }
+
         if (options.ShowComment)
         {
             row += $" {FormatCommentPreview(qso),-40}";
@@ -137,6 +149,9 @@ internal static class ListQsosCommand
                     break;
                 case "--show-comment":
                     displayOptions.ShowComment = true;
+                    break;
+                case "--show-duration":
+                    displayOptions.ShowDuration = true;
                     break;
                 case "--callsign" when i < args.Length - 1:
                     request.CallsignFilter = args[++i].ToUpperInvariant();
@@ -240,6 +255,13 @@ internal static class ListQsosCommand
         return TrimComment(comment);
     }
 
+    internal static string? FormatDuration(QsoRecord qso)
+    {
+        var start = qso.UtcTimestamp?.ToDateTimeOffset();
+        var end = qso.UtcEndTimestamp?.ToDateTimeOffset();
+        return QsoDurationFormatter.Format(start, end);
+    }
+
     internal static string TrimComment(string value)
     {
         var sanitized = value.ReplaceLineEndings(" ").Trim();
@@ -255,6 +277,8 @@ internal static class ListQsosCommand
 internal sealed class ListDisplayOptions
 {
     public bool ShowComment { get; set; } = true;
+
+    public bool ShowDuration { get; set; }
 
     public bool ShowId { get; set; }
 

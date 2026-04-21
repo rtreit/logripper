@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::LazyLock;
 
-use crate::proto::qsoripper::domain::{CallsignRecord, QsoRecord, RstReport};
+use crate::proto::qsoripper::domain::{CallsignRecord, DxccEntity, QsoRecord, RstReport};
 
 #[derive(Clone, Copy)]
 struct DxccEntityInfo {
@@ -102,6 +102,30 @@ pub(crate) fn enrich_callsign_record_from_dxcc(record: &mut CallsignRecord) {
     if string_is_blank(record.dxcc_country_name.as_deref()) && !entity.country.is_empty() {
         record.dxcc_country_name = Some(entity.country.to_owned());
     }
+}
+
+/// Look up a DXCC entity by its numeric code from the embedded ADIF DXCC table.
+///
+/// Returns a [`DxccEntity`] populated with the fields available locally
+/// (`dxcc_code`, `country_name`, `continent`, `cq_zone`, `itu_zone`). Optional
+/// fields that QRZ would normally provide (`utc_offset`, `latitude`, `longitude`,
+/// `notes`) are left unset because the embedded table does not carry them.
+///
+/// Returns `None` when no entity matches the requested code.
+#[must_use]
+pub fn lookup_dxcc_entity_by_code(dxcc_code: u32) -> Option<DxccEntity> {
+    let entity = DXCC_ENTITIES.get(&dxcc_code).copied()?;
+    Some(DxccEntity {
+        dxcc_code,
+        country_name: entity.country.to_owned(),
+        continent: entity.continent.to_owned(),
+        itu_zone: entity.itu_zone,
+        cq_zone: entity.cq_zone,
+        utc_offset: None,
+        latitude: None,
+        longitude: None,
+        notes: None,
+    })
 }
 
 fn string_is_blank(value: Option<&str>) -> bool {

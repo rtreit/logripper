@@ -151,7 +151,8 @@ Creates a new QSO record in the local logbook.
 6. Set `created_at` and `updated_at` to the current UTC time.
 7. Set `sync_status` to `SYNC_STATUS_NOT_SYNCED`.
 8. Persist the record via the storage backend.
-9. Return the persisted `QsoRecord` in the response.
+9. If `sync_to_qrz=true`, immediately push the new record to QRZ Logbook (per-operation sync; see §7.3 below). On success, adopt the QRZ-assigned `qrz_logid`, set `sync_status=SYNC_STATUS_SYNCED`, and write the row back to storage. Populate `LogQsoResponse.sync_success=true`. On failure (no API key, network error, QRZ rejection), leave `sync_status=SYNC_STATUS_NOT_SYNCED`, set `sync_success=false`, and put a human-readable message in `sync_error`. The local persist MUST succeed regardless — per-op sync failure is reported, not raised.
+10. Return the persisted `QsoRecord` in the response.
 
 **Error semantics:**
 - `INVALID_ARGUMENT` — missing or invalid required fields.
@@ -168,7 +169,8 @@ Updates an existing QSO record by `local_id`.
 3. Set `updated_at` to the current UTC time.
 4. If the QSO was previously synced, set `sync_status` to `SYNC_STATUS_MODIFIED`.
 5. Persist the updated record.
-6. Return the updated `QsoRecord`.
+6. If `sync_to_qrz=true`, immediately push the updated record to QRZ Logbook (per-operation sync; see §7.3 below). If the row already has a `qrz_logid`, use REPLACE so the same remote row is updated in place; otherwise INSERT. On success, write back the QRZ-assigned `qrz_logid` and `sync_status=SYNC_STATUS_SYNCED`, and set `UpdateQsoResponse.sync_success=true`. On failure, leave the local row in its current state (`SYNC_STATUS_MODIFIED` or `SYNC_STATUS_NOT_SYNCED`), set `sync_success=false`, and put a human-readable message in `sync_error`. The local persist MUST succeed regardless.
+7. Return the updated `QsoRecord`.
 
 **Error semantics:**
 - `NOT_FOUND` — no QSO with the given `local_id`.
@@ -321,10 +323,13 @@ When setup saves QRZ XML credentials, engines must restore those credentials on 
 Performs a callsign lookup with streaming progress updates.
 
 **Behavior:**
-- Same lookup logic as `Lookup`, but streams intermediate state changes (e.g., `LOOKUP_STATE_IN_PROGRESS`, cache check result, final result).
-- Useful for UIs that want to show real-time lookup progress.
+- Emits a `Loading` `LookupResult` immediately, **before** any cache or provider work, so clients get instant feedback that the request is in flight.
+- If a fresh cache entry exists, emits a `Found` (or `NotFound`) update and closes the stream.
+- If a stale cache entry exists, emits a `Stale` update with the cached record, then continues to the provider.
+- After the provider call completes, emits the final `Found`, `NotFound`, or `Error` update and closes the stream.
+- Updates must be pushed to the transport as they are produced; engines must not buffer the full transition sequence before sending.
 
-**Error semantics:** Same as `Lookup`.
+**Error semantics:** Same as `Lookup`. Per-request errors surface as a final `LookupResult` with state `LOOKUP_STATE_ERROR`; transport-level failures (e.g., the client dropping the stream) cancel the in-flight work without a panic.
 
 #### GetCachedCallsign
 
@@ -345,11 +350,21 @@ Returns DXCC entity information for a given DXCC code.
 **Behavior:**
 - Look up the `DxccEntity` by numeric DXCC code from the engine's DXCC reference data.
 - Return country name, continent, zones, and geographic data.
+- Engines that derive entity data from the embedded ADIF DXCC table populate
+  `dxcc_code`, `country_name`, `continent`, `cq_zone`, and `itu_zone`. Optional
+  geographic fields (`utc_offset`, `latitude`, `longitude`, `notes`) remain unset
+  unless the engine has access to a richer reference source (for example, QRZ DXCC
+  XML).
+- Prefix-based lookup (`GetDxccEntityRequest.prefix`) is reserved for a future engine
+  release that integrates QRZ's prefix reduction algorithm. Engines that have not yet
+  shipped prefix support must return `UNIMPLEMENTED` for that branch and `INVALID_ARGUMENT`
+  when neither `dxcc_code` nor `prefix` is set.
 
 **Error semantics:**
 - `NOT_FOUND` — unknown DXCC code.
-
-> **Note:** This RPC may be marked as unimplemented in early engine versions. Engines should return `UNIMPLEMENTED` if not yet supported.
+- `UNIMPLEMENTED` — request used the `prefix` branch and the engine has not yet
+  implemented prefix-based DXCC resolution.
+- `INVALID_ARGUMENT` — neither `dxcc_code` nor `prefix` was specified.
 
 #### BatchLookup
 
@@ -360,11 +375,15 @@ Performs lookups for multiple callsigns in a single request.
 - Perform lookups for each (cache-first, then external).
 - Return a list of `LookupResult` entries, one per input callsign.
 - Order of results matches order of input callsigns.
+- Engines should bound concurrency (the reference implementations cap parallel
+  lookups at 5) and reuse the same `LookupCoordinator` path that powers the unary
+  `Lookup` RPC so cache, debounce, and provider fallback semantics stay consistent.
+- Empty input is valid and returns an empty `results` list.
 
 **Error semantics:**
 - Per-callsign errors are reported in individual `LookupResult` entries, not as top-level gRPC errors.
-
-> **Note:** This RPC may be marked as unimplemented in early engine versions.
+- `INTERNAL` — orchestration failure (e.g., a worker task panicked) before a per-callsign
+  result could be produced.
 
 ### 3.4 RigControlService
 
@@ -1083,7 +1102,23 @@ The QRZ logbook sync is a three-phase operation:
 1. Call QRZ logbook API `STATUS` to get the current logbook QSO count and owner callsign.
 2. Update `sync_metadata` with the count, timestamp, and owner. If `STATUS` fails, engines SHOULD fall back to locally-computed counts rather than leaving metadata stale.
 
-**Resilience:** A failure in any phase should not prevent other phases from executing. The engine should report partial success/failure in the stream.
+**Resilience:** A failure in any phase should not prevent other phases from executing. The engine should report partial success/failure in the stream. A fatal failure in Phase 1 (e.g., metadata load failure, fetch failure) MUST short-circuit the rest of `execute_sync` so that `last_sync` is NOT advanced — the next attempt re-fetches the same window.
+
+#### Per-Operation Sync (`sync_to_qrz=true` on LogQso/UpdateQso)
+
+When `LogQso.sync_to_qrz=true` or `UpdateQso.sync_to_qrz=true`, engines MUST attempt to push the affected row to QRZ immediately after the local persist. This is independent of the bulk sync flow (`SyncWithQrz`) and lets clients log a QSO and get an authoritative QRZ logid back in a single round-trip.
+
+**Selection rule (mirrors Phase 2):**
+- If the local row has a non-empty `qrz_logid`, REPLACE in place (`ACTION=INSERT&OPTION=REPLACE,LOGID:<logid>`).
+- Otherwise INSERT (`ACTION=INSERT`).
+
+**Success path:** adopt the QRZ-assigned `LOGID`, set `sync_status=SYNC_STATUS_SYNCED`, write the row back to local storage, and populate the response's `sync_success=true` (and `qrz_logid` for `LogQsoResponse`).
+
+**Failure path:** the local persist (step 1) MUST succeed regardless. The QRZ failure is reported, not raised: leave the row's `sync_status` untouched (`NOT_SYNCED` or `MODIFIED`), set `sync_success=false`, and put a human-readable message in `sync_error`. The next bulk `SyncWithQrz` will retry the row via Phase 2.
+
+**Configuration not present:** if no QRZ logbook API key is configured, return `sync_success=false` with `sync_error="QRZ Logbook API key is not configured."`. The local row still persists.
+
+**.NET divergence:** the .NET reference engine currently runs all `LogQso`/`UpdateQso` work under a synchronous lock and does not yet issue the per-op QRZ HTTP call from inside that critical section. It returns `sync_success=true` with a placeholder `qrz_logid` when configured, or a `sync_error` indicating the operation is not yet wired. Tracked as a follow-up; see Appendix C.
 
 ### 7.4 Lookup Lifecycle
 
@@ -1420,3 +1455,4 @@ The following gaps are documented tracking items. They do not affect the normati
 
 - **.NET engine — `SyncWithQrz` streaming granularity.** The .NET engine currently produces a single terminal `SyncWithQrzResponse` instead of per-phase progress messages. Matches the spec's RPC signature but loses UI progress fidelity vs. the Rust engine.
 - **.NET engine — QRZ ADIF field coverage.** The .NET `AdifCodec` does not yet parse/emit every QRZ-specific field the Rust mapper covers (e.g., `ARRL_SECT`, SKCC, QSL/LOTW/EQSL date and flag variants, `MY_LAT`/`MY_LON`, `MY_ARRL_SECT`, `MY_CQ_ZONE`/`MY_ITU_ZONE`). Missing fields round-trip via `extra_fields` today, but should graduate to dedicated domain columns.
+- **.NET engine — per-operation `sync_to_qrz=true` on `LogQso`/`UpdateQso`.** `ManagedEngineState.LogQso`/`UpdateQso` run inside a synchronous lock and do not yet issue the per-op QRZ HTTP call. Currently returns either a placeholder logid (when configured) or a `sync_error`. Reaching parity requires moving the HTTP call out of the lock (likely making the handlers async). The Rust engine implements this fully via `sync::sync_single_qso`. See §7.3 "Per-Operation Sync".
