@@ -465,11 +465,10 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
         return runningEntry?.Endpoint ?? targetProfile.DefaultEndpoint;
     }
 
-    private static string BuildEngineText(EngineTargetProfile profile, string endpoint)
+    private static string BuildEngineText(EngineTargetProfile profile, string _)
     {
         ArgumentNullException.ThrowIfNull(profile);
-        ArgumentException.ThrowIfNullOrWhiteSpace(endpoint);
-        return $"Engine: {profile.DisplayName} @ {endpoint.Trim()}";
+        return $"Engine: {profile.DisplayName}";
     }
 
     /// <summary>

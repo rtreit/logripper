@@ -442,7 +442,7 @@
           <Grid ColumnDefinitions="*,Auto">
             <Grid Grid.Column="0">
               <DataGrid x:Name="RecentQsoGrid"
-                         Margin="8,2,8,0"
+                         Margin="8,2,8,2"
                          AutomationProperties.AutomationId="RecentQsoGrid"
                          RowHeight="{Binding RecentQsos.GridRowHeight}"
                          ColumnHeaderHeight="{Binding RecentQsos.GridHeaderHeight}"
@@ -1004,7 +1004,7 @@
                        Text="{Binding ContextHintText}"
                        FontSize="11"
                        FontFamily="Cascadia Mono, Consolas, monospace"
-                       Foreground="#600096D6"
+                       Foreground="#B00096D6"
                        VerticalAlignment="Center"
                        Margin="10,0,0,0"
                        TextTrimming="CharacterEllipsis" />
@@ -1030,7 +1030,7 @@
             <TextBlock Text="│" Opacity="0.30" FontSize="11" />
             <TextBlock Text="{Binding ActiveProfileText}" FontSize="11.5" TextTrimming="CharacterEllipsis" MaxWidth="180" Opacity="0.70" />
             <TextBlock Text="│" Opacity="0.30" FontSize="11" />
-            <TextBlock Text="{Binding ActiveEngineText}" FontSize="11.5" TextTrimming="CharacterEllipsis" MaxWidth="260" Opacity="0.70" />
+            <TextBlock Text="{Binding ActiveEngineText}" FontSize="11.5" TextTrimming="CharacterEllipsis" MaxWidth="160" Opacity="0.70" />
             <TextBlock Text="│" Opacity="0.30" FontSize="11" IsVisible="{Binding HasEngineSwitchStatus}" />
             <TextBlock Text="{Binding EngineSwitchStatusText}"
                        FontSize="11.5"
