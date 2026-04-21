@@ -78,6 +78,8 @@ function Invoke-Build([string]$Step, [string]$Command, [string[]]$Arguments) {
 $Win32SourceDir = Join-Path $PSScriptRoot 'src' 'c' 'qsoripper-win32'
 $Win32Source = Join-Path $Win32SourceDir 'src' 'main.c'
 $Win32FfiGateSource = Join-Path $Win32SourceDir 'src' 'backend_ffi_gate.c'
+$Win32ResourcesDir = Join-Path $Win32SourceDir 'resources'
+$Win32ResourceScript = Join-Path $Win32ResourcesDir 'app.rc'
 $Win32PublishDir = Join-Path $PSScriptRoot 'artifacts' 'publish' | Join-Path -ChildPath 'qsoripper-win32' | Join-Path -ChildPath $Configuration
 
 function Build-Rust {
@@ -262,11 +264,14 @@ function Build-Win32 {
     $exe = Join-Path $Win32PublishDir 'qsoripper-win32.exe'
 
     $arch = if ([System.Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture -eq 'Arm64') { 'arm64' } else { 'amd64' }
+    $win32Res = Join-Path $Win32PublishDir 'app.res'
     $buildScript = Join-Path $Win32PublishDir '_build.cmd'
     @"
 @echo off
 call "$vcvars" $arch >nul 2>&1
-cl /W4 /WX /analyze $optFlags /DUNICODE /D_UNICODE /I"$ffiInclude" "$Win32Source" "$Win32FfiGateSource" /Fe:"$exe" /link user32.lib gdi32.lib shell32.lib comctl32.lib
+rc /nologo /I"$Win32ResourcesDir" /fo"$win32Res" "$Win32ResourceScript"
+if errorlevel 1 exit /b %errorlevel%
+cl /W4 /WX /analyze $optFlags /DUNICODE /D_UNICODE /I"$ffiInclude" /I"$Win32ResourcesDir" "$Win32Source" "$Win32FfiGateSource" /Fe:"$exe" /link "$win32Res" user32.lib gdi32.lib shell32.lib comctl32.lib
 "@ | Set-Content -LiteralPath $buildScript -Encoding ASCII
 
     Push-Location $Win32PublishDir
@@ -289,6 +294,7 @@ cl /W4 /WX /analyze $optFlags /DUNICODE /D_UNICODE /I"$ffiInclude" "$Win32Source
     # Clean intermediate files
     Remove-Item (Join-Path $Win32PublishDir '*.obj') -Force -ErrorAction SilentlyContinue
     Remove-Item (Join-Path $Win32PublishDir '*.pft') -Force -ErrorAction SilentlyContinue
+    Remove-Item (Join-Path $Win32PublishDir '*.res') -Force -ErrorAction SilentlyContinue
     Remove-Item $buildScript -Force -ErrorAction SilentlyContinue
 
     Write-Host "  -> $Win32PublishDir"

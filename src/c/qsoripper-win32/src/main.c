@@ -19,6 +19,7 @@
 #include <stdint.h>
 #include "qsoripper_ffi.h"
 #include "backend_ffi_gate.h"
+#include "app.h"
 
 /* ── Compile-time settings ─────────────────────────────────────────────── */
 
@@ -4194,8 +4195,22 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
     wc.hCursor       = LoadCursor(NULL, IDC_ARROW);
     wc.hbrBackground = NULL; /* We handle all painting */
     wc.lpszClassName = WINDOW_CLASS;
-    wc.hIcon         = LoadIcon(NULL, IDI_APPLICATION);
-    wc.hIconSm       = LoadIcon(NULL, IDI_APPLICATION);
+    wc.hIcon         = (HICON)LoadImageW(hInstance, MAKEINTRESOURCEW(IDI_APP_ICON),
+                                         IMAGE_ICON,
+                                         GetSystemMetrics(SM_CXICON),
+                                         GetSystemMetrics(SM_CYICON),
+                                         LR_DEFAULTCOLOR | LR_SHARED);
+    if (!wc.hIcon) {
+        wc.hIcon = LoadIcon(NULL, IDI_APPLICATION);
+    }
+    wc.hIconSm       = (HICON)LoadImageW(hInstance, MAKEINTRESOURCEW(IDI_APP_ICON),
+                                         IMAGE_ICON,
+                                         GetSystemMetrics(SM_CXSMICON),
+                                         GetSystemMetrics(SM_CYSMICON),
+                                         LR_DEFAULTCOLOR | LR_SHARED);
+    if (!wc.hIconSm) {
+        wc.hIconSm = LoadIcon(NULL, IDI_APPLICATION);
+    }
 
     if (!RegisterClassExW(&wc)) {
         MessageBoxW(NULL, L"Failed to register window class",
