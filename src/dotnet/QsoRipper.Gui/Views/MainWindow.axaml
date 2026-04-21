@@ -123,7 +123,7 @@
 
   <DockPanel ClipToBounds="True">
       <Panel DockPanel.Dock="Top">
-      <Menu>
+      <Menu x:Name="AppMenuBar">
         <MenuItem x:Name="FileMenuItem"
                   AutomationProperties.AutomationId="FileMenuItem"
                   Header="_File">
