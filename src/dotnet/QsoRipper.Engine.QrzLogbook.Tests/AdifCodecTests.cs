@@ -246,6 +246,40 @@ public sealed class AdifCodecTests
     }
 
     [Fact]
+    public void Serialize_normalizes_qrz_tx_power_units()
+    {
+        var qso = new QsoRecord
+        {
+            WorkedCallsign = "W1AW",
+            Band = Band._20M,
+            Mode = Mode.Cw,
+            UtcTimestamp = Timestamp.FromDateTimeOffset(new DateTimeOffset(2024, 1, 1, 0, 0, 0, TimeSpan.Zero)),
+            TxPower = "100 watts",
+        };
+
+        var adif = AdifCodec.SerializeSingleQso(qso);
+
+        Assert.Contains("<TX_PWR:3>100", adif);
+    }
+
+    [Fact]
+    public void Serialize_omits_invalid_qrz_tx_power_values()
+    {
+        var qso = new QsoRecord
+        {
+            WorkedCallsign = "W1AW",
+            Band = Band._20M,
+            Mode = Mode.Cw,
+            UtcTimestamp = Timestamp.FromDateTimeOffset(new DateTimeOffset(2024, 1, 1, 0, 0, 0, TimeSpan.Zero)),
+            TxPower = "HIGH",
+        };
+
+        var adif = AdifCodec.SerializeSingleQso(qso);
+
+        Assert.DoesNotContain("TX_PWR", adif);
+    }
+
+    [Fact]
     public void Serialize_extra_fields_round_trip()
     {
         var original = new QsoRecord

@@ -846,7 +846,7 @@ All backends must implement the `EngineStorage` trait, which decomposes into:
 
 **Response format:** Ampersand-delimited key-value pairs. Check `RESULT` field for success/failure.
 
-**ADIF interchange:** The logbook API uses ADIF format for QSO data. The engine must serialize/deserialize ADIF at this boundary.
+**ADIF interchange:** The logbook API uses ADIF format for QSO data. The engine must serialize/deserialize ADIF at this boundary. When exporting numeric ADIF fields for QRZ uploads, engines must normalize them to QRZ-compatible values; for example, `TX_PWR` must be sent as a numeric watt value and omitted if the local value cannot be normalized safely.
 
 **Credential env vars:**
 - `QSORIPPER_QRZ_LOGBOOK_API_KEY`

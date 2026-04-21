@@ -268,6 +268,9 @@ The QsoRipper adapter should include a robust ADIF parser/serializer that handle
 - Variable field lengths and ordering
 - Optional fields present or absent per record
 - Multi-record payloads from FETCH responses
+- QRZ-compatible normalization for numeric fields on upload; for example,
+  `TX_PWR` must be numeric watts, so values like `100W` should be normalized to
+  `100` and unparseable values should be omitted rather than sent verbatim
 
 ---
 

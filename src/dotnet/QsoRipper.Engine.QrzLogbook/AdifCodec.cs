@@ -493,7 +493,11 @@ internal static class AdifCodec
             AppendField(sb, "RST_RCVD", qso.RstReceived.Raw);
         }
 
-        AppendOptional(sb, "TX_PWR", qso.TxPower);
+        if (TryNormalizeQrzPower(qso.TxPower, out var txPower))
+        {
+            AppendField(sb, "TX_PWR", txPower);
+        }
+
         AppendOptional(sb, "CONTACTED_OP", qso.WorkedOperatorCallsign);
         AppendOptional(sb, "NAME", qso.WorkedOperatorName);
         AppendOptional(sb, "GRIDSQUARE", qso.WorkedGrid);
@@ -585,6 +589,67 @@ internal static class AdifCodec
         {
             AppendField(sb, key, value);
         }
+    }
+
+    private static bool TryNormalizeQrzPower(string? value, out string normalized)
+    {
+        normalized = string.Empty;
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return false;
+        }
+
+        var trimmed = value.Trim();
+        var numericEnd = 0;
+        var seenDigit = false;
+        var seenDecimal = false;
+        while (numericEnd < trimmed.Length)
+        {
+            var ch = trimmed[numericEnd];
+            if (char.IsAsciiDigit(ch))
+            {
+                seenDigit = true;
+                numericEnd++;
+                continue;
+            }
+
+            if (ch == '.' && !seenDecimal)
+            {
+                seenDecimal = true;
+                numericEnd++;
+                continue;
+            }
+
+            break;
+        }
+
+        if (!seenDigit || numericEnd == 0)
+        {
+            return false;
+        }
+
+        var numericToken = trimmed[..numericEnd];
+        if (!decimal.TryParse(
+                numericToken,
+                NumberStyles.AllowDecimalPoint,
+                CultureInfo.InvariantCulture,
+                out var parsed)
+            || parsed < 0)
+        {
+            return false;
+        }
+
+        var suffix = trimmed[numericEnd..].Trim();
+        if (suffix.Length != 0
+            && !suffix.Equals("W", StringComparison.OrdinalIgnoreCase)
+            && !suffix.Equals("WATT", StringComparison.OrdinalIgnoreCase)
+            && !suffix.Equals("WATTS", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        normalized = numericToken;
+        return true;
     }
 
     private static bool TryParseAdifDateTime(string date, string? time, out Timestamp timestamp)

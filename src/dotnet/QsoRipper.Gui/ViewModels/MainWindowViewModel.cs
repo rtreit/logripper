@@ -31,6 +31,7 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
     private bool _setupCompleteBeforeWizard;
     private string? _preferredEngineProfileId;
     private string? _preferredEngineEndpoint;
+    private StationProfile? _activeStationProfile;
 
     [ObservableProperty]
     private bool _isSettingsOpen;
@@ -559,16 +560,26 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
     }
 
     [RelayCommand]
-    private void ToggleFullQsoCard()
+    private void OpenQsoCard()
     {
         if (IsFullQsoCardOpen)
         {
-            CloseFullQsoCard();
             return;
         }
 
-        var vm = new FullQsoCardViewModel(Logger);
+        FullQsoCardViewModel vm;
+        var selectedQso = RecentQsos.SelectedQso;
+        if (!IsLoggerFocused && selectedQso is not null)
+        {
+            vm = FullQsoCardViewModel.ForEdit(_engine, selectedQso.ToSourceQso());
+        }
+        else
+        {
+            vm = FullQsoCardViewModel.ForNew(_engine, Logger, _activeStationProfile?.Clone());
+        }
+
         vm.CloseRequested += OnFullQsoCardCloseRequested;
+        vm.Saved += OnFullQsoCardSaved;
         FullQsoCard = vm;
         IsFullQsoCardOpen = true;
     }
@@ -713,16 +724,21 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
         if (FullQsoCard is { } card)
         {
             card.CloseRequested -= OnFullQsoCardCloseRequested;
+            card.Saved -= OnFullQsoCardSaved;
         }
 
         IsFullQsoCardOpen = false;
         FullQsoCard = null;
-        Logger.FocusLogger();
     }
 
     private void OnFullQsoCardCloseRequested(object? sender, EventArgs e)
     {
         CloseFullQsoCard();
+    }
+
+    private void OnFullQsoCardSaved(object? sender, EventArgs e)
+    {
+        OnQsoLogged(sender, e);
     }
 
     private async void OnQsoLogged(object? sender, EventArgs e)
@@ -1028,6 +1044,7 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
     private void ApplySetupContext(QsoRipper.Services.SetupStatus status)
     {
         var activeProfile = status.StationProfile;
+        _activeStationProfile = activeProfile?.Clone();
         ActiveLogText = BuildLogText(status);
         ActiveProfileText = BuildProfileText(activeProfile);
         ActiveStationText = BuildStationText(activeProfile);

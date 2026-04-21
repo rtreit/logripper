@@ -112,6 +112,8 @@ internal sealed partial class QsoLoggerViewModel : ObservableObject
 
     public string BandLabel => SelectedBand.Label;
     public string ModeLabel => SelectedMode.Label;
+    internal CallsignRecord? LastLookupRecord => _lastLookupRecord;
+    internal DateTimeOffset SuggestedUtcStart => _timerRunning ? _qsoStartTime : DateTimeOffset.UtcNow;
 
     // ── Events ───────────────────────────────────────────────────────────
 
