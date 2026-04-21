@@ -42,6 +42,8 @@ internal sealed partial class HelpOverlayViewModel : ObservableObject
             new("F5", "Refresh"),
             new("F8", "Callsign card"),
             new("Alt+Enter", "Toggle inspector"),
+            new("Ctrl++ / Ctrl+-", "Zoom in / out"),
+            new("Ctrl+0", "Reset zoom"),
         ]),
         new("System", [
             new("F6", "Sync with QRZ"),

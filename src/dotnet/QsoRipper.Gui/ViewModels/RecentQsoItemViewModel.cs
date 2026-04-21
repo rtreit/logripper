@@ -396,7 +396,7 @@ internal sealed class RecentQsoItemViewModel : ObservableObject, IEditableObject
         SyncStatus = BuildSyncStatus(_sourceQso.SyncStatus);
         State = NoteOrNull(_sourceQso.WorkedState) ?? string.Empty;
         County = ParseCountyName(_sourceQso.WorkedCounty);
-        Comment = NoteOrNull(_sourceQso.Comment) ?? "-";
+        Comment = NoteOrNull(_sourceQso.Comment) ?? string.Empty;
         OnPropertyChanged(nameof(DurationDisplay));
         RecomputeDirty();
     }
@@ -777,13 +777,13 @@ internal sealed class RecentQsoItemViewModel : ObservableObject, IEditableObject
         DisplayOrDash(qso.ContestId),
         DisplayOrDash(qso.StationCallsign),
         BuildNote(qso),
-        NoteOrNull(qso.Comment) ?? "-",
+        NoteOrNull(qso.Comment) ?? string.Empty,
         FormatTimestamp(qso.UtcEndTimestamp, format),
         BuildOptionalNumber(qso.WorkedCqZone),
         BuildOptionalNumber(qso.WorkedItuZone));
 
     private static string BuildNote(QsoRecord qso) =>
-        NoteOrNull(qso.Notes) ?? "-";
+        NoteOrNull(qso.Notes) ?? string.Empty;
 
     private void RefreshSortKeys()
     {

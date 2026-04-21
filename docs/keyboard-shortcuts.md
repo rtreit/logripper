@@ -38,6 +38,9 @@ shortcuts across surfaces.
 | Refresh | F5 | — | — | GUI only |
 | Callsign lookup card | F8 | — | — | GUI only (side panel with QRZ data) |
 | Toggle inspector | Alt+Enter | — | — | GUI only (detail panel) |
+| Zoom in | Ctrl++ | — | — | GUI only |
+| Zoom out | Ctrl+- | — | — | GUI only |
+| Reset zoom | Ctrl+0 | — | — | GUI only |
 
 ## System
 
@@ -91,3 +94,25 @@ for the frequently-used callsign lookup without losing rig control access.
 In TUI and Win32, Alt+Enter logs or updates a QSO. The GUI uses Alt+Enter
 for the QSO inspector panel and Ctrl+Enter/F10 for logging. This avoids
 conflict with the menu access key system where Alt activates the menu bar.
+
+## Discoverability Features
+
+### Contextual Hint Strip (GUI)
+The GUI status bar includes a right-aligned contextual hint strip that changes
+based on the current focus area:
+
+| Focus Area | Hints Shown |
+|---|---|
+| QSO Grid | F2 edit · Ctrl+D delete · F8 lookup · Alt+Enter inspect · F5 refresh |
+| Logger | Alt+C call · Alt+B band · Alt+M mode · F10 log · Esc clear · Alt+A card |
+| Search | Esc clear · Enter search · F3 grid · Ctrl+N logger |
+
+### Inline Shortcut Hints (GUI)
+Toolbar buttons show their keyboard shortcuts directly on the button face
+(e.g. "Sort Ctrl+⇧+S", "Cols Ctrl+H", "⟳ Sync F6") so they are discoverable
+without hovering for tooltips.
+
+### Post-Log Focus Return (GUI)
+After logging a QSO with F10 or Ctrl+Enter, the GUI automatically clears the
+form and returns focus to the callsign field for immediate next-contact entry.
+This matches the TUI behavior for rapid contest logging.

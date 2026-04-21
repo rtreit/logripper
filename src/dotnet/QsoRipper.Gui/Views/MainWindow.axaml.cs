@@ -671,6 +671,7 @@ internal sealed partial class MainWindow : Window
         {
             _lastFocusArea = FocusArea.Logger;
             _viewModel.IsLoggerFocused = true;
+            _viewModel.ContextHintText = "Alt+C call · Alt+B band · Alt+M mode · F10 log · Esc clear · Alt+A card";
         }
     }
 
@@ -680,6 +681,7 @@ internal sealed partial class MainWindow : Window
         if (_viewModel is not null)
         {
             _viewModel.IsLoggerFocused = false;
+            _viewModel.ContextHintText = "F2 edit · Ctrl+D delete · F8 lookup · Alt+Enter inspect · F5 refresh";
         }
     }
 
@@ -689,6 +691,7 @@ internal sealed partial class MainWindow : Window
         if (_viewModel is not null)
         {
             _viewModel.IsLoggerFocused = false;
+            _viewModel.ContextHintText = "Esc clear · Enter search · F3 grid · Ctrl+N logger";
         }
     }
 
