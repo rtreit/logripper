@@ -24,8 +24,8 @@ import "services/stream_lookup_response.proto";
 //   Lookup             — implemented (both engines)
 //   StreamLookup       — implemented (both engines)
 //   GetCachedCallsign  — implemented (both engines)
-//   GetDxccEntity      — implemented (.NET, by DXCC code; prefix lookup not yet supported); unimplemented (Rust)
-//   BatchLookup        — implemented (.NET); unimplemented (Rust)
+//   GetDxccEntity      — implemented (both engines, by DXCC code; prefix lookup not yet supported)
+//   BatchLookup        — implemented (both engines)
 //
 // Transport: native gRPC (HTTP/2 + binary protobuf).
 // Browser clients must go through a gRPC-Web proxy — see docs/api/client-integration.md.

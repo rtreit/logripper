@@ -343,11 +343,21 @@ Returns DXCC entity information for a given DXCC code.
 **Behavior:**
 - Look up the `DxccEntity` by numeric DXCC code from the engine's DXCC reference data.
 - Return country name, continent, zones, and geographic data.
+- Engines that derive entity data from the embedded ADIF DXCC table populate
+  `dxcc_code`, `country_name`, `continent`, `cq_zone`, and `itu_zone`. Optional
+  geographic fields (`utc_offset`, `latitude`, `longitude`, `notes`) remain unset
+  unless the engine has access to a richer reference source (for example, QRZ DXCC
+  XML).
+- Prefix-based lookup (`GetDxccEntityRequest.prefix`) is reserved for a future engine
+  release that integrates QRZ's prefix reduction algorithm. Engines that have not yet
+  shipped prefix support must return `UNIMPLEMENTED` for that branch and `INVALID_ARGUMENT`
+  when neither `dxcc_code` nor `prefix` is set.
 
 **Error semantics:**
 - `NOT_FOUND` — unknown DXCC code.
-
-> **Note:** This RPC may be marked as unimplemented in early engine versions. Engines should return `UNIMPLEMENTED` if not yet supported.
+- `UNIMPLEMENTED` — request used the `prefix` branch and the engine has not yet
+  implemented prefix-based DXCC resolution.
+- `INVALID_ARGUMENT` — neither `dxcc_code` nor `prefix` was specified.
 
 #### BatchLookup
 
@@ -358,11 +368,15 @@ Performs lookups for multiple callsigns in a single request.
 - Perform lookups for each (cache-first, then external).
 - Return a list of `LookupResult` entries, one per input callsign.
 - Order of results matches order of input callsigns.
+- Engines should bound concurrency (the reference implementations cap parallel
+  lookups at 5) and reuse the same `LookupCoordinator` path that powers the unary
+  `Lookup` RPC so cache, debounce, and provider fallback semantics stay consistent.
+- Empty input is valid and returns an empty `results` list.
 
 **Error semantics:**
 - Per-callsign errors are reported in individual `LookupResult` entries, not as top-level gRPC errors.
-
-> **Note:** This RPC may be marked as unimplemented in early engine versions.
+- `INTERNAL` — orchestration failure (e.g., a worker task panicked) before a per-callsign
+  result could be produced.
 
 ### 3.4 RigControlService
 
