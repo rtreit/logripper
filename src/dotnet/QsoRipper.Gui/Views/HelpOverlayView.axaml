@@ -4,7 +4,7 @@
              x:Class="QsoRipper.Gui.Views.HelpOverlayView"
              x:DataType="vm:HelpOverlayViewModel">
 
-  <Border Background="#E0202020" CornerRadius="8" Padding="24" MaxWidth="640" MaxHeight="520"
+  <Border Background="#E0202020" CornerRadius="8" Padding="24" MaxWidth="720" MaxHeight="560"
           HorizontalAlignment="Center" VerticalAlignment="Center"
           BorderBrush="#60FFFFFF" BorderThickness="1">
     <DockPanel>

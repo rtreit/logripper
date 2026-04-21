@@ -71,19 +71,21 @@
         <Button Grid.Column="1"
                 Content="Cancel"
                 MinWidth="90"
-                Command="{Binding CloseCommand}" />
+                Command="{Binding CloseCommand}"
+                ToolTip.Tip="Discard and close (Esc)" />
         <Button Grid.Column="2"
                 Content="{Binding SaveButtonText}"
                 MinWidth="120"
                 Classes="accent"
                 IsEnabled="{Binding !IsSaving}"
-                Command="{Binding SaveCommand}" />
+                Command="{Binding SaveCommand}"
+                ToolTip.Tip="Save and close (Ctrl+Enter)" />
       </Grid>
 
       <TabControl x:Name="CardTabs"
                   SelectionChanged="OnCardTabsSelectionChanged"
                   SelectedIndex="{Binding SelectedTabIndex, Mode=TwoWay}">
-        <TabItem Header="Core">
+        <TabItem Header="1 Core">
           <ScrollViewer VerticalScrollBarVisibility="Auto">
             <Grid ColumnDefinitions="*,*" ColumnSpacing="18" Margin="0,8,0,0">
               <StackPanel Spacing="10">
@@ -168,7 +170,7 @@
           </ScrollViewer>
         </TabItem>
 
-        <TabItem Header="Lookup">
+        <TabItem Header="2 Lookup">
           <ScrollViewer VerticalScrollBarVisibility="Auto">
             <Grid ColumnDefinitions="*,*" ColumnSpacing="18" Margin="0,8,0,0">
               <StackPanel Spacing="10">
@@ -271,7 +273,7 @@
           </ScrollViewer>
         </TabItem>
 
-        <TabItem Header="QSL">
+        <TabItem Header="3 QSL">
           <ScrollViewer VerticalScrollBarVisibility="Auto">
             <Grid ColumnDefinitions="*,*" ColumnSpacing="18" Margin="0,8,0,0">
               <StackPanel Spacing="10">
@@ -344,7 +346,7 @@
           </ScrollViewer>
         </TabItem>
 
-        <TabItem Header="Contest">
+        <TabItem Header="4 Contest">
           <ScrollViewer VerticalScrollBarVisibility="Auto">
             <Grid ColumnDefinitions="*,*" ColumnSpacing="18" Margin="0,8,0,0">
               <StackPanel Spacing="10">
@@ -406,7 +408,7 @@
           </ScrollViewer>
         </TabItem>
 
-        <TabItem Header="Station">
+        <TabItem Header="5 Station">
           <ScrollViewer VerticalScrollBarVisibility="Auto">
             <Grid ColumnDefinitions="*,*"
                   RowDefinitions="Auto,Auto,Auto,Auto,Auto"
@@ -547,7 +549,7 @@
           </ScrollViewer>
         </TabItem>
 
-        <TabItem Header="Metadata">
+        <TabItem Header="6 Metadata">
           <ScrollViewer VerticalScrollBarVisibility="Auto">
             <Grid ColumnDefinitions="320,*" ColumnSpacing="18" Margin="0,8,0,0">
               <StackPanel Spacing="10">

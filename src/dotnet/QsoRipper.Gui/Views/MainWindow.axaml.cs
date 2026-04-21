@@ -249,7 +249,25 @@ internal sealed partial class MainWindow : Window
         // the "cursor blinks once then jumps to File menu" behaviour
         // after opening the card via Alt+A.
         if (_viewModel?.IsFullQsoCardOpen == true
-            && (e.Key == Key.LeftAlt || e.Key == Key.RightAlt || e.Key == Key.LWin || e.Key == Key.F10))
+            && (e.Key == Key.LeftAlt || e.Key == Key.RightAlt || e.Key == Key.LWin))
+        {
+            e.Handled = true;
+            return;
+        }
+
+        // Swallow standalone Alt releases after Alt-field jumps (Alt+C/B/M)
+        // so the menu access-key mode does not steal focus from the logger.
+        if ((e.Key == Key.LeftAlt || e.Key == Key.RightAlt)
+            && _lastFocusArea == FocusArea.Logger)
+        {
+            e.Handled = true;
+            return;
+        }
+
+        // Always swallow F10 KeyUp — it triggers Log QSO via KeyBinding on
+        // KeyDown, but the KeyUp would otherwise activate Avalonia's menu
+        // access-key mode (F10 is a standard menu activation key).
+        if (e.Key == Key.F10)
         {
             e.Handled = true;
             return;
@@ -392,6 +410,29 @@ internal sealed partial class MainWindow : Window
             Dispatcher.UIThread.Post(FocusFullQsoCard, DispatcherPriority.Loaded);
             e.Handled = true;
             return true;
+        }
+
+        // Alt-field jumps for rapid logger navigation — matches TUI Alt+C/B/M
+        // convention. Only active when no overlay is open and focus can reach
+        // the logger controls.
+        if (e.KeyModifiers == KeyModifiers.Alt && !_viewModel.IsFullQsoCardOpen
+            && !_viewModel.IsHelpOpen && !_viewModel.IsCallsignCardOpen)
+        {
+            switch (e.Key)
+            {
+                case Key.C:
+                    FocusLoggerControl("LoggerCallsignBox");
+                    e.Handled = true;
+                    return true;
+                case Key.B:
+                    FocusLoggerControl("LoggerBandButton");
+                    e.Handled = true;
+                    return true;
+                case Key.M:
+                    FocusLoggerControl("LoggerModeButton");
+                    e.Handled = true;
+                    return true;
+            }
         }
 
         if (e.KeyModifiers != KeyModifiers.None)
@@ -702,6 +743,27 @@ internal sealed partial class MainWindow : Window
             {
                 _recentQsoSearchBox.Focus();
                 _recentQsoSearchBox.SelectAll();
+            },
+            DispatcherPriority.Input);
+    }
+
+    private void FocusLoggerControl(string automationId)
+    {
+        var control = this.FindControl<Control>(automationId);
+        if (control is null)
+        {
+            return;
+        }
+
+        _lastFocusArea = FocusArea.Logger;
+        Dispatcher.UIThread.Post(
+            () =>
+            {
+                control.Focus();
+                if (control is TextBox textBox)
+                {
+                    textBox.SelectAll();
+                }
             },
             DispatcherPriority.Input);
     }

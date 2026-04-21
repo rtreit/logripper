@@ -1,0 +1,124 @@
+{
+  "inspectSurface": "MainWindow",
+  "window": {
+    "title": "QsoRipper",
+    "x": 80,
+    "y": 80,
+    "width": 1280,
+    "height": 760
+  },
+  "actions": [
+    { "type": "wait", "milliseconds": 800 },
+    { "type": "dump-tree", "path": "01-main-window-tree.json" },
+    { "type": "screenshot", "path": "01-main-window-default.png" },
+
+    { "comment": "Open File menu",
+      "type": "click", "name": "File", "controlType": "MenuItem" },
+    { "type": "wait", "milliseconds": 400 },
+    { "type": "screenshot", "path": "02-file-menu.png" },
+    { "type": "send-keys", "keys": "{ESC}" },
+    { "type": "wait", "milliseconds": 200 },
+
+    { "comment": "Open View menu",
+      "type": "click", "name": "View", "controlType": "MenuItem" },
+    { "type": "wait", "milliseconds": 400 },
+    { "type": "screenshot", "path": "03-view-menu.png" },
+    { "type": "send-keys", "keys": "{ESC}" },
+    { "type": "wait", "milliseconds": 200 },
+
+    { "comment": "Open Tools menu",
+      "type": "click", "name": "Tools", "controlType": "MenuItem" },
+    { "type": "wait", "milliseconds": 400 },
+    { "type": "screenshot", "path": "04-tools-menu.png" },
+    { "type": "send-keys", "keys": "{ESC}" },
+    { "type": "wait", "milliseconds": 200 },
+
+    { "comment": "Open Help overlay with F1",
+      "type": "send-keys", "keys": "{F1}" },
+    { "type": "wait", "milliseconds": 500 },
+    { "type": "screenshot", "path": "06-help-overlay.png" },
+    { "type": "dump-tree", "path": "06-help-overlay-tree.json" },
+    { "type": "send-keys", "keys": "{ESC}" },
+    { "type": "wait", "milliseconds": 300 },
+
+    { "comment": "Open Full QSO Card with Alt+A — Core tab",
+      "type": "send-keys", "keys": "%a" },
+    { "type": "wait", "milliseconds": 600 },
+    { "type": "screenshot", "path": "07-qso-card-core.png" },
+    { "type": "dump-tree", "path": "07-qso-card-tree.json" },
+
+    { "comment": "Switch to Lookup tab (Alt+2)",
+      "type": "send-keys", "keys": "%2" },
+    { "type": "wait", "milliseconds": 400 },
+    { "type": "screenshot", "path": "08-qso-card-lookup.png" },
+
+    { "comment": "Switch to QSL tab (Alt+3)",
+      "type": "send-keys", "keys": "%3" },
+    { "type": "wait", "milliseconds": 400 },
+    { "type": "screenshot", "path": "09-qso-card-qsl.png" },
+
+    { "comment": "Switch to Contest tab (Alt+4)",
+      "type": "send-keys", "keys": "%4" },
+    { "type": "wait", "milliseconds": 400 },
+    { "type": "screenshot", "path": "10-qso-card-contest.png" },
+
+    { "comment": "Switch to Station tab (Alt+5)",
+      "type": "send-keys", "keys": "%5" },
+    { "type": "wait", "milliseconds": 400 },
+    { "type": "screenshot", "path": "11-qso-card-station.png" },
+
+    { "comment": "Switch to Metadata tab (Alt+6)",
+      "type": "send-keys", "keys": "%6" },
+    { "type": "wait", "milliseconds": 400 },
+    { "type": "screenshot", "path": "12-qso-card-metadata.png" },
+
+    { "comment": "Close QSO card with Esc",
+      "type": "send-keys", "keys": "{ESC}" },
+    { "type": "wait", "milliseconds": 300 },
+
+    { "comment": "Select a row and open callsign card with F8",
+      "type": "click", "name": "W1AW", "controlType": "Text" },
+    { "type": "wait", "milliseconds": 300 },
+    { "type": "send-keys", "keys": "{F8}" },
+    { "type": "wait", "milliseconds": 1500 },
+    { "type": "screenshot", "path": "13-callsign-card.png" },
+    { "type": "dump-tree", "path": "13-callsign-card-tree.json" },
+    { "type": "send-keys", "keys": "{ESC}" },
+    { "type": "wait", "milliseconds": 300 },
+
+    { "comment": "Open Inspector with Alt+Enter",
+      "type": "send-keys", "keys": "%{ENTER}" },
+    { "type": "wait", "milliseconds": 500 },
+    { "type": "screenshot", "path": "14-inspector.png" },
+    { "type": "dump-tree", "path": "14-inspector-tree.json" },
+    { "type": "send-keys", "keys": "%{ENTER}" },
+    { "type": "wait", "milliseconds": 300 },
+
+    { "comment": "Open Column Chooser",
+      "type": "click", "automationId": "ColumnsButton" },
+    { "type": "wait", "milliseconds": 300 },
+    { "type": "screenshot", "path": "15-column-chooser.png" },
+    { "type": "send-keys", "keys": "{ESC}" },
+    { "type": "wait", "milliseconds": 200 },
+
+    { "comment": "Open Sort Chooser",
+      "type": "click", "automationId": "SortButton" },
+    { "type": "wait", "milliseconds": 300 },
+    { "type": "screenshot", "path": "16-sort-chooser.png" },
+    { "type": "send-keys", "keys": "{ESC}" },
+    { "type": "wait", "milliseconds": 200 },
+
+    { "comment": "Open Delete Confirm — select row then Ctrl+D",
+      "type": "click", "name": "W1AW", "controlType": "Text" },
+    { "type": "wait", "milliseconds": 200 },
+    { "type": "send-keys", "keys": "^d" },
+    { "type": "wait", "milliseconds": 400 },
+    { "type": "screenshot", "path": "17-delete-confirm.png" },
+    { "type": "send-keys", "keys": "{ESC}" },
+    { "type": "wait", "milliseconds": 300 },
+
+    { "comment": "Final screenshot after everything closed",
+      "type": "screenshot", "path": "18-main-window-final.png" },
+    { "type": "dump-tree", "path": "18-main-window-final-tree.json" }
+  ]
+}
