@@ -7,19 +7,21 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 add_executable(qsoripper-win32 WIN32
     src/main.c
     src/backend_ffi_gate.c
+    resources/app.rc
 )
 
 # FFI library from the Rust qsoripper-ffi crate
 # The .dll.lib import library and header are produced by `cargo build -p qsoripper-ffi`
 set(FFI_ROOT "${CMAKE_SOURCE_DIR}/../../rust/qsoripper-ffi")
 set(FFI_INCLUDE "${CMAKE_CURRENT_SOURCE_DIR}/include")
+set(WIN32_RES_DIR "${CMAKE_CURRENT_SOURCE_DIR}/resources")
 
 # Allow override via -DFFI_LIB_DIR for CI or custom layouts
 if(NOT DEFINED FFI_LIB_DIR)
     set(FFI_LIB_DIR "${CMAKE_SOURCE_DIR}/../../rust/target/release")
 endif()
 
-target_include_directories(qsoripper-win32 PRIVATE ${FFI_INCLUDE})
+target_include_directories(qsoripper-win32 PRIVATE ${FFI_INCLUDE} ${WIN32_RES_DIR})
 target_link_libraries(qsoripper-win32 PRIVATE
     user32 gdi32 shell32 comctl32
 )
@@ -84,7 +86,7 @@ if(BUILD_TESTING)
         src/backend_ffi_gate.c
     )
 
-    target_include_directories(qsoripper-win32-cli-exitcode-regression PRIVATE ${FFI_INCLUDE})
+    target_include_directories(qsoripper-win32-cli-exitcode-regression PRIVATE ${FFI_INCLUDE} ${WIN32_RES_DIR})
     target_link_libraries(qsoripper-win32-cli-exitcode-regression PRIVATE
         user32 gdi32 shell32 comctl32
     )
@@ -111,7 +113,7 @@ if(BUILD_TESTING)
         src/main.c
         src/backend_ffi_gate.c
     )
-    target_include_directories(qsoripper-win32-issue-regressions PRIVATE ${FFI_INCLUDE})
+    target_include_directories(qsoripper-win32-issue-regressions PRIVATE ${FFI_INCLUDE} ${WIN32_RES_DIR})
     target_link_libraries(qsoripper-win32-issue-regressions PRIVATE
         user32 gdi32 shell32 comctl32
     )
