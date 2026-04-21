@@ -241,6 +241,23 @@ internal sealed partial class MainWindow : Window
         }
     }
 
+    protected override void OnKeyUp(KeyEventArgs e)
+    {
+        // When the QSO card overlay is open, swallow standalone Alt key
+        // releases so Avalonia's menu access-key mode does not activate
+        // and steal focus from the callsign textbox. This is what causes
+        // the "cursor blinks once then jumps to File menu" behaviour
+        // after opening the card via Alt+A.
+        if (_viewModel?.IsFullQsoCardOpen == true
+            && (e.Key == Key.LeftAlt || e.Key == Key.RightAlt || e.Key == Key.LWin || e.Key == Key.F10))
+        {
+            e.Handled = true;
+            return;
+        }
+
+        base.OnKeyUp(e);
+    }
+
     private bool HandleRecentQsoGridKeyDown(KeyEventArgs e)
     {
         if (_recentQsoGrid is null || _viewModel is null || !_recentQsoGrid.IsKeyboardFocusWithin)
@@ -1204,11 +1221,58 @@ internal sealed partial class MainWindow : Window
 
     private void FocusFullQsoCard()
     {
+        // Try a few times to land focus in the callsign box. The card view
+        // is hosted in a ContentControl whose template realization races
+        // with this post; on first invocation the FullQsoCardView often
+        // doesn't exist yet. We also re-assert focus a tick later so any
+        // late focus theft (e.g. from menu access-key activation on Alt
+        // key release) gets corrected.
+        TryFocusCallsign(attemptsLeft: 5);
+    }
+
+    private void TryFocusCallsign(int attemptsLeft)
+    {
         Dispatcher.UIThread.Post(
-            () => this.GetVisualDescendants()
-                .OfType<FullQsoCardView>()
-                .LastOrDefault()?
-                .FocusWorkedCallsign(),
+            () =>
+            {
+                if (_viewModel?.IsFullQsoCardOpen != true)
+                {
+                    return;
+                }
+
+                var card = this.GetVisualDescendants()
+                    .OfType<FullQsoCardView>()
+                    .LastOrDefault();
+                if (card is null)
+                {
+                    if (attemptsLeft > 0)
+                    {
+                        TryFocusCallsign(attemptsLeft - 1);
+                    }
+                    return;
+                }
+
+                card.FocusWorkedCallsign();
+
+                // Re-assert focus on the next background tick to defeat any
+                // late focus theft (e.g. menu access keys activating on the
+                // trailing Alt key release of an Alt+A invocation).
+                if (attemptsLeft > 0)
+                {
+                    Dispatcher.UIThread.Post(
+                        () =>
+                        {
+                            if (_viewModel?.IsFullQsoCardOpen == true)
+                            {
+                                this.GetVisualDescendants()
+                                    .OfType<FullQsoCardView>()
+                                    .LastOrDefault()?
+                                    .FocusWorkedCallsign();
+                            }
+                        },
+                        DispatcherPriority.Background);
+                }
+            },
             DispatcherPriority.Loaded);
     }
 
