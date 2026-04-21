@@ -2,6 +2,7 @@
 
 use std::{
     collections::HashMap,
+    num::NonZeroUsize,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -27,22 +28,34 @@ type SharedProviderLookup = Shared<BoxFuture<'static, ProviderLookupResult>>;
 
 const DEFAULT_POSITIVE_CACHE_TTL: Duration = Duration::from_secs(15 * 60);
 const DEFAULT_NEGATIVE_CACHE_TTL: Duration = Duration::from_secs(2 * 60);
+const DEFAULT_MAX_CACHE_ENTRIES: NonZeroUsize = NonZeroUsize::new(1_000).unwrap();
 
 /// Lookup coordinator configuration.
 #[derive(Debug, Clone, Copy)]
 pub struct LookupCoordinatorConfig {
     positive_ttl: Duration,
     negative_ttl: Duration,
+    max_entries: NonZeroUsize,
 }
 
 impl LookupCoordinatorConfig {
-    /// Create an explicit cache configuration.
+    /// Create an explicit cache configuration with the default entry cap.
     #[must_use]
     pub fn new(positive_ttl: Duration, negative_ttl: Duration) -> Self {
         Self {
             positive_ttl,
             negative_ttl,
+            max_entries: DEFAULT_MAX_CACHE_ENTRIES,
         }
+    }
+
+    /// Override the maximum number of entries the in-memory cache may hold.
+    ///
+    /// When the cache is full, the least-recently-used entry is evicted.
+    #[must_use]
+    pub fn with_max_entries(mut self, max_entries: NonZeroUsize) -> Self {
+        self.max_entries = max_entries;
+        self
     }
 
     /// Positive (found-record) cache TTL.
@@ -56,6 +69,12 @@ impl LookupCoordinatorConfig {
     pub fn negative_ttl(self) -> Duration {
         self.negative_ttl
     }
+
+    /// Maximum number of in-memory cache entries before LRU eviction kicks in.
+    #[must_use]
+    pub fn max_entries(self) -> NonZeroUsize {
+        self.max_entries
+    }
 }
 
 impl Default for LookupCoordinatorConfig {
@@ -63,6 +82,7 @@ impl Default for LookupCoordinatorConfig {
         Self {
             positive_ttl: DEFAULT_POSITIVE_CACHE_TTL,
             negative_ttl: DEFAULT_NEGATIVE_CACHE_TTL,
+            max_entries: DEFAULT_MAX_CACHE_ENTRIES,
         }
     }
 }
@@ -79,11 +99,47 @@ struct CacheEntry {
     cached_at: Instant,
 }
 
+/// A size-bounded in-memory cache.
+///
+/// When the cache is at capacity, inserting a new key evicts an arbitrary
+/// existing entry to keep memory bounded.  Re-inserting an existing key
+/// updates its value without changing the entry count.
+struct BoundedCache {
+    entries: HashMap<String, CacheEntry>,
+    max_entries: usize,
+}
+
+impl BoundedCache {
+    fn new(max_entries: NonZeroUsize) -> Self {
+        Self {
+            entries: HashMap::new(),
+            max_entries: max_entries.get(),
+        }
+    }
+
+    fn get(&self, key: &str) -> Option<&CacheEntry> {
+        self.entries.get(key)
+    }
+
+    fn put(&mut self, key: String, value: CacheEntry) {
+        if let Some(existing) = self.entries.get_mut(&key) {
+            *existing = value;
+            return;
+        }
+        if self.entries.len() >= self.max_entries {
+            if let Some(evict_key) = self.entries.keys().next().cloned() {
+                self.entries.remove(&evict_key);
+            }
+        }
+        self.entries.insert(key, value);
+    }
+}
+
 /// Coordinates lookup policy over an underlying callsign provider.
 pub struct LookupCoordinator {
     provider: Arc<dyn CallsignProvider>,
     config: LookupCoordinatorConfig,
-    cache: RwLock<HashMap<String, CacheEntry>>,
+    cache: RwLock<BoundedCache>,
     in_flight: Mutex<HashMap<String, SharedProviderLookup>>,
     snapshot_storage: Option<Arc<dyn EngineStorage>>,
 }
@@ -95,7 +151,7 @@ impl LookupCoordinator {
         Self {
             provider,
             config,
-            cache: RwLock::new(HashMap::new()),
+            cache: RwLock::new(BoundedCache::new(config.max_entries)),
             in_flight: Mutex::new(HashMap::new()),
             snapshot_storage: None,
         }
@@ -114,7 +170,7 @@ impl LookupCoordinator {
         Self {
             provider,
             config,
-            cache: RwLock::new(HashMap::new()),
+            cache: RwLock::new(BoundedCache::new(config.max_entries)),
             in_flight: Mutex::new(HashMap::new()),
             snapshot_storage: Some(storage),
         }
@@ -375,8 +431,7 @@ impl LookupCoordinator {
     async fn store_cache_entry(&self, normalized_callsign: &str, entry: CacheEntry) {
         {
             let mut cache = self.cache.write().await;
-            cache.insert(normalized_callsign.to_string(), entry.clone());
-            cache.retain(|_, cached_entry| self.is_fresh(cached_entry));
+            cache.put(normalized_callsign.to_string(), entry.clone());
         }
 
         // Persist to the snapshot store if available.
@@ -480,8 +535,7 @@ impl LookupCoordinator {
         // Promote into in-memory cache so subsequent reads are fast.
         {
             let mut cache = self.cache.write().await;
-            cache.insert(normalized_callsign.to_string(), entry.clone());
-            cache.retain(|_, cached_entry| self.is_fresh(cached_entry));
+            cache.put(normalized_callsign.to_string(), entry.clone());
         }
 
         Some(entry)
@@ -558,6 +612,7 @@ fn duration_to_millis_u32(duration: Duration) -> u32 {
 mod tests {
     use std::{
         collections::VecDeque,
+        num::NonZeroUsize,
         sync::{
             atomic::{AtomicUsize, Ordering},
             Arc,
@@ -811,25 +866,29 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn inserting_new_entry_evicts_expired_cache_entries() {
+    async fn lru_eviction_drops_oldest_entry_at_capacity() {
+        let cap = NonZeroUsize::new(5).unwrap();
         let provider = QueueProvider::new(Vec::new(), Duration::ZERO);
         let coordinator = LookupCoordinator::new(
             Arc::new(provider),
-            LookupCoordinatorConfig::new(Duration::from_millis(1), Duration::from_millis(1)),
+            LookupCoordinatorConfig::new(Duration::from_secs(300), Duration::from_secs(300))
+                .with_max_entries(cap),
         );
 
         for index in 0..5 {
             let callsign = format!("W1AW{index}");
             let _ = coordinator.lookup(&callsign, false).await;
         }
-        sleep(Duration::from_millis(5)).await;
+
+        let cache_len_before = coordinator.cache.read().await.entries.len();
+        assert_eq!(cache_len_before, 5);
 
         let _ = coordinator.lookup("K7RND", false).await;
 
-        let cache_len = coordinator.cache.read().await.len();
+        let cache_len_after = coordinator.cache.read().await.entries.len();
         assert_eq!(
-            cache_len, 1,
-            "expected expired cache entries to be evicted when inserting a new entry"
+            cache_len_after, 5,
+            "cache should remain at capacity after LRU eviction"
         );
     }
 
