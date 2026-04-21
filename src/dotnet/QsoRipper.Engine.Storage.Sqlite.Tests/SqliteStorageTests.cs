@@ -235,8 +235,9 @@ public sealed class SqliteStorageTests : IDisposable
             After = DateTimeOffset.Parse("2026-01-15T12:00:00Z", System.Globalization.CultureInfo.InvariantCulture),
         });
 
-        Assert.Equal(2, result.Count);
-        Assert.All(result, q => Assert.True(q.UtcTimestamp.ToDateTimeOffset() > DateTimeOffset.Parse("2026-01-15T12:00:00Z", System.Globalization.CultureInfo.InvariantCulture)));
+        // After is inclusive: q1 at exactly 2026-01-15T12:00:00Z is included.
+        Assert.Equal(3, result.Count);
+        Assert.All(result, q => Assert.True(q.UtcTimestamp.ToDateTimeOffset() >= DateTimeOffset.Parse("2026-01-15T12:00:00Z", System.Globalization.CultureInfo.InvariantCulture)));
     }
 
     [Fact]
@@ -246,9 +247,10 @@ public sealed class SqliteStorageTests : IDisposable
 
         var result = await _storage.Logbook.ListQsosAsync(new QsoListQuery
         {
-            Before = DateTimeOffset.Parse("2026-01-16T12:00:00Z", System.Globalization.CultureInfo.InvariantCulture),
+            Before = DateTimeOffset.Parse("2026-01-16T00:00:00Z", System.Globalization.CultureInfo.InvariantCulture),
         });
 
+        // Before is inclusive: q2 at exactly 2026-01-16T00:00:00Z is included.
         Assert.Equal(2, result.Count);
     }
 
@@ -274,6 +276,20 @@ public sealed class SqliteStorageTests : IDisposable
         var result = await _storage.Logbook.ListQsosAsync(new QsoListQuery { CallsignFilter = "w1aw" });
 
         Assert.Single(result);
+    }
+
+    [Fact]
+    public async Task List_callsign_filter_matches_station_or_worked()
+    {
+        var qso = MakeQso("q1", "DL1XYZ", Band._20M, Mode.Ft8, "2026-01-15T12:00:00Z");
+        qso.StationCallsign = "K7RND";
+        await _storage.Logbook.InsertQsoAsync(qso);
+
+        var byStation = await _storage.Logbook.ListQsosAsync(new QsoListQuery { CallsignFilter = "K7RND" });
+        var byWorked = await _storage.Logbook.ListQsosAsync(new QsoListQuery { CallsignFilter = "DL1" });
+
+        Assert.Single(byStation);
+        Assert.Single(byWorked);
     }
 
     [Fact]

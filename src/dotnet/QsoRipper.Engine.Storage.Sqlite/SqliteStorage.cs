@@ -246,20 +246,23 @@ public sealed class SqliteStorage : IEngineStorage, ILogbookStore, ILookupSnapsh
 
             if (query.After is { } after)
             {
-                whereClauses.Add("utc_timestamp_ms > $after");
+                whereClauses.Add("utc_timestamp_ms >= $after");
                 cmd.Parameters.AddWithValue("$after", after.ToUnixTimeMilliseconds());
             }
 
             if (query.Before is { } before)
             {
-                whereClauses.Add("utc_timestamp_ms < $before");
+                whereClauses.Add("utc_timestamp_ms <= $before");
                 cmd.Parameters.AddWithValue("$before", before.ToUnixTimeMilliseconds());
             }
 
             if (!string.IsNullOrWhiteSpace(query.CallsignFilter))
             {
-                whereClauses.Add("worked_callsign LIKE $callsign_filter");
-                cmd.Parameters.AddWithValue("$callsign_filter", "%" + query.CallsignFilter.Trim() + "%");
+                whereClauses.Add(
+                    "(UPPER(station_callsign) LIKE $callsign_filter OR UPPER(worked_callsign) LIKE $callsign_filter)");
+                cmd.Parameters.AddWithValue(
+                    "$callsign_filter",
+                    "%" + query.CallsignFilter.Trim().ToUpperInvariant() + "%");
             }
 
             if (query.BandFilter is { } band)
