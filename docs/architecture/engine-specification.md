@@ -151,7 +151,8 @@ Creates a new QSO record in the local logbook.
 6. Set `created_at` and `updated_at` to the current UTC time.
 7. Set `sync_status` to `SYNC_STATUS_NOT_SYNCED`.
 8. Persist the record via the storage backend.
-9. Return the persisted `QsoRecord` in the response.
+9. If `sync_to_qrz=true`, immediately push the new record to QRZ Logbook (per-operation sync; see §7.3 below). On success, adopt the QRZ-assigned `qrz_logid`, set `sync_status=SYNC_STATUS_SYNCED`, and write the row back to storage. Populate `LogQsoResponse.sync_success=true`. On failure (no API key, network error, QRZ rejection), leave `sync_status=SYNC_STATUS_NOT_SYNCED`, set `sync_success=false`, and put a human-readable message in `sync_error`. The local persist MUST succeed regardless — per-op sync failure is reported, not raised.
+10. Return the persisted `QsoRecord` in the response.
 
 **Error semantics:**
 - `INVALID_ARGUMENT` — missing or invalid required fields.
@@ -168,7 +169,8 @@ Updates an existing QSO record by `local_id`.
 3. Set `updated_at` to the current UTC time.
 4. If the QSO was previously synced, set `sync_status` to `SYNC_STATUS_MODIFIED`.
 5. Persist the updated record.
-6. Return the updated `QsoRecord`.
+6. If `sync_to_qrz=true`, immediately push the updated record to QRZ Logbook (per-operation sync; see §7.3 below). If the row already has a `qrz_logid`, use REPLACE so the same remote row is updated in place; otherwise INSERT. On success, write back the QRZ-assigned `qrz_logid` and `sync_status=SYNC_STATUS_SYNCED`, and set `UpdateQsoResponse.sync_success=true`. On failure, leave the local row in its current state (`SYNC_STATUS_MODIFIED` or `SYNC_STATUS_NOT_SYNCED`), set `sync_success=false`, and put a human-readable message in `sync_error`. The local persist MUST succeed regardless.
+7. Return the updated `QsoRecord`.
 
 **Error semantics:**
 - `NOT_FOUND` — no QSO with the given `local_id`.
@@ -1079,7 +1081,23 @@ The QRZ logbook sync is a three-phase operation:
 1. Call QRZ logbook API `STATUS` to get the current logbook QSO count and owner callsign.
 2. Update `sync_metadata` with the count, timestamp, and owner. If `STATUS` fails, engines SHOULD fall back to locally-computed counts rather than leaving metadata stale.
 
-**Resilience:** A failure in any phase should not prevent other phases from executing. The engine should report partial success/failure in the stream.
+**Resilience:** A failure in any phase should not prevent other phases from executing. The engine should report partial success/failure in the stream. A fatal failure in Phase 1 (e.g., metadata load failure, fetch failure) MUST short-circuit the rest of `execute_sync` so that `last_sync` is NOT advanced — the next attempt re-fetches the same window.
+
+#### Per-Operation Sync (`sync_to_qrz=true` on LogQso/UpdateQso)
+
+When `LogQso.sync_to_qrz=true` or `UpdateQso.sync_to_qrz=true`, engines MUST attempt to push the affected row to QRZ immediately after the local persist. This is independent of the bulk sync flow (`SyncWithQrz`) and lets clients log a QSO and get an authoritative QRZ logid back in a single round-trip.
+
+**Selection rule (mirrors Phase 2):**
+- If the local row has a non-empty `qrz_logid`, REPLACE in place (`ACTION=INSERT&OPTION=REPLACE,LOGID:<logid>`).
+- Otherwise INSERT (`ACTION=INSERT`).
+
+**Success path:** adopt the QRZ-assigned `LOGID`, set `sync_status=SYNC_STATUS_SYNCED`, write the row back to local storage, and populate the response's `sync_success=true` (and `qrz_logid` for `LogQsoResponse`).
+
+**Failure path:** the local persist (step 1) MUST succeed regardless. The QRZ failure is reported, not raised: leave the row's `sync_status` untouched (`NOT_SYNCED` or `MODIFIED`), set `sync_success=false`, and put a human-readable message in `sync_error`. The next bulk `SyncWithQrz` will retry the row via Phase 2.
+
+**Configuration not present:** if no QRZ logbook API key is configured, return `sync_success=false` with `sync_error="QRZ Logbook API key is not configured."`. The local row still persists.
+
+**.NET divergence:** the .NET reference engine currently runs all `LogQso`/`UpdateQso` work under a synchronous lock and does not yet issue the per-op QRZ HTTP call from inside that critical section. It returns `sync_success=true` with a placeholder `qrz_logid` when configured, or a `sync_error` indicating the operation is not yet wired. Tracked as a follow-up; see Appendix C.
 
 ### 7.4 Lookup Lifecycle
 
@@ -1416,3 +1434,4 @@ The following gaps are documented tracking items. They do not affect the normati
 
 - **.NET engine — `SyncWithQrz` streaming granularity.** The .NET engine currently produces a single terminal `SyncWithQrzResponse` instead of per-phase progress messages. Matches the spec's RPC signature but loses UI progress fidelity vs. the Rust engine.
 - **.NET engine — QRZ ADIF field coverage.** The .NET `AdifCodec` does not yet parse/emit every QRZ-specific field the Rust mapper covers (e.g., `ARRL_SECT`, SKCC, QSL/LOTW/EQSL date and flag variants, `MY_LAT`/`MY_LON`, `MY_ARRL_SECT`, `MY_CQ_ZONE`/`MY_ITU_ZONE`). Missing fields round-trip via `extra_fields` today, but should graduate to dedicated domain columns.
+- **.NET engine — per-operation `sync_to_qrz=true` on `LogQso`/`UpdateQso`.** `ManagedEngineState.LogQso`/`UpdateQso` run inside a synchronous lock and do not yet issue the per-op QRZ HTTP call. Currently returns either a placeholder logid (when configured) or a `sync_error`. Reaching parity requires moving the HTTP call out of the lock (likely making the handlers async). The Rust engine implements this fully via `sync::sync_single_qso`. See §7.3 "Per-Operation Sync".

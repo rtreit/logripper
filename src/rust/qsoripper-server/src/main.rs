@@ -339,6 +339,33 @@ impl DeveloperLogbookService {
         qsoripper_core::qrz_logbook::QrzLogbookClient::new(config)
             .map_err(|err| format!("Failed to create QRZ logbook client: {err}"))
     }
+
+    /// Push a single QSO to QRZ for the per-RPC `sync_to_qrz=true` paths on
+    /// `LogQso` / `UpdateQso`. On success, mutates `stored` in-place to carry
+    /// the QRZ-assigned logid and `Synced` status, mirroring what the bulk
+    /// sync Phase 2 writes back to local storage.
+    ///
+    /// Returns `(sync_success, sync_error)` shaped for the gRPC response.
+    /// Failure leaves `stored` untouched; the local row keeps its current
+    /// status (`LocalOnly` or `Modified`) and the next bulk sync will retry.
+    async fn run_per_op_qrz_sync(
+        &self,
+        engine: &qsoripper_core::application::logbook::LogbookEngine,
+        stored: &mut qsoripper_core::proto::qsoripper::domain::QsoRecord,
+    ) -> (bool, Option<String>) {
+        let client = match self.build_qrz_logbook_client().await {
+            Ok(client) => client,
+            Err(err) => return (false, Some(err)),
+        };
+
+        match sync::sync_single_qso(&client, engine.logbook_store(), stored).await {
+            Ok(synced) => {
+                *stored = synced;
+                (true, None)
+            }
+            Err(err) => (false, Some(err)),
+        }
+    }
 }
 
 #[tonic::async_trait]
@@ -356,11 +383,15 @@ impl LogbookService for DeveloperLogbookService {
         let qso = request
             .qso
             .ok_or_else(|| Status::invalid_argument("LogQso requires a qso payload."))?;
-        let stored = engine
+        let mut stored = engine
             .log_qso_with_station_profile(qso, active_station_profile.as_ref())
             .await
             .map_err(map_logbook_error)?;
-        let (sync_success, sync_error) = sync_result(request.sync_to_qrz, "QRZ sync");
+        let (sync_success, sync_error) = if request.sync_to_qrz {
+            self.run_per_op_qrz_sync(&engine, &mut stored).await
+        } else {
+            (true, None)
+        };
 
         Ok(Response::new(LogQsoResponse {
             local_id: stored.local_id,
@@ -379,8 +410,12 @@ impl LogbookService for DeveloperLogbookService {
         let qso = request
             .qso
             .ok_or_else(|| Status::invalid_argument("UpdateQso requires a qso payload."))?;
-        let _ = engine.update_qso(qso).await.map_err(map_logbook_error)?;
-        let (sync_success, sync_error) = sync_result(request.sync_to_qrz, "QRZ sync");
+        let mut stored = engine.update_qso(qso).await.map_err(map_logbook_error)?;
+        let (sync_success, sync_error) = if request.sync_to_qrz {
+            self.run_per_op_qrz_sync(&engine, &mut stored).await
+        } else {
+            (true, None)
+        };
 
         Ok(Response::new(UpdateQsoResponse {
             success: true,
@@ -1139,14 +1174,6 @@ fn non_empty_string(value: &str) -> Option<String> {
         None
     } else {
         Some(trimmed.to_string())
-    }
-}
-
-fn sync_result(requested: bool, label: &str) -> (bool, Option<String>) {
-    if requested {
-        (false, Some(format!("{label} is not implemented yet.")))
-    } else {
-        (true, None)
     }
 }
 
