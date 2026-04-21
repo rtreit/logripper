@@ -528,6 +528,35 @@ public sealed class QrzSyncEngineTests
     }
 
     [Fact]
+    public async Task Merge_last_write_wins_adopts_remote_qrz_logid_when_differs()
+    {
+        // Regression for #161: when remote wins under LastWriteWins, the
+        // overwritten local row must carry the REMOTE qrz_logid (not the
+        // stale local one), otherwise the next sync would point at a phantom.
+        var store = CreateStore();
+        var local = MakeLocalQso("W1AW", BaseTime, Band._20M, Mode.Ft8, SyncStatus.Modified);
+        local.QrzLogid = "LOG-LOCAL-OLD";
+        local.Notes = "local stale";
+        await store.Logbook.InsertQsoAsync(local);
+
+        var remote = MakeRemoteQso("W1AW", BaseTime, Band._20M, Mode.Ft8, "LOG-REMOTE-NEW");
+        remote.Notes = "remote authoritative";
+
+        var api = new FakeQrzLogbookApi { FetchResult = [remote] };
+        var engine = new QrzSyncEngine(api);
+
+        var result = await engine.ExecuteSyncAsync(
+            store.Logbook,
+            fullSync: true,
+            ConflictPolicy.LastWriteWins);
+
+        Assert.Equal(0u, result.ConflictCount);
+        var all = await store.Logbook.ListQsosAsync(new QsoListQuery());
+        Assert.Single(all);
+        Assert.Equal("LOG-REMOTE-NEW", all[0].QrzLogid);
+    }
+
+    [Fact]
     public async Task Merge_flag_for_review_preserves_local_and_marks_conflict()
     {
         var store = CreateStore();

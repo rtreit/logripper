@@ -1822,6 +1822,69 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn last_write_wins_remote_newer_overwrites_local_qrz_logid_when_differs() {
+        // Regression for #161: when remote wins under LastWriteWins, the
+        // overwritten local row must carry the REMOTE qrz_logid, not the
+        // stale local one. Otherwise the local row points at a phantom QRZ
+        // record on the next sync.
+        let store = MemoryStorage::new();
+
+        let mut local = make_qso(
+            "W1AW",
+            "K7LWW-DIFFER",
+            Band::Band20m,
+            Mode::Ft8,
+            1_700_000_000,
+        );
+        local.sync_status = SyncStatus::Modified as i32;
+        local.qrz_logid = Some("LOG-LOCAL-OLD".into());
+        local.updated_at = Some(Timestamp {
+            seconds: 1000,
+            nanos: 0,
+        });
+        local.notes = Some("local edit".into());
+        store.insert_qso(&local).await.unwrap();
+
+        // Remote is newer AND has a different logid (e.g., remote re-inserted
+        // outside QsoRipper, or a logid migration on QRZ).
+        let remote = {
+            let mut q = make_qso(
+                "W1AW",
+                "K7LWW-DIFFER",
+                Band::Band20m,
+                Mode::Ft8,
+                1_700_000_000,
+            );
+            q.qrz_logid = Some("LOG-REMOTE-NEW".into());
+            q.updated_at = Some(Timestamp {
+                seconds: 2000,
+                nanos: 0,
+            });
+            q.notes = Some("remote authoritative".into());
+            q
+        };
+
+        let api = MockQrzApi::new(Ok(vec![remote]), vec![]);
+
+        let (tx, rx) = mpsc::channel(16);
+        execute_sync(&api, &store, true, ConflictPolicy::LastWriteWins, &tx).await;
+        drop(tx);
+
+        let final_msg = collect_final(rx).await;
+        assert!(final_msg.complete);
+        assert_eq!(final_msg.downloaded_records, 1);
+        assert_eq!(final_msg.conflict_records, 0);
+
+        let all = store.list_qsos(&QsoListQuery::default()).await.unwrap();
+        assert_eq!(all.len(), 1);
+        assert_eq!(
+            all[0].qrz_logid.as_deref(),
+            Some("LOG-REMOTE-NEW"),
+            "remote-wins overwrite must adopt the remote qrz_logid (not keep the stale local one)",
+        );
+    }
+
+    #[tokio::test]
     async fn last_write_wins_local_newer_keeps_modified() {
         let store = MemoryStorage::new();
 
