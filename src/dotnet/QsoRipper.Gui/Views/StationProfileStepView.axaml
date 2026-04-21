@@ -1,6 +1,7 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="using:QsoRipper.Gui.ViewModels"
+             xmlns:util="using:QsoRipper.Gui.Utilities"
              x:Class="QsoRipper.Gui.Views.StationProfileStepView"
              x:DataType="vm:StationProfileStepViewModel">
 
@@ -26,13 +27,15 @@
         <TextBox x:Name="WizardStationCallsignBox"
                  AutomationProperties.AutomationId="WizardStationCallsignBox"
                   Text="{Binding Callsign, Mode=TwoWay}"
-                  PlaceholderText="e.g. W1AW" />
+                  PlaceholderText="e.g. W1AW"
+                  util:UpperCaseBehavior.IsEnabled="True" />
 
         <TextBlock Text="Operator Callsign (required):" FontWeight="SemiBold" />
         <TextBox x:Name="WizardOperatorCallsignBox"
                  AutomationProperties.AutomationId="WizardOperatorCallsignBox"
                   Text="{Binding OperatorCallsign, Mode=TwoWay}"
-                  PlaceholderText="e.g. W1AW (or personal call if different)" />
+                  PlaceholderText="e.g. W1AW (or personal call if different)"
+                  util:UpperCaseBehavior.IsEnabled="True" />
 
         <TextBlock Text="Operator Name:" />
         <TextBox x:Name="WizardOperatorNameBox"

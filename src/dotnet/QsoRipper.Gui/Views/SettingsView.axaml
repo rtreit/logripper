@@ -2,6 +2,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:vm="using:QsoRipper.Gui.ViewModels"
         xmlns:v="using:QsoRipper.Gui.Views"
+        xmlns:util="using:QsoRipper.Gui.Utilities"
         x:Class="QsoRipper.Gui.Views.SettingsView"
         x:Name="SettingsWindow"
         x:DataType="vm:SettingsViewModel"
@@ -114,7 +115,8 @@
                        AutomationProperties.AutomationId="SettingsCallsignBox"
                        Grid.Row="0" Grid.Column="1"
                        Text="{Binding Callsign, Mode=TwoWay}"
-                       PlaceholderText="e.g. W1AW" />
+                       PlaceholderText="e.g. W1AW"
+                       util:UpperCaseBehavior.IsEnabled="True" />
 
               <TextBlock Grid.Row="0" Grid.Column="2" Text="Grid Square:" VerticalAlignment="Center" />
               <TextBox x:Name="SettingsGridSquareBox"
@@ -133,7 +135,8 @@
               <TextBox x:Name="SettingsOperatorCallsignBox"
                        AutomationProperties.AutomationId="SettingsOperatorCallsignBox"
                        Grid.Row="1" Grid.Column="3"
-                       Text="{Binding OperatorCallsign, Mode=TwoWay}" />
+                       Text="{Binding OperatorCallsign, Mode=TwoWay}"
+                       util:UpperCaseBehavior.IsEnabled="True" />
 
               <TextBlock Grid.Row="2" Grid.Column="0" Text="Profile Name:" VerticalAlignment="Center" />
               <TextBox x:Name="SettingsProfileNameBox"
