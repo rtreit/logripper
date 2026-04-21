@@ -494,6 +494,7 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
         if (!IsWizardOpen)
         {
             CloseTransientPanels(restoreGridFocus: false);
+            IsLoggerFocused = false;
             SearchFocusRequested?.Invoke(this, EventArgs.Empty);
         }
     }
@@ -514,6 +515,7 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
         if (!IsWizardOpen)
         {
             CloseTransientPanels(restoreGridFocus: false);
+            IsLoggerFocused = false;
             GridFocusRequested?.Invoke(this, EventArgs.Empty);
         }
     }
@@ -665,7 +667,12 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
     }
 
     [RelayCommand]
-    private void CloseCallsignCard(bool restoreFocus = true)
+    private void CloseCallsignCard()
+    {
+        CloseCallsignCardCore(restoreFocus: true);
+    }
+
+    private void CloseCallsignCardCore(bool restoreFocus)
     {
         if (CallsignCard is { } card)
         {
@@ -725,6 +732,7 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
         {
             card.CloseRequested -= OnFullQsoCardCloseRequested;
             card.Saved -= OnFullQsoCardSaved;
+            card.Dispose();
         }
 
         IsFullQsoCardOpen = false;
@@ -859,7 +867,7 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
     {
         IsSortChooserOpen = false;
         IsColumnChooserOpen = false;
-        CloseCallsignCard(restoreFocus: false);
+        CloseCallsignCardCore(restoreFocus: false);
         if (restoreGridFocus)
         {
             GridFocusRequested?.Invoke(this, EventArgs.Empty);

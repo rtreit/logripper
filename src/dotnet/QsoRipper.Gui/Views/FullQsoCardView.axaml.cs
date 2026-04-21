@@ -7,8 +7,6 @@ namespace QsoRipper.Gui.Views;
 
 internal sealed partial class FullQsoCardView : UserControl
 {
-    private const int TabCount = 6;
-
     public FullQsoCardView()
     {
         InitializeComponent();
@@ -17,55 +15,29 @@ internal sealed partial class FullQsoCardView : UserControl
     protected override void OnAttachedToVisualTree(VisualTreeAttachmentEventArgs e)
     {
         base.OnAttachedToVisualTree(e);
-        Dispatcher.UIThread.Post(FocusInitialField, DispatcherPriority.Background);
+        Dispatcher.UIThread.Post(FocusInitialField, DispatcherPriority.Loaded);
     }
 
-    internal void FocusInitialField() => FocusCurrentTab();
+    internal void FocusInitialField() => FocusWorkedCallsign();
+
+    internal bool TryHandleNavigationKey(Key key, KeyModifiers modifiers)
+    {
+        var currentIndex = this.FindControl<TabControl>("CardTabs")?.SelectedIndex ?? 0;
+        if (!FullQsoCardNavigation.TryResolve(key, modifiers, currentIndex, out var targetIndex))
+        {
+            return false;
+        }
+
+        FocusTab(targetIndex, GetFocusTargetName(targetIndex));
+        return true;
+    }
 
     protected override void OnKeyDown(KeyEventArgs e)
     {
-        if ((e.KeyModifiers & KeyModifiers.Control) == KeyModifiers.Control && e.Key == Key.Tab)
+        if (TryHandleNavigationKey(e.Key, e.KeyModifiers))
         {
-            ChangeTab((e.KeyModifiers & KeyModifiers.Shift) == KeyModifiers.Shift ? -1 : 1);
             e.Handled = true;
             return;
-        }
-
-        if ((e.KeyModifiers & KeyModifiers.Alt) == KeyModifiers.Alt)
-        {
-            switch (e.Key)
-            {
-                case Key.D1:
-                case Key.NumPad1:
-                    FocusTab(0, "WorkedCallsignBox");
-                    e.Handled = true;
-                    return;
-                case Key.D2:
-                case Key.NumPad2:
-                    FocusTab(1, "LookupOperatorCallsignBox");
-                    e.Handled = true;
-                    return;
-                case Key.D3:
-                case Key.NumPad3:
-                    FocusTab(2, "QslSentStatusBox");
-                    e.Handled = true;
-                    return;
-                case Key.D4:
-                case Key.NumPad4:
-                    FocusTab(3, "ContestIdBox");
-                    e.Handled = true;
-                    return;
-                case Key.D5:
-                case Key.NumPad5:
-                    FocusTab(4, "StationCallsignSnapshotBox");
-                    e.Handled = true;
-                    return;
-                case Key.D6:
-                case Key.NumPad6:
-                    FocusTab(5, "ExtraFieldsBox");
-                    e.Handled = true;
-                    return;
-            }
         }
 
         base.OnKeyDown(e);
@@ -87,7 +59,7 @@ internal sealed partial class FullQsoCardView : UserControl
     {
         if (DataContext is not ViewModels.FullQsoCardViewModel viewModel)
         {
-            FocusTab(0, "WorkedCallsignBox");
+            FocusWorkedCallsign();
             return;
         }
 
@@ -97,16 +69,7 @@ internal sealed partial class FullQsoCardView : UserControl
         });
     }
 
-    private void ChangeTab(int delta)
-    {
-        if (DataContext is not ViewModels.FullQsoCardViewModel viewModel)
-        {
-            return;
-        }
-
-        var nextIndex = (viewModel.SelectedTabIndex + delta + TabCount) % TabCount;
-        FocusTab(nextIndex, GetFocusTargetName(nextIndex));
-    }
+    internal void FocusWorkedCallsign() => FocusTab(0, "WorkedCallsignBox");
 
     private void FocusTab(int index, string targetName)
     {
@@ -117,7 +80,7 @@ internal sealed partial class FullQsoCardView : UserControl
 
         Dispatcher.UIThread.Post(
             () => this.FindControl<Control>(targetName)?.Focus(),
-            DispatcherPriority.Background);
+            DispatcherPriority.Loaded);
     }
 
     private static string GetFocusTargetName(int index) =>
