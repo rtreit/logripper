@@ -319,10 +319,13 @@ Performs a single callsign lookup.
 Performs a callsign lookup with streaming progress updates.
 
 **Behavior:**
-- Same lookup logic as `Lookup`, but streams intermediate state changes (e.g., `LOOKUP_STATE_IN_PROGRESS`, cache check result, final result).
-- Useful for UIs that want to show real-time lookup progress.
+- Emits a `Loading` `LookupResult` immediately, **before** any cache or provider work, so clients get instant feedback that the request is in flight.
+- If a fresh cache entry exists, emits a `Found` (or `NotFound`) update and closes the stream.
+- If a stale cache entry exists, emits a `Stale` update with the cached record, then continues to the provider.
+- After the provider call completes, emits the final `Found`, `NotFound`, or `Error` update and closes the stream.
+- Updates must be pushed to the transport as they are produced; engines must not buffer the full transition sequence before sending.
 
-**Error semantics:** Same as `Lookup`.
+**Error semantics:** Same as `Lookup`. Per-request errors surface as a final `LookupResult` with state `LOOKUP_STATE_ERROR`; transport-level failures (e.g., the client dropping the stream) cancel the in-flight work without a panic.
 
 #### GetCachedCallsign
 

@@ -676,24 +676,35 @@ impl LookupService for DeveloperLookupService {
     ) -> Result<Response<Self::StreamLookupStream>, Status> {
         let coordinator = self.runtime_config.lookup_coordinator().await;
         let request = request.into_inner();
-        let updates = coordinator
-            .stream_lookup(&request.callsign, request.skip_cache)
-            .await;
-        let (sender, receiver) = tokio::sync::mpsc::channel(8);
+        let (transport_tx, transport_rx) = tokio::sync::mpsc::channel(8);
 
-        for update in updates {
-            if sender
-                .send(Ok(StreamLookupResponse {
-                    result: Some(update),
-                }))
-                .await
-                .is_err()
-            {
-                break;
-            }
-        }
+        tokio::spawn(async move {
+            let (update_tx, mut update_rx) = tokio::sync::mpsc::unbounded_channel();
+            let producer = async move {
+                coordinator
+                    .stream_lookup_into(&request.callsign, request.skip_cache, &update_tx)
+                    .await;
+                drop(update_tx);
+            };
 
-        Ok(Response::new(ReceiverStream::new(receiver)))
+            let forwarder = async {
+                while let Some(update) = update_rx.recv().await {
+                    if transport_tx
+                        .send(Ok(StreamLookupResponse {
+                            result: Some(update),
+                        }))
+                        .await
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+            };
+
+            tokio::join!(producer, forwarder);
+        });
+
+        Ok(Response::new(ReceiverStream::new(transport_rx)))
     }
 
     async fn get_cached_callsign(
