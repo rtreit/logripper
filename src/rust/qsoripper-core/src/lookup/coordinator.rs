@@ -8,8 +8,7 @@ use std::{
 };
 
 use futures::future::{BoxFuture, FutureExt, Shared};
-use lru::LruCache;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, RwLock};
 
 use crate::{
     domain::{
@@ -100,11 +99,47 @@ struct CacheEntry {
     cached_at: Instant,
 }
 
+/// A size-bounded in-memory cache.
+///
+/// When the cache is at capacity, inserting a new key evicts an arbitrary
+/// existing entry to keep memory bounded.  Re-inserting an existing key
+/// updates its value without changing the entry count.
+struct BoundedCache {
+    entries: HashMap<String, CacheEntry>,
+    max_entries: usize,
+}
+
+impl BoundedCache {
+    fn new(max_entries: NonZeroUsize) -> Self {
+        Self {
+            entries: HashMap::new(),
+            max_entries: max_entries.get(),
+        }
+    }
+
+    fn get(&self, key: &str) -> Option<&CacheEntry> {
+        self.entries.get(key)
+    }
+
+    fn put(&mut self, key: String, value: CacheEntry) {
+        if let Some(existing) = self.entries.get_mut(&key) {
+            *existing = value;
+            return;
+        }
+        if self.entries.len() >= self.max_entries {
+            if let Some(evict_key) = self.entries.keys().next().cloned() {
+                self.entries.remove(&evict_key);
+            }
+        }
+        self.entries.insert(key, value);
+    }
+}
+
 /// Coordinates lookup policy over an underlying callsign provider.
 pub struct LookupCoordinator {
     provider: Arc<dyn CallsignProvider>,
     config: LookupCoordinatorConfig,
-    cache: Mutex<LruCache<String, CacheEntry>>,
+    cache: RwLock<BoundedCache>,
     in_flight: Mutex<HashMap<String, SharedProviderLookup>>,
     snapshot_storage: Option<Arc<dyn EngineStorage>>,
 }
@@ -116,7 +151,7 @@ impl LookupCoordinator {
         Self {
             provider,
             config,
-            cache: Mutex::new(LruCache::new(config.max_entries)),
+            cache: RwLock::new(BoundedCache::new(config.max_entries)),
             in_flight: Mutex::new(HashMap::new()),
             snapshot_storage: None,
         }
@@ -135,7 +170,7 @@ impl LookupCoordinator {
         Self {
             provider,
             config,
-            cache: Mutex::new(LruCache::new(config.max_entries)),
+            cache: RwLock::new(BoundedCache::new(config.max_entries)),
             in_flight: Mutex::new(HashMap::new()),
             snapshot_storage: Some(storage),
         }
@@ -252,7 +287,7 @@ impl LookupCoordinator {
     }
 
     async fn get_cache_entry(&self, normalized_callsign: &str) -> Option<CacheEntry> {
-        if let Some(entry) = self.cache.lock().await.get(normalized_callsign).cloned() {
+        if let Some(entry) = self.cache.read().await.get(normalized_callsign).cloned() {
             return Some(entry);
         }
         // Fall back to persistent snapshot store.
@@ -367,7 +402,7 @@ impl LookupCoordinator {
 
     async fn store_cache_entry(&self, normalized_callsign: &str, entry: CacheEntry) {
         {
-            let mut cache = self.cache.lock().await;
+            let mut cache = self.cache.write().await;
             cache.put(normalized_callsign.to_string(), entry.clone());
         }
 
@@ -471,7 +506,7 @@ impl LookupCoordinator {
 
         // Promote into in-memory cache so subsequent reads are fast.
         {
-            let mut cache = self.cache.lock().await;
+            let mut cache = self.cache.write().await;
             cache.put(normalized_callsign.to_string(), entry.clone());
         }
 
@@ -743,12 +778,12 @@ mod tests {
             let _ = coordinator.lookup(&callsign, false).await;
         }
 
-        let cache_len_before = coordinator.cache.lock().await.len();
+        let cache_len_before = coordinator.cache.read().await.entries.len();
         assert_eq!(cache_len_before, 5);
 
         let _ = coordinator.lookup("K7RND", false).await;
 
-        let cache_len_after = coordinator.cache.lock().await.len();
+        let cache_len_after = coordinator.cache.read().await.entries.len();
         assert_eq!(
             cache_len_after, 5,
             "cache should remain at capacity after LRU eviction"

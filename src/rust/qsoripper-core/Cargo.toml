@@ -14,7 +14,6 @@ tonic = { workspace = true }
 tokio = { workspace = true }
 uuid = { workspace = true }
 difa = "0.1"
-lru = "0.16"
 thiserror = "2"
 chrono = "0.4"
 futures = "0.3"
