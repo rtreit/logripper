@@ -60,7 +60,7 @@ shortcuts across surfaces.
 | Switch to tab N | Alt+1..6 | 1=Core, 2=Lookup, 3=QSL, 4=Contest, 5=Station, 6=Metadata |
 | Next tab | Ctrl+Tab | Wraps around |
 | Previous tab | Ctrl+Shift+Tab | Wraps around |
-| Save QSO | Ctrl+Enter | Saves and closes card |
+| Save QSO | Ctrl+Enter, Ctrl+S | Saves and closes card |
 | Close card | Esc | Discards changes |
 
 ## Settings (GUI only)

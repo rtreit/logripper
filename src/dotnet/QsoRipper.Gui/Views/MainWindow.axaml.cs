@@ -65,6 +65,49 @@ internal sealed partial class MainWindow : Window
 
         DataContextChanged += OnDataContextChanged;
         BuildColumnMap();
+
+        // Tunnel-phase Escape handler so overlay/menu/scrollviewer descendants
+        // cannot swallow Escape before we get a chance to close the active
+        // overlay. Without this, Escape inside the help overlay's ScrollViewer
+        // (and certain menu states) is consumed before bubbling reaches us.
+        AddHandler(KeyDownEvent, OnPreviewKeyDown, RoutingStrategies.Tunnel);
+    }
+
+    private void OnPreviewKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.Escape || _viewModel is null || _viewModel.IsWizardOpen)
+        {
+            return;
+        }
+
+        // Order matches the bubble-phase handler in OnKeyDown so behavior is
+        // identical regardless of which phase actually fires the close.
+        if (_viewModel.IsFullQsoCardOpen)
+        {
+            _viewModel.FullQsoCard?.CloseCommand.Execute(null);
+            e.Handled = true;
+            return;
+        }
+
+        if (_viewModel.IsHelpOpen)
+        {
+            _viewModel.ToggleHelpCommand.Execute(null);
+            e.Handled = true;
+            return;
+        }
+
+        if (_viewModel.IsCallsignCardOpen)
+        {
+            _viewModel.CloseCallsignCardCommand.Execute(null);
+            e.Handled = true;
+            return;
+        }
+
+        if (_viewModel.IsInspectorOpen)
+        {
+            _viewModel.ToggleInspectorCommand.Execute(null);
+            e.Handled = true;
+        }
     }
 
     protected override async void OnOpened(EventArgs e)

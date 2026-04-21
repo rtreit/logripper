@@ -32,7 +32,7 @@ internal sealed partial class HelpOverlayViewModel : ObservableObject
             new("Alt+1\u20266", "Jump to tab (Core\u2026Metadata)"),
             new("Ctrl+Tab", "Next tab"),
             new("Ctrl+Shift+Tab", "Previous tab"),
-            new("Ctrl+Enter", "Save"),
+            new("Ctrl+Enter / Ctrl+S", "Save"),
             new("Esc", "Close card"),
         ]),
         new("Grid", [
