@@ -6,6 +6,7 @@ mod normalize;
 mod zone_lookup;
 
 pub(crate) use normalize::enrich_callsign_record_from_dxcc;
+pub use normalize::lookup_dxcc_entity_by_code;
 pub(crate) use zone_lookup::enrich_zones_from_location;
 
 use crate::proto::qsoripper::domain::QsoRecord;
