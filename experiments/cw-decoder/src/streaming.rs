@@ -58,7 +58,14 @@ pub enum StreamEvent {
     Word,
     /// Letter could not be decoded (unknown morse pattern).
     Garbled { morse: String },
+    /// Periodic snapshot of the smoothed Goertzel power vs threshold.
+    /// Emitted at roughly `POWER_EVENT_HZ` Hz, throttled in `feed_goertzel`.
+    Power { power: f32, threshold: f32, signal: bool },
 }
+
+/// Target rate (events / sec) for `StreamEvent::Power`. A subset of the
+/// per-step power samples are forwarded; the rest are decimated away.
+const POWER_EVENT_HZ: f32 = 30.0;
 
 // --- Biquad filter (lifted unchanged from ditdah) -----------------------
 #[derive(Debug, Clone, Copy)]
@@ -573,6 +580,10 @@ pub struct StreamingDecoder {
     smooth_buf: VecDeque<f32>,
     smooth_sum: f32,
 
+    /// Decimation counter for `StreamEvent::Power` throttling.
+    power_emit_accum: f32,
+    power_emit_step: f32,
+
     decoder: Decoder,
 }
 
@@ -600,6 +611,7 @@ impl StreamingDecoder {
         let step = (win_size / 4).max(1);
         let power_rate = TARGET_RATE as f32 / step as f32;
         let smooth_window = ((power_rate * POWER_SMOOTH_MS / 1000.0).round() as usize).max(1);
+        let power_emit_step = (power_rate / POWER_EVENT_HZ).max(1.0);
 
         Ok(Self {
             resampler,
@@ -614,6 +626,8 @@ impl StreamingDecoder {
             smooth_window,
             smooth_buf: VecDeque::with_capacity(smooth_window + 1),
             smooth_sum: 0.0,
+            power_emit_accum: 0.0,
+            power_emit_step,
             decoder: Decoder::new(power_rate),
         })
     }
@@ -689,6 +703,16 @@ impl StreamingDecoder {
                 }
             }
             let smoothed = self.smooth_sum / self.smooth_buf.len() as f32;
+
+            // Throttled Power event for UI meters (~POWER_EVENT_HZ).
+            self.power_emit_accum += 1.0;
+            if self.power_emit_accum >= self.power_emit_step {
+                self.power_emit_accum -= self.power_emit_step;
+                let threshold = self.decoder.threshold;
+                let signal = threshold > 0.0 && smoothed > threshold;
+                events.push(StreamEvent::Power { power: smoothed, threshold, signal });
+            }
+
             self.decoder.push_power(smoothed, events);
         }
     }

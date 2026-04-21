@@ -35,6 +35,9 @@ parking_lot = "0.12"
 # Sample utilities
 hound = "3.5"
 
+# JSON event output for the Avalonia GUI bridge
+serde_json = "1"
+
 [profile.release]
 opt-level = 3
 lto = "thin"

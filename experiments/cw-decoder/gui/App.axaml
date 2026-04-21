@@ -1,0 +1,29 @@
+<Application xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:Class="CwDecoderGui.App"
+             RequestedThemeVariant="Dark">
+
+  <Application.Styles>
+    <FluentTheme />
+  </Application.Styles>
+
+  <Application.Resources>
+    <ResourceDictionary>
+      <!-- Scientific dark palette -->
+      <SolidColorBrush x:Key="BgDeep"      Color="#0A1018" />
+      <SolidColorBrush x:Key="BgPanel"     Color="#101824" />
+      <SolidColorBrush x:Key="BgPanelAlt"  Color="#152031" />
+      <SolidColorBrush x:Key="GridLine"    Color="#1F2D44" />
+      <SolidColorBrush x:Key="EdgeGlow"    Color="#1B5C8A" />
+
+      <SolidColorBrush x:Key="AccentCyan"  Color="#22D3EE" />
+      <SolidColorBrush x:Key="AccentLime"  Color="#84FF6E" />
+      <SolidColorBrush x:Key="AccentAmber" Color="#FFB347" />
+      <SolidColorBrush x:Key="AccentMag"   Color="#FF5BD0" />
+
+      <SolidColorBrush x:Key="TextHi"      Color="#E6F2FF" />
+      <SolidColorBrush x:Key="TextDim"     Color="#7A91AC" />
+      <SolidColorBrush x:Key="TextFaint"   Color="#3D556F" />
+    </ResourceDictionary>
+  </Application.Resources>
+</Application>

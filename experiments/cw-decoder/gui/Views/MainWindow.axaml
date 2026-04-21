@@ -1,0 +1,204 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="clr-namespace:CwDecoderGui.ViewModels"
+        xmlns:m="clr-namespace:CwDecoderGui.Models"
+        xmlns:v="clr-namespace:CwDecoderGui.Views"
+        x:Class="CwDecoderGui.Views.MainWindow"
+        x:DataType="vm:MainWindowViewModel"
+        Title="CW SCOPE"
+        Width="1180" Height="780"
+        MinWidth="900" MinHeight="640"
+        Background="{StaticResource BgDeep}"
+        Foreground="{StaticResource TextHi}"
+        FontFamily="Inter">
+
+  <Window.Resources>
+    <v:IsWordCellConverter x:Key="IsWordCell" />
+    <v:IsCharCellConverter x:Key="IsCharCell" />
+    <v:KeyingBrushConverter x:Key="KeyingBrush" />
+    <v:KeyingTextConverter x:Key="KeyingText" />
+    <v:BoolToBlurEffectConverter x:Key="BlurFx" />
+  </Window.Resources>
+
+  <Window.Styles>
+    <Style Selector="TextBlock.label">
+      <Setter Property="FontFamily" Value="Consolas" />
+      <Setter Property="FontSize" Value="11" />
+      <Setter Property="Foreground" Value="{StaticResource TextDim}" />
+      <Setter Property="LetterSpacing" Value="2" />
+    </Style>
+    <Style Selector="TextBlock.value">
+      <Setter Property="FontFamily" Value="Consolas" />
+      <Setter Property="FontSize" Value="22" />
+      <Setter Property="Foreground" Value="{StaticResource AccentCyan}" />
+    </Style>
+    <Style Selector="Border.panel">
+      <Setter Property="Background" Value="{StaticResource BgPanel}" />
+      <Setter Property="BorderBrush" Value="{StaticResource GridLine}" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="CornerRadius" Value="4" />
+      <Setter Property="Padding" Value="14,10" />
+    </Style>
+    <Style Selector="Button.primary">
+      <Setter Property="Background" Value="#0E2A3D" />
+      <Setter Property="Foreground" Value="{StaticResource AccentCyan}" />
+      <Setter Property="BorderBrush" Value="{StaticResource AccentCyan}" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="CornerRadius" Value="2" />
+      <Setter Property="Padding" Value="22,8" />
+      <Setter Property="FontFamily" Value="Consolas" />
+      <Setter Property="FontSize" Value="14" />
+    </Style>
+    <Style Selector="Button.primary:pointerover /template/ ContentPresenter">
+      <Setter Property="Background" Value="#173A52" />
+    </Style>
+    <Style Selector="ToggleButton.primary">
+      <Setter Property="Background" Value="#0E2A3D" />
+      <Setter Property="Foreground" Value="{StaticResource TextHi}" />
+      <Setter Property="BorderBrush" Value="{StaticResource GridLine}" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="CornerRadius" Value="2" />
+      <Setter Property="Padding" Value="14,6" />
+      <Setter Property="FontFamily" Value="Consolas" />
+      <Setter Property="FontSize" Value="11" />
+    </Style>
+    <Style Selector="ToggleButton.primary:checked">
+      <Setter Property="Background" Value="#3A1F0E" />
+      <Setter Property="BorderBrush" Value="{StaticResource AccentAmber}" />
+      <Setter Property="Foreground" Value="{StaticResource AccentAmber}" />
+    </Style>
+  </Window.Styles>
+
+  <Grid RowDefinitions="Auto,Auto,Auto,*,Auto">
+    <!-- Header -->
+    <Border Grid.Row="0" Padding="18,14" Background="{StaticResource BgPanel}" BorderBrush="{StaticResource EdgeGlow}" BorderThickness="0,0,0,1">
+      <Grid ColumnDefinitions="Auto,*,Auto">
+        <StackPanel Orientation="Horizontal" Spacing="14" VerticalAlignment="Center">
+          <TextBlock Text="CW" FontFamily="Consolas" FontSize="22" Foreground="{StaticResource AccentCyan}" LetterSpacing="6" />
+          <TextBlock Text="SCOPE" FontFamily="Consolas" FontSize="22" Foreground="{StaticResource TextHi}" LetterSpacing="6" />
+          <Border Width="1" Background="{StaticResource GridLine}" Height="22" Margin="6,0" />
+          <TextBlock Text="streaming morse decoder · ditdah-core" FontFamily="Consolas" FontSize="11"
+                     Foreground="{StaticResource TextDim}" VerticalAlignment="Center" LetterSpacing="2" />
+        </StackPanel>
+        <TextBlock Grid.Column="2" Text="{Binding SourceLabel}" FontFamily="Consolas" FontSize="11"
+                   Foreground="{StaticResource AccentLime}" LetterSpacing="2" VerticalAlignment="Center" />
+      </Grid>
+    </Border>
+
+    <!-- Controls -->
+    <Border Grid.Row="1" Padding="18,12" Background="{StaticResource BgDeep}" BorderBrush="{StaticResource GridLine}" BorderThickness="0,0,0,1">
+      <Grid ColumnDefinitions="Auto,*,Auto,Auto,Auto,Auto" >
+        <StackPanel Orientation="Vertical" Spacing="2">
+          <TextBlock Text="INPUT DEVICE" Classes="label" />
+          <ComboBox Width="320" ItemsSource="{Binding Devices}" SelectedItem="{Binding SelectedDevice}"
+                    Background="{StaticResource BgPanel}" Foreground="{StaticResource TextHi}" />
+        </StackPanel>
+        <Button Grid.Column="2" x:Name="RefreshButton" Margin="12,16,0,0" Classes="primary" Content="REFRESH" Click="OnRefreshClick" />
+        <Button Grid.Column="3" x:Name="OpenFileButton" Margin="12,16,0,0" Classes="primary" Content="OPEN FILE…" Click="OnOpenFileClick" />
+        <ToggleButton Grid.Column="4" Margin="12,16,0,0" Classes="primary" IsChecked="{Binding HideDecoded, Mode=TwoWay}" Content="HIDE DECODING" />
+        <Button Grid.Column="5" x:Name="StartStopButton" Margin="12,16,0,0" Classes="primary"
+                Content="{Binding StartStopLabel}" Click="OnStartStopClick" MinWidth="120" />
+      </Grid>
+    </Border>
+
+    <!-- Telemetry row: signal meter + WPM panel + sparkline -->
+    <Grid Grid.Row="2" ColumnDefinitions="*,*" Margin="14,12,14,0" >
+      <!-- Signal strength column -->
+      <Border Classes="panel" Margin="0,0,7,0">
+        <Grid RowDefinitions="Auto,Auto,Auto,*">
+          <Grid ColumnDefinitions="*,Auto" >
+            <TextBlock Text="SIGNAL STRENGTH" Classes="label" />
+            <TextBlock Grid.Column="1" Text="{Binding PitchHz, StringFormat={}{0:F1} Hz}"
+                       Classes="value" Foreground="{StaticResource AccentLime}" />
+          </Grid>
+          <v:SignalMeter Grid.Row="1" Height="42" Margin="0,8,0,0"
+                         Level="{Binding NormalizedLevel}"
+                         Threshold="{Binding NormalizedThreshold}"
+                         Signal="{Binding Signal}" />
+          <Grid Grid.Row="2" ColumnDefinitions="*,*,*" Margin="0,8,0,0">
+            <StackPanel Spacing="2">
+              <TextBlock Text="POWER" Classes="label" />
+              <TextBlock Text="{Binding Power, StringFormat={}{0:E2}}" Classes="value" FontSize="14" Foreground="{StaticResource TextHi}" />
+            </StackPanel>
+            <StackPanel Grid.Column="1" Spacing="2">
+              <TextBlock Text="THRESHOLD" Classes="label" />
+              <TextBlock Text="{Binding Threshold, StringFormat={}{0:E2}}" Classes="value" FontSize="14" Foreground="{StaticResource AccentAmber}" />
+            </StackPanel>
+            <StackPanel Grid.Column="2" Spacing="2">
+              <TextBlock Text="KEYING" Classes="label" />
+              <StackPanel Orientation="Horizontal" Spacing="8">
+                <Ellipse Width="14" Height="14" Fill="{Binding Signal, Converter={StaticResource KeyingBrush}}" VerticalAlignment="Center" />
+                <TextBlock Text="{Binding Signal, Converter={StaticResource KeyingText}}" Classes="value" FontSize="14"
+                           Foreground="{Binding Signal, Converter={StaticResource KeyingBrush}}" />
+              </StackPanel>
+            </StackPanel>
+          </Grid>
+        </Grid>
+      </Border>
+      <!-- WPM column -->
+      <Border Grid.Column="1" Classes="panel" Margin="7,0,0,0">
+        <Grid ColumnDefinitions="Auto,*">
+          <StackPanel Orientation="Vertical" Width="140" Spacing="0">
+            <TextBlock Text="WORDS / MINUTE" Classes="label" />
+            <TextBlock Text="{Binding Wpm, StringFormat={}{0:F1}}"
+                       FontFamily="Consolas" FontSize="64" FontWeight="Bold"
+                       Foreground="{StaticResource AccentCyan}" />
+            <TextBlock Text="rolling avg" Classes="label" />
+          </StackPanel>
+          <v:WpmSparkline Grid.Column="1" Margin="14,0,0,0"
+                          Values="{Binding WpmHistory}" Current="{Binding Wpm}" />
+        </Grid>
+      </Border>
+    </Grid>
+
+    <!-- Transcript area -->
+    <Border Grid.Row="3" Classes="panel" Margin="14,12,14,4">
+      <Grid RowDefinitions="Auto,*">
+        <Grid ColumnDefinitions="*,Auto">
+          <TextBlock Text="DECODED MESSAGE" Classes="label" />
+          <TextBlock Grid.Column="1" Text="morse always visible · letters blur with HIDE DECODING" Classes="label" />
+        </Grid>
+        <ScrollViewer Grid.Row="1" Margin="0,8,0,0" HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+          <ItemsControl ItemsSource="{Binding Cells}" x:Name="CellsHost">
+            <ItemsControl.ItemsPanel>
+              <ItemsPanelTemplate>
+                <WrapPanel Orientation="Horizontal" />
+              </ItemsPanelTemplate>
+            </ItemsControl.ItemsPanel>
+            <ItemsControl.ItemTemplate>
+              <DataTemplate DataType="m:TranscriptCell">
+                <Grid>
+                  <!-- Character cell -->
+                  <Border Margin="2,2" Padding="6,2" Background="#0C1A28" BorderBrush="{StaticResource GridLine}" BorderThickness="1" CornerRadius="2"
+                          IsVisible="{Binding ., Converter={StaticResource IsCharCell}}">
+                    <StackPanel Orientation="Vertical" HorizontalAlignment="Center" MinWidth="32">
+                      <TextBlock Text="{Binding Morse}"
+                                 FontFamily="Consolas" FontSize="14"
+                                 Foreground="{StaticResource AccentAmber}"
+                                 HorizontalAlignment="Center" />
+                      <TextBlock Text="{Binding Letter}"
+                                 FontFamily="Consolas" FontSize="32"
+                                 FontWeight="Bold"
+                                 Foreground="{StaticResource AccentCyan}"
+                                 HorizontalAlignment="Center"
+                                 x:Name="LetterText"
+                                 Effect="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).HideDecoded, Converter={StaticResource BlurFx}}" />
+                    </StackPanel>
+                  </Border>
+                  <!-- Word break: thin vertical separator -->
+                  <Border Margin="6,6" Width="2" Background="{StaticResource AccentLime}" Opacity="0.45"
+                          IsVisible="{Binding ., Converter={StaticResource IsWordCell}}" />
+                </Grid>
+              </DataTemplate>
+            </ItemsControl.ItemTemplate>
+          </ItemsControl>
+        </ScrollViewer>
+      </Grid>
+    </Border>
+
+    <!-- Status -->
+    <Border Grid.Row="4" Padding="18,8" Background="{StaticResource BgPanel}" BorderBrush="{StaticResource EdgeGlow}" BorderThickness="0,1,0,0">
+      <TextBlock Text="{Binding StatusText}" FontFamily="Consolas" FontSize="11" Foreground="{StaticResource TextDim}" LetterSpacing="2" />
+    </Border>
+  </Grid>
+</Window>
