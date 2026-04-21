@@ -58,6 +58,7 @@
       <Setter Property="BorderThickness" Value="0" />
       <Setter Property="SelectionMode" Value="Extended" />
       <Setter Property="IsReadOnly" Value="False" />
+      <Setter Property="Padding" Value="0,0,0,10" />
     </Style>
 
     <!-- Compact density: override Fluent theme MinHeight so RowHeight/ColumnHeaderHeight bindings control sizing -->
