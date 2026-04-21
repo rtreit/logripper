@@ -138,6 +138,8 @@ internal static class ManagedQsoParity
             || snapshot.ItuZone > 0
             || snapshot.Latitude != 0
             || snapshot.Longitude != 0
+            || (snapshot.HasAltitudeMeters && snapshot.AltitudeMeters != 0)
+            || TrimmedNonEmpty(snapshot.GridsquareExt) is not null
             || TrimmedNonEmpty(snapshot.ArrlSection) is not null;
     }
 
@@ -527,6 +529,13 @@ internal static class ManagedQsoParity
         {
             target.Longitude = overlay.Longitude;
         }
+
+        if (overlay.HasAltitudeMeters && double.IsFinite(overlay.AltitudeMeters))
+        {
+            target.AltitudeMeters = overlay.AltitudeMeters;
+        }
+
+        MergeSnapshotOptionalString(value => target.GridsquareExt = value, overlay.GridsquareExt, clearBlankStrings);
     }
 
     private static void NormalizeStationSnapshot(StationSnapshot snapshot)
@@ -540,6 +549,7 @@ internal static class ManagedQsoParity
         snapshot.State = NormalizeOptionalString(snapshot.State);
         snapshot.Country = NormalizeOptionalString(snapshot.Country);
         snapshot.ArrlSection = NormalizeOptionalString(snapshot.ArrlSection);
+        snapshot.GridsquareExt = NormalizeOptionalString(snapshot.GridsquareExt);
 
     }
 

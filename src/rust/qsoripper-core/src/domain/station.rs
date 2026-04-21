@@ -19,6 +19,8 @@ pub fn station_snapshot_from_profile(profile: &StationProfile) -> Option<Station
         itu_zone: profile.itu_zone.filter(|value| *value > 0),
         latitude: profile.latitude,
         longitude: profile.longitude,
+        altitude_meters: None,
+        gridsquare_ext: None,
         arrl_section: normalize_optional_string(profile.arrl_section.as_deref()),
     };
     normalize_station_snapshot(&mut snapshot);
@@ -186,6 +188,12 @@ pub fn station_snapshot_has_values(snapshot: &StationSnapshot) -> bool {
         || snapshot.itu_zone.is_some()
         || snapshot.latitude.is_some()
         || snapshot.longitude.is_some()
+        || snapshot.altitude_meters.is_some()
+        || snapshot
+            .gridsquare_ext
+            .as_deref()
+            .and_then(trimmed_non_empty)
+            .is_some()
         || snapshot
             .arrl_section
             .as_deref()
@@ -248,6 +256,14 @@ fn merge_station_snapshot(
     if let Some(longitude) = overlay.longitude {
         base.longitude = Some(longitude);
     }
+    if let Some(altitude) = overlay.altitude_meters {
+        base.altitude_meters = Some(altitude);
+    }
+    merge_optional_string(
+        &mut base.gridsquare_ext,
+        overlay.gridsquare_ext.as_deref(),
+        clear_blank_strings,
+    );
     merge_optional_string(
         &mut base.arrl_section,
         overlay.arrl_section.as_deref(),
@@ -267,6 +283,7 @@ fn normalize_station_snapshot(snapshot: &mut StationSnapshot) {
     snapshot.dxcc = snapshot.dxcc.filter(|value| *value > 0);
     snapshot.cq_zone = snapshot.cq_zone.filter(|value| *value > 0);
     snapshot.itu_zone = snapshot.itu_zone.filter(|value| *value > 0);
+    snapshot.gridsquare_ext = normalize_optional_string(snapshot.gridsquare_ext.as_deref());
     snapshot.arrl_section = normalize_optional_string(snapshot.arrl_section.as_deref());
 }
 
