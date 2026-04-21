@@ -1,0 +1,34 @@
+{
+  "inspectSurface": "MainWindow",
+  "window": {
+    "title": "QsoRipper",
+    "x": 40,
+    "y": 40,
+    "width": 1280,
+    "height": 760
+  },
+  "actions": [
+    { "type": "wait", "milliseconds": 600 },
+    { "type": "screenshot", "path": "01-default-1280x760.png" },
+
+    { "comment": "MinWidth/MinHeight stress", "type": "resize-window", "x": 40, "y": 40, "width": 1024, "height": 640 },
+    { "type": "wait", "milliseconds": 400 },
+    { "type": "screenshot", "path": "02-small-1024x640.png" },
+
+    { "comment": "Below minimum — hard failures", "type": "resize-window", "x": 40, "y": 40, "width": 900, "height": 600 },
+    { "type": "wait", "milliseconds": 400 },
+    { "type": "screenshot", "path": "03-tiny-900x600.png" },
+
+    { "comment": "Tall narrow — column header overflow", "type": "resize-window", "x": 40, "y": 40, "width": 800, "height": 900 },
+    { "type": "wait", "milliseconds": 400 },
+    { "type": "screenshot", "path": "04-tall-narrow-800x900.png" },
+
+    { "comment": "Wide short — vertical overflow", "type": "resize-window", "x": 40, "y": 40, "width": 1600, "height": 500 },
+    { "type": "wait", "milliseconds": 400 },
+    { "type": "screenshot", "path": "05-wide-short-1600x500.png" },
+
+    { "comment": "Restore default", "type": "resize-window", "x": 40, "y": 40, "width": 1280, "height": 760 },
+    { "type": "wait", "milliseconds": 300 },
+    { "type": "screenshot", "path": "06-restored-1280x760.png" }
+  ]
+}
