@@ -22,6 +22,9 @@ internal sealed partial class HelpOverlayViewModel : ObservableObject
         new("QSO Logging", [
             new("Ctrl+Enter / F10", "Log QSO"),
             new("Alt+A / Ctrl+L", "Open QSO Card"),
+            new("Alt+C", "Jump to callsign"),
+            new("Alt+B", "Jump to band"),
+            new("Alt+M", "Jump to mode"),
             new("F7", "Reset QSO timer"),
             new("\u2190 / \u2192", "Cycle band/mode (when focused)"),
         ]),

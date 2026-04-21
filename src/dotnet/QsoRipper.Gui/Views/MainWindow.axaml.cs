@@ -403,6 +403,29 @@ internal sealed partial class MainWindow : Window
             return true;
         }
 
+        // Alt-field jumps for rapid logger navigation — matches TUI Alt+C/B/M
+        // convention. Only active when no overlay is open and focus can reach
+        // the logger controls.
+        if (e.KeyModifiers == KeyModifiers.Alt && !_viewModel.IsFullQsoCardOpen
+            && !_viewModel.IsHelpOpen && !_viewModel.IsCallsignCardOpen)
+        {
+            switch (e.Key)
+            {
+                case Key.C:
+                    FocusLoggerControl("LoggerCallsignBox");
+                    e.Handled = true;
+                    return true;
+                case Key.B:
+                    FocusLoggerControl("LoggerBandButton");
+                    e.Handled = true;
+                    return true;
+                case Key.M:
+                    FocusLoggerControl("LoggerModeButton");
+                    e.Handled = true;
+                    return true;
+            }
+        }
+
         if (e.KeyModifiers != KeyModifiers.None)
         {
             return false;
@@ -711,6 +734,27 @@ internal sealed partial class MainWindow : Window
             {
                 _recentQsoSearchBox.Focus();
                 _recentQsoSearchBox.SelectAll();
+            },
+            DispatcherPriority.Input);
+    }
+
+    private void FocusLoggerControl(string automationId)
+    {
+        var control = this.FindControl<Control>(automationId);
+        if (control is null)
+        {
+            return;
+        }
+
+        _lastFocusArea = FocusArea.Logger;
+        Dispatcher.UIThread.Post(
+            () =>
+            {
+                control.Focus();
+                if (control is TextBox textBox)
+                {
+                    textBox.SelectAll();
+                }
             },
             DispatcherPriority.Input);
     }

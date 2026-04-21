@@ -272,7 +272,9 @@
                   ColumnSpacing="8"
                   VerticalAlignment="Center">
               <StackPanel Grid.Column="0" Spacing="1">
-                <TextBlock Text="Callsign" FontSize="10" Opacity="0.6" />
+                <TextBlock FontSize="10" Opacity="0.6">
+                  <Run Text="C" TextDecorations="Underline" /><Run Text="allsign" />
+                </TextBlock>
                 <TextBox x:Name="LoggerCallsignBox"
                          AutomationProperties.AutomationId="LoggerCallsignBox"
                          Text="{Binding Logger.Callsign, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
@@ -281,7 +283,9 @@
               </StackPanel>
 
               <StackPanel Grid.Column="1" Spacing="1">
-                <TextBlock Text="Band ◄►" FontSize="10" Opacity="0.6" />
+                <TextBlock FontSize="10" Opacity="0.6">
+                  <Run Text="B" TextDecorations="Underline" /><Run Text="and ◄►" />
+                </TextBlock>
                 <Button x:Name="LoggerBandButton"
                         AutomationProperties.AutomationId="LoggerBandButton"
                         Background="{DynamicResource SystemControlBackgroundBaseLowBrush}"
@@ -297,7 +301,9 @@
               </StackPanel>
 
               <StackPanel Grid.Column="2" Spacing="1">
-                <TextBlock Text="Mode ◄►" FontSize="10" Opacity="0.6" />
+                <TextBlock FontSize="10" Opacity="0.6">
+                  <Run Text="M" TextDecorations="Underline" /><Run Text="ode ◄►" />
+                </TextBlock>
                 <Button x:Name="LoggerModeButton"
                         AutomationProperties.AutomationId="LoggerModeButton"
                         Background="{DynamicResource SystemControlBackgroundBaseLowBrush}"
