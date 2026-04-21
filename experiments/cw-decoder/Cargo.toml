@@ -15,6 +15,10 @@ clap = { version = "4.5", features = ["derive"] }
 log = "0.4"
 env_logger = "0.11"
 
+# Signal processing (re-used in our streaming decoder; same versions as ditdah)
+rubato = "0.16"
+rustfft = "6.4"
+
 # Audio decode (mp3/wav/etc)
 symphonia = { version = "0.5", features = ["mp3", "wav", "isomp4", "aac"] }
 

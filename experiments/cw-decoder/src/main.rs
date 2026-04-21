@@ -6,6 +6,7 @@ use clap::{Parser, Subcommand};
 mod audio;
 mod decoder;
 mod log_capture;
+mod streaming;
 mod tui;
 
 #[derive(Parser, Debug)]
@@ -56,6 +57,29 @@ enum Cmd {
         #[arg(long, default_value_t = 8.0)]
         window: f32,
     },
+
+    /// Stream a file through the streaming decoder, printing events as they fire.
+    StreamFile {
+        path: PathBuf,
+        /// Chunk size in milliseconds when feeding the decoder.
+        #[arg(long, default_value_t = 50)]
+        chunk_ms: u32,
+        /// If true, sleep between chunks to simulate real-time playback.
+        #[arg(long)]
+        realtime: bool,
+        /// Suppress per-character event lines and only print the final transcript.
+        #[arg(long)]
+        quiet: bool,
+    },
+
+    /// Stream live audio through the streaming decoder, printing events to stdout.
+    StreamLive {
+        #[arg(long)]
+        device: Option<String>,
+        /// How long to capture before exiting (seconds). 0 = run forever.
+        #[arg(long, default_value_t = 0.0)]
+        seconds: f32,
+    },
 }
 
 fn main() -> Result<()> {
@@ -91,6 +115,10 @@ fn main() -> Result<()> {
                 .context("opening live audio device")?;
             tui::run(capture, log_capture)
         }
+        Cmd::StreamFile { path, chunk_ms, realtime, quiet } => {
+            run_stream_file(&path, chunk_ms, realtime, quiet)
+        }
+        Cmd::StreamLive { device, seconds } => run_stream_live(device.as_deref(), seconds),
     }
 }
 
@@ -175,4 +203,184 @@ fn run_file(
     }
 
     Ok(())
+}
+
+
+fn run_stream_file(path: &std::path::Path, chunk_ms: u32, realtime: bool, quiet: bool) -> Result<()> {
+    use std::time::Instant;
+    let audio = audio::decode_file(path).context("decoding audio file")?;
+    let dur = audio.samples.len() as f32 / audio.sample_rate as f32;
+    println!(
+        "Streaming: {} ({} Hz, {:.2} s, {} samples)",
+        path.display(), audio.sample_rate, dur, audio.samples.len()
+    );
+
+    let mut decoder = streaming::StreamingDecoder::new(audio.sample_rate)?;
+    let chunk_samples = ((audio.sample_rate as u64 * chunk_ms as u64) / 1000) as usize;
+    let chunk_samples = chunk_samples.max(64);
+
+    let mut transcript = String::new();
+    let mut last_wpm: Option<f32> = None;
+    let started = Instant::now();
+    let mut consumed: usize = 0;
+
+    for chunk in audio.samples.chunks(chunk_samples) {
+        let t_in_audio = consumed as f32 / audio.sample_rate as f32;
+        consumed += chunk.len();
+
+        let events = decoder.feed(chunk)?;
+        let now_real = started.elapsed().as_secs_f32();
+        let lag_ms = ((now_real - t_in_audio) * 1000.0) as i32;
+
+        for ev in events {
+            match ev {
+                streaming::StreamEvent::PitchUpdate { pitch_hz } => {
+                    if !quiet {
+                        println!("[t={:>6.2}s real+{:>4}ms] PITCH lock: {:.1} Hz", t_in_audio, lag_ms, pitch_hz);
+                    }
+                }
+                streaming::StreamEvent::WpmUpdate { wpm } => {
+                    let changed = last_wpm.map(|w| (w - wpm).abs() >= 1.0).unwrap_or(true);
+                    if changed {
+                        if !quiet {
+                            println!("[t={:>6.2}s real+{:>4}ms] WPM    -> {:.1}", t_in_audio, lag_ms, wpm);
+                        }
+                        last_wpm = Some(wpm);
+                    }
+                }
+                streaming::StreamEvent::Char { ch, morse } => {
+                    transcript.push(ch);
+                    if !quiet {
+                        println!(
+                            "[t={:>6.2}s real+{:>4}ms] CHAR  '{}' ({:>5})  transcript: {}",
+                            t_in_audio, lag_ms, ch, morse, transcript
+                        );
+                    }
+                }
+                streaming::StreamEvent::Word => {
+                    transcript.push(' ');
+                    if !quiet {
+                        println!("[t={:>6.2}s real+{:>4}ms] WORD  break", t_in_audio, lag_ms);
+                    }
+                }
+                streaming::StreamEvent::Garbled { morse } => {
+                    transcript.push('?');
+                    if !quiet {
+                        println!("[t={:>6.2}s real+{:>4}ms] ???  garbled morse: {}", t_in_audio, lag_ms, morse);
+                    }
+                }
+            }
+        }
+
+        if realtime {
+            let target_real = t_in_audio;
+            let now_real = started.elapsed().as_secs_f32();
+            if now_real < target_real {
+                std::thread::sleep(std::time::Duration::from_secs_f32(target_real - now_real));
+            }
+        }
+    }
+
+    // Flush any pending letter.
+    for ev in decoder.flush() {
+        match ev {
+            streaming::StreamEvent::Char { ch, .. } => transcript.push(ch),
+            streaming::StreamEvent::Garbled { .. } => transcript.push('?'),
+            _ => {}
+        }
+    }
+
+    println!();
+    println!("Final pitch:    {}", decoder.pitch().map(|p| format!("{p:.1} Hz")).unwrap_or_else(|| "(none)".into()));
+    println!("Final WPM:      {}", decoder.current_wpm().map(|w| format!("{w:.1}")).unwrap_or_else(|| "(none)".into()));
+    println!("Threshold:      {:.4e}", decoder.current_threshold());
+    println!();
+    println!("Transcript:");
+    println!("{}", transcript.trim());
+    Ok(())
+}
+
+fn run_stream_live(device: Option<&str>, seconds: f32) -> Result<()> {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
+
+    let capture = audio::open_input(device, 1.0)?;
+    println!("Live streaming from: {}", capture.device_name);
+    let mut decoder = streaming::StreamingDecoder::new(capture.sample_rate)?;
+
+    let stop = Arc::new(AtomicBool::new(false));
+    {
+        let stop = Arc::clone(&stop);
+        ctrlc_setup(move || { stop.store(true, Ordering::Relaxed); });
+    }
+
+    let started = Instant::now();
+    let mut transcript = String::new();
+    let mut last_wpm: Option<f32> = None;
+    let mut last_drain_at: u64 = 0;
+
+    loop {
+        if stop.load(Ordering::Relaxed) { break; }
+        if seconds > 0.0 && started.elapsed().as_secs_f32() >= seconds { break; }
+        std::thread::sleep(Duration::from_millis(50));
+
+            let chunk = {
+                let lock = capture.buffer.lock();
+            // Drain only NEW samples since last drain.
+            let total = lock.written;
+            let avail_in_ring = lock.len();
+            let want = (total - last_drain_at).min(avail_in_ring as u64) as usize;
+            if want == 0 {
+                Vec::new()
+            } else {
+                let snap = lock.snapshot();
+                last_drain_at = total;
+                let start = snap.len() - want;
+                snap[start..].to_vec()
+            }
+        };
+        if chunk.is_empty() { continue; }
+
+        let events = decoder.feed(&chunk)?;
+        let t = started.elapsed().as_secs_f32();
+        for ev in events {
+            match ev {
+                streaming::StreamEvent::PitchUpdate { pitch_hz } => {
+                    println!("[t={t:>6.2}s] PITCH lock: {pitch_hz:.1} Hz");
+                }
+                streaming::StreamEvent::WpmUpdate { wpm } => {
+                    let changed = last_wpm.map(|w| (w - wpm).abs() >= 1.0).unwrap_or(true);
+                    if changed {
+                        println!("[t={t:>6.2}s] WPM    -> {wpm:.1}");
+                        last_wpm = Some(wpm);
+                    }
+                }
+                streaming::StreamEvent::Char { ch, morse } => {
+                    transcript.push(ch);
+                    println!("[t={t:>6.2}s] CHAR  '{ch}' ({morse})  transcript: {transcript}");
+                }
+                streaming::StreamEvent::Word => {
+                    transcript.push(' ');
+                    println!("[t={t:>6.2}s] WORD  break");
+                }
+                streaming::StreamEvent::Garbled { morse } => {
+                    transcript.push('?');
+                    println!("[t={t:>6.2}s] ???  garbled morse: {morse}");
+                }
+            }
+        }
+    }
+
+    for ev in decoder.flush() {
+        if let streaming::StreamEvent::Char { ch, .. } = ev { transcript.push(ch); }
+    }
+    println!();
+    println!("Final transcript:");
+    println!("{}", transcript.trim());
+    Ok(())
+}
+
+fn ctrlc_setup<F: FnMut() + Send + 'static>(_f: F) {
+    // Best-effort: no ctrlc crate, rely on terminal interrupt for now.
 }
