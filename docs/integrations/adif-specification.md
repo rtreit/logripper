@@ -654,6 +654,16 @@ The ADIF parser (Rust-side edge adapter) converts ADIF fields to/from proto `Qso
 | EQSL_QSL_RCVD | eqsl_received | Map to bool |
 | MY_NAME | station_snapshot.operator_name | Logging-station snapshot field |
 | MY_ARRL_SECT | station_snapshot.arrl_section | Logging-station snapshot field |
+| BAND_RX | band_rx | Split-operation receiving band (Band enum) |
+| FREQ_RX | frequency_rx_khz | Split-operation RX frequency, MHz → kHz |
+| LAT | worked_latitude | Parsed from `[NSEW]DDD MM.MMM` to signed decimal degrees |
+| LON | worked_longitude | Parsed from `[NSEW]DDD MM.MMM` to signed decimal degrees |
+| ALTITUDE | worked_altitude_meters | Contacted-station altitude in meters (MSL) |
+| GRIDSQUARE_EXT | worked_gridsquare_ext | Extended grid chars 9-12 |
+| OWNER_CALLSIGN | owner_callsign | Logging-station owner callsign |
+| QSO_COMPLETE | qso_complete | Y/N/NIL/? → `QsoCompletion` enum |
+| MY_ALTITUDE | station_snapshot.altitude_meters | Logging-station altitude in meters (MSL) |
+| MY_GRIDSQUARE_EXT | station_snapshot.gridsquare_ext | Extended grid chars 9-12 |
 
 **Fields not in QsoRecord or its nested station snapshot** (such as unsupported `MY_` fields, propagation data, satellite info, etc.) are preserved in an overflow map for round-trip fidelity during ADIF import/export.
 

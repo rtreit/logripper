@@ -1,0 +1,15 @@
+syntax = "proto3";
+
+package qsoripper.domain;
+
+option csharp_namespace = "QsoRipper.Domain";
+
+// ADIF QSO_COMPLETE field — indicates whether the QSO contact was completed.
+// See ADIF QSO Complete Enumeration.
+enum QsoCompletion {
+  QSO_COMPLETION_UNSPECIFIED = 0;  // No value present in source ADIF.
+  QSO_COMPLETION_YES = 1;  // Y — QSO complete (the default when the ADIF field is omitted by the source operator).
+  QSO_COMPLETION_NO = 2;  // N — QSO not complete (operator decision).
+  QSO_COMPLETION_NIL = 3;  // NIL — No QSO took place (heard but no contact).
+  QSO_COMPLETION_UNCERTAIN = 4;  // ? — Operator uncertain whether QSO completed.
+}

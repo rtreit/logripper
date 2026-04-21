@@ -1,6 +1,8 @@
 //! `QsoRecord` helpers: construction, QSL status mapping, and ADIF field mapping.
 
-use crate::proto::qsoripper::domain::{Band, Mode, QslStatus, QsoRecord, SyncStatus};
+use crate::proto::qsoripper::domain::{
+    Band, Mode, QslStatus, QsoCompletion, QsoRecord, SyncStatus,
+};
 use uuid::Uuid;
 
 /// Map an ADIF QSL Sent/Received status character to the `QslStatus` enum.
@@ -26,6 +28,30 @@ pub fn qsl_status_to_adif(status: QslStatus) -> Option<&'static str> {
         QslStatus::Queued => Some("Q"),
         QslStatus::Ignore => Some("I"),
         QslStatus::Unspecified => None,
+    }
+}
+
+/// Map an ADIF `QSO_COMPLETE` value to the `QsoCompletion` enum.
+#[must_use]
+pub fn qso_completion_from_adif(s: &str) -> QsoCompletion {
+    match s.to_uppercase().as_str() {
+        "Y" => QsoCompletion::Yes,
+        "N" => QsoCompletion::No,
+        "NIL" => QsoCompletion::Nil,
+        "?" => QsoCompletion::Uncertain,
+        _ => QsoCompletion::Unspecified,
+    }
+}
+
+/// Convert the `QsoCompletion` enum to its ADIF `QSO_COMPLETE` representation.
+#[must_use]
+pub fn qso_completion_to_adif(status: QsoCompletion) -> Option<&'static str> {
+    match status {
+        QsoCompletion::Yes => Some("Y"),
+        QsoCompletion::No => Some("N"),
+        QsoCompletion::Nil => Some("NIL"),
+        QsoCompletion::Uncertain => Some("?"),
+        QsoCompletion::Unspecified => None,
     }
 }
 
