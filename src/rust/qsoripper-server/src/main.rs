@@ -710,20 +710,73 @@ impl LookupService for DeveloperLookupService {
 
     async fn get_dxcc_entity(
         &self,
-        _request: Request<GetDxccEntityRequest>,
+        request: Request<GetDxccEntityRequest>,
     ) -> Result<Response<GetDxccEntityResponse>, Status> {
-        Err(Status::unimplemented(
-            "GetDxccEntity is out of scope for the first lookup slice.",
-        ))
+        use qsoripper_core::proto::qsoripper::services::get_dxcc_entity_request::Query;
+
+        let request = request.into_inner();
+        match request.query {
+            Some(Query::DxccCode(code)) => {
+                match qsoripper_core::adif::lookup_dxcc_entity_by_code(code) {
+                    Some(entity) => Ok(Response::new(GetDxccEntityResponse {
+                        entity: Some(entity),
+                    })),
+                    None => Err(Status::not_found(format!("DXCC entity {code} not found."))),
+                }
+            }
+            Some(Query::Prefix(_)) => Err(Status::unimplemented(
+                "Prefix-based DXCC lookup is not yet supported.",
+            )),
+            None => Err(Status::invalid_argument(
+                "Either dxcc_code or prefix must be specified.",
+            )),
+        }
     }
 
     async fn batch_lookup(
         &self,
-        _request: Request<BatchLookupRequest>,
+        request: Request<BatchLookupRequest>,
     ) -> Result<Response<BatchLookupResponse>, Status> {
-        Err(Status::unimplemented(
-            "BatchLookup is out of scope for the first lookup slice.",
-        ))
+        use std::sync::Arc;
+        use tokio::sync::Semaphore;
+
+        const MAX_CONCURRENCY: usize = 5;
+
+        let coordinator = self.runtime_config.lookup_coordinator().await;
+        let request = request.into_inner();
+        let callsigns = request.callsigns;
+
+        if callsigns.is_empty() {
+            return Ok(Response::new(BatchLookupResponse {
+                results: Vec::new(),
+            }));
+        }
+
+        let semaphore = Arc::new(Semaphore::new(MAX_CONCURRENCY));
+        let mut handles = Vec::with_capacity(callsigns.len());
+
+        for callsign in callsigns {
+            let coordinator = coordinator.clone();
+            let semaphore = semaphore.clone();
+            handles.push(tokio::spawn(async move {
+                let permit = semaphore.acquire().await.map_err(|_| {
+                    Status::internal("batch lookup semaphore was closed unexpectedly")
+                })?;
+                let result = coordinator.lookup(&callsign, false).await;
+                drop(permit);
+                Ok::<_, Status>(result)
+            }));
+        }
+
+        let mut results = Vec::with_capacity(handles.len());
+        for handle in handles {
+            let result = handle
+                .await
+                .map_err(|err| Status::internal(format!("batch lookup task failed: {err}")))??;
+            results.push(result);
+        }
+
+        Ok(Response::new(BatchLookupResponse { results }))
     }
 }
 
@@ -1986,26 +2039,105 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn dxcc_and_batch_lookup_remain_unimplemented_for_first_slice() {
+    async fn get_dxcc_entity_returns_known_us_entity_by_code() {
         let service = test_lookup_service();
 
-        let dxcc_error = LookupService::get_dxcc_entity(
+        let response = LookupService::get_dxcc_entity(
+            &service,
+            Request::new(GetDxccEntityRequest {
+                query: Some(get_dxcc_entity_request::Query::DxccCode(291)),
+            }),
+        )
+        .await
+        .expect("dxcc lookup should succeed");
+
+        let entity = response
+            .into_inner()
+            .entity
+            .expect("dxcc entity payload present");
+        assert_eq!(291, entity.dxcc_code);
+        assert_eq!("UNITED STATES OF AMERICA", entity.country_name.as_str());
+        assert_eq!("NA", entity.continent.as_str());
+    }
+
+    #[tokio::test]
+    async fn get_dxcc_entity_returns_not_found_for_unknown_code() {
+        let service = test_lookup_service();
+
+        let error = LookupService::get_dxcc_entity(
+            &service,
+            Request::new(GetDxccEntityRequest {
+                query: Some(get_dxcc_entity_request::Query::DxccCode(9_999)),
+            }),
+        )
+        .await
+        .expect_err("unknown dxcc should not be found");
+
+        assert_eq!(Code::NotFound, error.code());
+    }
+
+    #[tokio::test]
+    async fn get_dxcc_entity_prefix_query_remains_unimplemented() {
+        let service = test_lookup_service();
+
+        let error = LookupService::get_dxcc_entity(
             &service,
             Request::new(GetDxccEntityRequest {
                 query: Some(get_dxcc_entity_request::Query::Prefix("W1AW".to_string())),
             }),
         )
         .await
-        .expect_err("dxcc should be unimplemented");
-        let batch_error = LookupService::batch_lookup(
+        .expect_err("prefix lookup should be unimplemented");
+
+        assert_eq!(Code::Unimplemented, error.code());
+    }
+
+    #[tokio::test]
+    async fn get_dxcc_entity_rejects_missing_query() {
+        let service = test_lookup_service();
+
+        let error =
+            LookupService::get_dxcc_entity(&service, Request::new(GetDxccEntityRequest::default()))
+                .await
+                .expect_err("missing query should be rejected");
+
+        assert_eq!(Code::InvalidArgument, error.code());
+    }
+
+    #[tokio::test]
+    async fn batch_lookup_returns_empty_results_for_empty_input() {
+        let service = test_lookup_service();
+
+        let response = LookupService::batch_lookup(
             &service,
             Request::new(BatchLookupRequest { callsigns: vec![] }),
         )
         .await
-        .expect_err("batch should be unimplemented");
+        .expect("empty batch lookup should succeed");
 
-        assert_eq!(Code::Unimplemented, dxcc_error.code());
-        assert_eq!(Code::Unimplemented, batch_error.code());
+        assert!(response.into_inner().results.is_empty());
+    }
+
+    #[tokio::test]
+    async fn batch_lookup_returns_one_result_per_callsign_in_order() {
+        let service = test_lookup_service();
+
+        let response = LookupService::batch_lookup(
+            &service,
+            Request::new(BatchLookupRequest {
+                callsigns: vec!["W1AW".to_string(), "K7DBG".to_string(), "AE7XI".to_string()],
+            }),
+        )
+        .await
+        .expect("batch lookup should succeed");
+
+        let results = response.into_inner().results;
+        assert_eq!(3, results.len());
+        let actual: Vec<&str> = results
+            .iter()
+            .map(|result| result.queried_callsign.as_str())
+            .collect();
+        assert_eq!(vec!["W1AW", "K7DBG", "AE7XI"], actual);
     }
 
     #[tokio::test]
