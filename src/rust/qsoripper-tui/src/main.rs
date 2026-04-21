@@ -749,7 +749,35 @@ fn load_qso_into_form(app: &mut App, local_id: &str, lookup_tx: &watch::Sender<S
     let src = &qso.source_record;
     app.form.comment = src.comment.clone().unwrap_or_default();
     app.form.notes = src.notes.clone().unwrap_or_default();
-    if let Some(khz) = src.frequency_khz {
+    if let Some(hz) = src.frequency_hz {
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "ham radio frequencies are well within f64 mantissa range"
+        )]
+        {
+            app.form.frequency_mhz = format!("{:.6}", hz as f64 / 1_000_000.0)
+                .trim_end_matches('0')
+                .trim_end_matches('.')
+                .to_string();
+            // Ensure at least 3 decimal places
+            let dot = app
+                .form
+                .frequency_mhz
+                .find('.')
+                .unwrap_or(app.form.frequency_mhz.len());
+            let decimals = app.form.frequency_mhz.len() - dot - 1;
+            if decimals < 3 {
+                for _ in 0..(3 - decimals) {
+                    app.form.frequency_mhz.push('0');
+                }
+            }
+        }
+    } else if let Some(khz) = {
+        #[allow(deprecated)]
+        {
+            src.frequency_khz
+        }
+    } {
         #[expect(
             clippy::cast_precision_loss,
             reason = "ham radio frequencies are well within f64 mantissa range"

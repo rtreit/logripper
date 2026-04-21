@@ -21,7 +21,7 @@ public class RecentQsoListViewModelTests
                     "W1AW",
                     Band._40M,
                     Mode.Cw,
-                    7025,
+                    7_025_000,
                     "CN87",
                     "First recent QSO",
                     operatorName: "Alice",
@@ -36,7 +36,7 @@ public class RecentQsoListViewModelTests
                     "K7RND",
                     Band._20M,
                     Mode.Ft8,
-                    14074,
+                    14_074_000,
                     "CN88",
                     "Second recent QSO",
                     operatorName: "Bob",
@@ -85,7 +85,7 @@ public class RecentQsoListViewModelTests
                     "W1AW",
                     Band._20M,
                     Mode.Ft8,
-                    14074,
+                    14_074_000,
                     "CN87",
                     "CQ test",
                     operatorName: "Alice",
@@ -98,7 +98,7 @@ public class RecentQsoListViewModelTests
                     "VE7ABC",
                     Band._40M,
                     Mode.Ssb,
-                    7185,
+                    7_185_000,
                     "CN88",
                     "Morning ragchew",
                     operatorName: "Bob",
@@ -123,7 +123,7 @@ public class RecentQsoListViewModelTests
     [Fact]
     public async Task SaveEditsAsyncUpdatesDirtyRowsAndClearsPendingEdits()
     {
-        var original = CreateQso("qso-1", "W1AW", Band._20M, Mode.Cw, 14025, "CN87", "Loaded", operatorName: "Alice", state: "WA", country: "United States");
+        var original = CreateQso("qso-1", "W1AW", Band._20M, Mode.Cw, 14_025_000, "CN87", "Loaded", operatorName: "Alice", state: "WA", country: "United States");
         var updated = original.Clone();
         updated.Notes = "Updated note";
 
@@ -159,7 +159,7 @@ public class RecentQsoListViewModelTests
         {
             RecentQsos =
             [
-                CreateQso("qso-1", "W1AW", Band._20M, Mode.Cw, 14025, "CN87", "Loaded", operatorName: "Alice", state: "WA", country: "United States")
+                CreateQso("qso-1", "W1AW", Band._20M, Mode.Cw, 14_025_000, "CN87", "Loaded", operatorName: "Alice", state: "WA", country: "United States")
             ]
         };
 
@@ -185,7 +185,7 @@ public class RecentQsoListViewModelTests
         {
             RecentQsos =
             [
-                CreateQso("qso-1", "W1AW", Band._20M, Mode.Cw, 14025, "CN87", "Loaded", operatorName: "Alice", state: "WA", country: "United States")
+                CreateQso("qso-1", "W1AW", Band._20M, Mode.Cw, 14_025_000, "CN87", "Loaded", operatorName: "Alice", state: "WA", country: "United States")
             ]
         };
 
@@ -209,7 +209,7 @@ public class RecentQsoListViewModelTests
                 "W1AW",
                 Band._40M,
                 Mode.Cw,
-                7025,
+                7_025_000,
                 "CN87",
                 "Evening CW",
                 operatorName: "Alice",
@@ -229,8 +229,8 @@ public class RecentQsoListViewModelTests
         {
             RecentQsos =
             [
-                CreateQso("qso-2", "VE7ABC", Band._40M, Mode.Ssb, 7185, "CN88", "Second", operatorName: "Bob", state: "BC", country: "Canada"),
-                CreateQso("qso-1", "W1AW", Band._20M, Mode.Cw, 14025, "CN87", "First", operatorName: "Alice", state: "WA", country: "United States")
+                CreateQso("qso-2", "VE7ABC", Band._40M, Mode.Ssb, 7_185_000, "CN88", "Second", operatorName: "Bob", state: "BC", country: "Canada"),
+                CreateQso("qso-1", "W1AW", Band._20M, Mode.Cw, 14_025_000, "CN87", "First", operatorName: "Alice", state: "WA", country: "United States")
             ]
         };
 
@@ -253,8 +253,8 @@ public class RecentQsoListViewModelTests
         {
             RecentQsos =
             [
-                CreateQso("qso-1", "W1AW", Band._20M, Mode.Cw, 14025, "CN87", "First", operatorName: "Alice", state: "WA", country: "United States"),
-                CreateQso("qso-2", "K7RND", Band._40M, Mode.Ssb, 7185, "CN88", "Second", operatorName: "Bob", state: "BC", country: "Canada")
+                CreateQso("qso-1", "W1AW", Band._20M, Mode.Cw, 14_025_000, "CN87", "First", operatorName: "Alice", state: "WA", country: "United States"),
+                CreateQso("qso-2", "K7RND", Band._40M, Mode.Ssb, 7_185_000, "CN88", "Second", operatorName: "Bob", state: "BC", country: "Canada")
             ]
         };
 
@@ -275,10 +275,10 @@ public class RecentQsoListViewModelTests
         {
             RecentQsos =
             [
-                CreateQso("qso-1", "W1AW", Band._20M, Mode.Cw, 14025, "CN87", "First", syncStatus: SyncStatus.LocalOnly),
-                CreateQso("qso-2", "K7RND", Band._40M, Mode.Ssb, 7185, "CN88", "Second", syncStatus: SyncStatus.Modified),
-                CreateQso("qso-3", "VE7ABC", Band._15M, Mode.Ft8, 21074, "CN89", "Third", syncStatus: SyncStatus.Conflict),
-                CreateQso("qso-4", "N0CALL", Band._10M, Mode.Ssb, 28450, "EN34", "Fourth", syncStatus: SyncStatus.Synced),
+                CreateQso("qso-1", "W1AW", Band._20M, Mode.Cw, 14_025_000, "CN87", "First", syncStatus: SyncStatus.LocalOnly),
+                CreateQso("qso-2", "K7RND", Band._40M, Mode.Ssb, 7_185_000, "CN88", "Second", syncStatus: SyncStatus.Modified),
+                CreateQso("qso-3", "VE7ABC", Band._15M, Mode.Ft8, 21_074_000, "CN89", "Third", syncStatus: SyncStatus.Conflict),
+                CreateQso("qso-4", "N0CALL", Band._10M, Mode.Ssb, 28_450_000, "EN34", "Fourth", syncStatus: SyncStatus.Synced),
             ]
         };
 
@@ -293,7 +293,7 @@ public class RecentQsoListViewModelTests
     public void CancelEditRestoresSnapshotAndClearsDirtyState()
     {
         var item = RecentQsoItemViewModel.FromQso(
-            CreateQso("qso-1", "W1AW", Band._20M, Mode.Cw, 14025, "CN87", "Loaded", operatorName: "Alice", state: "WA", country: "United States"));
+            CreateQso("qso-1", "W1AW", Band._20M, Mode.Cw, 14_025_000, "CN87", "Loaded", operatorName: "Alice", state: "WA", country: "United States"));
 
         item.BeginEdit();
         item.WorkedCallsign = "VE7ABC";
@@ -342,7 +342,7 @@ public class RecentQsoListViewModelTests
         string workedCallsign,
         Band band,
         Mode mode,
-        ulong frequencyKhz,
+        ulong frequencyHz,
         string grid,
         string comment,
         string? operatorName = null,
@@ -363,7 +363,7 @@ public class RecentQsoListViewModelTests
             UtcTimestamp = Timestamp.FromDateTimeOffset(utcTimestamp ?? new DateTimeOffset(2026, 4, 13, 22, 15, 0, TimeSpan.Zero)),
             Band = band,
             Mode = mode,
-            FrequencyKhz = frequencyKhz,
+            FrequencyHz = frequencyHz,
             WorkedGrid = grid,
             Comment = comment,
             Notes = notes ?? string.Empty,

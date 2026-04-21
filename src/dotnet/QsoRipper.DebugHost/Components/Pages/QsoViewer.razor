@@ -125,7 +125,7 @@
                                 <td>@FormatTimestamp(qso.UtcTimestamp)</td>
                                 <td>@FormatBand(qso.Band)</td>
                                 <td>@FormatMode(qso.Mode)</td>
-                                <td>@(qso.HasFrequencyKhz ? qso.FrequencyKhz.ToString("N0") : "—")</td>
+                                <td>@FormatFrequency(qso)</td>
                                 <td>@(qso.RstSent?.Raw ?? "—")</td>
                                 <td>@(qso.RstReceived?.Raw ?? "—")</td>
                                 <td>@qso.StationCallsign</td>
@@ -291,5 +291,23 @@
     private static string FormatMode(QsoRipper.Domain.Mode mode)
     {
         return ProtoEnumDisplay.ForMode(mode);
+    }
+
+    private static string FormatFrequency(QsoRipper.Domain.QsoRecord qso)
+    {
+        ulong? hz = qso.HasFrequencyHz ? qso.FrequencyHz
+#pragma warning disable CS0612
+            : qso.HasFrequencyKhz ? qso.FrequencyKhz * 1000
+#pragma warning restore CS0612
+            : null;
+        if (!hz.HasValue) return "—";
+        ulong whole = hz.Value / 1_000_000;
+        ulong frac = hz.Value % 1_000_000;
+        string full = $"{whole}.{frac:000000}";
+        int dotPos = full.IndexOf('.', StringComparison.Ordinal);
+        int minLen = dotPos + 4;
+        var trimmed = full.AsSpan().TrimEnd('0');
+        int end = Math.Max(trimmed.Length, minLen);
+        return full[..end];
     }
 }

@@ -94,13 +94,20 @@ internal static class UpdateQsoCommand
                     return false;
                 case "--freq" when i < args.Length - 1:
                     var freqValue = args[++i];
-                    if (!ulong.TryParse(freqValue, out var freq))
+                    if (!double.TryParse(freqValue, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var freqMhz) || freqMhz <= 0)
                     {
-                        error = $"Invalid value for --freq: {freqValue}";
+                        error = $"Invalid value for --freq: {freqValue}. Use MHz such as 14.074.";
                         return false;
                     }
 
-                    qso.FrequencyKhz = freq;
+                    {
+                        var hz = (ulong)Math.Round(freqMhz * 1_000_000.0, MidpointRounding.AwayFromZero);
+                        qso.FrequencyHz = hz;
+#pragma warning disable CS0612
+                        qso.FrequencyKhz = (hz + 500) / 1000;
+#pragma warning restore CS0612
+                    }
+
                     break;
                 case "--freq":
                     error = "Missing value for --freq.";

@@ -340,10 +340,12 @@ internal static class ManagedAdifCodec
                     qso.Submode = value;
                     break;
                 case "FREQ":
-                    if (double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out var mhz)
-                        && TryConvertMhzToKhz(mhz, out var khz))
+                    if (TryConvertMhzToHz(value, out var hz))
                     {
-                        qso.FrequencyKhz = khz;
+                        qso.FrequencyHz = hz;
+#pragma warning disable CS0612 // Type or member is obsolete
+                        qso.FrequencyKhz = (hz + 500) / 1000;
+#pragma warning restore CS0612
                     }
                     else
                     {
@@ -352,10 +354,12 @@ internal static class ManagedAdifCodec
 
                     break;
                 case "FREQ_RX":
-                    if (double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out var mhzRx)
-                        && TryConvertMhzToKhz(mhzRx, out var khzRx))
+                    if (TryConvertMhzToHz(value, out var hzRx))
                     {
-                        qso.FrequencyRxKhz = khzRx;
+                        qso.FrequencyRxHz = hzRx;
+#pragma warning disable CS0612 // Type or member is obsolete
+                        qso.FrequencyRxKhz = (hzRx + 500) / 1000;
+#pragma warning restore CS0612
                     }
                     else
                     {
@@ -749,14 +753,14 @@ internal static class ManagedAdifCodec
             fields.Add(new KeyValuePair<string, string>("SUBMODE", qso.Submode));
         }
 
-        if (qso.HasFrequencyKhz)
+        if (TryFormatHzAsMhz(qso, freq: true, out var freqStr))
         {
-            fields.Add(new KeyValuePair<string, string>("FREQ", $"{qso.FrequencyKhz / 1000}.{qso.FrequencyKhz % 1000:000}"));
+            fields.Add(new KeyValuePair<string, string>("FREQ", freqStr));
         }
 
-        if (qso.HasFrequencyRxKhz)
+        if (TryFormatHzAsMhz(qso, freq: false, out var freqRxStr))
         {
-            fields.Add(new KeyValuePair<string, string>("FREQ_RX", $"{qso.FrequencyRxKhz / 1000}.{qso.FrequencyRxKhz % 1000:000}"));
+            fields.Add(new KeyValuePair<string, string>("FREQ_RX", freqRxStr));
         }
 
         if (BandToAdif.TryGetValue(qso.BandRx, out var bandRxOut))
@@ -1273,22 +1277,126 @@ internal static class ManagedAdifCodec
         return true;
     }
 
-    private static bool TryConvertMhzToKhz(double mhz, out ulong khz)
+    /// <summary>
+    /// Parse an ADIF MHz string into Hz using string/decimal math for cross-engine
+    /// parity with the Rust implementation. Supports up to 6 decimal places.
+    /// </summary>
+    private static bool TryConvertMhzToHz(string mhzStr, out ulong hz)
     {
-        khz = 0;
-        if (!double.IsFinite(mhz) || mhz < 0)
+        hz = 0;
+        var trimmed = mhzStr.AsSpan().Trim();
+        if (trimmed.IsEmpty || trimmed[0] == '-')
         {
             return false;
         }
 
-        var rounded = Math.Round(mhz * 1000.0, MidpointRounding.AwayFromZero);
-        if (rounded < 0 || rounded > ulong.MaxValue)
+        int dotIndex = trimmed.IndexOf('.');
+        ReadOnlySpan<char> intPart;
+        ReadOnlySpan<char> fracPart;
+        if (dotIndex >= 0)
+        {
+            intPart = trimmed[..dotIndex];
+            fracPart = trimmed[(dotIndex + 1)..];
+        }
+        else
+        {
+            intPart = trimmed;
+            fracPart = [];
+        }
+
+        if (!ulong.TryParse(intPart, NumberStyles.None, CultureInfo.InvariantCulture, out var wholeMhz))
         {
             return false;
         }
 
-        khz = (ulong)rounded;
+        // Pad or truncate fractional part to exactly 6 digits (1 Hz resolution).
+        int fracLen = Math.Min(fracPart.Length, 6);
+        Span<char> fracBuf = stackalloc char[6];
+        fracPart[..fracLen].CopyTo(fracBuf);
+        for (int i = fracLen; i < 6; i++)
+        {
+            fracBuf[i] = '0';
+        }
+
+        if (!ulong.TryParse(fracBuf, NumberStyles.None, CultureInfo.InvariantCulture, out var fracHz))
+        {
+            return false;
+        }
+
+        // Round if more than 6 decimal places.
+        if (fracPart.Length > 6 && fracPart[6] >= '5')
+        {
+            fracHz++;
+        }
+
+        hz = wholeMhz * 1_000_000 + fracHz;
         return true;
+    }
+
+    /// <summary>
+    /// Format Hz as an ADIF-compliant MHz string with full precision.
+    /// Up to 6 decimal places, trailing zeros trimmed, minimum 3 places.
+    /// Prefers FrequencyHz; falls back to deprecated FrequencyKhz.
+    /// </summary>
+    private static bool TryFormatHzAsMhz(QsoRecord qso, bool freq, out string result)
+    {
+        result = string.Empty;
+        ulong hz;
+
+        if (freq)
+        {
+#pragma warning disable CS0612
+            if (qso.HasFrequencyHz)
+            {
+                hz = qso.FrequencyHz;
+            }
+            else if (qso.HasFrequencyKhz)
+            {
+                hz = qso.FrequencyKhz * 1000;
+            }
+            else
+            {
+                return false;
+            }
+#pragma warning restore CS0612
+        }
+        else
+        {
+#pragma warning disable CS0612
+            if (qso.HasFrequencyRxHz)
+            {
+                hz = qso.FrequencyRxHz;
+            }
+            else if (qso.HasFrequencyRxKhz)
+            {
+                hz = qso.FrequencyRxKhz * 1000;
+            }
+            else
+            {
+                return false;
+            }
+#pragma warning restore CS0612
+        }
+
+        result = FormatHzAsMhz(hz);
+        return true;
+    }
+
+    /// <summary>
+    /// Format a frequency in Hz as MHz with up to 6 decimal places,
+    /// trailing zeros trimmed, minimum 3 decimal places.
+    /// </summary>
+    internal static string FormatHzAsMhz(ulong hz)
+    {
+        ulong whole = hz / 1_000_000;
+        ulong frac = hz % 1_000_000;
+        string full = $"{whole}.{frac:000000}";
+        // Trim trailing zeros but keep at least 3 decimal places.
+        int dotPos = full.IndexOf('.', StringComparison.Ordinal);
+        int minLen = dotPos + 1 + 3;
+        var trimmed = full.AsSpan().TrimEnd('0');
+        int end = Math.Max(trimmed.Length, minLen);
+        return full[..end];
     }
 
     private static void EnrichFromDxcc(QsoRecord qso)
@@ -1344,7 +1452,10 @@ internal static class ManagedAdifCodec
             : key.Equals("QSLSDATE", StringComparison.OrdinalIgnoreCase) ? qso.QslSentDate is not null && TryFormatAdifDate(qso.QslSentDate, out _)
             : key.Equals("QSLRDATE", StringComparison.OrdinalIgnoreCase) ? qso.QslReceivedDate is not null && TryFormatAdifDate(qso.QslReceivedDate, out _)
             : key.Equals("BAND_RX", StringComparison.OrdinalIgnoreCase) ? qso.BandRx != Band.Unspecified
-            : key.Equals("FREQ_RX", StringComparison.OrdinalIgnoreCase) ? qso.HasFrequencyRxKhz
+            : key.Equals("FREQ_RX", StringComparison.OrdinalIgnoreCase) ? qso.HasFrequencyRxHz
+#pragma warning disable CS0612
+                || qso.HasFrequencyRxKhz
+#pragma warning restore CS0612
             : key.Equals("LAT", StringComparison.OrdinalIgnoreCase) ? qso.HasWorkedLatitude
             : key.Equals("LON", StringComparison.OrdinalIgnoreCase) ? qso.HasWorkedLongitude
             : key.Equals("ALTITUDE", StringComparison.OrdinalIgnoreCase) ? qso.HasWorkedAltitudeMeters

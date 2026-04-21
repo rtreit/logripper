@@ -621,7 +621,7 @@ The ADIF parser (Rust-side edge adapter) converts ADIF fields to/from proto `Qso
 | QSO_DATE_OFF + TIME_OFF | utc_end_timestamp | End date falls back to QSO_DATE when ADIF omits QSO_DATE_OFF |
 | BAND | band | Map string to Band enum |
 | MODE + SUBMODE | mode | Map to Mode enum; store submode separately if needed |
-| FREQ | frequency_khz | Convert MHz → kHz (multiply by 1000) |
+| FREQ | frequency_hz | Convert MHz → Hz via string/decimal math for sub-kHz precision |
 | RST_SENT | rst_sent | Parse into RstReport |
 | RST_RCVD | rst_received | Parse into RstReport |
 | TX_PWR | tx_power | — |
@@ -655,7 +655,7 @@ The ADIF parser (Rust-side edge adapter) converts ADIF fields to/from proto `Qso
 | MY_NAME | station_snapshot.operator_name | Logging-station snapshot field |
 | MY_ARRL_SECT | station_snapshot.arrl_section | Logging-station snapshot field |
 | BAND_RX | band_rx | Split-operation receiving band (Band enum) |
-| FREQ_RX | frequency_rx_khz | Split-operation RX frequency, MHz → kHz |
+| FREQ_RX | frequency_rx_hz | Split-operation RX frequency, MHz → Hz via string math |
 | LAT | worked_latitude | Parsed from `[NSEW]DDD MM.MMM` to signed decimal degrees |
 | LON | worked_longitude | Parsed from `[NSEW]DDD MM.MMM` to signed decimal degrees |
 | ALTITUDE | worked_altitude_meters | Contacted-station altitude in meters (MSL) |

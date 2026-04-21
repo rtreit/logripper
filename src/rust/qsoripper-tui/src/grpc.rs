@@ -52,7 +52,7 @@ pub(crate) async fn log_qso(
         parse_timestamp(&form.date, &form.time_off).ok()
     };
 
-    let frequency_khz = form.frequency_mhz.parse::<f64>().ok().map(mhz_to_khz);
+    let frequency_hz = form.frequency_mhz.parse::<f64>().ok().map(mhz_to_hz);
 
     let (worked_grid, worked_country, worked_cq_zone, worked_dxcc) =
         lookup.unwrap_or((None, None, None, None));
@@ -63,7 +63,7 @@ pub(crate) async fn log_qso(
         mode: i32::from(mode),
         utc_timestamp,
         utc_end_timestamp,
-        frequency_khz,
+        frequency_hz,
         submode: if form.submode_override.is_empty() {
             submode.map(str::to_string)
         } else {
@@ -325,7 +325,7 @@ pub(crate) async fn update_qso(
     } else {
         parse_timestamp(&form.date, &form.time_off).ok()
     };
-    let frequency_khz = form.frequency_mhz.parse::<f64>().ok().map(mhz_to_khz);
+    let frequency_hz = form.frequency_mhz.parse::<f64>().ok().map(mhz_to_hz);
 
     let (worked_grid, worked_country, worked_cq_zone, worked_dxcc) =
         lookup.unwrap_or((None, None, None, None));
@@ -339,7 +339,7 @@ pub(crate) async fn update_qso(
     qso.mode = i32::from(mode);
     qso.utc_timestamp = utc_timestamp;
     qso.utc_end_timestamp = utc_end_timestamp;
-    qso.frequency_khz = frequency_khz;
+    qso.frequency_hz = frequency_hz;
     qso.submode = if form.submode_override.is_empty() {
         submode.map(str::to_string)
     } else {
@@ -389,16 +389,16 @@ pub(crate) async fn delete_qso(channel: Channel, local_id: &str) -> anyhow::Resu
     Ok(())
 }
 
-/// Convert a frequency in MHz to kHz as a `u64`.
-fn mhz_to_khz(mhz: f64) -> u64 {
-    let khz = mhz * 1_000.0_f64;
+/// Convert a frequency in MHz to Hz as a `u64`.
+fn mhz_to_hz(mhz: f64) -> u64 {
+    let hz = mhz * 1_000_000.0_f64;
     #[expect(
         clippy::cast_possible_truncation,
         clippy::cast_sign_loss,
         reason = "frequency is always a small positive value well within u64 range"
     )]
     {
-        khz as u64
+        hz.round() as u64
     }
 }
 

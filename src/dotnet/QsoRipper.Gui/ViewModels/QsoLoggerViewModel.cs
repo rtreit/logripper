@@ -255,7 +255,11 @@ internal sealed partial class QsoLoggerViewModel : ObservableObject
         if (double.TryParse(FrequencyMhz, NumberStyles.Float, CultureInfo.InvariantCulture, out var freqMhz)
             && freqMhz > 0)
         {
-            qso.FrequencyKhz = (ulong)(freqMhz * 1000.0);
+            var hz = (ulong)Math.Round(freqMhz * 1_000_000.0, MidpointRounding.AwayFromZero);
+            qso.FrequencyHz = hz;
+#pragma warning disable CS0612
+            qso.FrequencyKhz = (hz + 500) / 1000;
+#pragma warning restore CS0612
         }
 
         if (!string.IsNullOrWhiteSpace(Comment))

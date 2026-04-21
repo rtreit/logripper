@@ -219,7 +219,7 @@ internal sealed record UxCaptureFixture
             UtcTimestamp = new DateTimeOffset(2026, 4, 13, 22, 16, 0, TimeSpan.Zero),
             Band = "40M",
             Mode = "CW",
-            FrequencyKhz = 7025,
+            FrequencyHz = 7_025_000,
             WorkedGrid = "FN31",
             Comment = "Evening CW run with strong signal reports and a narrow note field.",
             WorkedOperatorName = "ARRL HQ",
@@ -239,7 +239,7 @@ internal sealed record UxCaptureFixture
             UtcTimestamp = new DateTimeOffset(2026, 4, 13, 22, 15, 0, TimeSpan.Zero),
             Band = "20M",
             Mode = "FT8",
-            FrequencyKhz = 14074,
+            FrequencyHz = 14_074_000,
             WorkedGrid = "CN87",
             Comment = "Portable park activation exchange with a longer operator note to exercise truncation.",
             WorkedOperatorName = "Randy",
@@ -259,7 +259,7 @@ internal sealed record UxCaptureFixture
             UtcTimestamp = new DateTimeOffset(2026, 4, 13, 22, 12, 0, TimeSpan.Zero),
             Band = "15M",
             Mode = "SSB",
-            FrequencyKhz = 21295,
+            FrequencyHz = 21_295_000,
             WorkedGrid = "CN89",
             Comment = "Late-afternoon SSB contact with a country column long enough to ellipsize cleanly.",
             WorkedOperatorName = "Jordan",
@@ -279,7 +279,7 @@ internal sealed record UxCaptureFixture
             UtcTimestamp = new DateTimeOffset(2026, 4, 13, 22, 8, 0, TimeSpan.Zero),
             Band = "10M",
             Mode = "SSB",
-            FrequencyKhz = 28485,
+            FrequencyHz = 28_485_000,
             WorkedGrid = "JO62",
             Comment = "DX opening note for visual density capture.",
             WorkedOperatorName = "Marta",
@@ -319,7 +319,7 @@ internal sealed record UxCaptureFixture
             UtcTimestamp = Timestamp.FromDateTimeOffset(item.UtcTimestamp),
             Band = band,
             Mode = mode,
-            FrequencyKhz = item.FrequencyKhz,
+            FrequencyHz = item.FrequencyHz,
             WorkedGrid = item.WorkedGrid ?? string.Empty,
             Comment = item.Comment ?? string.Empty,
             Notes = item.Notes ?? string.Empty,
@@ -350,7 +350,7 @@ internal sealed record UxCaptureQsoFixtureItem
 
     public string Mode { get; init; } = "FT8";
 
-    public ulong FrequencyKhz { get; init; } = 14074;
+    public ulong FrequencyHz { get; init; } = 14_074_000;
 
     public string? WorkedGrid { get; init; }
 

@@ -290,10 +290,12 @@ internal static class AdifCodec
                     qso.Submode = value;
                     break;
                 case "FREQ":
-                    if (double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out var mhz)
-                        && TryConvertMhzToKhz(mhz, out var khz))
+                    if (TryConvertMhzToHz(value, out var hz))
                     {
-                        qso.FrequencyKhz = khz;
+                        qso.FrequencyHz = hz;
+#pragma warning disable CS0612
+                        qso.FrequencyKhz = (hz + 500) / 1000;
+#pragma warning restore CS0612
                     }
                     else
                     {
@@ -302,10 +304,12 @@ internal static class AdifCodec
 
                     break;
                 case "FREQ_RX":
-                    if (double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out var mhzRx)
-                        && TryConvertMhzToKhz(mhzRx, out var khzRx))
+                    if (TryConvertMhzToHz(value, out var hzRx))
                     {
-                        qso.FrequencyRxKhz = khzRx;
+                        qso.FrequencyRxHz = hzRx;
+#pragma warning disable CS0612
+                        qso.FrequencyRxKhz = (hzRx + 500) / 1000;
+#pragma warning restore CS0612
                     }
                     else
                     {
@@ -575,14 +579,22 @@ internal static class AdifCodec
             AppendField(sb, "SUBMODE", qso.Submode);
         }
 
-        if (qso.HasFrequencyKhz)
+        if (qso.HasFrequencyHz
+#pragma warning disable CS0612
+            || qso.HasFrequencyKhz)
         {
-            AppendField(sb, "FREQ", $"{qso.FrequencyKhz / 1000}.{qso.FrequencyKhz % 1000:000}");
+            ulong freqHz = qso.HasFrequencyHz ? qso.FrequencyHz : qso.FrequencyKhz * 1000;
+#pragma warning restore CS0612
+            AppendField(sb, "FREQ", FormatHzAsMhz(freqHz));
         }
 
-        if (qso.HasFrequencyRxKhz)
+        if (qso.HasFrequencyRxHz
+#pragma warning disable CS0612
+            || qso.HasFrequencyRxKhz)
         {
-            AppendField(sb, "FREQ_RX", $"{qso.FrequencyRxKhz / 1000}.{qso.FrequencyRxKhz % 1000:000}");
+            ulong freqRxHz = qso.HasFrequencyRxHz ? qso.FrequencyRxHz : qso.FrequencyRxKhz * 1000;
+#pragma warning restore CS0612
+            AppendField(sb, "FREQ_RX", FormatHzAsMhz(freqRxHz));
         }
 
         if (qso.RstSent is not null)
@@ -840,16 +852,73 @@ internal static class AdifCodec
         }
     }
 
-    private static bool TryConvertMhzToKhz(double mhz, out ulong khz)
+    /// <summary>
+    /// Parse an ADIF MHz string into Hz using string/decimal math.
+    /// Mirror of <c>ManagedAdifCodec.TryConvertMhzToHz</c> for cross-engine parity.
+    /// </summary>
+    private static bool TryConvertMhzToHz(string mhzStr, out ulong hz)
     {
-        khz = 0;
-        if (mhz <= 0)
+        hz = 0;
+        var trimmed = mhzStr.AsSpan().Trim();
+        if (trimmed.IsEmpty || trimmed[0] == '-')
         {
             return false;
         }
 
-        khz = (ulong)Math.Round(mhz * 1000, MidpointRounding.AwayFromZero);
+        int dotIndex = trimmed.IndexOf('.');
+        ReadOnlySpan<char> intPart;
+        ReadOnlySpan<char> fracPart;
+        if (dotIndex >= 0)
+        {
+            intPart = trimmed[..dotIndex];
+            fracPart = trimmed[(dotIndex + 1)..];
+        }
+        else
+        {
+            intPart = trimmed;
+            fracPart = [];
+        }
+
+        if (!ulong.TryParse(intPart, NumberStyles.None, CultureInfo.InvariantCulture, out var wholeMhz))
+        {
+            return false;
+        }
+
+        int fracLen = Math.Min(fracPart.Length, 6);
+        Span<char> fracBuf = stackalloc char[6];
+        fracPart[..fracLen].CopyTo(fracBuf);
+        for (int i = fracLen; i < 6; i++)
+        {
+            fracBuf[i] = '0';
+        }
+
+        if (!ulong.TryParse(fracBuf, NumberStyles.None, CultureInfo.InvariantCulture, out var fracHz))
+        {
+            return false;
+        }
+
+        if (fracPart.Length > 6 && fracPart[6] >= '5')
+        {
+            fracHz++;
+        }
+
+        hz = wholeMhz * 1_000_000 + fracHz;
         return true;
+    }
+
+    /// <summary>
+    /// Format Hz as MHz with up to 6 decimal places, trailing zeros trimmed, minimum 3.
+    /// </summary>
+    private static string FormatHzAsMhz(ulong hz)
+    {
+        ulong whole = hz / 1_000_000;
+        ulong frac = hz % 1_000_000;
+        string full = $"{whole}.{frac:000000}";
+        int dotPos = full.IndexOf('.', StringComparison.Ordinal);
+        int minLen = dotPos + 1 + 3;
+        var trimmedSpan = full.AsSpan().TrimEnd('0');
+        int end = Math.Max(trimmedSpan.Length, minLen);
+        return full[..end];
     }
 
     private static RstReport ParseRstReport(string raw)

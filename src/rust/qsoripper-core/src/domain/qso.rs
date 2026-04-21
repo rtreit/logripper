@@ -96,9 +96,25 @@ impl QsoRecordBuilder {
     }
 
     #[must_use]
-    /// Set the transmit frequency in kHz.
+    /// Set the transmit frequency in kHz (deprecated — prefer `frequency_hz`).
+    #[deprecated(note = "use frequency_hz() for sub-kHz precision")]
     pub fn frequency_khz(mut self, khz: u64) -> Self {
-        self.record.frequency_khz = Some(khz);
+        #[allow(deprecated)]
+        {
+            self.record.frequency_khz = Some(khz);
+        }
+        self.record.frequency_hz = Some(khz * 1000);
+        self
+    }
+
+    #[must_use]
+    /// Set the transmit frequency in Hz for full sub-kHz precision.
+    pub fn frequency_hz(mut self, hz: u64) -> Self {
+        self.record.frequency_hz = Some(hz);
+        #[allow(deprecated)]
+        {
+            self.record.frequency_khz = Some((hz + 500) / 1000);
+        }
         self
     }
 
@@ -192,7 +208,7 @@ mod tests {
         let record = QsoRecordBuilder::new("AA7BQ", "VK9NS")
             .band(Band::Band20m)
             .mode(Mode::Ft8)
-            .frequency_khz(14_074)
+            .frequency_hz(14_074_000)
             .comment("Great signal".to_string())
             .build();
 
@@ -200,7 +216,11 @@ mod tests {
         assert_eq!(record.worked_callsign, "VK9NS");
         assert_eq!(record.band, Band::Band20m as i32);
         assert_eq!(record.mode, Mode::Ft8 as i32);
-        assert_eq!(record.frequency_khz, Some(14_074));
+        assert_eq!(record.frequency_hz, Some(14_074_000));
+        #[allow(deprecated)]
+        {
+            assert_eq!(record.frequency_khz, Some(14_074));
+        }
         assert_eq!(record.comment.as_deref(), Some("Great signal"));
         assert_eq!(record.sync_status, SyncStatus::LocalOnly as i32);
         assert!(!record.local_id.is_empty());
@@ -263,7 +283,7 @@ mod tests {
         let record = QsoRecordBuilder::new("W1AW", "JA1ABC")
             .band(Band::Band40m)
             .mode(Mode::Cw)
-            .frequency_khz(7_030)
+            .frequency_hz(7_030_000)
             .comment("CW contest")
             .extra_field("CHECK", "73")
             .build();
@@ -279,7 +299,11 @@ mod tests {
         assert_eq!(decoded.worked_callsign, "JA1ABC");
         assert_eq!(decoded.band, Band::Band40m as i32);
         assert_eq!(decoded.mode, Mode::Cw as i32);
-        assert_eq!(decoded.frequency_khz, Some(7_030));
+        assert_eq!(decoded.frequency_hz, Some(7_030_000));
+        #[allow(deprecated)]
+        {
+            assert_eq!(decoded.frequency_khz, Some(7_030));
+        }
         assert_eq!(decoded.comment.as_deref(), Some("CW contest"));
         assert_eq!(
             decoded.extra_fields.get("CHECK").map(String::as_str),

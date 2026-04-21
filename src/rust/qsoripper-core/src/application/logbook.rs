@@ -589,7 +589,7 @@ fn qsos_match_for_duplicate(existing: &QsoRecord, candidate: &QsoRecord) -> bool
             candidate.worked_callsign.as_str(),
         )
         && optional_strings_compatible(existing.submode.as_deref(), candidate.submode.as_deref())
-        && optional_u64_compatible(existing.frequency_khz, candidate.frequency_khz)
+        && frequencies_compatible(existing, candidate)
 }
 
 /// Merge import data onto an existing record for refresh mode.
@@ -608,7 +608,9 @@ fn merge_qso_for_refresh(mut existing: QsoRecord, import: &QsoRecord) -> QsoReco
     existing.band = import.band;
     existing.mode = import.mode;
 
+    #[allow(deprecated)]
     merge_optional_u64(&mut existing.frequency_khz, import.frequency_khz);
+    merge_optional_u64(&mut existing.frequency_hz, import.frequency_hz);
     merge_optional_str(&mut existing.submode, import.submode.as_deref());
     merge_optional_timestamp(&mut existing.utc_end_timestamp, import.utc_end_timestamp);
 
@@ -738,6 +740,17 @@ fn optional_u64_compatible(left: Option<u64>, right: Option<u64>) -> bool {
     match (left, right) {
         (Some(left), Some(right)) => left == right,
         _ => true,
+    }
+}
+
+/// Compare frequencies for duplicate matching.
+/// When both sides have Hz fields, compare exactly.
+/// When one or both lack Hz, fall back to kHz compatibility.
+#[allow(deprecated)]
+fn frequencies_compatible(existing: &QsoRecord, candidate: &QsoRecord) -> bool {
+    match (existing.frequency_hz, candidate.frequency_hz) {
+        (Some(a), Some(b)) => a == b,
+        _ => optional_u64_compatible(existing.frequency_khz, candidate.frequency_khz),
     }
 }
 

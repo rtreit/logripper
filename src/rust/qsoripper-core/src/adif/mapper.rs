@@ -103,22 +103,22 @@ impl AdifMapper {
                 }
                 "SUBMODE" => qso.submode = Some(value_str.to_owned()),
                 "FREQ" => {
-                    if let Ok(mhz) = value_str.parse::<f64>() {
-                        if let Some(khz) = mhz_to_khz(mhz) {
-                            qso.frequency_khz = Some(khz);
-                        } else {
-                            qso.extra_fields.insert(key_upper, value_str.to_owned());
+                    if let Some(hz) = mhz_str_to_hz(value_str) {
+                        qso.frequency_hz = Some(hz);
+                        #[allow(deprecated)]
+                        {
+                            qso.frequency_khz = Some((hz + 500) / 1000);
                         }
                     } else {
                         qso.extra_fields.insert(key_upper, value_str.to_owned());
                     }
                 }
                 "FREQ_RX" => {
-                    if let Ok(mhz) = value_str.parse::<f64>() {
-                        if let Some(khz) = mhz_to_khz(mhz) {
-                            qso.frequency_rx_khz = Some(khz);
-                        } else {
-                            qso.extra_fields.insert(key_upper, value_str.to_owned());
+                    if let Some(hz) = mhz_str_to_hz(value_str) {
+                        qso.frequency_rx_hz = Some(hz);
+                        #[allow(deprecated)]
+                        {
+                            qso.frequency_rx_khz = Some((hz + 500) / 1000);
                         }
                     } else {
                         qso.extra_fields.insert(key_upper, value_str.to_owned());
@@ -490,24 +490,15 @@ impl AdifMapper {
             push_field(&mut fields, "SUBMODE", sub.as_str());
         }
 
-        // Frequency
-        if let Some(khz) = qso.frequency_khz {
-            let whole_mhz = khz / 1000;
-            let fractional_khz = khz % 1000;
-            push_field(
-                &mut fields,
-                "FREQ",
-                format!("{whole_mhz}.{fractional_khz:03}"),
-            );
-        }
-        if let Some(khz) = qso.frequency_rx_khz {
-            let whole_mhz = khz / 1000;
-            let fractional_khz = khz % 1000;
-            push_field(
-                &mut fields,
-                "FREQ_RX",
-                format!("{whole_mhz}.{fractional_khz:03}"),
-            );
+        // Frequency — prefer Hz field, fall back to deprecated kHz.
+        #[allow(deprecated)]
+        {
+            if let Some(freq_str) = hz_to_mhz_str(qso.frequency_hz, qso.frequency_khz) {
+                push_field(&mut fields, "FREQ", freq_str);
+            }
+            if let Some(freq_str) = hz_to_mhz_str(qso.frequency_rx_hz, qso.frequency_rx_khz) {
+                push_field(&mut fields, "FREQ_RX", freq_str);
+            }
         }
         let band_rx = Band::try_from(qso.band_rx).unwrap_or(Band::Unspecified);
         if let Some(band_str) = crate::domain::band::band_to_adif(band_rx) {
@@ -910,17 +901,74 @@ fn format_adif_altitude(meters: f64) -> String {
     }
 }
 
-fn mhz_to_khz(mhz: f64) -> Option<u64> {
-    if !mhz.is_finite() || mhz.is_sign_negative() {
+/// Parse an ADIF MHz string into Hz using string/decimal math to avoid float
+/// precision drift. Supports up to 6 decimal places (1 Hz resolution).
+///
+/// Examples: `"28.07573"` = `28_075_730`, `"14.074"` = `14_074_000`, `"7.0385"` = `7_038_500`
+fn mhz_str_to_hz(s: &str) -> Option<u64> {
+    let trimmed = s.trim();
+    if trimmed.is_empty() || trimmed.starts_with('-') {
         return None;
     }
 
-    let rounded = (mhz * 1000.0).round();
-    if rounded < 0.0 {
-        return None;
+    let (integer_part, fractional_part) = match trimmed.split_once('.') {
+        Some((int_s, frac_s)) => (int_s, frac_s),
+        None => (trimmed, ""),
+    };
+
+    let whole_mhz: u64 = integer_part.parse().ok()?;
+
+    // Pad or truncate fractional part to exactly 6 digits (1 Hz resolution).
+    let frac_len = fractional_part.len().min(6);
+    let frac_digits = &fractional_part[..frac_len];
+    let mut frac_hz: u64 = frac_digits.parse().ok()?;
+    // Scale up to 6 digits: e.g., "07573" (5 digits) → 75730
+    for _ in 0..(6 - frac_len) {
+        frac_hz *= 10;
     }
 
-    format!("{rounded:.0}").parse().ok()
+    // Handle rounding if there are more than 6 decimal places.
+    if fractional_part.len() > 6 {
+        let next_digit = fractional_part.as_bytes().get(6).and_then(|&b| {
+            if b.is_ascii_digit() {
+                Some(b - b'0')
+            } else {
+                None
+            }
+        });
+        if let Some(d) = next_digit {
+            if d >= 5 {
+                frac_hz += 1;
+            }
+        }
+    }
+
+    Some(whole_mhz * 1_000_000 + frac_hz)
+}
+
+/// Format Hz as an ADIF MHz string with full precision.
+/// Uses up to 6 decimal places, trims trailing zeros, keeps minimum 3 places.
+///
+/// Prefers `frequency_hz` when present; falls back to deprecated `frequency_khz * 1000`.
+#[allow(deprecated)]
+fn hz_to_mhz_str(hz: Option<u64>, khz_fallback: Option<u64>) -> Option<String> {
+    let hz = hz.or_else(|| khz_fallback.map(|k| k * 1000))?;
+    Some(format_hz_as_mhz(hz))
+}
+
+/// Format a frequency in Hz as an ADIF-compliant MHz string.
+/// Up to 6 decimal places, trailing zeros trimmed, minimum 3 decimal places.
+fn format_hz_as_mhz(hz: u64) -> String {
+    let whole = hz / 1_000_000;
+    let frac = hz % 1_000_000;
+    let full = format!("{whole}.{frac:06}");
+    // Trim trailing zeros but keep at least 3 decimal places.
+    // The format always contains a '.', so indexing is safe.
+    let dot_pos = whole.to_string().len(); // position of '.' in the formatted string
+    let min_len = dot_pos + 1 + 3; // "X." + 3 digits
+    let trimmed = full.trim_end_matches('0');
+    let end = trimmed.len().max(min_len);
+    full[..end].to_owned()
 }
 
 fn parse_confirmation_bool(value: &str) -> Option<bool> {
@@ -1053,7 +1101,12 @@ fn field_is_overridden(
     } else if key.eq_ignore_ascii_case("BAND_RX") {
         Band::try_from(qso.band_rx).unwrap_or(Band::Unspecified) != Band::Unspecified
     } else if key.eq_ignore_ascii_case("FREQ_RX") {
-        qso.frequency_rx_khz.is_some()
+        qso.frequency_rx_hz.is_some() || {
+            #[allow(deprecated)]
+            {
+                qso.frequency_rx_khz.is_some()
+            }
+        }
     } else if key.eq_ignore_ascii_case("LAT") {
         qso.worked_latitude.is_some()
     } else if key.eq_ignore_ascii_case("LON") {
@@ -1116,7 +1169,11 @@ mod tests {
         assert_eq!(qso.station_callsign, "AA7BQ");
         assert_eq!(qso.band, Band::Band20m as i32);
         assert_eq!(qso.mode, Mode::Rtty as i32);
-        assert_eq!(qso.frequency_khz, Some(14085));
+        assert_eq!(qso.frequency_hz, Some(14_085_000));
+        #[allow(deprecated)]
+        {
+            assert_eq!(qso.frequency_khz, Some(14085));
+        }
         assert!(qso.utc_timestamp.is_some());
         assert_eq!(
             qso.station_snapshot
@@ -1280,7 +1337,11 @@ mod tests {
         assert!(qso.utc_timestamp.is_none());
         assert_eq!(qso.band, Band::Unspecified as i32);
         assert_eq!(qso.mode, Mode::Unspecified as i32);
-        assert_eq!(qso.frequency_khz, None);
+        assert_eq!(qso.frequency_hz, None);
+        #[allow(deprecated)]
+        {
+            assert_eq!(qso.frequency_khz, None);
+        }
         assert_eq!(
             qso.extra_fields.get("QSO_DATE").map(String::as_str),
             Some("2025ABCD")
@@ -1736,23 +1797,67 @@ mod tests {
     }
 
     #[test]
-    fn frequency_to_khz_conversion() {
+    fn frequency_to_hz_conversion() {
         let mut rec = Record::new();
         rec.insert("CALL", "W1AW").unwrap();
         rec.insert("FREQ", "14.074").unwrap();
 
         let qso = AdifMapper::record_to_qso(&rec);
-        assert_eq!(qso.frequency_khz, Some(14074));
+        assert_eq!(qso.frequency_hz, Some(14_074_000));
+        #[allow(deprecated)]
+        {
+            assert_eq!(qso.frequency_khz, Some(14074));
+        }
     }
 
     #[test]
-    fn frequency_to_khz_precise() {
+    fn frequency_to_hz_precise() {
         let mut rec = Record::new();
         rec.insert("CALL", "W1AW").unwrap();
         rec.insert("FREQ", "7.0385").unwrap();
 
         let qso = AdifMapper::record_to_qso(&rec);
-        assert_eq!(qso.frequency_khz, Some(7039)); // 7038.5 rounds to 7039
+        assert_eq!(qso.frequency_hz, Some(7_038_500));
+        #[allow(deprecated)]
+        {
+            assert_eq!(qso.frequency_khz, Some(7039)); // 7038.5 kHz rounds to 7039
+        }
+    }
+
+    #[test]
+    fn frequency_sub_khz_precision_preserved() {
+        let mut rec = Record::new();
+        rec.insert("CALL", "W1AW").unwrap();
+        rec.insert("FREQ", "28.07573").unwrap();
+
+        let qso = AdifMapper::record_to_qso(&rec);
+        assert_eq!(qso.frequency_hz, Some(28_075_730));
+        #[allow(deprecated)]
+        {
+            assert_eq!(qso.frequency_khz, Some(28076)); // 28075.73 kHz rounds to 28076
+        }
+    }
+
+    #[test]
+    fn frequency_hz_round_trips_through_adif() {
+        // Parse → serialize → parse should preserve Hz precision.
+        let mut rec = Record::new();
+        rec.insert("CALL", "W1AW").unwrap();
+        rec.insert("BAND", "20M").unwrap();
+        rec.insert("MODE", "FT8").unwrap();
+        rec.insert("QSO_DATE", "20260417").unwrap();
+        rec.insert("TIME_ON", "194345").unwrap();
+        rec.insert("FREQ", "28.07573").unwrap();
+        rec.insert("STATION_CALLSIGN", "KC7AVA").unwrap();
+
+        let qso = AdifMapper::record_to_qso(&rec);
+        assert_eq!(qso.frequency_hz, Some(28_075_730));
+
+        let adif_out = AdifMapper::qso_to_adi(&qso);
+        assert!(
+            adif_out.contains("<FREQ:8>28.07573"),
+            "ADIF output should preserve sub-kHz precision: {adif_out}"
+        );
     }
 
     #[test]
@@ -1763,7 +1868,7 @@ mod tests {
 
         let qso = AdifMapper::record_to_qso(&rec);
         assert_eq!(
-            qso.frequency_khz, None,
+            qso.frequency_hz, None,
             "Negative frequency should be rejected, not mapped to 0"
         );
     }
@@ -2019,8 +2124,13 @@ mod tests {
 
         assert_eq!(qso.band, Band::Band20m as i32);
         assert_eq!(qso.band_rx, Band::Band40m as i32);
-        assert_eq!(qso.frequency_khz, Some(14250));
-        assert_eq!(qso.frequency_rx_khz, Some(7075));
+        assert_eq!(qso.frequency_hz, Some(14_250_000));
+        assert_eq!(qso.frequency_rx_hz, Some(7_075_000));
+        #[allow(deprecated)]
+        {
+            assert_eq!(qso.frequency_khz, Some(14250));
+            assert_eq!(qso.frequency_rx_khz, Some(7075));
+        }
         assert!(!qso.extra_fields.contains_key("BAND_RX"));
         assert!(!qso.extra_fields.contains_key("FREQ_RX"));
     }
@@ -2152,8 +2262,8 @@ mod tests {
             station_callsign: "AA7BQ".to_string(),
             band: Band::Band20m as i32,
             band_rx: Band::Band40m as i32,
-            frequency_khz: Some(14250),
-            frequency_rx_khz: Some(7075),
+            frequency_hz: Some(14_250_000),
+            frequency_rx_hz: Some(7_075_000),
             worked_latitude: Some(41.5),
             worked_longitude: Some(-71.7583),
             worked_altitude_meters: Some(150.0),
@@ -2202,7 +2312,7 @@ mod tests {
             worked_longitude: Some(0.0),
             worked_altitude_meters: Some(10.0),
             worked_gridsquare_ext: Some("aa".to_string()),
-            frequency_rx_khz: Some(14000),
+            frequency_rx_hz: Some(14_000_000),
             owner_callsign: Some("W1AW".to_string()),
             qso_complete: QsoCompletion::Yes as i32,
             ..Default::default()
@@ -2254,7 +2364,7 @@ mod tests {
             station_callsign: "AA7BQ".to_string(),
             band: Band::Band20m as i32,
             band_rx: Band::Band40m as i32,
-            frequency_rx_khz: Some(7075),
+            frequency_rx_hz: Some(7_075_000),
             worked_altitude_meters: Some(150.0),
             worked_gridsquare_ext: Some("ab".to_string()),
             owner_callsign: Some("W1AW".to_string()),
@@ -2280,7 +2390,7 @@ mod tests {
         let parsed = AdifMapper::record_to_qso(&record);
 
         assert_eq!(parsed.band_rx, Band::Band40m as i32);
-        assert_eq!(parsed.frequency_rx_khz, Some(7075));
+        assert_eq!(parsed.frequency_rx_hz, Some(7_075_000));
         assert_eq!(parsed.worked_altitude_meters, Some(150.0));
         assert_eq!(parsed.worked_gridsquare_ext.as_deref(), Some("ab"));
         assert_eq!(parsed.owner_callsign.as_deref(), Some("W1AW"));

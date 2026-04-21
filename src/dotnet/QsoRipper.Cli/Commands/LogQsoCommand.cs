@@ -224,13 +224,20 @@ internal static class LogQsoCommand
                     return false;
                 case "--freq" when i < args.Length - 1:
                     var freqValue = args[++i];
-                    if (!ulong.TryParse(freqValue, out var freq))
+                    if (!double.TryParse(freqValue, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var freqMhz) || freqMhz <= 0)
                     {
-                        error = $"Invalid value for --freq: {freqValue}";
+                        error = $"Invalid value for --freq: {freqValue}. Use MHz such as 14.074.";
                         return false;
                     }
 
-                    qso.FrequencyKhz = freq;
+                    {
+                        var hz = (ulong)Math.Round(freqMhz * 1_000_000.0, MidpointRounding.AwayFromZero);
+                        qso.FrequencyHz = hz;
+#pragma warning disable CS0612
+                        qso.FrequencyKhz = (hz + 500) / 1000;
+#pragma warning restore CS0612
+                    }
+
                     break;
                 case "--freq":
                     error = "Missing value for --freq.";
@@ -446,9 +453,12 @@ internal static class LogQsoCommand
                 qso.Mode = snapshot.Mode;
             }
 
-            if (qso.FrequencyKhz == 0 && snapshot.FrequencyHz > 0)
+            if (!qso.HasFrequencyHz && snapshot.FrequencyHz > 0)
             {
+                qso.FrequencyHz = snapshot.FrequencyHz;
+#pragma warning disable CS0612
                 qso.FrequencyKhz = (snapshot.FrequencyHz + 500) / 1000;
+#pragma warning restore CS0612
             }
 
             if (!qso.HasSubmode && snapshot.HasSubmode)

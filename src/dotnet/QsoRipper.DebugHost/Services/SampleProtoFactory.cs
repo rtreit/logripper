@@ -111,7 +111,7 @@ internal sealed class SampleProtoFactory
         var utcNow = DateTime.SpecifyKind(DateTime.UtcNow, DateTimeKind.Utc);
         var normalizedCallsign = NormalizeCallsign(workedCallsign);
         var sampleRst = CreateSampleRst(options.Mode);
-        var frequencyKhz = GetSampleFrequencyKhz(options.Band);
+        var frequencyHz = GetSampleFrequencyHz(options.Band);
         var submode = GetSampleSubmode(options.Band, options.Mode);
         var record = new QsoRecord
         {
@@ -121,7 +121,7 @@ internal sealed class SampleProtoFactory
             UtcTimestamp = Timestamp.FromDateTime(utcNow),
             Band = options.Band,
             Mode = options.Mode,
-            FrequencyKhz = frequencyKhz,
+            FrequencyHz = frequencyHz,
             RstSent = sampleRst.Sent,
             RstReceived = sampleRst.Received,
             TxPower = "100",
@@ -662,7 +662,8 @@ internal sealed class SampleProtoFactory
     {
         return field.Name switch
         {
-            "frequency_khz" => checked((long)(GetSampleFrequencyKhz(context.Options.Band) + (ulong)SampleGenerationContext.NextInt(0, 25))),
+            "frequency_hz" => checked((long)(GetSampleFrequencyHz(context.Options.Band) + (ulong)SampleGenerationContext.NextInt(0, 25) * 1000)),
+            "frequency_khz" => checked((long)((GetSampleFrequencyHz(context.Options.Band) + 500) / 1000 + (ulong)SampleGenerationContext.NextInt(0, 25))),
             _ => CreateSampleInt32(field, context)
         };
     }
@@ -747,7 +748,7 @@ internal sealed class SampleProtoFactory
     private static QsoRecord CreateSampleQsoRecord(SampleGenerationContext context)
     {
         var sampleRst = CreateSampleRst(context.Options.Mode);
-        var frequencyKhz = GetSampleFrequencyKhz(context.Options.Band) + (ulong)SampleGenerationContext.NextInt(0, 25);
+        var frequencyHz = GetSampleFrequencyHz(context.Options.Band) + (ulong)SampleGenerationContext.NextInt(0, 25) * 1000;
         var submode = GetSampleSubmode(context.Options.Band, context.Options.Mode);
         var record = new QsoRecord
         {
@@ -757,7 +758,7 @@ internal sealed class SampleProtoFactory
             UtcTimestamp = Timestamp.FromDateTime(context.GeneratedAtUtc),
             Band = context.Options.Band,
             Mode = context.Options.Mode,
-            FrequencyKhz = frequencyKhz,
+            FrequencyHz = frequencyHz,
             RstSent = sampleRst.Sent,
             RstReceived = sampleRst.Received,
             TxPower = context.TxPower,
@@ -854,23 +855,23 @@ internal sealed class SampleProtoFactory
         };
     }
 
-    private static ulong GetSampleFrequencyKhz(Band band)
+    private static ulong GetSampleFrequencyHz(Band band)
     {
         return band switch
         {
-            Band._160M => 1900,
-            Band._80M => 3900,
-            Band._40M => 7100,
-            Band._30M => 10136,
-            Band._20M => 14250,
-            Band._17M => 18100,
-            Band._15M => 21250,
-            Band._12M => 24940,
-            Band._10M => 28400,
-            Band._6M => 50125,
-            Band._2M => 146520,
-            Band._70Cm => 446000,
-            _ => 14250
+            Band._160M => 1_900_000,
+            Band._80M => 3_900_000,
+            Band._40M => 7_100_000,
+            Band._30M => 10_136_000,
+            Band._20M => 14_250_000,
+            Band._17M => 18_100_000,
+            Band._15M => 21_250_000,
+            Band._12M => 24_940_000,
+            Band._10M => 28_400_000,
+            Band._6M => 50_125_000,
+            Band._2M => 146_520_000,
+            Band._70Cm => 446_000_000,
+            _ => 14_250_000
         };
     }
 

@@ -38,7 +38,7 @@ async fn parse_basic_qsos_file() {
     assert_eq!(q1.station_callsign, "AA7BQ");
     assert_eq!(q1.band, Band::Band20m as i32);
     assert_eq!(q1.mode, Mode::Rtty as i32);
-    assert_eq!(q1.frequency_khz, Some(14085));
+    assert_eq!(q1.frequency_hz, Some(14_085_000));
     assert_eq!(q1.rst_sent.as_ref().unwrap().raw, "59");
     assert_eq!(q1.rst_received.as_ref().unwrap().raw, "57");
     assert_eq!(q1.comment.as_deref(), Some("Good signal!"));
@@ -68,7 +68,7 @@ async fn parse_basic_qsos_file() {
     assert_eq!(q2.band, Band::Band40m as i32);
     assert_eq!(q2.mode, Mode::Ssb as i32);
     assert_eq!(q2.submode.as_deref(), Some("USB"));
-    assert_eq!(q2.frequency_khz, Some(7180));
+    assert_eq!(q2.frequency_hz, Some(7_180_000));
     assert_eq!(q2.contest_id.as_deref(), Some("CQ-WW-SSB"));
     assert_eq!(q2.serial_received.as_deref(), Some("142"));
     assert_eq!(q2.serial_sent.as_deref(), Some("033"));
@@ -101,7 +101,7 @@ async fn parse_basic_qsos_file() {
     assert_eq!(q3.worked_callsign, "JA1ABC");
     assert_eq!(q3.band, Band::Band15m as i32);
     assert_eq!(q3.mode, Mode::Ft8 as i32);
-    assert_eq!(q3.frequency_khz, Some(21074));
+    assert_eq!(q3.frequency_hz, Some(21_074_000));
     assert_eq!(q3.worked_grid.as_deref(), Some("PM95vk"));
     assert_eq!(q3.worked_country.as_deref(), Some("Japan"));
     assert_eq!(q3.worked_dxcc, Some(339));
@@ -219,7 +219,7 @@ async fn round_trip_qso_through_adif() {
     assert_eq!(round_tripped.station_callsign, original.station_callsign);
     assert_eq!(round_tripped.band, original.band);
     assert_eq!(round_tripped.mode, original.mode);
-    assert_eq!(round_tripped.frequency_khz, original.frequency_khz);
+    assert_eq!(round_tripped.frequency_hz, original.frequency_hz);
     assert_eq!(
         round_tripped.rst_sent.as_ref().map(|r| r.raw.as_str()),
         original.rst_sent.as_ref().map(|r| r.raw.as_str())

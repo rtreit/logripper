@@ -26,7 +26,8 @@ message QsoRecord {
   google.protobuf.Timestamp utc_timestamp = 12;
   Band band = 13;
   Mode mode = 14;
-  optional uint64 frequency_khz = 15;  // Precise frequency in kHz
+  optional uint64 frequency_khz = 15 [deprecated = true];  // Deprecated: use frequency_hz for sub-kHz precision
+  optional uint64 frequency_hz = 116;  // Precise frequency in Hz (e.g., 28075730 for 28.075730 MHz)
   optional string submode = 16;  // ADIF submode string (e.g., "USB", "PSK31")
   optional StationSnapshot station_snapshot = 17;  // Materialized local-station values used at log time
   optional google.protobuf.Timestamp utc_end_timestamp = 18;  // QSO end timestamp when known
@@ -109,8 +110,10 @@ message QsoRecord {
   optional string worked_gridsquare_ext = 103;
 
   // --- Split RX (ADIF FREQ_RX / BAND_RX) ---
-  // Receiver frequency in kHz when running split.
-  optional uint64 frequency_rx_khz = 104;
+  // Deprecated: use frequency_rx_hz for sub-kHz precision.
+  optional uint64 frequency_rx_khz = 104 [deprecated = true];
+  // Receiver frequency in Hz when running split.
+  optional uint64 frequency_rx_hz = 117;
   // Receiver band when running split. Defaults to BAND_UNSPECIFIED if absent.
   Band band_rx = 105;
 
