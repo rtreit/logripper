@@ -358,7 +358,11 @@ fn build_qso_record(req: &QsrLogQsoRequest) -> Result<QsoRecord, String> {
     }
 
     if req.freq_khz > 0 {
-        qso.frequency_khz = Some(req.freq_khz);
+        qso.frequency_hz = Some(req.freq_khz * 1000);
+        #[allow(deprecated)]
+        {
+            qso.frequency_khz = Some(req.freq_khz);
+        }
     }
 
     set_optional_str(&req.comment, |s| qso.comment = Some(s.to_string()));
@@ -748,11 +752,13 @@ fn populate_qso_detail(qso: &QsoRecord, out: &mut QsrQsoDetail) {
         str_to_buf(&time_str, &mut out.time);
     }
 
-    // Frequency
-    if let Some(freq_khz) = qso.frequency_khz {
-        if freq_khz > 0 {
-            let mhz = freq_khz as f64 / 1000.0;
-            let freq_str = format!("{mhz:.5}");
+    // Frequency — prefer Hz field, fall back to deprecated kHz
+    #[allow(deprecated)]
+    let freq_hz = qso.frequency_hz.or(qso.frequency_khz.map(|k| k * 1000));
+    if let Some(hz) = freq_hz {
+        if hz > 0 {
+            let mhz = hz as f64 / 1_000_000.0;
+            let freq_str = format!("{mhz:.6}");
             str_to_buf(&freq_str, &mut out.freq_mhz);
         }
     }

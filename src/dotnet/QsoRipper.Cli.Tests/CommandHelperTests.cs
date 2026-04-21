@@ -12,7 +12,7 @@ public sealed class CommandHelperTests
     {
         var success = LogQsoCommand.TryBuildQso(
             "W1AW",
-            ["20m", "FT8", "--station", "k7abv", "--rst-sent", "59", "--rst-rcvd", "57", "--freq", "14074", "--comment", "Strong copy", "--notes", "Worked on dipole"],
+            ["20m", "FT8", "--station", "k7abv", "--rst-sent", "59", "--rst-rcvd", "57", "--freq", "14.074", "--comment", "Strong copy", "--notes", "Worked on dipole"],
             out var qso,
             out _,
             out var error);
@@ -24,7 +24,7 @@ public sealed class CommandHelperTests
         Assert.Equal("K7ABV", qso.StationCallsign);
         Assert.Equal(Band._20M, qso.Band);
         Assert.Equal(Mode.Ft8, qso.Mode);
-        Assert.Equal((ulong)14074, qso.FrequencyKhz);
+        Assert.Equal((ulong)14_074_000, qso.FrequencyHz);
         Assert.Equal((uint)5, qso.RstSent!.Readability);
         Assert.Equal((uint)9, qso.RstSent.Strength);
         Assert.Equal((uint)5, qso.RstReceived!.Readability);
@@ -35,7 +35,7 @@ public sealed class CommandHelperTests
     }
 
     [Theory]
-    [InlineData("--freq", "nope", "Invalid value for --freq: nope")]
+    [InlineData("--freq", "nope", "Invalid value for --freq: nope. Use MHz such as 14.074.")]
     [InlineData("--rst-sent", "ab", "Invalid value for --rst-sent: ab. Expected 2 or 3 digits.")]
     [InlineData("--rst-rcvd", "1", "Invalid value for --rst-rcvd: 1. Expected 2 or 3 digits.")]
     public void TryBuildQso_rejects_invalid_optional_values(string option, string value, string expectedError)
@@ -296,7 +296,7 @@ public sealed class CommandHelperTests
         var enrich = false;
 
         var success = UpdateQsoCommand.TryApplyUpdates(
-            ["--grid", "FN31", "--freq", "14035", "--comment", "Nice signal"],
+            ["--grid", "FN31", "--freq", "14.035", "--comment", "Nice signal"],
             qso,
             ref enrich,
             out var error);
@@ -304,7 +304,7 @@ public sealed class CommandHelperTests
         Assert.True(success);
         Assert.Null(error);
         Assert.Equal("FN31", qso.WorkedGrid);
-        Assert.Equal((ulong)14035, qso.FrequencyKhz);
+        Assert.Equal((ulong)14_035_000, qso.FrequencyHz);
         Assert.Equal("Nice signal", qso.Comment);
         Assert.False(enrich);
     }

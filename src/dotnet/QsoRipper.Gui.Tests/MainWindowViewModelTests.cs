@@ -105,7 +105,7 @@ public sealed class MainWindowViewModelTests
             UtcTimestamp = Timestamp.FromDateTimeOffset(new DateTimeOffset(2026, 4, 13, 22, 15, 0, TimeSpan.Zero)),
             Band = Band._20M,
             Mode = Mode.Cw,
-            FrequencyKhz = 14025,
+            FrequencyHz = 14_025_000,
             WorkedGrid = "CN87",
             Comment = "Loaded",
             Notes = string.Empty,

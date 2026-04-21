@@ -78,7 +78,7 @@ public sealed class AdifCodecTests
         var qsos = AdifCodec.ParseAdif(adif);
 
         Assert.Single(qsos);
-        Assert.Equal(14074UL, qsos[0].FrequencyKhz);
+        Assert.Equal(14_074_000UL, qsos[0].FrequencyHz);
     }
 
     [Fact]
@@ -226,7 +226,7 @@ public sealed class AdifCodecTests
             Band = Band._40M,
             Mode = Mode.Cw,
             UtcTimestamp = Timestamp.FromDateTimeOffset(new DateTimeOffset(2024, 3, 10, 14, 0, 0, TimeSpan.Zero)),
-            FrequencyKhz = 7030,
+            FrequencyHz = 7_030_000,
             RstSent = new RstReport { Readability = 5, Strength = 9, Tone = 9, Raw = "599" },
             Notes = "Test note",
         };
@@ -240,7 +240,7 @@ public sealed class AdifCodecTests
         Assert.Equal("K7RND", q.StationCallsign);
         Assert.Equal(Band._40M, q.Band);
         Assert.Equal(Mode.Cw, q.Mode);
-        Assert.Equal(7030UL, q.FrequencyKhz);
+        Assert.Equal(7_030_000UL, q.FrequencyHz);
         Assert.Equal("599", q.RstSent!.Raw);
         Assert.Equal("Test note", q.Notes);
     }

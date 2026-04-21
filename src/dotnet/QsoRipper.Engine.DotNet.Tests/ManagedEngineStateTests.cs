@@ -651,7 +651,7 @@ public sealed class ManagedEngineStateTests : IDisposable
         var stored = state.ListQsos(new ListQsosRequest()).Single();
 
         Assert.Equal(Band._40M, stored.BandRx);
-        Assert.Equal(7075ul, stored.FrequencyRxKhz);
+        Assert.Equal(7_075_000ul, stored.FrequencyRxHz);
         Assert.Equal(150.0, stored.WorkedAltitudeMeters);
         Assert.Equal("ab", stored.WorkedGridsquareExt);
         Assert.Equal("W1AW", stored.OwnerCallsign);
@@ -721,7 +721,7 @@ public sealed class ManagedEngineStateTests : IDisposable
                 RstSent = new RstReport { Raw = "59" },
                 RstReceived = new RstReport { Raw = "57" },
                 Notes = "Initial notes",
-                FrequencyKhz = 14074,
+                FrequencyHz = 14_074_000,
             }
         });
 
@@ -748,7 +748,7 @@ public sealed class ManagedEngineStateTests : IDisposable
         Assert.Equal("59", stored.RstSent?.Raw);
         Assert.Equal("57", stored.RstReceived?.Raw);
         Assert.Equal("Initial notes", stored.Notes);
-        Assert.Equal(14074UL, stored.FrequencyKhz);
+        Assert.Equal(14_074_000UL, stored.FrequencyHz);
     }
 
     [Fact]

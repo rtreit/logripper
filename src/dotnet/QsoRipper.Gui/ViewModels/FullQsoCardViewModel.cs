@@ -496,8 +496,10 @@ internal sealed partial class FullQsoCardViewModel : ObservableObject, IDisposab
         SelectedBand = ProtoEnumDisplay.ForBand(qso.Band);
         SelectedMode = ProtoEnumDisplay.ForMode(qso.Mode);
         Submode = qso.Submode ?? string.Empty;
-        FrequencyMhz = qso.HasFrequencyKhz
-            ? (qso.FrequencyKhz / 1000.0).ToString("0.###", CultureInfo.InvariantCulture)
+        FrequencyMhz = qso.HasFrequencyHz ? FormatFrequencyMhz(qso.FrequencyHz)
+#pragma warning disable CS0612
+            : qso.HasFrequencyKhz ? FormatFrequencyMhz(qso.FrequencyKhz * 1000)
+#pragma warning restore CS0612
             : string.Empty;
         RstSent = FormatRst(qso.RstSent);
         RstReceived = FormatRst(qso.RstReceived);
@@ -815,8 +817,20 @@ internal sealed partial class FullQsoCardViewModel : ObservableObject, IDisposab
                 out error)
             || !TryApplyFrequency(
                 FrequencyMhz,
-                value => working.FrequencyKhz = value,
-                working.ClearFrequencyKhz,
+                hz =>
+                {
+                    working.FrequencyHz = hz;
+#pragma warning disable CS0612
+                    working.FrequencyKhz = (hz + 500) / 1000;
+#pragma warning restore CS0612
+                },
+                () =>
+                {
+                    working.ClearFrequencyHz();
+#pragma warning disable CS0612
+                    working.ClearFrequencyKhz();
+#pragma warning restore CS0612
+                },
                 out error)
             || !TryApplyOptionalRst(
                 RstSent,
@@ -1016,12 +1030,24 @@ internal sealed partial class FullQsoCardViewModel : ObservableObject, IDisposab
 
         if (double.TryParse(normalized, NumberStyles.Float, CultureInfo.InvariantCulture, out var mhz) && mhz > 0)
         {
-            setter((ulong)Math.Round(mhz * 1000.0, MidpointRounding.AwayFromZero));
+            setter((ulong)Math.Round(mhz * 1_000_000.0, MidpointRounding.AwayFromZero));
             return true;
         }
 
         error = $"Invalid frequency: {value}. Use MHz such as 14.074.";
         return false;
+    }
+
+    private static string FormatFrequencyMhz(ulong hz)
+    {
+        ulong whole = hz / 1_000_000;
+        ulong frac = hz % 1_000_000;
+        string full = $"{whole}.{frac:000000}";
+        int dotPos = full.IndexOf('.', StringComparison.Ordinal);
+        int minLen = dotPos + 4; // dot + 3 digits minimum
+        var trimmed = full.AsSpan().TrimEnd('0');
+        int end = Math.Max(trimmed.Length, minLen);
+        return full[..end];
     }
 
     private static bool TryApplyOptionalRst(

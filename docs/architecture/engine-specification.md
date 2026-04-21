@@ -1176,7 +1176,7 @@ When DXCC data is available, cascade zone information onto the lookup result if 
    Engines MUST NOT leave these app keys in `extra_fields` once a dedicated domain field carries the value, otherwise downstream sync will treat the record as unlinked and re-upload it as a duplicate.
 4. Map normalized ADIF fields to their dedicated proto slots rather than `extra_fields`:
    - `BAND_RX` → `band_rx` (Band enum)
-   - `FREQ_RX` → `frequency_rx_khz` (MHz → kHz)
+   - `FREQ_RX` → `frequency_rx_hz` (MHz → Hz via string math for sub-kHz precision)
    - `LAT` / `LON` → `worked_latitude` / `worked_longitude` (parsed from `[NSEW]DDD MM.MMM` to signed decimal degrees)
    - `ALTITUDE` → `worked_altitude_meters`
    - `GRIDSQUARE_EXT` → `worked_gridsquare_ext`

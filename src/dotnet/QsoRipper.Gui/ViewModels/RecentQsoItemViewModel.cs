@@ -612,15 +612,21 @@ internal sealed class RecentQsoItemViewModel : ObservableObject, IEditableObject
     {
         error = null;
 
-        if (TryParseFrequency(Frequency, out var frequency))
+        if (TryParseFrequencyHz(Frequency, out var hz))
         {
-            updated.FrequencyKhz = frequency;
+            updated.FrequencyHz = hz;
+#pragma warning disable CS0612
+            updated.FrequencyKhz = (hz + 500) / 1000;
+#pragma warning restore CS0612
             return true;
         }
 
         if (string.IsNullOrWhiteSpace(Frequency) || Frequency == "-")
         {
+            updated.ClearFrequencyHz();
+#pragma warning disable CS0612
             updated.ClearFrequencyKhz();
+#pragma warning restore CS0612
             return true;
         }
 
@@ -767,7 +773,7 @@ internal sealed class RecentQsoItemViewModel : ObservableObject, IEditableObject
         DisplayOrDash(qso.WorkedCallsign),
         ProtoEnumDisplay.ForBand(qso.Band),
         ProtoEnumDisplay.ForMode(qso.Mode),
-        qso.HasFrequencyKhz ? qso.FrequencyKhz.ToString(CultureInfo.InvariantCulture) : "-",
+        FormatFrequencyMhzOrDash(qso),
         BuildCombinedReport(FormatRst(qso.RstSent), FormatRst(qso.RstReceived)),
         BuildDxcc(qso),
         BuildCountry(qso),
@@ -802,8 +808,8 @@ internal sealed class RecentQsoItemViewModel : ObservableObject, IEditableObject
 
     private static ulong ParseFrequencySortKey(string? value)
     {
-        return TryParseFrequency(value, out var frequency)
-            ? frequency
+        return TryParseFrequencyHz(value, out var hz)
+            ? hz
             : 0;
     }
 
@@ -978,20 +984,44 @@ internal sealed class RecentQsoItemViewModel : ObservableObject, IEditableObject
                    out timestamp);
     }
 
-    private static bool TryParseFrequency(string? value, out ulong frequency)
+    private static bool TryParseFrequencyHz(string? value, out ulong hz)
     {
-        frequency = 0;
+        hz = 0;
         var normalized = NoteOrNull(value);
         if (normalized is null || normalized == "-")
         {
             return false;
         }
 
-        return ulong.TryParse(
-            normalized.Replace(",", string.Empty, StringComparison.Ordinal),
-            NumberStyles.None,
-            CultureInfo.InvariantCulture,
-            out frequency);
+        if (double.TryParse(normalized, NumberStyles.Float, CultureInfo.InvariantCulture, out var mhz) && mhz > 0)
+        {
+            hz = (ulong)Math.Round(mhz * 1_000_000.0, MidpointRounding.AwayFromZero);
+            return true;
+        }
+
+        return false;
+    }
+
+    private static string FormatFrequencyMhzOrDash(QsoRecord qso)
+    {
+        ulong? hz = qso.HasFrequencyHz ? qso.FrequencyHz
+#pragma warning disable CS0612
+            : qso.HasFrequencyKhz ? qso.FrequencyKhz * 1000
+#pragma warning restore CS0612
+            : null;
+        return hz.HasValue ? FormatFrequencyMhz(hz.Value) : "-";
+    }
+
+    private static string FormatFrequencyMhz(ulong hz)
+    {
+        ulong whole = hz / 1_000_000;
+        ulong frac = hz % 1_000_000;
+        string full = $"{whole}.{frac:000000}";
+        int dotPos = full.IndexOf('.', StringComparison.Ordinal);
+        int minLen = dotPos + 4; // dot + 3 digits minimum
+        var trimmed = full.AsSpan().TrimEnd('0');
+        int end = Math.Max(trimmed.Length, minLen);
+        return full[..end];
     }
 
     private static bool TryParseOptionalUInt(string? value, out uint parsed)

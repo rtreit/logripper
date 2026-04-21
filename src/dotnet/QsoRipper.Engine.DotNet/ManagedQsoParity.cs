@@ -273,7 +273,7 @@ internal static class ManagedQsoParity
             && StringsEqualIgnoreAsciiCase(existing.StationCallsign, candidate.StationCallsign)
             && StringsEqualIgnoreAsciiCase(existing.WorkedCallsign, candidate.WorkedCallsign)
             && OptionalStringsCompatible(existing.HasSubmode ? existing.Submode : null, candidate.HasSubmode ? candidate.Submode : null)
-            && OptionalUInt64Compatible(existing.HasFrequencyKhz ? existing.FrequencyKhz : null, candidate.HasFrequencyKhz ? candidate.FrequencyKhz : null);
+            && FrequenciesCompatible(existing, candidate);
     }
 
     /// <summary>
@@ -316,7 +316,10 @@ internal static class ManagedQsoParity
             merged.Mode = incoming.Mode;
         }
 
+#pragma warning disable CS0612
         MergeOptionalUInt64(incoming.HasFrequencyKhz, incoming.FrequencyKhz, value => merged.FrequencyKhz = value);
+#pragma warning restore CS0612
+        MergeOptionalUInt64(incoming.HasFrequencyHz, incoming.FrequencyHz, value => merged.FrequencyHz = value);
         MergeOptionalString(incoming.HasSubmode ? incoming.Submode : null, value => merged.Submode = value);
         if (incoming.UtcEndTimestamp is not null)
         {
@@ -431,7 +434,10 @@ internal static class ManagedQsoParity
         merged.Band = import.Band;
         merged.Mode = import.Mode;
 
+#pragma warning disable CS0612
         MergeOptionalUInt64(import.HasFrequencyKhz, import.FrequencyKhz, value => merged.FrequencyKhz = value);
+#pragma warning restore CS0612
+        MergeOptionalUInt64(import.HasFrequencyHz, import.FrequencyHz, value => merged.FrequencyHz = value);
         MergeOptionalString(import.HasSubmode ? import.Submode : null, value => merged.Submode = value);
         if (import.UtcEndTimestamp is not null)
         {
@@ -614,6 +620,24 @@ internal static class ManagedQsoParity
     private static bool OptionalUInt64Compatible(ulong? left, ulong? right)
     {
         return left is null || right is null || left.Value == right.Value;
+    }
+
+    /// <summary>
+    /// Compare frequencies for duplicate matching. When both sides have Hz fields,
+    /// compare exactly. When one or both lack Hz, fall back to kHz compatibility.
+    /// </summary>
+    private static bool FrequenciesCompatible(QsoRecord existing, QsoRecord candidate)
+    {
+        if (existing.HasFrequencyHz && candidate.HasFrequencyHz)
+        {
+            return existing.FrequencyHz == candidate.FrequencyHz;
+        }
+
+#pragma warning disable CS0612
+        return OptionalUInt64Compatible(
+            existing.HasFrequencyKhz ? existing.FrequencyKhz : null,
+            candidate.HasFrequencyKhz ? candidate.FrequencyKhz : null);
+#pragma warning restore CS0612
     }
 
     private static string NormalizeOptionalString(string? value)

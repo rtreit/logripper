@@ -88,7 +88,7 @@ Normalized representation of a ham radio operator/station. Derived from QRZ XML 
 The core QSO (contact) entity. Every logged contact is a QsoRecord.
 
 - **Identity**: local_id (UUID assigned by QsoRipper), qrz_logid (from QRZ sync)
-- **Core**: station_callsign, worked_callsign, utc_timestamp, utc_end_timestamp, band, mode, submode, frequency_khz
+- **Core**: station_callsign, worked_callsign, utc_timestamp, utc_end_timestamp, band, mode, submode, frequency_hz
 - **Signal**: rst_sent, rst_received (structured RstReport), tx_power
 - **QSL**: sent/received status for card, LoTW, eQSL
 - **Enrichment**: worked_operator_name, worked_grid, worked_country, worked_dxcc, worked_continent

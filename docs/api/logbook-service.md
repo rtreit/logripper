@@ -287,7 +287,7 @@ rpc ImportAdif(stream ImportAdifRequest) returns (ImportAdifResponse)
 - The server accumulates chunks and parses the complete ADIF payload after the client closes the send side.
 - Imported `STATION_CALLSIGN`, `OPERATOR`, and `MY_*` fields are preserved through `station_snapshot`; the current active station profile does **not** overwrite imported local-station history.
 - If an ADIF record has no local-station context at all, the server uses the current active station profile as an explicit fallback and adds a warning describing that fallback.
-- Duplicate policy: a record is skipped when it matches an existing QSO on `station_callsign`, `worked_callsign`, `utc_timestamp`, `band`, `mode`, and compatible `submode` / `frequency_khz`.
+- Duplicate policy: a record is skipped when it matches an existing QSO on `station_callsign`, `worked_callsign`, `utc_timestamp`, `band`, `mode`, and compatible `submode` / `frequency_hz`.
 - Invalid core ADIF values such as unknown `BAND`, unknown `MODE`, or invalid `QSO_DATE` / `TIME_ON` combinations are skipped with warnings. Raw ADIF values are still retained in `extra_fields` so later exports stay predictable.
 
 **Response:** `ImportAdifResponse`
@@ -353,7 +353,7 @@ rpc ExportAdif(ExportAdifRequest) returns (stream ExportAdifResponse)
 | `utc_end_timestamp` | Optional | UTC end time of the contact when known |
 | `band` | Required | Frequency band (see `Band` enum) |
 | `mode` | Required | Operating mode (see `Mode` enum) |
-| `frequency_khz` | Optional | Precise frequency in kHz |
+| `frequency_hz` | Optional | Precise frequency in Hz (e.g., 28075730 for 28.07573 MHz) |
 | `submode` | Optional | ADIF submode string (e.g., `"USB"`, `"PSK31"`) |
 | `rst_sent` / `rst_received` | Optional | RST signal reports |
 | `sync_status` | Set by engine | `LOCAL_ONLY → SYNCED → MODIFIED → CONFLICT` |

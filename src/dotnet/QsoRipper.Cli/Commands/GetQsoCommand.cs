@@ -45,9 +45,16 @@ internal static class GetQsoCommand
             Console.WriteLine($"Duration:         {duration}");
         }
 
-        if (qso.HasFrequencyKhz)
         {
-            Console.WriteLine($"Frequency:        {qso.FrequencyKhz} kHz");
+            ulong? freqHz = qso.HasFrequencyHz ? qso.FrequencyHz
+#pragma warning disable CS0612
+                : qso.HasFrequencyKhz ? qso.FrequencyKhz * 1000
+#pragma warning restore CS0612
+                : null;
+            if (freqHz.HasValue)
+            {
+                Console.WriteLine($"Frequency:        {FormatFrequencyMhz(freqHz.Value)} MHz");
+            }
         }
 
         if (qso.RstSent is not null)
@@ -66,5 +73,17 @@ internal static class GetQsoCommand
         }
 
         return 0;
+    }
+
+    private static string FormatFrequencyMhz(ulong hz)
+    {
+        ulong whole = hz / 1_000_000;
+        ulong frac = hz % 1_000_000;
+        string full = $"{whole}.{frac:000000}";
+        int dotPos = full.IndexOf('.', StringComparison.Ordinal);
+        int minLen = dotPos + 4;
+        var trimmed = full.AsSpan().TrimEnd('0');
+        int end = Math.Max(trimmed.Length, minLen);
+        return full[..end];
     }
 }
