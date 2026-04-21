@@ -356,7 +356,28 @@ internal sealed partial class MainWindow : Window
 
     private bool TryHandleGlobalNavigationKey(KeyEventArgs e)
     {
-        if (_viewModel is null || e.KeyModifiers != KeyModifiers.None)
+        if (_viewModel is null)
+        {
+            return false;
+        }
+
+        if (e.KeyModifiers == KeyModifiers.Alt && e.Key == Key.A)
+        {
+            _viewModel.OpenQsoCardCommand.Execute(null);
+            Dispatcher.UIThread.Post(FocusFullQsoCard, DispatcherPriority.Loaded);
+            e.Handled = true;
+            return true;
+        }
+
+        if (e.KeyModifiers == KeyModifiers.Control && e.Key == Key.L)
+        {
+            _viewModel.OpenQsoCardCommand.Execute(null);
+            Dispatcher.UIThread.Post(FocusFullQsoCard, DispatcherPriority.Loaded);
+            e.Handled = true;
+            return true;
+        }
+
+        if (e.KeyModifiers != KeyModifiers.None)
         {
             return false;
         }
@@ -1187,7 +1208,7 @@ internal sealed partial class MainWindow : Window
             () => this.GetVisualDescendants()
                 .OfType<FullQsoCardView>()
                 .LastOrDefault()?
-                .FocusInitialField(),
+                .FocusWorkedCallsign(),
             DispatcherPriority.Loaded);
     }
 

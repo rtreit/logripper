@@ -18,7 +18,7 @@ internal sealed partial class FullQsoCardView : UserControl
         Dispatcher.UIThread.Post(FocusInitialField, DispatcherPriority.Loaded);
     }
 
-    internal void FocusInitialField() => FocusCurrentTab();
+    internal void FocusInitialField() => FocusWorkedCallsign();
 
     internal bool TryHandleNavigationKey(Key key, KeyModifiers modifiers)
     {
@@ -59,7 +59,7 @@ internal sealed partial class FullQsoCardView : UserControl
     {
         if (DataContext is not ViewModels.FullQsoCardViewModel viewModel)
         {
-            FocusTab(0, "WorkedCallsignBox");
+            FocusWorkedCallsign();
             return;
         }
 
@@ -68,6 +68,8 @@ internal sealed partial class FullQsoCardView : UserControl
             _ => GetFocusTargetName(viewModel.SelectedTabIndex)
         });
     }
+
+    internal void FocusWorkedCallsign() => FocusTab(0, "WorkedCallsignBox");
 
     private void FocusTab(int index, string targetName)
     {
