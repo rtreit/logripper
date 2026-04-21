@@ -608,7 +608,11 @@ impl PersistedSetupConfig {
         config.station_profiles = station_profiles;
         config.qrz_xml = PersistedQrzXmlConfig {
             username: qrz_xml_username,
-            password: qrz_xml_password,
+            password: if qrz_xml_password.is_some() {
+                qrz_xml_password
+            } else {
+                existing.and_then(|c| c.qrz_xml.password.clone())
+            },
             // Preserve any existing user_agent; the setup wizard does not set it
             // directly, and runtime derives a default from the username when absent.
             user_agent: existing.and_then(|c| c.qrz_xml.user_agent.clone()),
@@ -1064,12 +1068,9 @@ impl PersistedStationProfile {
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 struct PersistedQrzXmlConfig {
     username: Option<String>,
-    /// QRZ XML password is never written to disk. It is only read from
-    /// environment variable `QSORIPPER_QRZ_XML_PASSWORD` at runtime.
-    /// The field is kept deserializable so legacy configs that already
-    /// contain a password can still be loaded (the value will be used
-    /// for runtime config but will not be re-persisted on the next save).
-    #[serde(skip_serializing)]
+    /// QRZ XML password is persisted with the saved setup config so engine
+    /// restarts can continue serving live lookups without requiring a
+    /// separate process-level environment variable injection step.
     password: Option<String>,
     user_agent: Option<String>,
 }
@@ -3060,6 +3061,68 @@ station_callsign = "K7RND"
         let _ = fs::remove_dir_all(config_directory);
     }
 
+    #[tokio::test]
+    async fn save_setup_preserves_xml_password_when_omitted_in_subsequent_save() {
+        let config_path = unique_config_path();
+        let log_file_path = absolute_log_file_path(&config_path, "preserve-password.db");
+        let setup_state = Arc::new(SetupState::load(config_path.clone()).expect("setup state"));
+        let runtime_config = Arc::new(RuntimeConfigManager::new(BTreeMap::new()).expect("runtime"));
+        let service = SetupControlSurface::new(setup_state.clone(), runtime_config.clone());
+
+        SetupService::save_setup(
+            &service,
+            Request::new(SaveSetupRequest {
+                log_file_path: Some(log_file_path.clone()),
+                station_profile: Some(StationProfile {
+                    station_callsign: "k7rnd".to_string(),
+                    ..StationProfile::default()
+                }),
+                qrz_xml_username: Some("k7rnd".to_string()),
+                qrz_xml_password: Some("original-secret".to_string()),
+                ..Default::default()
+            }),
+        )
+        .await
+        .expect("first save");
+
+        let response = SetupService::save_setup(
+            &service,
+            Request::new(SaveSetupRequest {
+                log_file_path: Some(log_file_path),
+                station_profile: Some(StationProfile {
+                    station_callsign: "k7rnd".to_string(),
+                    ..StationProfile::default()
+                }),
+                qrz_xml_username: Some("k7rnd".to_string()),
+                ..Default::default()
+            }),
+        )
+        .await
+        .expect("second save")
+        .into_inner();
+
+        let status = response.status.expect("status payload");
+        assert!(
+            status.has_qrz_xml_password,
+            "xml password should be preserved across saves when omitted"
+        );
+
+        let effective_values = runtime_config.effective_values().await;
+        assert_eq!(
+            Some("original-secret"),
+            effective_values
+                .get(qsoripper_core::lookup::QRZ_XML_PASSWORD_ENV_VAR)
+                .map(String::as_str)
+        );
+
+        drop(service);
+        drop(runtime_config);
+        drop(setup_state);
+
+        let config_directory = config_path.parent().expect("config directory");
+        let _ = fs::remove_dir_all(config_directory);
+    }
+
     #[test]
     fn persisted_sync_config_round_trips_through_proto() {
         let proto = SyncConfig {
@@ -3138,10 +3201,8 @@ station_callsign = "K7RND"
         assert_eq!("Rig control port must be between 1 and 65535.", error);
     }
 
-    // ── Bug #220: password must never be serialized to disk ─────────────────
-
     #[test]
-    fn password_excluded_from_serialized_config() {
+    fn password_round_trips_through_serialized_config() {
         let mut config = PersistedSetupConfig::default();
         config.qrz_xml.username = Some("K7RND".to_string());
         config.qrz_xml.password = Some("super_secret_password".to_string());
@@ -3153,17 +3214,17 @@ station_callsign = "K7RND"
             "username should be present in TOML"
         );
         assert!(
-            !toml_output.contains("super_secret_password"),
-            "password must NOT appear in serialized TOML"
+            toml_output.contains("super_secret_password"),
+            "password should be serialized so restarts preserve lookup auth"
         );
         assert!(
-            !toml_output.contains("password"),
-            "password key must NOT appear in serialized TOML"
+            toml_output.contains("password"),
+            "password key should be present in serialized TOML"
         );
     }
 
     #[test]
-    fn legacy_config_with_password_deserializes_but_wont_reserialize() {
+    fn config_with_password_deserializes_and_reserializes_password() {
         let toml_input = r#"
 [qrz_xml]
 username = "K7RND"
@@ -3178,16 +3239,15 @@ password = "legacy_secret"
             "legacy password should still be deserialized for runtime use"
         );
 
-        // Re-serialization must strip the password.
         let reserialized = toml::to_string_pretty(&config).expect("reserialize");
         assert!(
-            !reserialized.contains("legacy_secret"),
-            "password must not survive reserialization: {reserialized}"
+            reserialized.contains("legacy_secret"),
+            "password should survive reserialization: {reserialized}"
         );
     }
 
     #[tokio::test]
-    async fn save_setup_does_not_persist_password_to_disk() {
+    async fn save_setup_persists_password_to_disk() {
         let config_path = unique_config_path();
         let log_file_path = absolute_log_file_path(&config_path, "no_pw.db");
         let setup_state = Arc::new(SetupState::load(config_path.clone()).expect("setup state"));
@@ -3205,7 +3265,7 @@ password = "legacy_secret"
                     ..StationProfile::default()
                 }),
                 qrz_xml_username: Some("k7rnd".to_string()),
-                qrz_xml_password: Some("should_not_appear".to_string()),
+                qrz_xml_password: Some("should_persist".to_string()),
                 ..Default::default()
             }),
         )
@@ -3214,8 +3274,8 @@ password = "legacy_secret"
 
         let saved = fs::read_to_string(&config_path).expect("read saved config");
         assert!(
-            !saved.contains("should_not_appear"),
-            "password must NOT be written to disk: {saved}"
+            saved.contains("should_persist"),
+            "password should be written to disk so restarts preserve lookup auth: {saved}"
         );
         assert!(
             saved.contains("K7RND") || saved.contains("k7rnd"),

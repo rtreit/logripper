@@ -518,7 +518,11 @@ mod tests {
     use qsoripper_core::storage::{
         EngineStorage, LookupSnapshot, LookupSnapshotStore, QsoListQuery,
     };
+    use sqlite::Connection;
+    use std::fs;
+    use std::path::PathBuf;
     use std::sync::Arc;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     #[tokio::test]
     async fn sqlite_storage_round_trips_qsos_through_logbook_engine() {
@@ -614,6 +618,30 @@ mod tests {
     }
 
     #[test]
+    fn sqlite_storage_builder_migrates_legacy_qsos_schema() {
+        let path = unique_temp_db_path("legacy-schema");
+        let legacy_connection = Connection::open_thread_safe(&path).unwrap();
+        legacy_connection
+            .execute(crate::migrations::INITIAL_SCHEMA)
+            .unwrap();
+        drop(legacy_connection);
+
+        let storage = SqliteStorageBuilder::new().path(&path).build().unwrap();
+        drop(storage);
+
+        let migrated_connection = Connection::open_thread_safe(&path).unwrap();
+        let columns = load_qso_columns(&migrated_connection);
+
+        assert!(columns.iter().any(|column| column == "deleted_at_ms"));
+        assert!(columns
+            .iter()
+            .any(|column| column == "pending_remote_delete"));
+
+        drop(migrated_connection);
+        cleanup_sqlite_files(&path);
+    }
+
+    #[test]
     fn timestamp_to_millis_saturates_positive_overflow() {
         let value = super::timestamp_to_millis(Some(&Timestamp {
             seconds: i64::MAX,
@@ -631,5 +659,32 @@ mod tests {
         }));
 
         assert_eq!(value, Some(i64::MIN));
+    }
+
+    fn load_qso_columns(connection: &sqlite::ConnectionThreadSafe) -> Vec<String> {
+        let mut statement = connection.prepare("PRAGMA table_info(qsos);").unwrap();
+        let mut columns = Vec::new();
+        while let sqlite::State::Row = statement.next().unwrap() {
+            columns.push(statement.read::<String, _>(1).unwrap());
+        }
+
+        columns
+    }
+
+    fn unique_temp_db_path(prefix: &str) -> PathBuf {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "qsoripper-storage-sqlite-{prefix}-{}-{suffix}.db",
+            std::process::id()
+        ))
+    }
+
+    fn cleanup_sqlite_files(path: &PathBuf) {
+        let _ = fs::remove_file(path);
+        let _ = fs::remove_file(path.with_extension("db-shm"));
+        let _ = fs::remove_file(path.with_extension("db-wal"));
     }
 }

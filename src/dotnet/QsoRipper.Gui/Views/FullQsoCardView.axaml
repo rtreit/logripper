@@ -32,6 +32,7 @@
           CornerRadius="12"
           Width="1120"
           Height="720"
+          KeyboardNavigation.TabNavigation="Cycle"
           Padding="20"
           BorderBrush="{DynamicResource SystemControlForegroundBaseMediumLowBrush}"
           BorderThickness="1"
@@ -171,12 +172,24 @@
           <ScrollViewer VerticalScrollBarVisibility="Auto">
             <Grid ColumnDefinitions="*,*" ColumnSpacing="18" Margin="0,8,0,0">
               <StackPanel Spacing="10">
-                <StackPanel>
-                  <TextBlock Classes="fieldLabel" Text="Worked operator callsign" />
-                  <TextBox x:Name="LookupOperatorCallsignBox"
-                           Text="{Binding WorkedOperatorCallsign, Mode=TwoWay}"
-                           Classes="mono" />
-                </StackPanel>
+                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
+                  <StackPanel>
+                    <TextBlock Classes="fieldLabel" Text="Worked operator callsign" />
+                    <TextBox x:Name="LookupOperatorCallsignBox"
+                             Text="{Binding WorkedOperatorCallsign, Mode=TwoWay}"
+                             Classes="mono" />
+                  </StackPanel>
+                  <Button Grid.Column="1"
+                          VerticalAlignment="Bottom"
+                          MinWidth="110"
+                          Content="Lookup now"
+                          Command="{Binding LookupWorkedCallsignCommand}"
+                          IsEnabled="{Binding !IsLookingUp}" />
+                </Grid>
+
+                <TextBlock Text="{Binding LookupStatusText}"
+                           Opacity="0.72"
+                           TextWrapping="Wrap" />
 
                 <StackPanel>
                   <TextBlock Classes="fieldLabel" Text="Worked operator name" />
@@ -395,108 +408,141 @@
 
         <TabItem Header="Station">
           <ScrollViewer VerticalScrollBarVisibility="Auto">
-            <Grid ColumnDefinitions="*,*" ColumnSpacing="18" Margin="0,8,0,0">
-              <StackPanel Spacing="10">
-                <Border Classes="infoPanel">
-                  <StackPanel Spacing="4">
-                    <TextBlock Text="Local station snapshot" FontWeight="SemiBold" />
-                    <TextBlock Text="These values are captured for the logging station, not the worked callsign. New QSOs start from the active station profile when one is configured." Opacity="0.72" TextWrapping="Wrap" />
-                  </StackPanel>
-                </Border>
+            <Grid ColumnDefinitions="*,*"
+                  RowDefinitions="Auto,Auto,Auto,Auto,Auto"
+                  ColumnSpacing="18"
+                  RowSpacing="10"
+                  Margin="0,8,0,0">
+              <Border Grid.Row="0"
+                      Grid.Column="0"
+                      Classes="infoPanel">
+                <StackPanel Spacing="4">
+                  <TextBlock Text="Local station snapshot" FontWeight="SemiBold" />
+                  <TextBlock Text="These values are captured for the logging station, not the worked callsign. New QSOs start from the active station profile when one is configured." Opacity="0.72" TextWrapping="Wrap" />
+                </StackPanel>
+              </Border>
 
-                <Grid ColumnDefinitions="*,*" ColumnSpacing="10">
-                  <StackPanel>
-                    <TextBlock Classes="fieldLabel" Text="Snapshot station callsign" />
-                    <TextBox x:Name="StationCallsignSnapshotBox"
-                             Text="{Binding SnapshotStationCallsign, Mode=TwoWay}"
-                             Classes="mono" />
-                  </StackPanel>
-                  <StackPanel Grid.Column="1">
-                    <TextBlock Classes="fieldLabel" Text="Snapshot operator callsign" />
-                    <TextBox Text="{Binding SnapshotOperatorCallsign, Mode=TwoWay}" Classes="mono" />
-                  </StackPanel>
-                </Grid>
+              <Border Grid.Row="0"
+                      Grid.Column="1"
+                      Classes="infoPanel">
+                <StackPanel Spacing="8">
+                  <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
+                    <TextBlock Text="Advanced station details"
+                               FontWeight="SemiBold"
+                               VerticalAlignment="Center" />
+                    <CheckBox Grid.Column="1"
+                              Content="Show advanced"
+                              IsChecked="{Binding ShowAdvancedStationFields, Mode=TwoWay}"
+                              VerticalAlignment="Center" />
+                  </Grid>
+                  <TextBlock Text="Rare profile and zone fields stay tucked away unless they already have values or you want to edit them."
+                             Opacity="0.72"
+                             TextWrapping="Wrap" />
+                </StackPanel>
+              </Border>
 
+              <Grid Grid.Row="1"
+                    Grid.Column="0"
+                    ColumnDefinitions="*,*"
+                    ColumnSpacing="10">
                 <StackPanel>
-                  <TextBlock Classes="fieldLabel" Text="Snapshot operator name" />
-                  <TextBox Text="{Binding SnapshotOperatorName, Mode=TwoWay}" />
+                  <TextBlock Classes="fieldLabel" Text="Snapshot station callsign" />
+                  <TextBox x:Name="StationCallsignSnapshotBox"
+                           Text="{Binding SnapshotStationCallsign, Mode=TwoWay}"
+                           Classes="mono" />
                 </StackPanel>
+                <StackPanel Grid.Column="1">
+                  <TextBlock Classes="fieldLabel" Text="Snapshot operator callsign" />
+                  <TextBox Text="{Binding SnapshotOperatorCallsign, Mode=TwoWay}" Classes="mono" />
+                </StackPanel>
+              </Grid>
 
-                <Grid ColumnDefinitions="*,*" ColumnSpacing="10">
-                  <StackPanel>
-                    <TextBlock Classes="fieldLabel" Text="Snapshot grid" />
-                    <TextBox Text="{Binding SnapshotGrid, Mode=TwoWay}" Classes="mono" />
-                  </StackPanel>
-                  <StackPanel Grid.Column="1">
-                    <TextBlock Classes="fieldLabel" Text="Snapshot country" />
-                    <TextBox Text="{Binding SnapshotCountry, Mode=TwoWay}" />
-                  </StackPanel>
-                </Grid>
-
-                <Grid ColumnDefinitions="*,*" ColumnSpacing="10">
-                  <StackPanel>
-                    <TextBlock Classes="fieldLabel" Text="Snapshot state" />
-                    <TextBox Text="{Binding SnapshotState, Mode=TwoWay}" />
-                  </StackPanel>
-                  <StackPanel Grid.Column="1">
-                    <TextBlock Classes="fieldLabel" Text="Snapshot county" />
-                    <TextBox Text="{Binding SnapshotCounty, Mode=TwoWay}" />
-                  </StackPanel>
-                </Grid>
+              <StackPanel Grid.Row="1"
+                          Grid.Column="1"
+                          IsVisible="{Binding ShowAdvancedStationFields}">
+                <TextBlock Classes="fieldLabel" Text="Snapshot profile" />
+                <TextBox x:Name="StationProfileBox"
+                         Text="{Binding SnapshotProfileName, Mode=TwoWay}" />
               </StackPanel>
 
-              <StackPanel Grid.Column="1" Spacing="10">
-                <CheckBox Content="Show advanced snapshot fields"
-                          IsChecked="{Binding ShowAdvancedStationFields, Mode=TwoWay}" />
-
-                <Border Classes="infoPanel" IsVisible="{Binding ShowAdvancedStationFields}">
-                  <StackPanel Spacing="4">
-                    <TextBlock Text="Advanced station details" FontWeight="SemiBold" />
-                    <TextBlock Text="Rare profile and zone fields stay tucked away unless they already have values or you want to edit them." Opacity="0.72" TextWrapping="Wrap" />
-                  </StackPanel>
-                </Border>
-
-                <StackPanel Spacing="10" IsVisible="{Binding ShowAdvancedStationFields}">
-                  <StackPanel>
-                    <TextBlock Classes="fieldLabel" Text="Snapshot profile" />
-                    <TextBox x:Name="StationProfileBox"
-                             Text="{Binding SnapshotProfileName, Mode=TwoWay}" />
-                  </StackPanel>
-
-                  <Grid ColumnDefinitions="*,*" ColumnSpacing="10">
-                    <StackPanel>
-                      <TextBlock Classes="fieldLabel" Text="Snapshot ARRL section" />
-                      <TextBox Text="{Binding SnapshotArrlSection, Mode=TwoWay}" Classes="mono" />
-                    </StackPanel>
-                    <StackPanel Grid.Column="1">
-                      <TextBlock Classes="fieldLabel" Text="Snapshot DXCC" />
-                      <TextBox Text="{Binding SnapshotDxcc, Mode=TwoWay}" Classes="mono" />
-                    </StackPanel>
-                  </Grid>
-
-                  <Grid ColumnDefinitions="*,*" ColumnSpacing="10">
-                    <StackPanel>
-                      <TextBlock Classes="fieldLabel" Text="Snapshot CQ zone" />
-                      <TextBox Text="{Binding SnapshotCqZone, Mode=TwoWay}" Classes="mono" />
-                    </StackPanel>
-                    <StackPanel Grid.Column="1">
-                      <TextBlock Classes="fieldLabel" Text="Snapshot ITU zone" />
-                      <TextBox Text="{Binding SnapshotItuZone, Mode=TwoWay}" Classes="mono" />
-                    </StackPanel>
-                  </Grid>
-
-                  <Grid ColumnDefinitions="*,*" ColumnSpacing="10">
-                    <StackPanel>
-                      <TextBlock Classes="fieldLabel" Text="Latitude" />
-                      <TextBox Text="{Binding SnapshotLatitude, Mode=TwoWay}" Classes="mono" />
-                    </StackPanel>
-                    <StackPanel Grid.Column="1">
-                      <TextBlock Classes="fieldLabel" Text="Longitude" />
-                      <TextBox Text="{Binding SnapshotLongitude, Mode=TwoWay}" Classes="mono" />
-                    </StackPanel>
-                  </Grid>
-                </StackPanel>
+              <StackPanel Grid.Row="2"
+                          Grid.Column="0">
+                <TextBlock Classes="fieldLabel" Text="Snapshot operator name" />
+                <TextBox Text="{Binding SnapshotOperatorName, Mode=TwoWay}" />
               </StackPanel>
+
+              <Grid Grid.Row="2"
+                    Grid.Column="1"
+                    ColumnDefinitions="*,*"
+                    ColumnSpacing="10"
+                    IsVisible="{Binding ShowAdvancedStationFields}">
+                <StackPanel>
+                  <TextBlock Classes="fieldLabel" Text="Snapshot ARRL section" />
+                  <TextBox Text="{Binding SnapshotArrlSection, Mode=TwoWay}" Classes="mono" />
+                </StackPanel>
+                <StackPanel Grid.Column="1">
+                  <TextBlock Classes="fieldLabel" Text="Snapshot DXCC" />
+                  <TextBox Text="{Binding SnapshotDxcc, Mode=TwoWay}" Classes="mono" />
+                </StackPanel>
+              </Grid>
+
+              <Grid Grid.Row="3"
+                    Grid.Column="0"
+                    ColumnDefinitions="*,*"
+                    ColumnSpacing="10">
+                <StackPanel>
+                  <TextBlock Classes="fieldLabel" Text="Snapshot grid" />
+                  <TextBox Text="{Binding SnapshotGrid, Mode=TwoWay}" Classes="mono" />
+                </StackPanel>
+                <StackPanel Grid.Column="1">
+                  <TextBlock Classes="fieldLabel" Text="Snapshot country" />
+                  <TextBox Text="{Binding SnapshotCountry, Mode=TwoWay}" />
+                </StackPanel>
+              </Grid>
+
+              <Grid Grid.Row="3"
+                    Grid.Column="1"
+                    ColumnDefinitions="*,*"
+                    ColumnSpacing="10"
+                    IsVisible="{Binding ShowAdvancedStationFields}">
+                <StackPanel>
+                  <TextBlock Classes="fieldLabel" Text="Snapshot CQ zone" />
+                  <TextBox Text="{Binding SnapshotCqZone, Mode=TwoWay}" Classes="mono" />
+                </StackPanel>
+                <StackPanel Grid.Column="1">
+                  <TextBlock Classes="fieldLabel" Text="Snapshot ITU zone" />
+                  <TextBox Text="{Binding SnapshotItuZone, Mode=TwoWay}" Classes="mono" />
+                </StackPanel>
+              </Grid>
+
+              <Grid Grid.Row="4"
+                    Grid.Column="0"
+                    ColumnDefinitions="*,*"
+                    ColumnSpacing="10">
+                <StackPanel>
+                  <TextBlock Classes="fieldLabel" Text="Snapshot state" />
+                  <TextBox Text="{Binding SnapshotState, Mode=TwoWay}" />
+                </StackPanel>
+                <StackPanel Grid.Column="1">
+                  <TextBlock Classes="fieldLabel" Text="Snapshot county" />
+                  <TextBox Text="{Binding SnapshotCounty, Mode=TwoWay}" />
+                </StackPanel>
+              </Grid>
+
+              <Grid Grid.Row="4"
+                    Grid.Column="1"
+                    ColumnDefinitions="*,*"
+                    ColumnSpacing="10"
+                    IsVisible="{Binding ShowAdvancedStationFields}">
+                <StackPanel>
+                  <TextBlock Classes="fieldLabel" Text="Latitude" />
+                  <TextBox Text="{Binding SnapshotLatitude, Mode=TwoWay}" Classes="mono" />
+                </StackPanel>
+                <StackPanel Grid.Column="1">
+                  <TextBlock Classes="fieldLabel" Text="Longitude" />
+                  <TextBox Text="{Binding SnapshotLongitude, Mode=TwoWay}" Classes="mono" />
+                </StackPanel>
+              </Grid>
             </Grid>
           </ScrollViewer>
         </TabItem>

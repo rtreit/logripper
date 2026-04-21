@@ -12,7 +12,7 @@ using QsoRipper.Gui.Utilities;
 
 namespace QsoRipper.Gui.ViewModels;
 
-internal sealed partial class FullQsoCardViewModel : ObservableObject
+internal sealed partial class FullQsoCardViewModel : ObservableObject, IDisposable
 {
     private static readonly string[] TimestampFormats =
     [
@@ -44,6 +44,8 @@ internal sealed partial class FullQsoCardViewModel : ObservableObject
     private readonly QsoLoggerViewModel? _logger;
     private readonly QsoRecord? _sourceQso;
     private string _lastAutoWorkedOperatorCallsign = string.Empty;
+    private CancellationTokenSource? _lookupCts;
+    private CallsignRecord? _lastLookupRecord;
 
     private FullQsoCardViewModel(IEngineClient engine, QsoLoggerViewModel? logger, QsoRecord? sourceQso, StationProfile? activeStationProfile)
     {
@@ -81,6 +83,7 @@ internal sealed partial class FullQsoCardViewModel : ObservableObject
     public string SaveButtonText => IsEditingExisting ? "Save Changes" : "Log QSO";
     public string ModeBadgeText => IsEditingExisting ? "Edit Existing" : "New Contact";
     public string SectionHint { get; } = SectionHintText;
+    internal TimeSpan LookupDebounceDelay { get; set; } = TimeSpan.FromMilliseconds(800);
 
     [ObservableProperty]
     private int _selectedTabIndex;
@@ -90,6 +93,12 @@ internal sealed partial class FullQsoCardViewModel : ObservableObject
 
     [ObservableProperty]
     private string _statusText = string.Empty;
+
+    [ObservableProperty]
+    private bool _isLookingUp;
+
+    [ObservableProperty]
+    private string _lookupStatusText = string.Empty;
 
     [ObservableProperty]
     private string _workedCallsign = string.Empty;
@@ -301,6 +310,8 @@ internal sealed partial class FullQsoCardViewModel : ObservableObject
             WorkedOperatorCallsign = normalized;
             _lastAutoWorkedOperatorCallsign = normalized;
         }
+
+        RestartLookupForWorkedCallsign(normalized);
     }
 
     partial void OnWorkedOperatorCallsignChanged(string value)
@@ -314,6 +325,7 @@ internal sealed partial class FullQsoCardViewModel : ObservableObject
     [RelayCommand]
     private void Close()
     {
+        DisposeLookupCts();
         CloseRequested?.Invoke(this, EventArgs.Empty);
     }
 
@@ -364,6 +376,45 @@ internal sealed partial class FullQsoCardViewModel : ObservableObject
         finally
         {
             IsSaving = false;
+        }
+    }
+
+    [RelayCommand]
+    private async Task LookupWorkedCallsignAsync()
+    {
+        if (IsLookingUp)
+        {
+            return;
+        }
+
+        var lookupCallsign = NormalizeToken(
+            FirstNonBlank(WorkedCallsign, WorkedOperatorCallsign),
+            uppercase: true);
+        if (lookupCallsign.Length == 0)
+        {
+            LookupStatusText = "Enter a callsign to look up.";
+            return;
+        }
+
+        PrepareForLookup(lookupCallsign);
+        IsLookingUp = true;
+        LookupStatusText = $"Looking up {lookupCallsign}...";
+
+        try
+        {
+            LookupStatusText = await ExecuteLookupAsync(lookupCallsign, updateStatusText: true, CancellationToken.None);
+        }
+        catch (RpcException ex)
+        {
+            LookupStatusText = $"Lookup error: {ex.Status.Detail}";
+        }
+        catch (InvalidOperationException ex)
+        {
+            LookupStatusText = $"Lookup error: {ex.Message}";
+        }
+        finally
+        {
+            IsLookingUp = false;
         }
     }
 
@@ -512,6 +563,7 @@ internal sealed partial class FullQsoCardViewModel : ObservableObject
 
     private void ApplyLookup(CallsignRecord record)
     {
+        _lastLookupRecord = record;
         WorkedOperatorCallsign = FirstNonBlank(WorkedOperatorCallsign, record.Callsign, record.CrossRef, WorkedCallsign) ?? string.Empty;
         _lastAutoWorkedOperatorCallsign = WorkedOperatorCallsign;
         WorkedOperatorName = FirstNonBlank(WorkedOperatorName, BuildName(record)) ?? string.Empty;
@@ -536,6 +588,168 @@ internal sealed partial class FullQsoCardViewModel : ObservableObject
         {
             WorkedItuZone = record.ItuZone.ToString(CultureInfo.InvariantCulture);
         }
+    }
+
+    private static string BuildLookupStatusText(string lookupCallsign, LookupResult result)
+    {
+        var cacheSuffix = result.CacheHit ? " (cached)" : string.Empty;
+        return result.LookupLatencyMs > 0
+            ? $"Loaded {lookupCallsign} in {result.LookupLatencyMs} ms{cacheSuffix}."
+            : $"Loaded {lookupCallsign}{cacheSuffix}.";
+    }
+
+    private void RestartLookupForWorkedCallsign(string workedCallsign)
+    {
+        DisposeLookupCts();
+
+        if (workedCallsign.Length < 3)
+        {
+            ClearAppliedLookupFields();
+            LookupStatusText = string.Empty;
+            return;
+        }
+
+        _lookupCts = new CancellationTokenSource();
+        _ = DebouncedLookupAsync(workedCallsign, _lookupCts.Token);
+    }
+
+    private async Task DebouncedLookupAsync(string callsign, CancellationToken ct)
+    {
+        try
+        {
+            await Task.Delay(LookupDebounceDelay, ct);
+        }
+        catch (TaskCanceledException)
+        {
+            return;
+        }
+
+        if (ct.IsCancellationRequested)
+        {
+            return;
+        }
+
+        PrepareForLookup(callsign);
+        LookupStatusText = "Looking up...";
+
+        try
+        {
+            LookupStatusText = await ExecuteLookupAsync(callsign, updateStatusText: false, ct);
+        }
+        catch (TaskCanceledException)
+        {
+        }
+        catch (RpcException)
+        {
+            LookupStatusText = "Lookup error";
+        }
+        catch (InvalidOperationException)
+        {
+            LookupStatusText = "Lookup error";
+        }
+    }
+
+    private async Task<string> ExecuteLookupAsync(string lookupCallsign, bool updateStatusText, CancellationToken ct)
+    {
+        var response = await _engine.LookupCallsignAsync(lookupCallsign, ct);
+        if (ct.IsCancellationRequested)
+        {
+            return LookupStatusText;
+        }
+
+        var result = response.Result;
+        if (result.State == LookupState.Found && result.Record is { } record)
+        {
+            ApplyLookup(record);
+            return updateStatusText ? BuildLookupStatusText(lookupCallsign, result) : string.Empty;
+        }
+
+        ClearAppliedLookupFields();
+        if (result.State == LookupState.NotFound)
+        {
+            return updateStatusText ? $"Callsign '{lookupCallsign}' not found." : "Not found";
+        }
+
+        return result.ErrorMessage ?? $"Lookup failed ({result.State}).";
+    }
+
+    private void PrepareForLookup(string lookupCallsign)
+    {
+        if (_lastLookupRecord is null)
+        {
+            return;
+        }
+
+        var previousCallsign = FirstNonBlank(
+            _lastLookupRecord.Callsign,
+            _lastLookupRecord.CrossRef,
+            _lastLookupRecord.BaseCallsign);
+        if (string.Equals(previousCallsign, lookupCallsign, StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        ClearAppliedLookupFields();
+    }
+
+    private void ClearAppliedLookupFields()
+    {
+        if (_lastLookupRecord is not { } record)
+        {
+            return;
+        }
+
+        ClearAutoField(WorkedOperatorName, BuildName(record), value => WorkedOperatorName = value);
+        ClearAutoField(WorkedGrid, record.GridSquare, value => WorkedGrid = value);
+        ClearAutoField(WorkedCountry, FirstNonBlank(record.DxccCountryName, record.Country), value => WorkedCountry = value);
+        ClearAutoField(WorkedState, record.State, value => WorkedState = value);
+        ClearAutoField(WorkedCounty, record.County, value => WorkedCounty = value);
+        ClearAutoField(WorkedContinent, record.DxccContinent, value => WorkedContinent = value);
+        ClearAutoField(WorkedIota, record.Iota, value => WorkedIota = value);
+
+        if (record.DxccEntityId != 0)
+        {
+            ClearAutoField(WorkedDxcc, record.DxccEntityId.ToString(CultureInfo.InvariantCulture), value => WorkedDxcc = value);
+        }
+
+        if (record.HasCqZone)
+        {
+            ClearAutoField(WorkedCqZone, record.CqZone.ToString(CultureInfo.InvariantCulture), value => WorkedCqZone = value);
+        }
+
+        if (record.HasItuZone)
+        {
+            ClearAutoField(WorkedItuZone, record.ItuZone.ToString(CultureInfo.InvariantCulture), value => WorkedItuZone = value);
+        }
+
+        _lastLookupRecord = null;
+    }
+
+    private static void ClearAutoField(string current, string? appliedValue, Action<string> clear)
+    {
+        if (!string.IsNullOrWhiteSpace(appliedValue)
+            && string.Equals(current, appliedValue, StringComparison.Ordinal))
+        {
+            clear(string.Empty);
+        }
+    }
+
+    public void Dispose()
+    {
+        DisposeLookupCts();
+        GC.SuppressFinalize(this);
+    }
+
+    private void DisposeLookupCts()
+    {
+        if (_lookupCts is null)
+        {
+            return;
+        }
+
+        _lookupCts.Cancel();
+        _lookupCts.Dispose();
+        _lookupCts = null;
     }
 
     private void InitializeStationTabState()

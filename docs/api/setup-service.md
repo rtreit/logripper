@@ -74,6 +74,8 @@ rpc SaveSetup(SaveSetupRequest) returns (SaveSetupResponse)
 | `qrz_xml_username` | `string` (optional) | Optional QRZ XML username |
 | `qrz_xml_password` | `string` (optional) | Optional QRZ XML password |
 
+Saved setup persists the QRZ XML password so engine restarts can continue serving live callsign lookups without requiring a separate startup-only environment override.
+
 **Validation rules**
 
 - `station_profile.station_callsign` is required
