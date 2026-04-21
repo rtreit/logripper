@@ -8,9 +8,13 @@ use std::{borrow::Cow, fmt::Write as _};
 use crate::adif::normalize::{enrich_from_dxcc, parse_rst_report};
 use crate::domain::band::band_from_adif;
 use crate::domain::mode::normalize_mode_from_adif;
-use crate::domain::qso::{new_local_id, qsl_status_from_adif};
+use crate::domain::qso::{
+    new_local_id, qsl_status_from_adif, qso_completion_from_adif, qso_completion_to_adif,
+};
 use crate::domain::station::{effective_station_snapshot, station_snapshot_has_values};
-use crate::proto::qsoripper::domain::{Band, Mode, QsoRecord, StationSnapshot, SyncStatus};
+use crate::proto::qsoripper::domain::{
+    Band, Mode, QsoCompletion, QsoRecord, StationSnapshot, SyncStatus,
+};
 use difa::Record;
 
 /// Borrowed or owned ADIF field data suitable for ADI serialization.
@@ -80,6 +84,13 @@ impl AdifMapper {
                         qso.extra_fields.insert(key_upper, value_str.to_owned());
                     }
                 }
+                "BAND_RX" => {
+                    if let Some(band) = band_from_adif(value_str) {
+                        qso.band_rx = band.into();
+                    } else {
+                        qso.extra_fields.insert(key_upper, value_str.to_owned());
+                    }
+                }
                 "MODE" => {
                     if let Some((mode, submode)) = normalize_mode_from_adif(value_str) {
                         qso.mode = mode.into();
@@ -102,6 +113,17 @@ impl AdifMapper {
                         qso.extra_fields.insert(key_upper, value_str.to_owned());
                     }
                 }
+                "FREQ_RX" => {
+                    if let Ok(mhz) = value_str.parse::<f64>() {
+                        if let Some(khz) = mhz_to_khz(mhz) {
+                            qso.frequency_rx_khz = Some(khz);
+                        } else {
+                            qso.extra_fields.insert(key_upper, value_str.to_owned());
+                        }
+                    } else {
+                        qso.extra_fields.insert(key_upper, value_str.to_owned());
+                    }
+                }
                 // --- Signal reports ---
                 "RST_SENT" => qso.rst_sent = Some(parse_rst_report(value_str)),
                 "RST_RCVD" => qso.rst_received = Some(parse_rst_report(value_str)),
@@ -111,6 +133,41 @@ impl AdifMapper {
                 "CONTACTED_OP" => qso.worked_operator_callsign = Some(value_str.to_owned()),
                 "NAME" => qso.worked_operator_name = Some(value_str.to_owned()),
                 "GRIDSQUARE" => qso.worked_grid = Some(value_str.to_owned()),
+                "GRIDSQUARE_EXT" => qso.worked_gridsquare_ext = Some(value_str.to_owned()),
+                "LAT" => {
+                    if let Some(latitude) = parse_adif_location(value_str, true) {
+                        qso.worked_latitude = Some(latitude);
+                    } else {
+                        qso.extra_fields.insert(key_upper, value_str.to_owned());
+                    }
+                }
+                "LON" => {
+                    if let Some(longitude) = parse_adif_location(value_str, false) {
+                        qso.worked_longitude = Some(longitude);
+                    } else {
+                        qso.extra_fields.insert(key_upper, value_str.to_owned());
+                    }
+                }
+                "ALTITUDE" => {
+                    if let Ok(meters) = value_str.parse::<f64>() {
+                        if meters.is_finite() {
+                            qso.worked_altitude_meters = Some(meters);
+                        } else {
+                            qso.extra_fields.insert(key_upper, value_str.to_owned());
+                        }
+                    } else {
+                        qso.extra_fields.insert(key_upper, value_str.to_owned());
+                    }
+                }
+                "OWNER_CALLSIGN" => qso.owner_callsign = Some(value_str.to_owned()),
+                "QSO_COMPLETE" => {
+                    let parsed = qso_completion_from_adif(value_str);
+                    if matches!(parsed, QsoCompletion::Unspecified) && !value_str.is_empty() {
+                        qso.extra_fields.insert(key_upper, value_str.to_owned());
+                    } else {
+                        qso.qso_complete = parsed.into();
+                    }
+                }
                 "COUNTRY" => qso.worked_country = Some(value_str.to_owned()),
                 "DXCC" => {
                     if let Ok(code) = value_str.parse::<u32>() {
@@ -202,6 +259,24 @@ impl AdifMapper {
                     } else {
                         qso.extra_fields.insert(key_upper, value_str.to_owned());
                     }
+                }
+                "MY_ALTITUDE" => {
+                    if let Ok(meters) = value_str.parse::<f64>() {
+                        if meters.is_finite() {
+                            station_snapshot
+                                .get_or_insert_with(StationSnapshot::default)
+                                .altitude_meters = Some(meters);
+                        } else {
+                            qso.extra_fields.insert(key_upper, value_str.to_owned());
+                        }
+                    } else {
+                        qso.extra_fields.insert(key_upper, value_str.to_owned());
+                    }
+                }
+                "MY_GRIDSQUARE_EXT" => {
+                    station_snapshot
+                        .get_or_insert_with(StationSnapshot::default)
+                        .gridsquare_ext = Some(value_str.to_owned());
                 }
                 "MY_ARRL_SECT" => {
                     station_snapshot
@@ -425,6 +500,19 @@ impl AdifMapper {
                 format!("{whole_mhz}.{fractional_khz:03}"),
             );
         }
+        if let Some(khz) = qso.frequency_rx_khz {
+            let whole_mhz = khz / 1000;
+            let fractional_khz = khz % 1000;
+            push_field(
+                &mut fields,
+                "FREQ_RX",
+                format!("{whole_mhz}.{fractional_khz:03}"),
+            );
+        }
+        let band_rx = Band::try_from(qso.band_rx).unwrap_or(Band::Unspecified);
+        if let Some(band_str) = crate::domain::band::band_to_adif(band_rx) {
+            push_field(&mut fields, "BAND_RX", band_str);
+        }
 
         // Signal reports
         if let Some(ref rst) = qso.rst_sent {
@@ -446,6 +534,34 @@ impl AdifMapper {
         }
         if let Some(v) = qso.worked_grid.as_deref() {
             push_field(&mut fields, "GRIDSQUARE", v);
+        }
+        if let Some(v) = qso.worked_gridsquare_ext.as_deref() {
+            push_field(&mut fields, "GRIDSQUARE_EXT", v);
+        }
+        if let Some(latitude) = qso
+            .worked_latitude
+            .and_then(|value| format_adif_location(value, true))
+        {
+            push_field(&mut fields, "LAT", latitude);
+        }
+        if let Some(longitude) = qso
+            .worked_longitude
+            .and_then(|value| format_adif_location(value, false))
+        {
+            push_field(&mut fields, "LON", longitude);
+        }
+        if let Some(altitude) = qso.worked_altitude_meters {
+            if altitude.is_finite() {
+                push_field(&mut fields, "ALTITUDE", format_adif_altitude(altitude));
+            }
+        }
+        if let Some(v) = qso.owner_callsign.as_deref() {
+            push_field(&mut fields, "OWNER_CALLSIGN", v);
+        }
+        if let Some(s) = qso_completion_to_adif(
+            QsoCompletion::try_from(qso.qso_complete).unwrap_or(QsoCompletion::Unspecified),
+        ) {
+            push_field(&mut fields, "QSO_COMPLETE", s);
         }
         if let Some(v) = qso.worked_country.as_deref() {
             push_field(&mut fields, "COUNTRY", v);
@@ -513,6 +629,14 @@ impl AdifMapper {
                 .and_then(|value| format_adif_location(value, false))
             {
                 push_field(&mut fields, "MY_LON", longitude);
+            }
+            if let Some(altitude) = snapshot.altitude_meters {
+                if altitude.is_finite() {
+                    push_field(&mut fields, "MY_ALTITUDE", format_adif_altitude(altitude));
+                }
+            }
+            if let Some(v) = snapshot.gridsquare_ext.as_deref() {
+                push_field(&mut fields, "MY_GRIDSQUARE_EXT", v.to_string());
             }
             if let Some(v) = snapshot.arrl_section.as_deref() {
                 push_field(&mut fields, "MY_ARRL_SECT", v.to_string());
@@ -769,6 +893,23 @@ fn format_adif_location(value: f64, latitude: bool) -> Option<String> {
     Some(format!("{direction}{degrees:03.0} {minutes:06.3}"))
 }
 
+fn format_adif_altitude(meters: f64) -> String {
+    // Format as compact decimal with up to 3 fractional digits, trimming
+    // trailing zeros so integer-meter values round-trip cleanly (e.g. "100"
+    // rather than "100.000"). ADIF altitude is a Number with no fixed format.
+    let rounded = (meters * 1000.0).round() / 1000.0;
+    let formatted = format!("{rounded:.3}");
+    let trimmed = formatted
+        .trim_end_matches('0')
+        .trim_end_matches('.')
+        .to_owned();
+    if trimmed.is_empty() || trimmed == "-" {
+        "0".to_owned()
+    } else {
+        trimmed
+    }
+}
+
 fn mhz_to_khz(mhz: f64) -> Option<u64> {
     if !mhz.is_finite() || mhz.is_sign_negative() {
         return None;
@@ -817,6 +958,7 @@ fn push_confirmation_field(
     }
 }
 
+#[allow(clippy::too_many_lines)]
 fn field_is_overridden(
     qso: &QsoRecord,
     station_snapshot: Option<&StationSnapshot>,
@@ -908,6 +1050,31 @@ fn field_is_overridden(
         || key.eq_ignore_ascii_case("APP_QRZ_BOOKID")
     {
         qso.qrz_bookid.is_some()
+    } else if key.eq_ignore_ascii_case("BAND_RX") {
+        Band::try_from(qso.band_rx).unwrap_or(Band::Unspecified) != Band::Unspecified
+    } else if key.eq_ignore_ascii_case("FREQ_RX") {
+        qso.frequency_rx_khz.is_some()
+    } else if key.eq_ignore_ascii_case("LAT") {
+        qso.worked_latitude.is_some()
+    } else if key.eq_ignore_ascii_case("LON") {
+        qso.worked_longitude.is_some()
+    } else if key.eq_ignore_ascii_case("ALTITUDE") {
+        qso.worked_altitude_meters.is_some()
+    } else if key.eq_ignore_ascii_case("GRIDSQUARE_EXT") {
+        qso.worked_gridsquare_ext.is_some()
+    } else if key.eq_ignore_ascii_case("OWNER_CALLSIGN") {
+        qso.owner_callsign.is_some()
+    } else if key.eq_ignore_ascii_case("QSO_COMPLETE") {
+        QsoCompletion::try_from(qso.qso_complete).unwrap_or(QsoCompletion::Unspecified)
+            != QsoCompletion::Unspecified
+    } else if key.eq_ignore_ascii_case("MY_ALTITUDE") {
+        station_snapshot
+            .and_then(|snapshot| snapshot.altitude_meters)
+            .is_some()
+    } else if key.eq_ignore_ascii_case("MY_GRIDSQUARE_EXT") {
+        station_snapshot
+            .and_then(|snapshot| snapshot.gridsquare_ext.as_ref())
+            .is_some()
     } else {
         false
     }
@@ -1821,5 +1988,302 @@ mod tests {
             .count();
         assert_eq!(logid_count, 1, "logid should round-trip exactly once");
         assert_eq!(bookid_count, 1, "bookid should round-trip exactly once");
+    }
+
+    // --- Issue #92 ADIF normalization follow-ups ---
+
+    fn count_field(fields: &[(String, String)], key: &str) -> usize {
+        fields
+            .iter()
+            .filter(|(k, _)| k.eq_ignore_ascii_case(key))
+            .count()
+    }
+
+    fn field_value<'a>(fields: &'a [(String, String)], key: &str) -> Option<&'a str> {
+        fields
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case(key))
+            .map(|(_, v)| v.as_str())
+    }
+
+    #[test]
+    fn record_to_qso_maps_split_rx_fields() {
+        let mut rec = Record::new();
+        rec.insert("CALL", "K1ABC").unwrap();
+        rec.insert("BAND", "20M").unwrap();
+        rec.insert("BAND_RX", "40M").unwrap();
+        rec.insert("FREQ", "14.250").unwrap();
+        rec.insert("FREQ_RX", "7.075").unwrap();
+
+        let qso = AdifMapper::record_to_qso(&rec);
+
+        assert_eq!(qso.band, Band::Band20m as i32);
+        assert_eq!(qso.band_rx, Band::Band40m as i32);
+        assert_eq!(qso.frequency_khz, Some(14250));
+        assert_eq!(qso.frequency_rx_khz, Some(7075));
+        assert!(!qso.extra_fields.contains_key("BAND_RX"));
+        assert!(!qso.extra_fields.contains_key("FREQ_RX"));
+    }
+
+    #[test]
+    fn record_to_qso_maps_worked_geo_fields() {
+        let mut rec = Record::new();
+        rec.insert("CALL", "K1ABC").unwrap();
+        rec.insert("LAT", "N041 30.000").unwrap();
+        rec.insert("LON", "W071 45.500").unwrap();
+        rec.insert("ALTITUDE", "150").unwrap();
+        rec.insert("GRIDSQUARE", "FN41").unwrap();
+        rec.insert("GRIDSQUARE_EXT", "ab").unwrap();
+
+        let qso = AdifMapper::record_to_qso(&rec);
+
+        assert!(qso.worked_latitude.is_some());
+        assert!((qso.worked_latitude.unwrap() - 41.5).abs() < 0.0001);
+        assert!(qso.worked_longitude.is_some());
+        assert!((qso.worked_longitude.unwrap() - (-71.7583)).abs() < 0.001);
+        assert_eq!(qso.worked_altitude_meters, Some(150.0));
+        assert_eq!(qso.worked_grid.as_deref(), Some("FN41"));
+        assert_eq!(qso.worked_gridsquare_ext.as_deref(), Some("ab"));
+        assert!(!qso.extra_fields.contains_key("LAT"));
+        assert!(!qso.extra_fields.contains_key("LON"));
+        assert!(!qso.extra_fields.contains_key("ALTITUDE"));
+        assert!(!qso.extra_fields.contains_key("GRIDSQUARE_EXT"));
+    }
+
+    #[test]
+    fn record_to_qso_maps_my_altitude_and_my_gridsquare_ext() {
+        let mut rec = Record::new();
+        rec.insert("CALL", "K1ABC").unwrap();
+        rec.insert("STATION_CALLSIGN", "AA7BQ").unwrap();
+        rec.insert("MY_GRIDSQUARE", "DM43").unwrap();
+        rec.insert("MY_GRIDSQUARE_EXT", "bb").unwrap();
+        rec.insert("MY_ALTITUDE", "550").unwrap();
+
+        let qso = AdifMapper::record_to_qso(&rec);
+        let snapshot = qso.station_snapshot.as_ref().expect("snapshot");
+
+        assert_eq!(snapshot.gridsquare_ext.as_deref(), Some("bb"));
+        assert_eq!(snapshot.altitude_meters, Some(550.0));
+        assert!(!qso.extra_fields.contains_key("MY_ALTITUDE"));
+        assert!(!qso.extra_fields.contains_key("MY_GRIDSQUARE_EXT"));
+    }
+
+    #[test]
+    fn record_to_qso_maps_owner_callsign_and_qso_complete() {
+        let mut rec = Record::new();
+        rec.insert("CALL", "K1ABC").unwrap();
+        rec.insert("OWNER_CALLSIGN", "W1AW").unwrap();
+        rec.insert("QSO_COMPLETE", "NIL").unwrap();
+
+        let qso = AdifMapper::record_to_qso(&rec);
+
+        assert_eq!(qso.owner_callsign.as_deref(), Some("W1AW"));
+        assert_eq!(qso.qso_complete, QsoCompletion::Nil as i32);
+        assert!(!qso.extra_fields.contains_key("OWNER_CALLSIGN"));
+        assert!(!qso.extra_fields.contains_key("QSO_COMPLETE"));
+    }
+
+    #[test]
+    fn record_to_qso_qso_complete_handles_all_canonical_values() {
+        for (input, expected) in [
+            ("Y", QsoCompletion::Yes),
+            ("N", QsoCompletion::No),
+            ("NIL", QsoCompletion::Nil),
+            ("?", QsoCompletion::Uncertain),
+        ] {
+            let mut rec = Record::new();
+            rec.insert("CALL", "K1ABC").unwrap();
+            rec.insert("QSO_COMPLETE", input).unwrap();
+
+            let qso = AdifMapper::record_to_qso(&rec);
+            assert_eq!(qso.qso_complete, expected as i32, "input {input}");
+        }
+    }
+
+    #[test]
+    fn record_to_qso_qso_complete_unknown_value_falls_back_to_extra_fields() {
+        let mut rec = Record::new();
+        rec.insert("CALL", "K1ABC").unwrap();
+        rec.insert("QSO_COMPLETE", "MAYBE").unwrap();
+
+        let qso = AdifMapper::record_to_qso(&rec);
+
+        assert_eq!(qso.qso_complete, QsoCompletion::Unspecified as i32);
+        assert_eq!(
+            qso.extra_fields.get("QSO_COMPLETE").map(String::as_str),
+            Some("MAYBE")
+        );
+    }
+
+    #[test]
+    fn record_to_qso_invalid_lat_falls_back_to_extra_fields() {
+        let mut rec = Record::new();
+        rec.insert("CALL", "K1ABC").unwrap();
+        rec.insert("LAT", "not-a-coord").unwrap();
+
+        let qso = AdifMapper::record_to_qso(&rec);
+
+        assert!(qso.worked_latitude.is_none());
+        assert_eq!(
+            qso.extra_fields.get("LAT").map(String::as_str),
+            Some("not-a-coord")
+        );
+    }
+
+    #[test]
+    fn record_to_qso_invalid_altitude_falls_back_to_extra_fields() {
+        let mut rec = Record::new();
+        rec.insert("CALL", "K1ABC").unwrap();
+        rec.insert("ALTITUDE", "high").unwrap();
+
+        let qso = AdifMapper::record_to_qso(&rec);
+
+        assert!(qso.worked_altitude_meters.is_none());
+        assert_eq!(
+            qso.extra_fields.get("ALTITUDE").map(String::as_str),
+            Some("high")
+        );
+    }
+
+    #[test]
+    fn qso_to_adif_emits_new_fields_exactly_once() {
+        let qso = QsoRecord {
+            worked_callsign: "K1ABC".to_string(),
+            station_callsign: "AA7BQ".to_string(),
+            band: Band::Band20m as i32,
+            band_rx: Band::Band40m as i32,
+            frequency_khz: Some(14250),
+            frequency_rx_khz: Some(7075),
+            worked_latitude: Some(41.5),
+            worked_longitude: Some(-71.7583),
+            worked_altitude_meters: Some(150.0),
+            worked_gridsquare_ext: Some("ab".to_string()),
+            owner_callsign: Some("W1AW".to_string()),
+            qso_complete: QsoCompletion::Yes as i32,
+            station_snapshot: Some(StationSnapshot {
+                station_callsign: "AA7BQ".to_string(),
+                altitude_meters: Some(550.0),
+                gridsquare_ext: Some("bb".to_string()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let fields = AdifMapper::qso_to_adif_fields(&qso);
+
+        assert_eq!(count_field(&fields, "BAND_RX"), 1);
+        assert_eq!(field_value(&fields, "BAND_RX"), Some("40M"));
+        assert_eq!(count_field(&fields, "FREQ_RX"), 1);
+        assert_eq!(field_value(&fields, "FREQ_RX"), Some("7.075"));
+        assert_eq!(count_field(&fields, "LAT"), 1);
+        assert_eq!(count_field(&fields, "LON"), 1);
+        assert_eq!(count_field(&fields, "ALTITUDE"), 1);
+        assert_eq!(field_value(&fields, "ALTITUDE"), Some("150"));
+        assert_eq!(count_field(&fields, "GRIDSQUARE_EXT"), 1);
+        assert_eq!(field_value(&fields, "GRIDSQUARE_EXT"), Some("ab"));
+        assert_eq!(count_field(&fields, "OWNER_CALLSIGN"), 1);
+        assert_eq!(count_field(&fields, "QSO_COMPLETE"), 1);
+        assert_eq!(field_value(&fields, "QSO_COMPLETE"), Some("Y"));
+        assert_eq!(count_field(&fields, "MY_ALTITUDE"), 1);
+        assert_eq!(field_value(&fields, "MY_ALTITUDE"), Some("550"));
+        assert_eq!(count_field(&fields, "MY_GRIDSQUARE_EXT"), 1);
+        assert_eq!(field_value(&fields, "MY_GRIDSQUARE_EXT"), Some("bb"));
+    }
+
+    #[test]
+    fn qso_to_adif_does_not_emit_dedicated_fields_from_extra_fields() {
+        // If a dedicated field is set AND the same key exists in extra_fields
+        // (e.g. from a malformed import), the dedicated value wins and the
+        // extra_fields copy is suppressed to prevent duplicate emission.
+        let mut qso = QsoRecord {
+            worked_callsign: "K1ABC".to_string(),
+            band_rx: Band::Band20m as i32,
+            worked_latitude: Some(0.0),
+            worked_longitude: Some(0.0),
+            worked_altitude_meters: Some(10.0),
+            worked_gridsquare_ext: Some("aa".to_string()),
+            frequency_rx_khz: Some(14000),
+            owner_callsign: Some("W1AW".to_string()),
+            qso_complete: QsoCompletion::Yes as i32,
+            ..Default::default()
+        };
+
+        for key in [
+            "BAND_RX",
+            "FREQ_RX",
+            "LAT",
+            "LON",
+            "ALTITUDE",
+            "GRIDSQUARE_EXT",
+            "OWNER_CALLSIGN",
+            "QSO_COMPLETE",
+        ] {
+            qso.extra_fields
+                .insert(key.to_string(), "stale".to_string());
+        }
+
+        let fields = AdifMapper::qso_to_adif_fields(&qso);
+
+        for key in [
+            "BAND_RX",
+            "FREQ_RX",
+            "LAT",
+            "LON",
+            "ALTITUDE",
+            "GRIDSQUARE_EXT",
+            "OWNER_CALLSIGN",
+            "QSO_COMPLETE",
+        ] {
+            assert_eq!(
+                count_field(&fields, key),
+                1,
+                "{key} should be emitted exactly once"
+            );
+            assert_ne!(
+                field_value(&fields, key),
+                Some("stale"),
+                "{key} should not be emitted from extra_fields when a dedicated value is set"
+            );
+        }
+    }
+
+    #[test]
+    fn qso_round_trips_new_fields_through_adi() {
+        let qso = QsoRecord {
+            worked_callsign: "K1ABC".to_string(),
+            station_callsign: "AA7BQ".to_string(),
+            band: Band::Band20m as i32,
+            band_rx: Band::Band40m as i32,
+            frequency_rx_khz: Some(7075),
+            worked_altitude_meters: Some(150.0),
+            worked_gridsquare_ext: Some("ab".to_string()),
+            owner_callsign: Some("W1AW".to_string()),
+            qso_complete: QsoCompletion::Nil as i32,
+            ..Default::default()
+        };
+
+        let adi = AdifMapper::qso_to_adi(&qso);
+        let mut record = Record::new();
+        for line in adi.lines() {
+            if line.is_empty() || line.eq_ignore_ascii_case("<eor>") {
+                continue;
+            }
+            // Parse simple <KEY:LEN>VALUE lines; reuse difa::Record by hand.
+            if let Some(end_tag) = line.find('>') {
+                let tag = &line[1..end_tag];
+                let value = &line[end_tag + 1..];
+                if let Some((key, _)) = tag.split_once(':') {
+                    record.insert(key, value).unwrap();
+                }
+            }
+        }
+        let parsed = AdifMapper::record_to_qso(&record);
+
+        assert_eq!(parsed.band_rx, Band::Band40m as i32);
+        assert_eq!(parsed.frequency_rx_khz, Some(7075));
+        assert_eq!(parsed.worked_altitude_meters, Some(150.0));
+        assert_eq!(parsed.worked_gridsquare_ext.as_deref(), Some("ab"));
+        assert_eq!(parsed.owner_callsign.as_deref(), Some("W1AW"));
+        assert_eq!(parsed.qso_complete, QsoCompletion::Nil as i32);
     }
 }

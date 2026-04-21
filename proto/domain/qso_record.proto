@@ -7,6 +7,7 @@ option csharp_namespace = "QsoRipper.Domain";
 import "domain/band.proto";
 import "domain/mode.proto";
 import "domain/qsl_status.proto";
+import "domain/qso_completion.proto";
 import "domain/rst_report.proto";
 import "domain/station_snapshot.proto";
 import "domain/sync_status.proto";
@@ -96,4 +97,27 @@ message QsoRecord {
   // Stores ADIF fields not mapped to dedicated proto fields,
   // preserving them for lossless re-export. Key = ADIF field name (uppercase).
   map<string, string> extra_fields = 80;
+
+  // --- Worked-station geographic location (ADIF LAT/LON/ALTITUDE/GRIDSQUARE_EXT) ---
+  // Decimal degrees, signed (negative for S/W).
+  optional double worked_latitude = 100;
+  optional double worked_longitude = 101;
+  // Worked station altitude in meters above mean sea level.
+  optional double worked_altitude_meters = 102;
+  // Maidenhead grid square extension (chars 7-8 of an 8-char grid) for higher
+  // precision on top of `worked_grid`.
+  optional string worked_gridsquare_ext = 103;
+
+  // --- Split RX (ADIF FREQ_RX / BAND_RX) ---
+  // Receiver frequency in kHz when running split.
+  optional uint64 frequency_rx_khz = 104;
+  // Receiver band when running split. Defaults to BAND_UNSPECIFIED if absent.
+  Band band_rx = 105;
+
+  // --- Ownership / completion ---
+  // ADIF OWNER_CALLSIGN — owner of the station used to log the contact (may
+  // differ from STATION_CALLSIGN and OPERATOR).
+  optional string owner_callsign = 106;
+  // ADIF QSO_COMPLETE — whether the contact was completed.
+  QsoCompletion qso_complete = 107;
 }

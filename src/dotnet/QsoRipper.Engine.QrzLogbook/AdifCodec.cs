@@ -264,6 +264,17 @@ internal static class AdifCodec
                     }
 
                     break;
+                case "BAND_RX":
+                    if (AdifToBand.TryGetValue(value, out var bandRx))
+                    {
+                        qso.BandRx = bandRx;
+                    }
+                    else
+                    {
+                        qso.ExtraFields[key] = value;
+                    }
+
+                    break;
                 case "MODE":
                     if (AdifToMode.TryGetValue(value, out var mode))
                     {
@@ -290,6 +301,18 @@ internal static class AdifCodec
                     }
 
                     break;
+                case "FREQ_RX":
+                    if (double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out var mhzRx)
+                        && TryConvertMhzToKhz(mhzRx, out var khzRx))
+                    {
+                        qso.FrequencyRxKhz = khzRx;
+                    }
+                    else
+                    {
+                        qso.ExtraFields[key] = value;
+                    }
+
+                    break;
                 case "RST_SENT":
                     qso.RstSent = ParseRstReport(value);
                     break;
@@ -307,6 +330,60 @@ internal static class AdifCodec
                     break;
                 case "GRIDSQUARE":
                     qso.WorkedGrid = value;
+                    break;
+                case "GRIDSQUARE_EXT":
+                    qso.WorkedGridsquareExt = value;
+                    break;
+                case "LAT":
+                    if (TryParseAdifLocation(value, latitude: true, out var workedLatitude))
+                    {
+                        qso.WorkedLatitude = workedLatitude;
+                    }
+                    else
+                    {
+                        qso.ExtraFields[key] = value;
+                    }
+
+                    break;
+                case "LON":
+                    if (TryParseAdifLocation(value, latitude: false, out var workedLongitude))
+                    {
+                        qso.WorkedLongitude = workedLongitude;
+                    }
+                    else
+                    {
+                        qso.ExtraFields[key] = value;
+                    }
+
+                    break;
+                case "ALTITUDE":
+                    if (double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out var workedAltitude)
+                        && double.IsFinite(workedAltitude))
+                    {
+                        qso.WorkedAltitudeMeters = workedAltitude;
+                    }
+                    else
+                    {
+                        qso.ExtraFields[key] = value;
+                    }
+
+                    break;
+                case "OWNER_CALLSIGN":
+                    qso.OwnerCallsign = value;
+                    break;
+                case "QSO_COMPLETE":
+                    {
+                        var completion = ParseQsoCompletion(value);
+                        if (completion == QsoCompletion.Unspecified && !string.IsNullOrEmpty(value))
+                        {
+                            qso.ExtraFields[key] = value;
+                        }
+                        else
+                        {
+                            qso.QsoComplete = completion;
+                        }
+                    }
+
                     break;
                 case "COUNTRY":
                     qso.WorkedCountry = value;
@@ -349,6 +426,21 @@ internal static class AdifCodec
                     break;
                 case "MY_GRIDSQUARE":
                     (stationSnapshot ??= new StationSnapshot()).Grid = value;
+                    break;
+                case "MY_GRIDSQUARE_EXT":
+                    (stationSnapshot ??= new StationSnapshot()).GridsquareExt = value;
+                    break;
+                case "MY_ALTITUDE":
+                    if (double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out var myAltitude)
+                        && double.IsFinite(myAltitude))
+                    {
+                        (stationSnapshot ??= new StationSnapshot()).AltitudeMeters = myAltitude;
+                    }
+                    else
+                    {
+                        qso.ExtraFields[key] = value;
+                    }
+
                     break;
                 case "MY_CNTY":
                     (stationSnapshot ??= new StationSnapshot()).County = value;
@@ -468,6 +560,11 @@ internal static class AdifCodec
             AppendField(sb, "BAND", bandStr);
         }
 
+        if (qso.BandRx != Band.Unspecified && BandToAdif.TryGetValue(qso.BandRx, out var bandRxStr))
+        {
+            AppendField(sb, "BAND_RX", bandRxStr);
+        }
+
         if (ModeToAdif.TryGetValue(qso.Mode, out var modeStr))
         {
             AppendField(sb, "MODE", modeStr);
@@ -481,6 +578,11 @@ internal static class AdifCodec
         if (qso.HasFrequencyKhz)
         {
             AppendField(sb, "FREQ", $"{qso.FrequencyKhz / 1000}.{qso.FrequencyKhz % 1000:000}");
+        }
+
+        if (qso.HasFrequencyRxKhz)
+        {
+            AppendField(sb, "FREQ_RX", $"{qso.FrequencyRxKhz / 1000}.{qso.FrequencyRxKhz % 1000:000}");
         }
 
         if (qso.RstSent is not null)
@@ -501,6 +603,31 @@ internal static class AdifCodec
         AppendOptional(sb, "CONTACTED_OP", qso.WorkedOperatorCallsign);
         AppendOptional(sb, "NAME", qso.WorkedOperatorName);
         AppendOptional(sb, "GRIDSQUARE", qso.WorkedGrid);
+        AppendOptional(sb, "GRIDSQUARE_EXT", qso.WorkedGridsquareExt);
+
+        if (qso.HasWorkedLatitude && TryFormatAdifLocation(qso.WorkedLatitude, latitude: true, out var latStr))
+        {
+            AppendField(sb, "LAT", latStr);
+        }
+
+        if (qso.HasWorkedLongitude && TryFormatAdifLocation(qso.WorkedLongitude, latitude: false, out var lonStr))
+        {
+            AppendField(sb, "LON", lonStr);
+        }
+
+        if (qso.HasWorkedAltitudeMeters && double.IsFinite(qso.WorkedAltitudeMeters))
+        {
+            AppendField(sb, "ALTITUDE", FormatAdifAltitude(qso.WorkedAltitudeMeters));
+        }
+
+        AppendOptional(sb, "OWNER_CALLSIGN", qso.OwnerCallsign);
+
+        if (qso.QsoComplete != QsoCompletion.Unspecified
+            && TryFormatQsoCompletion(qso.QsoComplete, out var completionStr))
+        {
+            AppendField(sb, "QSO_COMPLETE", completionStr);
+        }
+
         AppendOptional(sb, "COUNTRY", qso.WorkedCountry);
 
         if (qso.HasWorkedDxcc)
@@ -539,6 +666,12 @@ internal static class AdifCodec
         {
             AppendOptional(sb, "MY_NAME", snap.OperatorName);
             AppendOptional(sb, "MY_GRIDSQUARE", snap.Grid);
+            AppendOptional(sb, "MY_GRIDSQUARE_EXT", snap.GridsquareExt);
+            if (snap.HasAltitudeMeters && double.IsFinite(snap.AltitudeMeters))
+            {
+                AppendField(sb, "MY_ALTITUDE", FormatAdifAltitude(snap.AltitudeMeters));
+            }
+
             AppendOptional(sb, "MY_CNTY", snap.County);
             AppendOptional(sb, "MY_STATE", snap.State);
             AppendOptional(sb, "MY_COUNTRY", snap.Country);
@@ -740,5 +873,133 @@ internal static class AdifCodec
 
         var value = (byte)(raw[index] - '0');
         return value >= minimum && value <= maximum ? (uint)value : 0;
+    }
+
+    private static QsoCompletion ParseQsoCompletion(string value)
+    {
+        return value.Trim().ToUpperInvariant() switch
+        {
+            "Y" => QsoCompletion.Yes,
+            "N" => QsoCompletion.No,
+            "NIL" => QsoCompletion.Nil,
+            "?" => QsoCompletion.Uncertain,
+            _ => QsoCompletion.Unspecified,
+        };
+    }
+
+    private static bool TryFormatQsoCompletion(QsoCompletion status, out string value)
+    {
+        value = status switch
+        {
+            QsoCompletion.Yes => "Y",
+            QsoCompletion.No => "N",
+            QsoCompletion.Nil => "NIL",
+            QsoCompletion.Uncertain => "?",
+            _ => string.Empty,
+        };
+
+        return value.Length > 0;
+    }
+
+    private static string FormatAdifAltitude(double meters)
+    {
+        var rounded = Math.Round(meters * 1000.0, MidpointRounding.AwayFromZero) / 1000.0;
+        var formatted = rounded.ToString("0.000", CultureInfo.InvariantCulture);
+        var trimmed = formatted.TrimEnd('0').TrimEnd('.');
+        if (trimmed.Length == 0 || trimmed == "-")
+        {
+            return "0";
+        }
+
+        return trimmed;
+    }
+
+    private static bool TryParseAdifLocation(string rawValue, bool latitude, out double value)
+    {
+        value = 0;
+        var trimmed = rawValue.Trim();
+        if (trimmed.Length != 11 || !trimmed.All(char.IsAscii))
+        {
+            return false;
+        }
+
+        var direction = char.ToUpperInvariant(trimmed[0]);
+        if (latitude)
+        {
+            if (direction is not ('N' or 'S'))
+            {
+                return false;
+            }
+        }
+        else if (direction is not ('E' or 'W'))
+        {
+            return false;
+        }
+
+        if (trimmed[4] != ' ')
+        {
+            return false;
+        }
+
+        if (!double.TryParse(trimmed.AsSpan(1, 3), NumberStyles.None, CultureInfo.InvariantCulture, out var degrees)
+            || !double.TryParse(trimmed.AsSpan(5, 6), NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture, out var minutes))
+        {
+            return false;
+        }
+
+        if (minutes < 0 || minutes >= 60)
+        {
+            return false;
+        }
+
+        var signed = degrees + (minutes / 60.0);
+        if (direction is 'S' or 'W')
+        {
+            signed *= -1.0;
+        }
+
+        var limit = latitude ? 90.0 : 180.0;
+        if (!double.IsFinite(signed) || Math.Abs(signed) > limit)
+        {
+            return false;
+        }
+
+        value = signed;
+        return true;
+    }
+
+    private static bool TryFormatAdifLocation(double value, bool latitude, out string formatted)
+    {
+        formatted = string.Empty;
+        if (!double.IsFinite(value))
+        {
+            return false;
+        }
+
+        var limit = latitude ? 90.0 : 180.0;
+        if (Math.Abs(value) > limit)
+        {
+            return false;
+        }
+
+        var direction = latitude
+            ? (value < 0 ? 'S' : 'N')
+            : (value < 0 ? 'W' : 'E');
+        var absolute = Math.Abs(value);
+        var degrees = Math.Floor(absolute);
+        var minutes = Math.Round((absolute - degrees) * 60.0 * 1000.0, MidpointRounding.AwayFromZero) / 1000.0;
+        if (minutes >= 60.0)
+        {
+            degrees += 1.0;
+            minutes = 0.0;
+        }
+
+        if (degrees > limit)
+        {
+            return false;
+        }
+
+        formatted = string.Format(CultureInfo.InvariantCulture, "{0}{1:000} {2:00.000}", direction, degrees, minutes);
+        return true;
     }
 }
