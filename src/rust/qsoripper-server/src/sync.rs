@@ -452,40 +452,11 @@ async fn upload_phase(
     );
 
     for qso in &pending_qsos {
-        let is_modified = qso.sync_status == SyncStatus::Modified as i32;
-        let existing_logid = qso.qrz_logid.clone().filter(|s| !s.is_empty());
-
-        let result = match (is_modified, existing_logid.as_deref()) {
-            // Edited locally and we already know its QRZ logid -> REPLACE in
-            // place so QRZ keeps the same row instead of growing a duplicate.
-            (true, Some(logid)) => client.replace_qso(logid, qso).await,
-            // Either a brand-new QSO, or a "modified" QSO that somehow lost
-            // its logid (legacy data). Fall back to INSERT.
-            _ => client.upload_qso(qso).await,
-        };
-
-        match result {
-            Ok(result) => {
-                let mut synced = qso.clone();
-                synced.qrz_logid = Some(result.logid);
-                synced.sync_status = SyncStatus::Synced as i32;
-                match store.update_qso(&synced).await {
-                    Ok(_) => counters.uploaded += 1,
-                    Err(err) => {
-                        eprintln!(
-                            "[sync] Uploaded but failed to update local record {}: {err}",
-                            qso.local_id
-                        );
-                        counters.errors.push(format!(
-                            "Upload succeeded for {} but local update failed: {err}",
-                            qso.worked_callsign,
-                        ));
-                    }
-                }
-            }
+        match sync_single_qso(client, store, qso).await {
+            Ok(_) => counters.uploaded += 1,
             Err(err) => {
                 eprintln!(
-                    "[sync] Failed to upload QSO {} ({}): {err}",
+                    "[sync] Failed to push QSO {} ({}): {err}",
                     qso.local_id, qso.worked_callsign
                 );
                 counters
@@ -494,6 +465,50 @@ async fn upload_phase(
             }
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Per-operation sync helper (used by Phase 2 and by per-RPC sync_to_qrz=true)
+// ---------------------------------------------------------------------------
+
+/// Push a single QSO to QRZ, then mirror the QRZ-assigned logid + Synced
+/// state back into local storage. Used by both bulk sync Phase 2 and the
+/// per-operation `sync_to_qrz=true` paths on `LogQso` / `UpdateQso`.
+///
+/// Selection rule:
+/// * If the local row already has a non-empty `qrz_logid`, REPLACE in place
+///   so QRZ keeps the same row (no duplicate). This applies regardless of
+///   whether `sync_status` is Modified or Synced.
+/// * Otherwise INSERT a new remote row and adopt the returned logid.
+///
+/// Returns the locally-persisted `QsoRecord` on success (with refreshed
+/// `qrz_logid` and `sync_status = Synced`). Returns a human-readable error
+/// string on either upload failure or local-store write failure; callers
+/// surface it as the gRPC `sync_error` field.
+pub(crate) async fn sync_single_qso(
+    client: &dyn QrzLogbookApi,
+    store: &dyn LogbookStore,
+    qso: &QsoRecord,
+) -> Result<QsoRecord, String> {
+    let existing_logid = qso.qrz_logid.clone().filter(|s| !s.is_empty());
+
+    let result = match existing_logid.as_deref() {
+        Some(logid) => client.replace_qso(logid, qso).await,
+        None => client.upload_qso(qso).await,
+    };
+
+    let upload = result.map_err(|err| format!("QRZ upload failed: {err}"))?;
+
+    let mut synced = qso.clone();
+    synced.qrz_logid = Some(upload.logid);
+    synced.sync_status = SyncStatus::Synced as i32;
+
+    store
+        .update_qso(&synced)
+        .await
+        .map_err(|err| format!("QRZ upload succeeded but local update failed: {err}"))?;
+
+    Ok(synced)
 }
 
 // ---------------------------------------------------------------------------
@@ -928,7 +943,7 @@ mod tests {
     use qsoripper_storage_memory::MemoryStorage;
     use tokio::sync::mpsc;
 
-    use super::{execute_sync, QrzLogbookApi};
+    use super::{execute_sync, sync_single_qso, QrzLogbookApi};
 
     // -- Mock API -----------------------------------------------------------
 
@@ -1220,6 +1235,85 @@ mod tests {
         let saved = store.get_qso(&q.local_id).await.unwrap().unwrap();
         assert_eq!(saved.sync_status, SyncStatus::Synced as i32);
         assert_eq!(saved.qrz_logid.as_deref(), Some("QRZ-EXISTING"));
+    }
+
+    // ---- sync_single_qso (per-operation sync_to_qrz=true path) -------------
+
+    #[tokio::test]
+    async fn sync_single_qso_inserts_when_no_logid_and_marks_synced() {
+        let store = MemoryStorage::new();
+        let mut q = make_qso("W1AW", "K7NEW", Band::Band20m, Mode::Ft8, 1_700_000_000);
+        q.qrz_logid = None;
+        q.sync_status = SyncStatus::LocalOnly as i32;
+        store.insert_qso(&q).await.unwrap();
+
+        let api = MockQrzApi::new(
+            Ok(vec![]),
+            vec![Ok(QrzUploadResult {
+                logid: "QRZ-NEW".into(),
+            })],
+        );
+
+        let synced = sync_single_qso(&api, &store, &q).await.expect("ok");
+        assert_eq!(synced.qrz_logid.as_deref(), Some("QRZ-NEW"));
+        assert_eq!(synced.sync_status, SyncStatus::Synced as i32);
+
+        let saved = store.get_qso(&q.local_id).await.unwrap().unwrap();
+        assert_eq!(saved.qrz_logid.as_deref(), Some("QRZ-NEW"));
+        assert_eq!(saved.sync_status, SyncStatus::Synced as i32);
+
+        // INSERT was used; REPLACE was not.
+        assert!(api.replace_calls.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn sync_single_qso_replaces_when_logid_present_preserving_id() {
+        let store = MemoryStorage::new();
+        let mut q = make_qso("W1AW", "K7EDIT", Band::Band20m, Mode::Ft8, 1_700_000_000);
+        q.qrz_logid = Some("QRZ-EXISTING".into());
+        q.sync_status = SyncStatus::Modified as i32;
+        store.insert_qso(&q).await.unwrap();
+
+        // No upload_results queued — only REPLACE should be called and it
+        // defaults to echoing the logid back.
+        let api = MockQrzApi::new(Ok(vec![]), vec![]);
+
+        let synced = sync_single_qso(&api, &store, &q).await.expect("ok");
+        assert_eq!(synced.qrz_logid.as_deref(), Some("QRZ-EXISTING"));
+        assert_eq!(synced.sync_status, SyncStatus::Synced as i32);
+
+        let replace_calls = api.replace_calls.lock().unwrap().clone();
+        assert_eq!(replace_calls.len(), 1, "must REPLACE not INSERT");
+        assert_eq!(replace_calls[0].0, "QRZ-EXISTING");
+
+        let saved = store.get_qso(&q.local_id).await.unwrap().unwrap();
+        assert_eq!(saved.sync_status, SyncStatus::Synced as i32);
+        assert_eq!(saved.qrz_logid.as_deref(), Some("QRZ-EXISTING"));
+    }
+
+    #[tokio::test]
+    async fn sync_single_qso_returns_error_when_upload_fails_and_leaves_local_alone() {
+        let store = MemoryStorage::new();
+        let mut q = make_qso("W1AW", "K7FAIL", Band::Band20m, Mode::Ft8, 1_700_000_000);
+        q.qrz_logid = None;
+        q.sync_status = SyncStatus::LocalOnly as i32;
+        store.insert_qso(&q).await.unwrap();
+
+        let api = MockQrzApi::new(
+            Ok(vec![]),
+            vec![Err(QrzLogbookError::ApiError("boom".into()))],
+        );
+
+        let err = sync_single_qso(&api, &store, &q)
+            .await
+            .expect_err("should return error");
+        assert!(err.contains("QRZ upload failed"), "actual error: {err}");
+
+        // Local row must remain LocalOnly with no logid — caller (handler)
+        // surfaces the failure as sync_error and the next bulk sync will retry.
+        let saved = store.get_qso(&q.local_id).await.unwrap().unwrap();
+        assert_eq!(saved.sync_status, SyncStatus::LocalOnly as i32);
+        assert!(saved.qrz_logid.is_none());
     }
 
     #[tokio::test]
