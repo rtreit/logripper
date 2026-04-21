@@ -35,6 +35,16 @@ internal static class GetQsoCommand
             Console.WriteLine($"UTC:              {qso.UtcTimestamp.ToDateTime():u}");
         }
 
+        if (qso.UtcEndTimestamp is not null)
+        {
+            Console.WriteLine($"UTC End:          {qso.UtcEndTimestamp.ToDateTime():u}");
+        }
+
+        if (ListQsosCommand.FormatDuration(qso) is { } duration)
+        {
+            Console.WriteLine($"Duration:         {duration}");
+        }
+
         if (qso.HasFrequencyKhz)
         {
             Console.WriteLine($"Frequency:        {qso.FrequencyKhz} kHz");
