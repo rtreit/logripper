@@ -3,6 +3,7 @@ using QsoRipper.Domain;
 using QsoRipper.Gui.Services;
 using QsoRipper.Gui.ViewModels;
 using QsoRipper.Services;
+using Xunit.Sdk;
 
 namespace QsoRipper.Gui.Tests;
 
@@ -205,6 +206,189 @@ public sealed class FullQsoCardViewModelTests
         Assert.Equal("N0CALL", card.WorkedCallsign);
     }
 
+    [Fact]
+    public async Task OpenQsoCardCommandUsesSelectedGridQsoAfterFocusGridClearsLoggerFocus()
+    {
+        var engine = new RecordingEngineClient
+        {
+            RecentQsos =
+            [
+                new QsoRecord
+                {
+                    LocalId = "grid-qso",
+                    WorkedCallsign = "N0CALL",
+                    StationCallsign = "K7RND",
+                    UtcTimestamp = Timestamp.FromDateTimeOffset(new DateTimeOffset(2026, 4, 19, 23, 0, 0, TimeSpan.Zero)),
+                    Band = Band._40M,
+                    Mode = Mode.Cw,
+                },
+            ],
+        };
+
+        using var viewModel = new MainWindowViewModel(engine);
+        await viewModel.RecentQsos.RefreshAsync();
+        viewModel.IsLoggerFocused = true;
+
+        viewModel.FocusGridCommand.Execute(null);
+        viewModel.OpenQsoCardCommand.Execute(null);
+
+        Assert.NotNull(viewModel.FullQsoCard);
+        var card = viewModel.FullQsoCard!;
+        Assert.True(card.IsEditingExisting);
+        Assert.Equal("N0CALL", card.WorkedCallsign);
+    }
+
+    [Fact]
+    public async Task LookupWorkedCallsignCommandAppliesLookupRecord()
+    {
+        var engine = new RecordingEngineClient
+        {
+            LookupResponse = new LookupResponse
+            {
+                Result = new LookupResult
+                {
+                    State = LookupState.Found,
+                    LookupLatencyMs = 12,
+                    Record = new CallsignRecord
+                    {
+                        Callsign = "W1AW",
+                        FirstName = "Hiram",
+                        LastName = "Maxim",
+                        GridSquare = "FN31",
+                        DxccCountryName = "United States",
+                        State = "CT",
+                    },
+                },
+            },
+        };
+        var logger = new QsoLoggerViewModel(engine)
+        {
+            Callsign = "w1aw",
+        };
+        var card = FullQsoCardViewModel.ForNew(engine, logger);
+        card.WorkedOperatorCallsign = string.Empty;
+        card.WorkedOperatorName = string.Empty;
+        card.WorkedGrid = string.Empty;
+        card.WorkedCountry = string.Empty;
+        card.WorkedState = string.Empty;
+
+        await card.LookupWorkedCallsignCommand.ExecuteAsync(null);
+
+        Assert.Equal("W1AW", engine.LastLookupCallsign);
+        Assert.Equal("W1AW", card.WorkedOperatorCallsign);
+        Assert.Equal("Hiram Maxim", card.WorkedOperatorName);
+        Assert.Equal("FN31", card.WorkedGrid);
+        Assert.Equal("United States", card.WorkedCountry);
+        Assert.Equal("CT", card.WorkedState);
+        Assert.Equal("Loaded W1AW in 12 ms.", card.LookupStatusText);
+    }
+
+    [Fact]
+    public async Task WorkedCallsignAutoLookupAppliesLookupRecord()
+    {
+        var engine = new RecordingEngineClient();
+        engine.LookupResponsesByCallsign["W1AW"] = new LookupResponse
+        {
+            Result = new LookupResult
+            {
+                State = LookupState.Found,
+                Record = new CallsignRecord
+                {
+                    Callsign = "W1AW",
+                    FirstName = "Hiram",
+                    LastName = "Maxim",
+                    GridSquare = "FN31",
+                    Country = "United States",
+                    State = "CT",
+                },
+            },
+        };
+
+        var logger = new QsoLoggerViewModel(engine);
+        var card = FullQsoCardViewModel.ForNew(engine, logger);
+        card.LookupDebounceDelay = TimeSpan.Zero;
+
+        card.WorkedCallsign = "w1aw";
+
+        await WaitUntilAsync(() => card.WorkedOperatorName == "Hiram Maxim", TimeSpan.FromSeconds(1));
+
+        Assert.Equal("W1AW", engine.LastLookupCallsign);
+        Assert.Equal("W1AW", card.WorkedOperatorCallsign);
+        Assert.Equal("FN31", card.WorkedGrid);
+        Assert.Equal("United States", card.WorkedCountry);
+        Assert.Equal("CT", card.WorkedState);
+        Assert.Equal(string.Empty, card.LookupStatusText);
+    }
+
+    [Fact]
+    public async Task WorkedCallsignAutoLookupRefreshesFieldsWhenCallsignChanges()
+    {
+        var engine = new RecordingEngineClient();
+        engine.LookupResponsesByCallsign["W1AW"] = new LookupResponse
+        {
+            Result = new LookupResult
+            {
+                State = LookupState.Found,
+                Record = new CallsignRecord
+                {
+                    Callsign = "W1AW",
+                    FirstName = "Hiram",
+                    LastName = "Maxim",
+                    GridSquare = "FN31",
+                    Country = "United States",
+                    State = "CT",
+                },
+            },
+        };
+        engine.LookupResponsesByCallsign["K7ABC"] = new LookupResponse
+        {
+            Result = new LookupResult
+            {
+                State = LookupState.Found,
+                Record = new CallsignRecord
+                {
+                    Callsign = "K7ABC",
+                    FirstName = "Alice",
+                    LastName = "Smith",
+                    GridSquare = "CN87",
+                    Country = "United States",
+                    State = "WA",
+                },
+            },
+        };
+
+        var logger = new QsoLoggerViewModel(engine);
+        var card = FullQsoCardViewModel.ForNew(engine, logger);
+        card.LookupDebounceDelay = TimeSpan.Zero;
+
+        card.WorkedCallsign = "W1AW";
+        await WaitUntilAsync(() => card.WorkedOperatorName == "Hiram Maxim", TimeSpan.FromSeconds(1));
+
+        card.WorkedCallsign = "K7ABC";
+        await WaitUntilAsync(() => card.WorkedOperatorName == "Alice Smith", TimeSpan.FromSeconds(1));
+
+        Assert.Equal("K7ABC", engine.LastLookupCallsign);
+        Assert.Equal("K7ABC", card.WorkedOperatorCallsign);
+        Assert.Equal("CN87", card.WorkedGrid);
+        Assert.Equal("WA", card.WorkedState);
+    }
+
+    private static async Task WaitUntilAsync(Func<bool> predicate, TimeSpan timeout)
+    {
+        var deadline = DateTime.UtcNow + timeout;
+        while (DateTime.UtcNow < deadline)
+        {
+            if (predicate())
+            {
+                return;
+            }
+
+            await Task.Delay(10);
+        }
+
+        throw new XunitException("Condition was not satisfied before the timeout elapsed.");
+    }
+
     private sealed class RecordingEngineClient : IEngineClient
     {
         public QsoRecord? LastLoggedQso { get; private set; }
@@ -212,6 +396,19 @@ public sealed class FullQsoCardViewModelTests
         public QsoRecord? LastUpdatedQso { get; private set; }
 
         public IReadOnlyList<QsoRecord> RecentQsos { get; init; } = [];
+
+        public LookupResponse LookupResponse { get; init; } = new()
+        {
+            Result = new LookupResult
+            {
+                State = LookupState.NotFound,
+            },
+        };
+
+        public string? LastLookupCallsign { get; private set; }
+
+        public Dictionary<string, LookupResponse> LookupResponsesByCallsign { get; } =
+            new(StringComparer.OrdinalIgnoreCase);
 
         public Task<GetSetupWizardStateResponse> GetWizardStateAsync(CancellationToken ct = default) =>
             Task.FromResult(new GetSetupWizardStateResponse());
@@ -253,8 +450,17 @@ public sealed class FullQsoCardViewModelTests
         public Task<GetSyncStatusResponse> GetSyncStatusAsync(CancellationToken ct = default) =>
             Task.FromResult(new GetSyncStatusResponse());
 
-        public Task<LookupResponse> LookupCallsignAsync(string callsign, CancellationToken ct = default) =>
-            throw new NotImplementedException();
+        public Task<LookupResponse> LookupCallsignAsync(string callsign, CancellationToken ct = default)
+        {
+            LastLookupCallsign = callsign;
+
+            if (LookupResponsesByCallsign.TryGetValue(callsign, out var response))
+            {
+                return Task.FromResult(response);
+            }
+
+            return Task.FromResult(LookupResponse);
+        }
 
         public Task<DeleteQsoResponse> DeleteQsoAsync(string localId, bool deleteFromQrz = false, CancellationToken ct = default) =>
             throw new NotImplementedException();

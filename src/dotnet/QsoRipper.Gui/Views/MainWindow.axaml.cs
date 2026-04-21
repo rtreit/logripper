@@ -168,6 +168,11 @@ internal sealed partial class MainWindow : Window
             return;
         }
 
+        if (TryHandleFullQsoCardNavigationKey(e))
+        {
+            return;
+        }
+
         // Global navigation keys — handled explicitly so they work even when
         // focus is inside a TextBox (e.g. the QSO logger fields) where the
         // XAML KeyBinding may not fire reliably.
@@ -369,6 +374,25 @@ internal sealed partial class MainWindow : Window
             default:
                 return false;
         }
+    }
+
+    private bool TryHandleFullQsoCardNavigationKey(KeyEventArgs e)
+    {
+        if (_viewModel?.IsFullQsoCardOpen != true)
+        {
+            return false;
+        }
+
+        var card = this.GetVisualDescendants()
+            .OfType<FullQsoCardView>()
+            .LastOrDefault();
+        if (card is null || !card.TryHandleNavigationKey(e.Key, e.KeyModifiers))
+        {
+            return false;
+        }
+
+        e.Handled = true;
+        return true;
     }
 
     private bool TryHandleRecentQsoZoomKey(KeyEventArgs e)
@@ -574,11 +598,19 @@ internal sealed partial class MainWindow : Window
     private void OnGridGotFocus(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
         _lastFocusArea = FocusArea.Grid;
+        if (_viewModel is not null)
+        {
+            _viewModel.IsLoggerFocused = false;
+        }
     }
 
     private void OnSearchGotFocus(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
         _lastFocusArea = FocusArea.Search;
+        if (_viewModel is not null)
+        {
+            _viewModel.IsLoggerFocused = false;
+        }
     }
 
     private void OnLoggerLostFocus(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
@@ -1156,7 +1188,7 @@ internal sealed partial class MainWindow : Window
                 .OfType<FullQsoCardView>()
                 .LastOrDefault()?
                 .FocusInitialField(),
-            DispatcherPriority.Background);
+            DispatcherPriority.Loaded);
     }
 
     private void OnRecentQsosPropertyChanged(object? sender, PropertyChangedEventArgs e)

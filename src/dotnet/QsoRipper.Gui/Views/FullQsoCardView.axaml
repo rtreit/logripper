@@ -171,12 +171,24 @@
           <ScrollViewer VerticalScrollBarVisibility="Auto">
             <Grid ColumnDefinitions="*,*" ColumnSpacing="18" Margin="0,8,0,0">
               <StackPanel Spacing="10">
-                <StackPanel>
-                  <TextBlock Classes="fieldLabel" Text="Worked operator callsign" />
-                  <TextBox x:Name="LookupOperatorCallsignBox"
-                           Text="{Binding WorkedOperatorCallsign, Mode=TwoWay}"
-                           Classes="mono" />
-                </StackPanel>
+                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
+                  <StackPanel>
+                    <TextBlock Classes="fieldLabel" Text="Worked operator callsign" />
+                    <TextBox x:Name="LookupOperatorCallsignBox"
+                             Text="{Binding WorkedOperatorCallsign, Mode=TwoWay}"
+                             Classes="mono" />
+                  </StackPanel>
+                  <Button Grid.Column="1"
+                          VerticalAlignment="Bottom"
+                          MinWidth="110"
+                          Content="Lookup now"
+                          Command="{Binding LookupWorkedCallsignCommand}"
+                          IsEnabled="{Binding !IsLookingUp}" />
+                </Grid>
+
+                <TextBlock Text="{Binding LookupStatusText}"
+                           Opacity="0.72"
+                           TextWrapping="Wrap" />
 
                 <StackPanel>
                   <TextBlock Classes="fieldLabel" Text="Worked operator name" />

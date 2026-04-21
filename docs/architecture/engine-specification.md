@@ -303,6 +303,10 @@ Performs a single callsign lookup.
 5. Enrich with DXCC entity data if available.
 6. Return a `LookupResult` containing the `CallsignRecord`, lookup state, latency, and cache hit status.
 
+Desktop clients may use this RPC for both fast-entry and advanced QSO-card workflows. Those clients should debounce user typing and cancel stale in-flight UI requests, but they must still route callsign enrichment through this shared lookup service rather than duplicating QRZ XML logic in the UI layer.
+
+When setup saves QRZ XML credentials, engines must restore those credentials on restart so `LookupService` availability does not depend on a one-time in-memory secret surviving process restarts.
+
 **Slash-call fallback:** If the callsign contains a `/` modifier (e.g., `W1AW/7`), and the full lookup fails, strip the modifier and retry with the base callsign. Populate `base_callsign`, `modifier_text`, and `modifier_kind` on the result.
 
 **In-flight deduplication:** If a lookup for the same callsign is already in progress, coalesce the request rather than firing a duplicate QRZ query.

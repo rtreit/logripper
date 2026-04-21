@@ -494,6 +494,7 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
         if (!IsWizardOpen)
         {
             CloseTransientPanels(restoreGridFocus: false);
+            IsLoggerFocused = false;
             SearchFocusRequested?.Invoke(this, EventArgs.Empty);
         }
     }
@@ -514,6 +515,7 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
         if (!IsWizardOpen)
         {
             CloseTransientPanels(restoreGridFocus: false);
+            IsLoggerFocused = false;
             GridFocusRequested?.Invoke(this, EventArgs.Empty);
         }
     }
@@ -725,6 +727,7 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
         {
             card.CloseRequested -= OnFullQsoCardCloseRequested;
             card.Saved -= OnFullQsoCardSaved;
+            card.Dispose();
         }
 
         IsFullQsoCardOpen = false;
