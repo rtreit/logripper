@@ -1,6 +1,7 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="using:QsoRipper.Gui.ViewModels"
+             xmlns:util="using:QsoRipper.Gui.Utilities"
              x:Class="QsoRipper.Gui.Views.FullQsoCardView"
              x:DataType="vm:FullQsoCardViewModel">
   <UserControl.KeyBindings>
@@ -96,7 +97,8 @@
                            Text="{Binding WorkedCallsign, Mode=TwoWay}"
                            FontSize="18"
                            FontWeight="SemiBold"
-                           Classes="mono" />
+                           Classes="mono"
+                           util:UpperCaseBehavior.IsEnabled="True" />
                 </StackPanel>
 
                 <Grid ColumnDefinitions="*,*" ColumnSpacing="10">
@@ -149,7 +151,8 @@
               <StackPanel Grid.Column="1" Spacing="10">
                 <StackPanel>
                   <TextBlock Classes="fieldLabel" Text="Station callsign" />
-                  <TextBox Text="{Binding StationCallsign, Mode=TwoWay}" Classes="mono" />
+                  <TextBox Text="{Binding StationCallsign, Mode=TwoWay}" Classes="mono"
+                           util:UpperCaseBehavior.IsEnabled="True" />
                 </StackPanel>
 
                 <StackPanel>
@@ -180,7 +183,8 @@
                     <TextBlock Classes="fieldLabel" Text="Worked operator callsign" />
                     <TextBox x:Name="LookupOperatorCallsignBox"
                              Text="{Binding WorkedOperatorCallsign, Mode=TwoWay}"
-                             Classes="mono" />
+                             Classes="mono"
+                             util:UpperCaseBehavior.IsEnabled="True" />
                   </StackPanel>
                   <Button Grid.Column="1"
                           VerticalAlignment="Bottom"
@@ -452,11 +456,13 @@
                   <TextBlock Classes="fieldLabel" Text="Snapshot station callsign" />
                   <TextBox x:Name="StationCallsignSnapshotBox"
                            Text="{Binding SnapshotStationCallsign, Mode=TwoWay}"
-                           Classes="mono" />
+                           Classes="mono"
+                           util:UpperCaseBehavior.IsEnabled="True" />
                 </StackPanel>
                 <StackPanel Grid.Column="1">
                   <TextBlock Classes="fieldLabel" Text="Snapshot operator callsign" />
-                  <TextBox Text="{Binding SnapshotOperatorCallsign, Mode=TwoWay}" Classes="mono" />
+                  <TextBox Text="{Binding SnapshotOperatorCallsign, Mode=TwoWay}" Classes="mono"
+                           util:UpperCaseBehavior.IsEnabled="True" />
                 </StackPanel>
               </Grid>
 
