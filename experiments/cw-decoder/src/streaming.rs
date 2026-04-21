@@ -556,7 +556,6 @@ impl Decoder {
 
 // --- Top-level streaming decoder ---------------------------------------
 pub struct StreamingDecoder {
-    source_rate: u32,
     resampler: Option<SincFixedIn<f32>>,
     raw_in: Vec<f32>,
     hp: Biquad,
@@ -603,7 +602,6 @@ impl StreamingDecoder {
         let smooth_window = ((power_rate * POWER_SMOOTH_MS / 1000.0).round() as usize).max(1);
 
         Ok(Self {
-            source_rate,
             resampler,
             raw_in: Vec::with_capacity(RESAMPLER_CHUNK * 2),
             hp: Biquad::new(FilterType::HighPass, FREQ_MIN_HZ, TARGET_RATE),
@@ -620,8 +618,6 @@ impl StreamingDecoder {
         })
     }
 
-    pub fn target_rate(&self) -> u32 { TARGET_RATE }
-    pub fn power_rate(&self) -> f32 { self.decoder.power_rate }
     pub fn pitch(&self) -> Option<f32> { self.pitch_locked }
     pub fn current_wpm(&self) -> Option<f32> { self.decoder.current_wpm() }
     pub fn current_threshold(&self) -> f32 { self.decoder.threshold }
