@@ -640,6 +640,11 @@
                                       Binding="{ReflectionBinding UtcEndDisplay, Mode=TwoWay}"
                                       SortMemberPath="UtcEndSortKey"
                                       IsVisible="False" />
+                  <DataGridTextColumn Header="Dur"
+                                      Width="72"
+                                      MinWidth="64"
+                                      Binding="{ReflectionBinding DurationDisplay}"
+                                      IsReadOnly="True" />
                   <DataGridTextColumn Header="CQ"
                                       Width="64"
                                       MinWidth="64"
