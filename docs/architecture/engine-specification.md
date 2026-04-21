@@ -1172,10 +1172,21 @@ When DXCC data is available, cascade zone information onto the lookup result if 
    - `APP_QRZLOG_LOGID` (canonical) and the legacy alias `APP_QRZ_LOGID` → `qrz_logid`
    - `APP_QRZLOG_QSO_ID` (canonical) and the legacy alias `APP_QRZ_BOOKID` → `qrz_bookid`
    Engines MUST NOT leave these app keys in `extra_fields` once a dedicated domain field carries the value, otherwise downstream sync will treat the record as unlinked and re-upload it as a duplicate.
-4. Preserve any other unrecognized ADIF fields in the `extra_fields` map for lossless round-trip.
-5. Generate a `local_id` for each imported record.
-6. Normalize callsigns and validate required fields.
-7. Insert into storage with `sync_status = NOT_SYNCED`.
+4. Map normalized ADIF fields to their dedicated proto slots rather than `extra_fields`:
+   - `BAND_RX` → `band_rx` (Band enum)
+   - `FREQ_RX` → `frequency_rx_khz` (MHz → kHz)
+   - `LAT` / `LON` → `worked_latitude` / `worked_longitude` (parsed from `[NSEW]DDD MM.MMM` to signed decimal degrees)
+   - `ALTITUDE` → `worked_altitude_meters`
+   - `GRIDSQUARE_EXT` → `worked_gridsquare_ext`
+   - `OWNER_CALLSIGN` → `owner_callsign`
+   - `QSO_COMPLETE` → `qso_complete` (`Y`/`N`/`NIL`/`?` → `QsoCompletion` enum)
+   - `MY_ALTITUDE` → `station_snapshot.altitude_meters`
+   - `MY_GRIDSQUARE_EXT` → `station_snapshot.gridsquare_ext`
+   Unrecognized values (e.g., malformed LAT, unknown `QSO_COMPLETE` literal) fall back to `extra_fields` under the original key.
+5. Preserve any other unrecognized ADIF fields in the `extra_fields` map for lossless round-trip.
+6. Generate a `local_id` for each imported record.
+7. Normalize callsigns and validate required fields.
+8. Insert into storage with `sync_status = NOT_SYNCED`.
 
 See `docs/integrations/adif-specification.md` for the authoritative field-name table.
 
@@ -1187,8 +1198,9 @@ See `docs/integrations/adif-specification.md` for the authoritative field-name t
    - `qrz_logid` → `APP_QRZLOG_LOGID`
    - `qrz_bookid` → `APP_QRZLOG_QSO_ID`
    When iterating `extra_fields`, skip keys already covered by these dedicated emissions (`APP_QRZLOG_LOGID`, `APP_QRZ_LOGID`, `APP_QRZLOG_QSO_ID`, `APP_QRZ_BOOKID`) to avoid duplicate ADIF fields.
-4. Include other `extra_fields` to preserve data from previous imports.
-5. Output records delimited by `<eor>`.
+4. Emit the normalized ADIF fields from their dedicated proto slots whenever populated (`BAND_RX`, `FREQ_RX`, `LAT`, `LON`, `ALTITUDE`, `GRIDSQUARE_EXT`, `OWNER_CALLSIGN`, `QSO_COMPLETE`, `MY_ALTITUDE`, `MY_GRIDSQUARE_EXT`). When iterating `extra_fields`, skip these same keys so the dedicated proto value always wins and the ADIF output never contains the same field twice.
+5. Include other `extra_fields` to preserve data from previous imports.
+6. Output records delimited by `<eor>`.
 
 ### 7.6 Error Handling
 
@@ -1435,6 +1447,7 @@ A conformant engine must pass all of the following scenarios:
 | `proto/domain/sync_status.proto` | `SyncStatus` | QSO sync state |
 | `proto/domain/lookup_state.proto` | `LookupState` | Lookup result state |
 | `proto/domain/conflict_policy.proto` | `ConflictPolicy` | Sync conflict resolution policy |
+| `proto/domain/qso_completion.proto` | `QsoCompletion` | ADIF `QSO_COMPLETE` enum (Y/N/NIL/?) |
 | `proto/domain/rig_connection_status.proto` | `RigConnectionStatus` | Rig connection state |
 | `proto/domain/space_weather_status.proto` | `SpaceWeatherStatus` | Space weather data state |
 

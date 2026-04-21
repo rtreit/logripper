@@ -20,4 +20,6 @@ message StationSnapshot {
   optional double latitude = 12;  // Logging station latitude in decimal degrees
   optional double longitude = 13;  // Logging station longitude in decimal degrees
   optional string arrl_section = 14;  // Logging station ARRL section used for this QSO
+  optional double altitude_meters = 15;  // Logging station altitude in meters above mean sea level (ADIF MY_ALTITUDE)
+  optional string gridsquare_ext = 16;  // Logging station Maidenhead grid square extension (ADIF MY_GRIDSQUARE_EXT)
 }

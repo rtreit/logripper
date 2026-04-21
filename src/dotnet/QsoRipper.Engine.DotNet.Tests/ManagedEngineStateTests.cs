@@ -624,6 +624,77 @@ public sealed class ManagedEngineStateTests : IDisposable
     }
 
     [Fact]
+    public void Adif_round_trips_normalized_split_and_geo_fields()
+    {
+        var state = CreateState();
+        state.SaveSetup(new SaveSetupRequest
+        {
+            StationProfile = new StationProfile
+            {
+                ProfileName = "Home",
+                StationCallsign = "K7RND",
+                OperatorCallsign = "K7RND",
+                Grid = "CN87"
+            }
+        });
+
+        var payload = Utf8(
+            "<STATION_CALLSIGN:5>K7RND<CALL:4>W1AW<QSO_DATE:8>20260115<TIME_ON:4>1523" +
+            "<BAND:3>20M<MODE:3>SSB<BAND_RX:3>40M<FREQ_RX:5>7.075" +
+            "<LAT:11>N041 30.000<LON:11>W071 45.500<ALTITUDE:3>150" +
+            "<GRIDSQUARE_EXT:2>ab<OWNER_CALLSIGN:4>W1AW<QSO_COMPLETE:1>Y" +
+            "<MY_ALTITUDE:3>550<MY_GRIDSQUARE_EXT:2>bb<EOR>\n");
+
+        var imported = state.ImportAdif(payload, refresh: false);
+        Assert.Equal(1u, imported.RecordsImported);
+
+        var stored = state.ListQsos(new ListQsosRequest()).Single();
+
+        Assert.Equal(Band._40M, stored.BandRx);
+        Assert.Equal(7075ul, stored.FrequencyRxKhz);
+        Assert.Equal(150.0, stored.WorkedAltitudeMeters);
+        Assert.Equal("ab", stored.WorkedGridsquareExt);
+        Assert.Equal("W1AW", stored.OwnerCallsign);
+        Assert.Equal(QsoCompletion.Yes, stored.QsoComplete);
+        Assert.True(stored.HasWorkedLatitude);
+        Assert.True(stored.HasWorkedLongitude);
+        Assert.NotNull(stored.StationSnapshot);
+        Assert.Equal(550.0, stored.StationSnapshot.AltitudeMeters);
+        Assert.Equal("bb", stored.StationSnapshot.GridsquareExt);
+
+        var exported = Encoding.UTF8.GetString(state.ExportAdif(new ExportAdifRequest()));
+
+        Assert.Contains("<BAND_RX:3>40M", exported, StringComparison.Ordinal);
+        Assert.Contains("<FREQ_RX:5>7.075", exported, StringComparison.Ordinal);
+        Assert.Contains("<ALTITUDE:3>150", exported, StringComparison.Ordinal);
+        Assert.Contains("<GRIDSQUARE_EXT:2>ab", exported, StringComparison.Ordinal);
+        Assert.Contains("<OWNER_CALLSIGN:4>W1AW", exported, StringComparison.Ordinal);
+        Assert.Contains("<QSO_COMPLETE:1>Y", exported, StringComparison.Ordinal);
+        Assert.Contains("<MY_ALTITUDE:3>550", exported, StringComparison.Ordinal);
+        Assert.Contains("<MY_GRIDSQUARE_EXT:2>bb", exported, StringComparison.Ordinal);
+        Assert.Contains("<LAT:11>N041 30.000", exported, StringComparison.Ordinal);
+        Assert.Contains("<LON:11>W071 45.500", exported, StringComparison.Ordinal);
+
+        // Each new field should be emitted exactly once (no duplicates from extra_fields).
+        AssertSingleAdifField(exported, "BAND_RX");
+        AssertSingleAdifField(exported, "FREQ_RX");
+        AssertSingleAdifField(exported, "LAT");
+        AssertSingleAdifField(exported, "LON");
+        AssertSingleAdifField(exported, "ALTITUDE");
+        AssertSingleAdifField(exported, "GRIDSQUARE_EXT");
+        AssertSingleAdifField(exported, "OWNER_CALLSIGN");
+        AssertSingleAdifField(exported, "QSO_COMPLETE");
+        AssertSingleAdifField(exported, "MY_ALTITUDE");
+        AssertSingleAdifField(exported, "MY_GRIDSQUARE_EXT");
+    }
+
+    private static void AssertSingleAdifField(string adif, string key)
+    {
+        var matches = System.Text.RegularExpressions.Regex.Matches(adif, $"<{key}:", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        Assert.True(matches.Count == 1, $"Expected exactly one <{key}:...> tag, found {matches.Count}");
+    }
+
+    [Fact]
     public void Update_qso_preserves_fields_not_present_in_partial_update()
     {
         var state = CreateState();

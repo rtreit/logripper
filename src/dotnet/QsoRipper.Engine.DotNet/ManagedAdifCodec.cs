@@ -310,6 +310,17 @@ internal static class ManagedAdifCodec
                     }
 
                     break;
+                case "BAND_RX":
+                    if (AdifToBand.TryGetValue(value, out var bandRx))
+                    {
+                        qso.BandRx = bandRx;
+                    }
+                    else
+                    {
+                        qso.ExtraFields[key] = value;
+                    }
+
+                    break;
                 case "MODE":
                     if (TryNormalizeModeFromAdif(value, out var mode, out var submode))
                     {
@@ -340,6 +351,18 @@ internal static class ManagedAdifCodec
                     }
 
                     break;
+                case "FREQ_RX":
+                    if (double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out var mhzRx)
+                        && TryConvertMhzToKhz(mhzRx, out var khzRx))
+                    {
+                        qso.FrequencyRxKhz = khzRx;
+                    }
+                    else
+                    {
+                        qso.ExtraFields[key] = value;
+                    }
+
+                    break;
                 case "RST_SENT":
                     qso.RstSent = ParseRstReport(value);
                     break;
@@ -357,6 +380,60 @@ internal static class ManagedAdifCodec
                     break;
                 case "GRIDSQUARE":
                     qso.WorkedGrid = value;
+                    break;
+                case "GRIDSQUARE_EXT":
+                    qso.WorkedGridsquareExt = value;
+                    break;
+                case "LAT":
+                    if (TryParseAdifLocation(value, latitude: true, out var workedLatitude))
+                    {
+                        qso.WorkedLatitude = workedLatitude;
+                    }
+                    else
+                    {
+                        qso.ExtraFields[key] = value;
+                    }
+
+                    break;
+                case "LON":
+                    if (TryParseAdifLocation(value, latitude: false, out var workedLongitude))
+                    {
+                        qso.WorkedLongitude = workedLongitude;
+                    }
+                    else
+                    {
+                        qso.ExtraFields[key] = value;
+                    }
+
+                    break;
+                case "ALTITUDE":
+                    if (double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out var workedAltitude)
+                        && double.IsFinite(workedAltitude))
+                    {
+                        qso.WorkedAltitudeMeters = workedAltitude;
+                    }
+                    else
+                    {
+                        qso.ExtraFields[key] = value;
+                    }
+
+                    break;
+                case "OWNER_CALLSIGN":
+                    qso.OwnerCallsign = value;
+                    break;
+                case "QSO_COMPLETE":
+                    {
+                        var completion = ParseQsoCompletion(value);
+                        if (completion == QsoCompletion.Unspecified && !string.IsNullOrEmpty(value))
+                        {
+                            qso.ExtraFields[key] = value;
+                        }
+                        else
+                        {
+                            qso.QsoComplete = completion;
+                        }
+                    }
+
                     break;
                 case "COUNTRY":
                     qso.WorkedCountry = value;
@@ -469,6 +546,21 @@ internal static class ManagedAdifCodec
                         qso.ExtraFields[key] = value;
                     }
 
+                    break;
+                case "MY_ALTITUDE":
+                    if (double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out var myAltitude)
+                        && double.IsFinite(myAltitude))
+                    {
+                        (stationSnapshot ??= new StationSnapshot()).AltitudeMeters = myAltitude;
+                    }
+                    else
+                    {
+                        qso.ExtraFields[key] = value;
+                    }
+
+                    break;
+                case "MY_GRIDSQUARE_EXT":
+                    (stationSnapshot ??= new StationSnapshot()).GridsquareExt = value;
                     break;
                 case "MY_ARRL_SECT":
                     (stationSnapshot ??= new StationSnapshot()).ArrlSection = value;
@@ -662,6 +754,16 @@ internal static class ManagedAdifCodec
             fields.Add(new KeyValuePair<string, string>("FREQ", $"{qso.FrequencyKhz / 1000}.{qso.FrequencyKhz % 1000:000}"));
         }
 
+        if (qso.HasFrequencyRxKhz)
+        {
+            fields.Add(new KeyValuePair<string, string>("FREQ_RX", $"{qso.FrequencyRxKhz / 1000}.{qso.FrequencyRxKhz % 1000:000}"));
+        }
+
+        if (BandToAdif.TryGetValue(qso.BandRx, out var bandRxOut))
+        {
+            fields.Add(new KeyValuePair<string, string>("BAND_RX", bandRxOut));
+        }
+
         if (qso.RstSent is not null)
         {
             fields.Add(new KeyValuePair<string, string>("RST_SENT", qso.RstSent.Raw));
@@ -680,6 +782,28 @@ internal static class ManagedAdifCodec
         AddOptionalStringField(fields, "CONTACTED_OP", qso.WorkedOperatorCallsign);
         AddOptionalStringField(fields, "NAME", qso.WorkedOperatorName);
         AddOptionalStringField(fields, "GRIDSQUARE", qso.WorkedGrid);
+        AddOptionalStringField(fields, "GRIDSQUARE_EXT", qso.WorkedGridsquareExt);
+        if (qso.HasWorkedLatitude && TryFormatAdifLocation(qso.WorkedLatitude, latitude: true, out var workedLatOut))
+        {
+            fields.Add(new KeyValuePair<string, string>("LAT", workedLatOut));
+        }
+
+        if (qso.HasWorkedLongitude && TryFormatAdifLocation(qso.WorkedLongitude, latitude: false, out var workedLonOut))
+        {
+            fields.Add(new KeyValuePair<string, string>("LON", workedLonOut));
+        }
+
+        if (qso.HasWorkedAltitudeMeters && double.IsFinite(qso.WorkedAltitudeMeters))
+        {
+            fields.Add(new KeyValuePair<string, string>("ALTITUDE", FormatAdifAltitude(qso.WorkedAltitudeMeters)));
+        }
+
+        AddOptionalStringField(fields, "OWNER_CALLSIGN", qso.OwnerCallsign);
+        if (TryFormatQsoCompletion(qso.QsoComplete, out var qsoCompleteOut))
+        {
+            fields.Add(new KeyValuePair<string, string>("QSO_COMPLETE", qsoCompleteOut));
+        }
+
         AddOptionalStringField(fields, "COUNTRY", qso.WorkedCountry);
         if (qso.HasWorkedDxcc)
         {
@@ -735,6 +859,12 @@ internal static class ManagedAdifCodec
                 fields.Add(new KeyValuePair<string, string>("MY_LON", myLongitude));
             }
 
+            if (stationSnapshot.HasAltitudeMeters && double.IsFinite(stationSnapshot.AltitudeMeters))
+            {
+                fields.Add(new KeyValuePair<string, string>("MY_ALTITUDE", FormatAdifAltitude(stationSnapshot.AltitudeMeters)));
+            }
+
+            AddOptionalStringField(fields, "MY_GRIDSQUARE_EXT", stationSnapshot.GridsquareExt);
             AddOptionalStringField(fields, "MY_ARRL_SECT", stationSnapshot.ArrlSection);
         }
 
@@ -875,6 +1005,45 @@ internal static class ManagedAdifCodec
         };
 
         return value.Length > 0;
+    }
+
+    private static QsoCompletion ParseQsoCompletion(string value)
+    {
+        return value.Trim().ToUpperInvariant() switch
+        {
+            "Y" => QsoCompletion.Yes,
+            "N" => QsoCompletion.No,
+            "NIL" => QsoCompletion.Nil,
+            "?" => QsoCompletion.Uncertain,
+            _ => QsoCompletion.Unspecified,
+        };
+    }
+
+    private static bool TryFormatQsoCompletion(QsoCompletion status, out string value)
+    {
+        value = status switch
+        {
+            QsoCompletion.Yes => "Y",
+            QsoCompletion.No => "N",
+            QsoCompletion.Nil => "NIL",
+            QsoCompletion.Uncertain => "?",
+            _ => string.Empty,
+        };
+
+        return value.Length > 0;
+    }
+
+    private static string FormatAdifAltitude(double meters)
+    {
+        var rounded = Math.Round(meters * 1000.0, MidpointRounding.AwayFromZero) / 1000.0;
+        var formatted = rounded.ToString("0.000", CultureInfo.InvariantCulture);
+        var trimmed = formatted.TrimEnd('0').TrimEnd('.');
+        if (trimmed.Length == 0 || trimmed == "-")
+        {
+            return "0";
+        }
+
+        return trimmed;
     }
 
     private static void MapConfirmationField(QsoRecord qso, string key, string value, Action<QsoRecord, bool> setter)
@@ -1100,7 +1269,7 @@ internal static class ManagedAdifCodec
             return false;
         }
 
-        formatted = string.Format(CultureInfo.InvariantCulture, "{0}{1:000} {2:000.000}", direction, degrees, minutes);
+        formatted = string.Format(CultureInfo.InvariantCulture, "{0}{1:000} {2:00.000}", direction, degrees, minutes);
         return true;
     }
 
@@ -1174,6 +1343,16 @@ internal static class ManagedAdifCodec
             : key.Equals("MY_ARRL_SECT", StringComparison.OrdinalIgnoreCase) ? !string.IsNullOrWhiteSpace(stationSnapshot?.ArrlSection)
             : key.Equals("QSLSDATE", StringComparison.OrdinalIgnoreCase) ? qso.QslSentDate is not null && TryFormatAdifDate(qso.QslSentDate, out _)
             : key.Equals("QSLRDATE", StringComparison.OrdinalIgnoreCase) ? qso.QslReceivedDate is not null && TryFormatAdifDate(qso.QslReceivedDate, out _)
+            : key.Equals("BAND_RX", StringComparison.OrdinalIgnoreCase) ? qso.BandRx != Band.Unspecified
+            : key.Equals("FREQ_RX", StringComparison.OrdinalIgnoreCase) ? qso.HasFrequencyRxKhz
+            : key.Equals("LAT", StringComparison.OrdinalIgnoreCase) ? qso.HasWorkedLatitude
+            : key.Equals("LON", StringComparison.OrdinalIgnoreCase) ? qso.HasWorkedLongitude
+            : key.Equals("ALTITUDE", StringComparison.OrdinalIgnoreCase) ? qso.HasWorkedAltitudeMeters
+            : key.Equals("GRIDSQUARE_EXT", StringComparison.OrdinalIgnoreCase) ? !string.IsNullOrWhiteSpace(qso.WorkedGridsquareExt)
+            : key.Equals("OWNER_CALLSIGN", StringComparison.OrdinalIgnoreCase) ? !string.IsNullOrWhiteSpace(qso.OwnerCallsign)
+            : key.Equals("QSO_COMPLETE", StringComparison.OrdinalIgnoreCase) ? qso.QsoComplete != QsoCompletion.Unspecified
+            : key.Equals("MY_ALTITUDE", StringComparison.OrdinalIgnoreCase) ? stationSnapshot is not null && stationSnapshot.HasAltitudeMeters
+            : key.Equals("MY_GRIDSQUARE_EXT", StringComparison.OrdinalIgnoreCase) ? !string.IsNullOrWhiteSpace(stationSnapshot?.GridsquareExt)
             : (key.Equals("QSO_DATE_OFF", StringComparison.OrdinalIgnoreCase) || key.Equals("TIME_OFF", StringComparison.OrdinalIgnoreCase)) && qso.UtcEndTimestamp is not null;
     }
 
