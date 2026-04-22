@@ -105,7 +105,7 @@
     <Grid Grid.Row="2" ColumnDefinitions="*,*" Margin="14,12,14,0" >
       <!-- Signal strength column -->
       <Border Classes="panel" Margin="0,0,7,0">
-        <Grid RowDefinitions="Auto,Auto,52" RowSpacing="10">
+        <Grid RowDefinitions="Auto,Auto,Auto" RowSpacing="10">
           <!-- Header: section title + pitch -->
           <Grid ColumnDefinitions="*,Auto" >
             <TextBlock Text="SIGNAL STRENGTH" Classes="label" />
@@ -137,12 +137,40 @@
             </StackPanel>
           </Grid>
 
-          <!-- The meter (last row has explicit pixel height) -->
-          <v:SignalMeter Grid.Row="2"
-                         HorizontalAlignment="Stretch" VerticalAlignment="Stretch"
-                         Level="{Binding NormalizedLevel}"
-                         Threshold="{Binding NormalizedThreshold}"
-                         Signal="{Binding Signal}" />
+          <!-- The meter (composed from native shapes — guaranteed to render) -->
+          <Grid Grid.Row="2" Height="48" HorizontalAlignment="Stretch">
+            <!-- Background -->
+            <Border Background="#0A121B" BorderBrush="#22364E" BorderThickness="1" CornerRadius="2" />
+            <!-- Tick grid -->
+            <UniformGrid Columns="10" Margin="1">
+              <Rectangle Fill="#1A2B40" Width="1" HorizontalAlignment="Right" />
+              <Rectangle Fill="#1A2B40" Width="1" HorizontalAlignment="Right" />
+              <Rectangle Fill="#1A2B40" Width="1" HorizontalAlignment="Right" />
+              <Rectangle Fill="#1A2B40" Width="1" HorizontalAlignment="Right" />
+              <Rectangle Fill="#1A2B40" Width="1" HorizontalAlignment="Right" />
+              <Rectangle Fill="#1A2B40" Width="1" HorizontalAlignment="Right" />
+              <Rectangle Fill="#1A2B40" Width="1" HorizontalAlignment="Right" />
+              <Rectangle Fill="#1A2B40" Width="1" HorizontalAlignment="Right" />
+              <Rectangle Fill="#1A2B40" Width="1" HorizontalAlignment="Right" />
+              <Rectangle Width="1" />
+            </UniformGrid>
+            <!-- The bar itself: a ProgressBar gives us reliable level-driven width -->
+            <ProgressBar Minimum="0" Maximum="1" Value="{Binding NormalizedLevel}"
+                         Background="Transparent" BorderThickness="0"
+                         Margin="2" Height="44">
+              <ProgressBar.Foreground>
+                <LinearGradientBrush StartPoint="0%,50%" EndPoint="100%,50%">
+                  <GradientStop Color="#10A0C8" Offset="0.0" />
+                  <GradientStop Color="#22D3EE" Offset="0.5" />
+                  <GradientStop Color="#84FF6E" Offset="1.0" />
+                </LinearGradientBrush>
+              </ProgressBar.Foreground>
+            </ProgressBar>
+            <!-- Magenta keying stripe across the top when above threshold -->
+            <Border Height="3" VerticalAlignment="Top" Margin="2,2,2,0"
+                    Background="{StaticResource AccentMag}"
+                    IsVisible="{Binding Signal}" />
+          </Grid>
         </Grid>
       </Border>
       <!-- WPM column -->
@@ -195,9 +223,13 @@
                                  Effect="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).HideDecoded, Converter={StaticResource BlurFx}}" />
                     </StackPanel>
                   </Border>
-                  <!-- Word break: thin vertical separator -->
-                  <Border Margin="6,6" Width="2" Background="{StaticResource AccentLime}" Opacity="0.45"
-                          IsVisible="{Binding ., Converter={StaticResource IsWordCell}}" />
+                  <!-- Word break: lime ' / ' separator -->
+                  <Border Margin="4,2" Width="14" Height="56"
+                          IsVisible="{Binding ., Converter={StaticResource IsWordCell}}">
+                    <TextBlock Text="/" FontFamily="Consolas" FontSize="32"
+                               Foreground="{StaticResource AccentLime}" Opacity="0.7"
+                               HorizontalAlignment="Center" VerticalAlignment="Center" />
+                  </Border>
                 </Grid>
               </DataTemplate>
             </ItemsControl.ItemTemplate>

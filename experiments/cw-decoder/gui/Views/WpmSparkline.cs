@@ -50,6 +50,18 @@ internal sealed class WpmSparkline : Control
 
     private void OnCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e) => InvalidateVisual();
 
+    /// <summary>
+    /// Without an explicit MeasureOverride a bare Control returns Size.Empty
+    /// from measure, which leaves it at 0×0 even when the parent grid has a
+    /// star/fixed cell. Honor the available size so we render into our slot.
+    /// </summary>
+    protected override Size MeasureOverride(Size availableSize)
+    {
+        double w = double.IsFinite(availableSize.Width) ? availableSize.Width : 200;
+        double h = double.IsFinite(availableSize.Height) ? availableSize.Height : 80;
+        return new Size(w, h);
+    }
+
     public override void Render(DrawingContext ctx)
     {
         base.Render(ctx);
