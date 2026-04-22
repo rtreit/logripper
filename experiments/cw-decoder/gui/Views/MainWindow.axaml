@@ -87,71 +87,83 @@
 
     <!-- Controls -->
     <Border Grid.Row="1" Padding="18,12" Background="{StaticResource BgDeep}" BorderBrush="{StaticResource GridLine}" BorderThickness="0,0,0,1">
-      <Grid ColumnDefinitions="Auto,*,Auto,Auto,Auto,Auto" >
+      <Grid ColumnDefinitions="Auto,Auto,*,Auto,Auto,Auto,Auto" ColumnSpacing="12">
         <StackPanel Orientation="Vertical" Spacing="2">
           <TextBlock Text="INPUT DEVICE" Classes="label" />
           <ComboBox Width="320" ItemsSource="{Binding Devices}" SelectedItem="{Binding SelectedDevice}"
                     Background="{StaticResource BgPanel}" Foreground="{StaticResource TextHi}" />
         </StackPanel>
-        <Button Grid.Column="2" x:Name="RefreshButton" Margin="12,16,0,0" Classes="primary" Content="REFRESH" Click="OnRefreshClick" />
-        <Button Grid.Column="3" x:Name="OpenFileButton" Margin="12,16,0,0" Classes="primary" Content="OPEN FILE…" Click="OnOpenFileClick" />
-        <ToggleButton Grid.Column="4" Margin="12,16,0,0" Classes="primary" IsChecked="{Binding HideDecoded, Mode=TwoWay}" Content="HIDE DECODING" />
-        <Button Grid.Column="5" x:Name="StartStopButton" Margin="12,16,0,0" Classes="primary"
+        <StackPanel Grid.Column="1" Orientation="Vertical" Spacing="2">
+          <TextBlock Text="DECODER MODE" Classes="label" />
+          <ComboBox Width="180" ItemsSource="{Binding DecoderModes}" SelectedItem="{Binding SelectedDecoderMode}"
+                    Background="{StaticResource BgPanel}" Foreground="{StaticResource TextHi}" />
+        </StackPanel>
+        <Button Grid.Column="3" x:Name="RefreshButton" Margin="0,16,0,0" Classes="primary" Content="REFRESH" Click="OnRefreshClick" />
+        <Button Grid.Column="4" x:Name="OpenFileButton" Margin="0,16,0,0" Classes="primary" Content="OPEN FILE…" Click="OnOpenFileClick" />
+        <ToggleButton Grid.Column="5" Margin="0,16,0,0" Classes="primary" IsChecked="{Binding HideDecoded, Mode=TwoWay}" Content="HIDE DECODING" />
+        <Button Grid.Column="6" x:Name="StartStopButton" Margin="0,16,0,0" Classes="primary"
                 Content="{Binding StartStopLabel}" Click="OnStartStopClick" MinWidth="120" />
       </Grid>
     </Border>
 
     <!-- Sensitivity panel: 3 sliders + signal-quality readout + reset.
-         Sends config-update commands to the decoder over stdin in real time. -->
+          Sends config-update commands to the decoder over stdin in real time. -->
     <Border Grid.Row="2" Padding="18,10" Background="{StaticResource BgPanel}"
             BorderBrush="{StaticResource GridLine}" BorderThickness="0,0,0,1">
-      <Grid ColumnDefinitions="Auto,*,Auto,*,Auto,*,Auto,Auto" >
-        <TextBlock Text="SENS" Classes="label" VerticalAlignment="Center" Margin="0,0,8,0" />
+      <Grid>
+        <Grid ColumnDefinitions="Auto,*,Auto,*,Auto,*,Auto,Auto"
+              IsVisible="{Binding IsCustomDecoderMode}">
+          <TextBlock Text="SENS" Classes="label" VerticalAlignment="Center" Margin="0,0,8,0" />
 
-        <!-- SNR threshold (dB) -->
-        <StackPanel Grid.Column="1" Spacing="2" Margin="4,0,16,0">
-          <Grid ColumnDefinitions="Auto,*,Auto">
-            <TextBlock Text="MIN SNR" Classes="label" />
-            <TextBlock Grid.Column="2" Text="{Binding MinSnrDb, StringFormat={}{0:F1} dB}" Classes="label" Foreground="{StaticResource AccentLime}" />
-          </Grid>
-          <Slider Minimum="0" Maximum="15" SmallChange="0.5" LargeChange="2"
-                  TickFrequency="3" IsSnapToTickEnabled="False"
-                  Value="{Binding MinSnrDb, Mode=TwoWay}" />
-        </StackPanel>
+          <StackPanel Grid.Column="1" Spacing="2" Margin="4,0,16,0">
+            <Grid ColumnDefinitions="Auto,*,Auto">
+              <TextBlock Text="MIN SNR" Classes="label" />
+              <TextBlock Grid.Column="2" Text="{Binding MinSnrDb, StringFormat={}{0:F1} dB}" Classes="label" Foreground="{StaticResource AccentLime}" />
+            </Grid>
+            <Slider Minimum="0" Maximum="15" SmallChange="0.5" LargeChange="2"
+                    TickFrequency="3" IsSnapToTickEnabled="False"
+                    Value="{Binding MinSnrDb, Mode=TwoWay}" />
+          </StackPanel>
 
-        <TextBlock Grid.Column="2" Text="·" Foreground="{StaticResource GridLine}" VerticalAlignment="Center" />
+          <TextBlock Grid.Column="2" Text="·" Foreground="{StaticResource GridLine}" VerticalAlignment="Center" />
 
-        <!-- Pitch lock confidence (dB) -->
-        <StackPanel Grid.Column="3" Spacing="2" Margin="4,0,16,0">
-          <Grid ColumnDefinitions="Auto,*,Auto">
-            <TextBlock Text="PITCH LOCK" Classes="label" />
-            <TextBlock Grid.Column="2" Text="{Binding PitchMinSnrDb, StringFormat={}{0:F1} dB}" Classes="label" Foreground="{StaticResource AccentLime}" />
-          </Grid>
-          <Slider Minimum="0" Maximum="20" SmallChange="0.5" LargeChange="2"
-                  TickFrequency="4" Value="{Binding PitchMinSnrDb, Mode=TwoWay}" />
-        </StackPanel>
+          <StackPanel Grid.Column="3" Spacing="2" Margin="4,0,16,0">
+            <Grid ColumnDefinitions="Auto,*,Auto">
+              <TextBlock Text="PITCH LOCK" Classes="label" />
+              <TextBlock Grid.Column="2" Text="{Binding PitchMinSnrDb, StringFormat={}{0:F1} dB}" Classes="label" Foreground="{StaticResource AccentLime}" />
+            </Grid>
+            <Slider Minimum="0" Maximum="20" SmallChange="0.5" LargeChange="2"
+                    TickFrequency="4" Value="{Binding PitchMinSnrDb, Mode=TwoWay}" />
+          </StackPanel>
 
-        <TextBlock Grid.Column="4" Text="·" Foreground="{StaticResource GridLine}" VerticalAlignment="Center" />
+          <TextBlock Grid.Column="4" Text="·" Foreground="{StaticResource GridLine}" VerticalAlignment="Center" />
 
-        <!-- Threshold scale -->
-        <StackPanel Grid.Column="5" Spacing="2" Margin="4,0,16,0">
-          <Grid ColumnDefinitions="Auto,*,Auto">
-            <TextBlock Text="THRESHOLD ×" Classes="label" />
-            <TextBlock Grid.Column="2" Text="{Binding ThresholdScale, StringFormat={}{0:F2}}" Classes="label" Foreground="{StaticResource AccentLime}" />
-          </Grid>
-          <Slider Minimum="0.3" Maximum="2.0" SmallChange="0.05" LargeChange="0.2"
-                  TickFrequency="0.5" Value="{Binding ThresholdScale, Mode=TwoWay}" />
-        </StackPanel>
+          <StackPanel Grid.Column="5" Spacing="2" Margin="4,0,16,0">
+            <Grid ColumnDefinitions="Auto,*,Auto">
+              <TextBlock Text="THRESHOLD ×" Classes="label" />
+              <TextBlock Grid.Column="2" Text="{Binding ThresholdScale, StringFormat={}{0:F2}}" Classes="label" Foreground="{StaticResource AccentLime}" />
+            </Grid>
+            <Slider Minimum="0.3" Maximum="2.0" SmallChange="0.05" LargeChange="0.2"
+                    TickFrequency="0.5" Value="{Binding ThresholdScale, Mode=TwoWay}" />
+          </StackPanel>
 
-        <!-- Quality indicator (NOISE / WEAK / GOOD / STRONG / NO LOCK) -->
-        <Border Grid.Column="6" Padding="10,4" Margin="0,0,12,0" VerticalAlignment="Center"
-                Background="#0E2A3D" BorderBrush="{StaticResource AccentCyan}" BorderThickness="1" CornerRadius="2">
-          <TextBlock Text="{Binding SignalQualityLabel}" FontFamily="Consolas" FontSize="13"
-                     Foreground="{StaticResource AccentCyan}" LetterSpacing="3" />
-        </Border>
+          <Border Grid.Column="6" Padding="10,4" Margin="0,0,12,0" VerticalAlignment="Center"
+                  Background="#0E2A3D" BorderBrush="{StaticResource AccentCyan}" BorderThickness="1" CornerRadius="2">
+            <TextBlock Text="{Binding SignalQualityLabel}" FontFamily="Consolas" FontSize="13"
+                       Foreground="{StaticResource AccentCyan}" LetterSpacing="3" />
+          </Border>
 
-        <Button Grid.Column="7" Classes="primary" Content="RESET" Click="OnResetSensitivityClick"
-                FontSize="11" Padding="14,4" />
+          <Button Grid.Column="7" Classes="primary" Content="RESET" Click="OnResetSensitivityClick"
+                  FontSize="11" Padding="14,4" />
+        </Grid>
+
+        <Grid ColumnDefinitions="Auto,*" ColumnSpacing="12" IsVisible="{Binding IsBaselineDecoderMode}">
+          <TextBlock Text="BASELINE" Classes="label" VerticalAlignment="Center" />
+          <StackPanel Grid.Column="1" Spacing="4">
+            <TextBlock Text="{Binding BaselineDecoderSummary}" Foreground="{StaticResource AccentCyan}" TextWrapping="Wrap" />
+            <TextBlock Text="Run sweeps on the Tuning tab, click APPLY TOP RESULT, then use Baseline ditdah mode here for file or live A/B testing." Classes="label" TextWrapping="Wrap" />
+          </StackPanel>
+        </Grid>
       </Grid>
     </Border>
 
@@ -292,7 +304,7 @@
           </Grid>
         </Border>
       </TabItem>
-      <TabItem Header="ADVANCED LABELING">
+      <TabItem Header="LABELING">
         <Border Classes="panel">
           <Grid RowDefinitions="Auto,Auto,Auto,*,Auto" RowSpacing="10">
             <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="10">
@@ -372,85 +384,158 @@
                 </Grid>
               </Border>
 
-              <Grid Grid.Column="1" RowDefinitions="Auto,Auto,Auto,Auto,*,Auto" RowSpacing="10">
-                <Grid ColumnDefinitions="Auto,*">
-                  <TextBlock Text="SELECTED" Classes="label" />
-                  <TextBlock Grid.Column="1" Text="{Binding SelectedCandidateRange}" Foreground="{StaticResource AccentCyan}" />
-                </Grid>
-                <Grid Grid.Row="1" ColumnDefinitions="*,*" ColumnSpacing="10">
-                  <Border BorderBrush="{StaticResource GridLine}" BorderThickness="1" CornerRadius="2" Padding="8">
-                    <StackPanel Spacing="6">
-                      <TextBlock Text="OFFLINE DITDAH" Classes="label" />
-                      <TextBlock Text="{Binding SelectedCandidate.Offline.Text}" TextWrapping="Wrap" Foreground="{StaticResource TextHi}" />
-                      <TextBlock Text="{Binding SelectedCandidate.Offline.PitchHz, StringFormat={}{0:F1} Hz}" Classes="label" />
-                      <TextBlock Text="{Binding SelectedCandidate.Offline.Wpm, StringFormat={}{0:F1} WPM}" Classes="label" />
-                    </StackPanel>
-                  </Border>
-                  <Border Grid.Column="1" BorderBrush="{StaticResource GridLine}" BorderThickness="1" CornerRadius="2" Padding="8">
-                    <StackPanel Spacing="6">
-                      <TextBlock Text="STREAMING DECODER" Classes="label" />
-                      <TextBlock Text="{Binding SelectedCandidate.Stream.Text}" TextWrapping="Wrap" Foreground="{StaticResource TextHi}" />
-                      <TextBlock Text="{Binding SelectedCandidate.Stream.PitchHz, StringFormat={}{0:F1} Hz}" Classes="label" />
-                      <TextBlock Text="{Binding SelectedCandidate.Stream.Wpm, StringFormat={}{0:F1} WPM}" Classes="label" />
-                    </StackPanel>
-                  </Border>
-                </Grid>
-                <Grid Grid.Row="2" ColumnDefinitions="Auto,*">
-                  <TextBlock Text="MATCH" Classes="label" />
-                  <TextBlock Grid.Column="1" Text="{Binding SelectedCandidateNeedles}" Foreground="{StaticResource AccentLime}" />
-                </Grid>
-                <Border Grid.Row="3" BorderBrush="{StaticResource GridLine}" BorderThickness="1" CornerRadius="2" Padding="8">
-                  <Grid RowDefinitions="Auto,Auto,Auto" RowSpacing="8">
-                    <Grid ColumnDefinitions="Auto,*,Auto,Auto" ColumnSpacing="10">
-                      <TextBlock Text="SIGNAL PROFILE" Classes="label" />
-                      <TextBlock Grid.Column="1" Text="{Binding AdjustedRangeLabel}" Foreground="{StaticResource AccentMag}" />
-                      <Button Grid.Column="2" Classes="primary" Content="RESET SPAN" Click="OnResetAdjustedSpanClick"
-                              IsEnabled="{Binding CanResetAdjustedSpan}" FontSize="11" Padding="14,4" />
-                      <Button Grid.Column="3" Classes="primary" Content="USE SUGGESTED" Click="OnUseSuggestedSpanClick"
-                              IsEnabled="{Binding CanUseSuggestedSpan}" FontSize="11" Padding="14,4" />
-                    </Grid>
-                    <TextBlock Grid.Row="1"
-                               Text="Cyan outline = harvested span. Lime outline = pause-based suggestion. Drag the magenta handles or drag inside the magenta range to move the exact window."
-                               Classes="label" TextWrapping="Wrap" />
-                    <Grid Grid.Row="2" RowDefinitions="Auto,*" RowSpacing="6">
-                      <TextBlock Text="LOADING PROFILE..."
-                                 Classes="label"
-                                 IsVisible="{Binding IsProfileBusy}" />
-                      <v:SignalProfileEditor Grid.Row="1"
-                                             Height="190"
-                                             Points="{Binding CurrentSignalProfile.Points}"
-                                             DisplayStartSeconds="{Binding CurrentSignalProfile.DisplayStartSeconds}"
-                                             DisplayEndSeconds="{Binding CurrentSignalProfile.DisplayEndSeconds}"
-                                             OriginalStartSeconds="{Binding CurrentSignalProfile.SelectionStartSeconds}"
-                                             OriginalEndSeconds="{Binding CurrentSignalProfile.SelectionEndSeconds}"
-                                             SuggestedStartSeconds="{Binding CurrentSignalProfile.SuggestedStartSeconds}"
-                                             SuggestedEndSeconds="{Binding CurrentSignalProfile.SuggestedEndSeconds}"
-                                             SelectionStartSeconds="{Binding AdjustedStartSeconds, Mode=TwoWay}"
-                                             SelectionEndSeconds="{Binding AdjustedEndSeconds, Mode=TwoWay}"
-                                             Threshold="{Binding CurrentSignalProfile.Threshold}" />
-                    </Grid>
+              <ScrollViewer Grid.Column="1" HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+                <Grid RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,*" RowSpacing="10">
+                  <Grid ColumnDefinitions="Auto,*">
+                    <TextBlock Text="SELECTED" Classes="label" />
+                    <TextBlock Grid.Column="1" Text="{Binding SelectedCandidateRange}" Foreground="{StaticResource AccentCyan}" />
                   </Grid>
-                </Border>
-                <StackPanel Grid.Row="4" Spacing="6">
-                  <TextBlock Text="VERIFIED COPY" Classes="label" />
-                  <TextBox Text="{Binding CorrectCopy, Mode=TwoWay}" AcceptsReturn="True" MinHeight="120"
-                            Background="#0C1A28" Foreground="{StaticResource TextHi}" />
-                  <TextBlock Text="Type exactly what you hear in this selected window. If a symbol is cut at the edge, mark it below." Classes="label" TextWrapping="Wrap" />
-                  <Grid ColumnDefinitions="Auto,Auto,*" ColumnSpacing="14">
-                    <CheckBox Content="START CLIPPED" IsChecked="{Binding ClipStart, Mode=TwoWay}" />
-                    <CheckBox Grid.Column="1" Content="END CLIPPED" IsChecked="{Binding ClipEnd, Mode=TwoWay}" />
-                    <TextBlock Grid.Column="2" Text="Saved labels are exact-window truth (`label_scope = exact_window`)." Classes="label" VerticalAlignment="Center" />
+                  <Grid Grid.Row="1" ColumnDefinitions="*,*" ColumnSpacing="10">
+                    <Border BorderBrush="{StaticResource GridLine}" BorderThickness="1" CornerRadius="2" Padding="8">
+                      <StackPanel Spacing="6">
+                        <TextBlock Text="OFFLINE DITDAH" Classes="label" />
+                        <TextBlock Text="{Binding SelectedCandidate.Offline.Text}" TextWrapping="Wrap" Foreground="{StaticResource TextHi}" />
+                        <TextBlock Text="{Binding SelectedCandidate.Offline.PitchHz, StringFormat={}{0:F1} Hz}" Classes="label" />
+                        <TextBlock Text="{Binding SelectedCandidate.Offline.Wpm, StringFormat={}{0:F1} WPM}" Classes="label" />
+                      </StackPanel>
+                    </Border>
+                    <Border Grid.Column="1" BorderBrush="{StaticResource GridLine}" BorderThickness="1" CornerRadius="2" Padding="8">
+                      <StackPanel Spacing="6">
+                        <TextBlock Text="STREAMING DECODER" Classes="label" />
+                        <TextBlock Text="{Binding SelectedCandidate.Stream.Text}" TextWrapping="Wrap" Foreground="{StaticResource TextHi}" />
+                        <TextBlock Text="{Binding SelectedCandidate.Stream.PitchHz, StringFormat={}{0:F1} Hz}" Classes="label" />
+                        <TextBlock Text="{Binding SelectedCandidate.Stream.Wpm, StringFormat={}{0:F1} WPM}" Classes="label" />
+                      </StackPanel>
+                    </Border>
                   </Grid>
-                </StackPanel>
-                <Grid Grid.Row="5" ColumnDefinitions="*,Auto" ColumnSpacing="10">
-                  <TextBlock Text="{Binding LabelFilePath}" Classes="label" TextWrapping="Wrap" />
-                  <Button Grid.Column="1" Classes="primary" Content="SAVE LABEL" Click="OnSaveLabelClick"
-                          IsEnabled="{Binding CanSaveLabel}" />
+                  <Grid Grid.Row="2" ColumnDefinitions="Auto,*">
+                    <TextBlock Text="MATCH" Classes="label" />
+                    <TextBlock Grid.Column="1" Text="{Binding SelectedCandidateNeedles}" Foreground="{StaticResource AccentLime}" />
+                  </Grid>
+                  <Border Grid.Row="3" BorderBrush="{StaticResource GridLine}" BorderThickness="1" CornerRadius="2" Padding="8">
+                    <Grid RowDefinitions="Auto,Auto,Auto" RowSpacing="8">
+                      <Grid ColumnDefinitions="Auto,*,Auto,Auto" ColumnSpacing="10">
+                        <TextBlock Text="SIGNAL PROFILE" Classes="label" />
+                        <TextBlock Grid.Column="1" Text="{Binding AdjustedRangeLabel}" Foreground="{StaticResource AccentMag}" />
+                        <Button Grid.Column="2" Classes="primary" Content="RESET SPAN" Click="OnResetAdjustedSpanClick"
+                                IsEnabled="{Binding CanResetAdjustedSpan}" FontSize="11" Padding="14,4" />
+                        <Button Grid.Column="3" Classes="primary" Content="USE SUGGESTED" Click="OnUseSuggestedSpanClick"
+                                IsEnabled="{Binding CanUseSuggestedSpan}" FontSize="11" Padding="14,4" />
+                      </Grid>
+                      <TextBlock Grid.Row="1"
+                                 Text="Cyan outline = harvested span. Lime outline = pause-based suggestion. Drag the magenta handles or drag inside the magenta range to move the exact window."
+                                 Classes="label" TextWrapping="Wrap" />
+                      <Grid Grid.Row="2" RowDefinitions="Auto,*" RowSpacing="6">
+                        <TextBlock Text="LOADING PROFILE..."
+                                   Classes="label"
+                                   IsVisible="{Binding IsProfileBusy}" />
+                        <v:SignalProfileEditor Grid.Row="1"
+                                               Height="190"
+                                               Points="{Binding CurrentSignalProfile.Points}"
+                                               DisplayStartSeconds="{Binding CurrentSignalProfile.DisplayStartSeconds}"
+                                               DisplayEndSeconds="{Binding CurrentSignalProfile.DisplayEndSeconds}"
+                                               OriginalStartSeconds="{Binding CurrentSignalProfile.SelectionStartSeconds}"
+                                               OriginalEndSeconds="{Binding CurrentSignalProfile.SelectionEndSeconds}"
+                                               SuggestedStartSeconds="{Binding CurrentSignalProfile.SuggestedStartSeconds}"
+                                               SuggestedEndSeconds="{Binding CurrentSignalProfile.SuggestedEndSeconds}"
+                                               SelectionStartSeconds="{Binding AdjustedStartSeconds, Mode=TwoWay}"
+                                               SelectionEndSeconds="{Binding AdjustedEndSeconds, Mode=TwoWay}"
+                                               Threshold="{Binding CurrentSignalProfile.Threshold}" />
+                      </Grid>
+                    </Grid>
+                  </Border>
+                  <StackPanel Grid.Row="4" Spacing="6">
+                    <TextBlock Text="VERIFIED COPY" Classes="label" />
+                    <TextBox Text="{Binding CorrectCopy, Mode=TwoWay}" AcceptsReturn="True" MinHeight="120"
+                              Background="#0C1A28" Foreground="{StaticResource TextHi}" />
+                    <TextBlock Text="Type exactly what you hear in this selected window. If a symbol is cut at the edge, mark it below." Classes="label" TextWrapping="Wrap" />
+                    <Grid ColumnDefinitions="Auto,Auto,*" ColumnSpacing="14">
+                      <CheckBox Content="START CLIPPED" IsChecked="{Binding ClipStart, Mode=TwoWay}" />
+                      <CheckBox Grid.Column="1" Content="END CLIPPED" IsChecked="{Binding ClipEnd, Mode=TwoWay}" />
+                      <TextBlock Grid.Column="2" Text="Saved labels are exact-window truth (`label_scope = exact_window`)." Classes="label" VerticalAlignment="Center" />
+                    </Grid>
+                  </StackPanel>
+                  <Grid Grid.Row="5" ColumnDefinitions="*,Auto" ColumnSpacing="10">
+                    <TextBlock Text="{Binding LabelFilePath}" Classes="label" TextWrapping="Wrap" />
+                    <Button Grid.Column="1" Classes="primary" Content="SAVE LABEL" Click="OnSaveLabelClick"
+                            IsEnabled="{Binding CanSaveLabel}" />
+                  </Grid>
                 </Grid>
-              </Grid>
+              </ScrollViewer>
             </Grid>
 
             <TextBlock Grid.Row="4" Text="{Binding AdvancedStatusText}" Classes="label" Foreground="{StaticResource TextDim}" />
+          </Grid>
+        </Border>
+      </TabItem>
+      <TabItem Header="TUNING">
+        <Border Classes="panel">
+          <Grid RowDefinitions="Auto,Auto,Auto,*" RowSpacing="10">
+            <Grid ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,*,Auto,Auto" ColumnSpacing="10">
+              <TextBlock Text="LABEL EVAL / SWEEP" Classes="label" VerticalAlignment="Center" />
+              <CheckBox Grid.Column="1" Content="ALL LABELS" IsChecked="{Binding EvaluateAllLabels, Mode=TwoWay}" VerticalAlignment="Center" />
+              <CheckBox Grid.Column="2" Content="FULL STREAM" IsChecked="{Binding UseFullStreamScorer, Mode=TwoWay}" VerticalAlignment="Center" />
+              <CheckBox Grid.Column="3" Content="WIDE SWEEP" IsChecked="{Binding UseWideSweep, Mode=TwoWay}" VerticalAlignment="Center" />
+              <TextBlock Grid.Column="5" Text="{Binding LabelEvaluationTargetLabel}" Classes="label" TextWrapping="Wrap" VerticalAlignment="Center" />
+              <Button Grid.Column="6" Classes="primary" Content="SCORE LABELS" Click="OnRunLabelScoreClick"
+                      IsEnabled="{Binding CanRunLabelScore}" FontSize="11" Padding="14,4" />
+              <Button Grid.Column="7" Classes="primary" Content="SWEEP BASELINE" Click="OnRunLabelSweepClick"
+                      IsEnabled="{Binding CanRunLabelSweep}" FontSize="11" Padding="14,4" />
+            </Grid>
+
+            <Grid Grid.Row="1" ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,*" ColumnSpacing="10">
+              <StackPanel Spacing="2">
+                <TextBlock Text="WINDOW (s)" Classes="label" />
+                <NumericUpDown Minimum="8" Maximum="40" Increment="1" Value="{Binding LabelEvalWindowSeconds, Mode=TwoWay}" />
+              </StackPanel>
+              <StackPanel Grid.Column="1" Spacing="2">
+                <TextBlock Text="MIN WINDOW (s)" Classes="label" />
+                <NumericUpDown Minimum="0.25" Maximum="8" Increment="0.25" Value="{Binding LabelEvalMinWindowSeconds, Mode=TwoWay}" />
+              </StackPanel>
+              <StackPanel Grid.Column="2" Spacing="2">
+                <TextBlock Text="DECODE EVERY (ms)" Classes="label" />
+                <NumericUpDown Minimum="100" Maximum="3000" Increment="100" Value="{Binding LabelEvalDecodeEveryMs, Mode=TwoWay}" />
+              </StackPanel>
+              <StackPanel Grid.Column="3" Spacing="2">
+                <TextBlock Text="CONFIRM / TOP" Classes="label" />
+                <Grid ColumnDefinitions="*,*" ColumnSpacing="6">
+                  <NumericUpDown Minimum="1" Maximum="6" Increment="1" Value="{Binding LabelEvalConfirmations, Mode=TwoWay}" />
+                  <NumericUpDown Grid.Column="1" Minimum="1" Maximum="50" Increment="1" Value="{Binding LabelEvalTopResults, Mode=TwoWay}" />
+                </Grid>
+              </StackPanel>
+              <StackPanel Grid.Column="4" Spacing="2">
+                <TextBlock Text="PRE / POST (ms)" Classes="label" />
+                <Grid ColumnDefinitions="*,*" ColumnSpacing="6">
+                  <NumericUpDown Minimum="0" Maximum="5000" Increment="100" Value="{Binding LabelEvalPreRollMs, Mode=TwoWay}" />
+                  <NumericUpDown Grid.Column="1" Minimum="0" Maximum="5000" Increment="100" Value="{Binding LabelEvalPostRollMs, Mode=TwoWay}" />
+                </Grid>
+              </StackPanel>
+              <StackPanel Grid.Column="5" Spacing="4" VerticalAlignment="Bottom">
+                <TextBlock Text="{Binding TopSweepSummary}" Classes="label" TextWrapping="Wrap" />
+                <Button Classes="primary" Content="APPLY TOP RESULT" Click="OnApplyTopSweepClick"
+                        IsEnabled="{Binding CanApplyTopSweep}" FontSize="11" Padding="14,4" HorizontalAlignment="Left" />
+              </StackPanel>
+            </Grid>
+
+            <Grid Grid.Row="2" ColumnDefinitions="Auto,*" ColumnSpacing="10">
+              <TextBlock Text="{Binding LabelEvaluationStatusText}" Classes="label" VerticalAlignment="Center" />
+              <ProgressBar Grid.Column="1" IsIndeterminate="True" Height="16" VerticalAlignment="Center"
+                           IsVisible="{Binding IsEvaluationBusy}" />
+            </Grid>
+
+            <Grid Grid.Row="3" RowDefinitions="Auto,*" RowSpacing="8">
+              <TextBlock Text="The Decoder tab’s Baseline ditdah mode uses these shared tuning settings directly. Sweep, apply the top result here, then switch back to Decoder for file or live A/B testing." Classes="label" TextWrapping="Wrap" />
+              <TextBox Grid.Row="1"
+                       Text="{Binding LabelEvaluationOutputText}"
+                       IsReadOnly="True"
+                       AcceptsReturn="True"
+                       TextWrapping="NoWrap"
+                       MinHeight="240"
+                       FontFamily="Consolas"
+                       FontSize="12"
+                       Background="#0C1A28"
+                       Foreground="{StaticResource TextHi}" />
+            </Grid>
           </Grid>
         </Border>
       </TabItem>

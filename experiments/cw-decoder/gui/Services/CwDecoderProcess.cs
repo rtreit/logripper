@@ -57,18 +57,22 @@ internal sealed class CwDecoderProcess : IDisposable
         catch { return Array.Empty<string>(); }
     }
 
-    public void StartLive(string? device, DecoderConfig cfg)
+    public void StartLive(string? device, DecoderConfig cfg, BaselineDecoderConfig baselineCfg, bool useBaseline)
     {
         Stop();
-        var args = $"stream-live --json --stdin-control {cfg.ToCliArgs()}";
+        var args = useBaseline
+            ? $"stream-live-ditdah --json --chunk-ms 50 {baselineCfg.ToCliArgs()}"
+            : $"stream-live --json --stdin-control {cfg.ToCliArgs()}";
         if (!string.IsNullOrWhiteSpace(device)) args += $" --device \"{device}\"";
         Spawn(args);
     }
 
-    public void StartFile(string path, bool realtime, DecoderConfig cfg)
+    public void StartFile(string path, bool realtime, DecoderConfig cfg, BaselineDecoderConfig baselineCfg, bool useBaseline)
     {
         Stop();
-        var args = $"stream-file --json --stdin-control {cfg.ToCliArgs()} \"{path}\"";
+        var args = useBaseline
+            ? $"stream-file-ditdah --json --chunk-ms 50 {baselineCfg.ToCliArgs()} \"{path}\""
+            : $"stream-file --json --stdin-control {cfg.ToCliArgs()} \"{path}\"";
         if (realtime) args += " --realtime";
         Spawn(args);
     }
@@ -220,6 +224,56 @@ internal sealed class CwDecoderProcess : IDisposable
             ?? throw new InvalidOperationException("Failed to parse profile-window output.");
     }
 
+    public async Task<string> RunLabelScoreAsync(
+        bool allLabels,
+        string? labelPath,
+        bool fullStreamMode,
+        int preRollMs,
+        int postRollMs,
+        double windowSeconds,
+        double minWindowSeconds,
+        int decodeEveryMs,
+        int confirmations,
+        CancellationToken ct = default)
+    {
+        var psi = CreateEvalStartInfo();
+        AddLabelSelectionArguments(psi, allLabels, labelPath);
+        AddLabelScoreModeArguments(psi, fullStreamMode, preRollMs, postRollMs);
+        psi.ArgumentList.Add("--window");
+        psi.ArgumentList.Add(F(windowSeconds));
+        psi.ArgumentList.Add("--min-window");
+        psi.ArgumentList.Add(F(minWindowSeconds));
+        psi.ArgumentList.Add("--decode-every-ms");
+        psi.ArgumentList.Add(decodeEveryMs.ToString(CultureInfo.InvariantCulture));
+        psi.ArgumentList.Add("--confirmations");
+        psi.ArgumentList.Add(confirmations.ToString(CultureInfo.InvariantCulture));
+        return await RunOneShotAsync(psi, ct).ConfigureAwait(false);
+    }
+
+    public async Task<string> RunLabelSweepAsync(
+        bool allLabels,
+        string? labelPath,
+        bool fullStreamMode,
+        int preRollMs,
+        int postRollMs,
+        bool wideSweep,
+        int top,
+        CancellationToken ct = default)
+    {
+        var psi = CreateEvalStartInfo();
+        AddLabelSelectionArguments(psi, allLabels, labelPath);
+        AddLabelScoreModeArguments(psi, fullStreamMode, preRollMs, postRollMs);
+        psi.ArgumentList.Add("--sweep-ditdah");
+        psi.ArgumentList.Add("--top");
+        psi.ArgumentList.Add(top.ToString(CultureInfo.InvariantCulture));
+        if (wideSweep)
+        {
+            psi.ArgumentList.Add("--wide-sweep");
+        }
+
+        return await RunOneShotAsync(psi, ct).ConfigureAwait(false);
+    }
+
     public static void OpenPreview(string path)
     {
         var psi = new ProcessStartInfo(path) { UseShellExecute = true };
@@ -336,10 +390,36 @@ internal sealed class CwDecoderProcess : IDisposable
         return null;
     }
 
+    private static string LocateEvalBinary()
+    {
+        var decoderExe = LocateBinary() ?? throw new InvalidOperationException(
+            "Could not locate cw-decoder.exe. Run `cargo build --release` in experiments/cw-decoder first.");
+        var evalName = OperatingSystem.IsWindows() ? "eval.exe" : "eval";
+        var evalPath = Path.Combine(Path.GetDirectoryName(decoderExe)!, evalName);
+        if (File.Exists(evalPath))
+        {
+            return evalPath;
+        }
+
+        throw new InvalidOperationException(
+            "Could not locate eval.exe. Run `cargo build --release --bins` in experiments/cw-decoder first.");
+    }
+
     private static ProcessStartInfo CreateBaseStartInfo(string? args = null)
     {
         var exe = LocateBinary() ?? throw new InvalidOperationException(
             "Could not locate cw-decoder.exe. Run `cargo build --release` in experiments/cw-decoder first.");
+        return CreateStartInfo(exe, args);
+    }
+
+    private static ProcessStartInfo CreateEvalStartInfo(string? args = null)
+    {
+        var exe = LocateEvalBinary();
+        return CreateStartInfo(exe, args);
+    }
+
+    private static ProcessStartInfo CreateStartInfo(string exe, string? args = null)
+    {
         var psi = string.IsNullOrWhiteSpace(args)
             ? new ProcessStartInfo(exe)
             : new ProcessStartInfo(exe, args);
@@ -349,6 +429,67 @@ internal sealed class CwDecoderProcess : IDisposable
         psi.CreateNoWindow = true;
         psi.WorkingDirectory = Path.GetDirectoryName(exe)!;
         return psi;
+    }
+
+    private static void AddLabelSelectionArguments(ProcessStartInfo psi, bool allLabels, string? labelPath)
+    {
+        if (allLabels)
+        {
+            psi.ArgumentList.Add("--labels-dir");
+            psi.ArgumentList.Add(LocateLabelCorpusDirectory());
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(labelPath))
+        {
+            throw new InvalidOperationException("Pick an audio file with saved labels first, or enable all-labels.");
+        }
+
+        psi.ArgumentList.Add("--labels");
+        psi.ArgumentList.Add(labelPath);
+    }
+
+    private static string LocateLabelCorpusDirectory()
+    {
+        var decoderExe = LocateBinary() ?? throw new InvalidOperationException(
+            "Could not locate cw-decoder.exe. Run `cargo build --release` in experiments/cw-decoder first.");
+        var dir = new DirectoryInfo(Path.GetDirectoryName(decoderExe)!);
+        for (int i = 0; dir is not null && i < 8; i++, dir = dir.Parent)
+        {
+            var candidate = Path.Combine(dir.FullName, "data", "cw-samples");
+            if (Directory.Exists(candidate))
+            {
+                return candidate;
+            }
+        }
+
+        throw new InvalidOperationException(
+            "Could not locate the label corpus directory. Expected data\\cw-samples somewhere above the decoder build output.");
+    }
+
+    private static void AddLabelScoreModeArguments(
+        ProcessStartInfo psi,
+        bool fullStreamMode,
+        int preRollMs,
+        int postRollMs)
+    {
+        if (fullStreamMode)
+        {
+            psi.ArgumentList.Add("--mode");
+            psi.ArgumentList.Add("full-stream");
+        }
+
+        if (preRollMs > 0)
+        {
+            psi.ArgumentList.Add("--pre-roll-ms");
+            psi.ArgumentList.Add(preRollMs.ToString(CultureInfo.InvariantCulture));
+        }
+
+        if (postRollMs > 0)
+        {
+            psi.ArgumentList.Add("--post-roll-ms");
+            psi.ArgumentList.Add(postRollMs.ToString(CultureInfo.InvariantCulture));
+        }
     }
 
     private static async Task<string> RunOneShotAsync(ProcessStartInfo psi, CancellationToken ct)

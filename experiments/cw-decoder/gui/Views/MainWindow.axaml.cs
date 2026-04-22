@@ -83,4 +83,19 @@ public partial class MainWindow : Window
 
     private void OnUseSuggestedSpanClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
         => Vm?.UseSuggestedSpan();
+
+    private async void OnRunLabelScoreClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (Vm is null) return;
+        await Vm.RunLabelScoreAsync();
+    }
+
+    private async void OnRunLabelSweepClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (Vm is null) return;
+        await Vm.RunLabelSweepAsync();
+    }
+
+    private void OnApplyTopSweepClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+        => Vm?.ApplyTopSweepResult();
 }

@@ -10,10 +10,14 @@
 //!     cargo run --release --bin eval -- --json        # machine-readable
 //!     cargo run --release --bin eval -- --only real   # filter by name
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use anyhow::Result;
+use rayon::prelude::*;
+use serde::Deserialize;
 use cw_decoder_poc::audio;
+use cw_decoder_poc::ditdah_streaming::{run_causal_baseline, run_causal_baseline_trace, CausalBaselineConfig, CausalBaselineTrace};
 use cw_decoder_poc::streaming::{DecoderConfig, StreamEvent, StreamingDecoder};
 
 const SYNTH_RATE: u32 = 12_000;
@@ -89,6 +93,27 @@ struct Metrics {
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let json_mode = args.iter().any(|a| a == "--json");
+    let label_files = collect_label_files(&args)?;
+    if !label_files.is_empty() {
+        let score_cfg = LabelScoreConfig {
+            baseline: CausalBaselineConfig {
+                window_seconds: arg_value_f32(&args, "--window").unwrap_or(20.0),
+                min_window_seconds: arg_value_f32(&args, "--min-window").unwrap_or(4.0),
+                decode_every_ms: arg_value_u32(&args, "--decode-every-ms").unwrap_or(1000),
+                required_confirmations: arg_value_usize(&args, "--confirmations").unwrap_or(2),
+            },
+            mode: parse_label_score_mode(&args),
+            pre_roll_s: arg_value_f32(&args, "--pre-roll-ms").unwrap_or(0.0) / 1000.0,
+            post_roll_s: arg_value_f32(&args, "--post-roll-ms").unwrap_or(0.0) / 1000.0,
+        };
+        let top = arg_value_usize(&args, "--top").unwrap_or(10);
+        if args.iter().any(|a| a == "--sweep-ditdah") {
+            let wide = args.iter().any(|a| a == "--wide-sweep");
+            return run_label_sweep(&label_files, top, wide, score_cfg, json_mode);
+        }
+        return run_label_score(&label_files, score_cfg, json_mode);
+    }
+
     let only: Option<String> = args
         .windows(2)
         .find(|w| w[0] == "--only")
@@ -161,6 +186,615 @@ fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct LabelRow {
+    source: PathBuf,
+    start_s: f32,
+    end_s: f32,
+    correct_copy: String,
+}
+
+#[derive(Debug, Clone)]
+struct LabelExample {
+    name: String,
+    source: PathBuf,
+    start_s: f32,
+    end_s: f32,
+    truth: String,
+}
+
+#[derive(Debug, Clone)]
+struct LabelScore {
+    example: LabelExample,
+    decoded: String,
+    distance: usize,
+    cer: f32,
+    exact: bool,
+    failure_class: &'static str,
+}
+
+#[derive(Debug, Clone)]
+struct SweepSummary {
+    cfg: CausalBaselineConfig,
+    exact: usize,
+    total_distance: usize,
+    total_cer: f32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LabelScoreMode {
+    ExactWindow,
+    FullStream,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct LabelScoreConfig {
+    baseline: CausalBaselineConfig,
+    mode: LabelScoreMode,
+    pre_roll_s: f32,
+    post_roll_s: f32,
+}
+
+impl LabelScoreMode {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::ExactWindow => "exact-window",
+            Self::FullStream => "full-stream",
+        }
+    }
+}
+
+fn run_label_score(label_files: &[PathBuf], score_cfg: LabelScoreConfig, json_mode: bool) -> Result<()> {
+    let labels = load_label_examples(label_files)?;
+    let audio_cache = load_audio_cache(&labels)?;
+    let scores = score_labels(&labels, &audio_cache, score_cfg);
+    let exact = scores.iter().filter(|s| s.exact).count();
+    let total_distance: usize = scores.iter().map(|s| s.distance).sum();
+    let avg_cer = scores.iter().map(|s| s.cer).sum::<f32>() / scores.len().max(1) as f32;
+    if json_mode {
+        let summary = serde_json::json!({
+            "kind": "label-score",
+            "labels": scores.len(),
+            "mode": score_cfg.mode.as_str(),
+            "pre_roll_ms": (score_cfg.pre_roll_s * 1000.0).round() as u32,
+            "post_roll_ms": (score_cfg.post_roll_s * 1000.0).round() as u32,
+            "baseline": {
+                "window_seconds": score_cfg.baseline.window_seconds,
+                "min_window_seconds": score_cfg.baseline.min_window_seconds,
+                "decode_every_ms": score_cfg.baseline.decode_every_ms,
+                "required_confirmations": score_cfg.baseline.required_confirmations,
+            },
+            "summary": {
+                "exact": exact,
+                "total_distance": total_distance,
+                "average_cer": avg_cer,
+            },
+            "rows": scores.iter().map(|score| serde_json::json!({
+                "name": score.example.name,
+                "source": score.example.source,
+                "start_s": score.example.start_s,
+                "end_s": score.example.end_s,
+                "truth": score.example.truth,
+                "decoded": score.decoded,
+                "distance": score.distance,
+                "cer": score.cer,
+                "exact": score.exact,
+                "failure_class": score.failure_class,
+            })).collect::<Vec<_>>(),
+        });
+        println!("{}", serde_json::to_string_pretty(&summary)?);
+        return Ok(());
+    }
+
+    println!(
+        "LABEL SCORE  labels={}  mode={}  pre={}ms  post={}ms",
+        scores.len(),
+        score_cfg.mode.as_str(),
+        (score_cfg.pre_roll_s * 1000.0).round() as u32,
+        (score_cfg.post_roll_s * 1000.0).round() as u32
+    );
+    for score in &scores {
+        println!(
+            "{:<30} {:>5}  cer={:.2}  class={:<18} truth={}  decoded={}",
+            score.example.name,
+            if score.exact { "EXACT" } else { "MISS" },
+            score.cer,
+            score.failure_class,
+            score.example.truth,
+            score.decoded
+        );
+    }
+    println!(
+        "\nSUMMARY  exact={}/{}  total_distance={}  avg_cer={:.2}  window={:.1}s min={:.1}s every={}ms confirmations={}",
+        exact,
+        scores.len(),
+        total_distance,
+        avg_cer,
+        score_cfg.baseline.window_seconds,
+        score_cfg.baseline.min_window_seconds,
+        score_cfg.baseline.decode_every_ms,
+        score_cfg.baseline.required_confirmations
+    );
+    Ok(())
+}
+
+fn run_label_sweep(
+    label_files: &[PathBuf],
+    top: usize,
+    wide: bool,
+    score_cfg: LabelScoreConfig,
+    json_mode: bool,
+) -> Result<()> {
+    let labels = load_label_examples(label_files)?;
+    let audio_cache = load_audio_cache(&labels)?;
+    let window_values: &[f32] = if wide {
+        &[12.0, 16.0, 20.0, 24.0, 30.0]
+    } else {
+        &[16.0, 20.0, 24.0]
+    };
+    let min_window_values: &[f32] = if wide {
+        &[0.5, 1.0, 2.0, 3.0, 4.0]
+    } else {
+        &[0.5, 1.0, 2.0]
+    };
+    let decode_every_values: &[u32] = if wide {
+        &[250, 500, 750, 1000, 1500]
+    } else {
+        &[500, 1000]
+    };
+    let mut configs = Vec::new();
+    for window_seconds in window_values {
+        for min_window_seconds in min_window_values {
+            if min_window_seconds > window_seconds {
+                continue;
+            }
+            for decode_every_ms in decode_every_values {
+                for required_confirmations in [1usize, 2, 3] {
+                    configs.push(CausalBaselineConfig {
+                        window_seconds: *window_seconds,
+                        min_window_seconds: *min_window_seconds,
+                        decode_every_ms: *decode_every_ms,
+                        required_confirmations,
+                    });
+                }
+            }
+        }
+    }
+
+    let mut summaries: Vec<SweepSummary> = configs
+        .into_par_iter()
+        .map(|cfg| {
+            let scores = score_labels(
+                &labels,
+                &audio_cache,
+                LabelScoreConfig {
+                    baseline: cfg,
+                    ..score_cfg
+                },
+            );
+            SweepSummary {
+                cfg,
+                exact: scores.iter().filter(|s| s.exact).count(),
+                total_distance: scores.iter().map(|s| s.distance).sum(),
+                total_cer: scores.iter().map(|s| s.cer).sum(),
+            }
+        })
+        .collect();
+    summaries.sort_by(|a, b| {
+        b.exact
+            .cmp(&a.exact)
+            .then_with(|| a.total_distance.cmp(&b.total_distance))
+            .then_with(|| a.total_cer.partial_cmp(&b.total_cer).unwrap_or(std::cmp::Ordering::Equal))
+            .then_with(|| {
+                a.cfg
+                    .window_seconds
+                    .partial_cmp(&b.cfg.window_seconds)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .then_with(|| {
+                a.cfg
+                    .min_window_seconds
+                    .partial_cmp(&b.cfg.min_window_seconds)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .then_with(|| a.cfg.decode_every_ms.cmp(&b.cfg.decode_every_ms))
+            .then_with(|| a.cfg.required_confirmations.cmp(&b.cfg.required_confirmations))
+    });
+
+    if json_mode {
+        let summary = serde_json::json!({
+            "kind": "label-sweep",
+            "labels": labels.len(),
+            "mode": score_cfg.mode.as_str(),
+            "pre_roll_ms": (score_cfg.pre_roll_s * 1000.0).round() as u32,
+            "post_roll_ms": (score_cfg.post_roll_s * 1000.0).round() as u32,
+            "sweep_mode": if wide { "wide" } else { "interactive" },
+            "results": summaries.iter().map(|summary| serde_json::json!({
+                "exact": summary.exact,
+                "total_distance": summary.total_distance,
+                "total_cer": summary.total_cer,
+                "window_seconds": summary.cfg.window_seconds,
+                "min_window_seconds": summary.cfg.min_window_seconds,
+                "decode_every_ms": summary.cfg.decode_every_ms,
+                "required_confirmations": summary.cfg.required_confirmations,
+            })).collect::<Vec<_>>(),
+        });
+        println!("{}", serde_json::to_string_pretty(&summary)?);
+        return Ok(());
+    }
+
+    println!(
+        "LABEL SWEEP  labels={}  configs={}  sweep={}  score={}  pre={}ms  post={}ms",
+        labels.len(),
+        summaries.len(),
+        if wide { "wide" } else { "interactive" },
+        score_cfg.mode.as_str(),
+        (score_cfg.pre_roll_s * 1000.0).round() as u32,
+        (score_cfg.post_roll_s * 1000.0).round() as u32
+    );
+    println!(
+        "{:<6} {:<8} {:<8} {:<8} {:<6} {:<6} {:<12}",
+        "exact", "dist", "cer", "window", "min", "every", "confirmations"
+    );
+    println!("{}", "-".repeat(64));
+    for summary in summaries.iter().take(top) {
+        println!(
+            "{:<6} {:<8} {:<8.2} {:<8.1} {:<6.1} {:<6} {:<12}",
+            format!("{}/{}", summary.exact, labels.len()),
+            summary.total_distance,
+            summary.total_cer,
+            summary.cfg.window_seconds,
+            summary.cfg.min_window_seconds,
+            summary.cfg.decode_every_ms,
+            summary.cfg.required_confirmations
+        );
+    }
+    Ok(())
+}
+
+fn load_label_examples(label_files: &[PathBuf]) -> Result<Vec<LabelExample>> {
+    let mut examples = Vec::new();
+    for path in label_files {
+        let label_dir = path.parent().unwrap_or_else(|| std::path::Path::new("."));
+        for (index, line) in std::fs::read_to_string(path)?.lines().enumerate() {
+            if line.trim().is_empty() {
+                continue;
+            }
+            let row: LabelRow = serde_json::from_str(line)?;
+            let name = format!(
+                "{}#{}",
+                path.file_stem().and_then(|s| s.to_str()).unwrap_or("label"),
+                index + 1
+            );
+            examples.push(LabelExample {
+                name,
+                source: resolve_label_source(&row.source, label_dir),
+                start_s: row.start_s,
+                end_s: row.end_s,
+                truth: normalize_copy(&row.correct_copy),
+            });
+        }
+    }
+    Ok(examples)
+}
+
+fn load_audio_cache(labels: &[LabelExample]) -> Result<HashMap<PathBuf, audio::DecodedAudio>> {
+    let mut cache = HashMap::new();
+    for source in labels.iter().map(|label| label.source.clone()) {
+        cache.entry(source.clone())
+            .or_insert(audio::decode_file(&source)?);
+    }
+    Ok(cache)
+}
+
+fn score_labels(
+    labels: &[LabelExample],
+    audio_cache: &HashMap<PathBuf, audio::DecodedAudio>,
+    score_cfg: LabelScoreConfig,
+) -> Vec<LabelScore> {
+    match score_cfg.mode {
+        LabelScoreMode::ExactWindow => score_labels_exact_window(labels, audio_cache, score_cfg),
+        LabelScoreMode::FullStream => score_labels_full_stream(labels, audio_cache, score_cfg),
+    }
+}
+
+fn score_labels_exact_window(
+    labels: &[LabelExample],
+    audio_cache: &HashMap<PathBuf, audio::DecodedAudio>,
+    score_cfg: LabelScoreConfig,
+) -> Vec<LabelScore> {
+    labels
+        .iter()
+        .map(|example| {
+            let audio = audio_cache.get(&example.source).expect("audio cache missing source");
+            let (start, end) = expanded_sample_bounds(audio, example, score_cfg);
+            let samples = if end > start { &audio.samples[start..end] } else { &[] };
+            let outcome = run_causal_baseline(samples, audio.sample_rate, score_cfg.baseline);
+            build_label_score(example, &normalize_copy(&outcome.transcript))
+        })
+        .collect()
+}
+
+fn score_labels_full_stream(
+    labels: &[LabelExample],
+    audio_cache: &HashMap<PathBuf, audio::DecodedAudio>,
+    score_cfg: LabelScoreConfig,
+) -> Vec<LabelScore> {
+    let mut traces = HashMap::new();
+    for source in labels.iter().map(|label| label.source.clone()) {
+        traces.entry(source.clone()).or_insert_with(|| {
+            let audio = audio_cache.get(&source).expect("audio cache missing source");
+            run_causal_baseline_trace(&audio.samples, audio.sample_rate, score_cfg.baseline)
+        });
+    }
+
+    labels
+        .iter()
+        .map(|example| {
+            let audio = audio_cache.get(&example.source).expect("audio cache missing source");
+            let trace = traces.get(&example.source).expect("trace missing source");
+            let (start, end) = expanded_sample_bounds(audio, example, score_cfg);
+            let before = transcript_at_or_before(trace, start);
+            let after = transcript_at_or_before(trace, end);
+            let decoded = normalize_copy(&extract_transcript_delta(before, after));
+            build_label_score(example, &decoded)
+        })
+        .collect()
+}
+
+fn build_label_score(example: &LabelExample, decoded: &str) -> LabelScore {
+    let normalized = normalize_copy(decoded);
+    let distance = edit_distance(&example.truth, &normalized);
+    let cer = distance as f32 / example.truth.chars().count().max(1) as f32;
+    LabelScore {
+        example: example.clone(),
+        decoded: normalized.clone(),
+        distance,
+        cer,
+        exact: normalized == example.truth,
+        failure_class: classify_failure(&example.truth, &normalized, distance, cer),
+    }
+}
+
+fn normalize_copy(text: &str) -> String {
+    text.split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_uppercase()
+}
+
+fn edit_distance(reference: &str, hypothesis: &str) -> usize {
+    let r: Vec<char> = reference.chars().collect();
+    let h: Vec<char> = hypothesis.chars().collect();
+    if r.is_empty() {
+        return h.len();
+    }
+    let mut prev: Vec<usize> = (0..=h.len()).collect();
+    let mut cur = vec![0usize; h.len() + 1];
+    for (i, rc) in r.iter().enumerate() {
+        cur[0] = i + 1;
+        for (j, hc) in h.iter().enumerate() {
+            let cost = if rc == hc { 0 } else { 1 };
+            cur[j + 1] = (prev[j + 1] + 1).min(cur[j] + 1).min(prev[j] + cost);
+        }
+        std::mem::swap(&mut prev, &mut cur);
+    }
+    prev[h.len()]
+}
+
+fn expanded_sample_bounds(
+    audio: &audio::DecodedAudio,
+    example: &LabelExample,
+    score_cfg: LabelScoreConfig,
+) -> (usize, usize) {
+    let start_s = (example.start_s - score_cfg.pre_roll_s).max(0.0);
+    let end_s = (example.end_s + score_cfg.post_roll_s)
+        .min(audio.samples.len() as f32 / audio.sample_rate.max(1) as f32);
+    let start = ((start_s * audio.sample_rate as f32).floor() as usize).min(audio.samples.len());
+    let end = ((end_s * audio.sample_rate as f32).ceil() as usize).min(audio.samples.len());
+    (start, end.max(start))
+}
+
+fn transcript_at_or_before(trace: &CausalBaselineTrace, sample_index: usize) -> &str {
+    let index = trace
+        .snapshots
+        .partition_point(|snapshot| snapshot.end_sample <= sample_index);
+    if index == 0 {
+        ""
+    } else {
+        trace.snapshots[index - 1].transcript.as_str()
+    }
+}
+
+fn extract_transcript_delta(before: &str, after: &str) -> String {
+    let before_tokens: Vec<&str> = before.split_whitespace().collect();
+    let after_tokens: Vec<&str> = after.split_whitespace().collect();
+    if before_tokens.is_empty() {
+        return after_tokens.join(" ");
+    }
+    if after_tokens.is_empty() {
+        return String::new();
+    }
+    if before_tokens.len() <= after_tokens.len() && before_tokens == after_tokens[..before_tokens.len()] {
+        return after_tokens[before_tokens.len()..].join(" ");
+    }
+
+    let max_overlap = before_tokens.len().min(after_tokens.len());
+    for overlap in (1..=max_overlap).rev() {
+        if before_tokens[before_tokens.len() - overlap..] == after_tokens[..overlap] {
+            return after_tokens[overlap..].join(" ");
+        }
+    }
+
+    after_tokens.join(" ")
+}
+
+fn classify_failure(truth: &str, decoded: &str, distance: usize, cer: f32) -> &'static str {
+    if decoded.is_empty() {
+        return "empty_output";
+    }
+    if decoded == truth {
+        return "exact";
+    }
+    if truth.replace(' ', "") == decoded.replace(' ', "") {
+        return "spacing_only_error";
+    }
+
+    let truth_chars: Vec<char> = truth.chars().collect();
+    let decoded_chars: Vec<char> = decoded.chars().collect();
+    let common_prefix = truth_chars
+        .iter()
+        .zip(decoded_chars.iter())
+        .take_while(|(left, right)| left == right)
+        .count();
+    let common_suffix = truth_chars
+        .iter()
+        .rev()
+        .zip(decoded_chars.iter().rev())
+        .take_while(|(left, right)| left == right)
+        .count();
+    let max_len = truth_chars.len().max(decoded_chars.len());
+
+    if common_suffix + 2 >= max_len && common_prefix < common_suffix {
+        return "leading_edge_error";
+    }
+    if common_prefix + 2 >= max_len && common_suffix < common_prefix {
+        return "trailing_edge_error";
+    }
+    if truth.contains(decoded) {
+        return "dropped_region";
+    }
+    if decoded.contains(truth) {
+        return "extra_output";
+    }
+    if distance <= 2 || cer <= 0.2 {
+        return "near_match";
+    }
+    "garbage_decode"
+}
+
+fn arg_values(args: &[String], key: &str) -> Vec<String> {
+    args.windows(2)
+        .filter(|w| w[0] == key)
+        .map(|w| w[1].clone())
+        .collect()
+}
+
+fn collect_label_files(args: &[String]) -> Result<Vec<PathBuf>> {
+    let mut files = Vec::new();
+    for value in arg_values(args, "--labels") {
+        collect_label_path(&mut files, PathBuf::from(value))?;
+    }
+    for value in arg_values(args, "--labels-dir") {
+        collect_labels_from_dir(&mut files, PathBuf::from(value))?;
+    }
+    if args.iter().any(|a| a == "--all-labels") {
+        collect_labels_from_dir(&mut files, PathBuf::from("data").join("cw-samples"))?;
+    }
+    files.sort();
+    files.dedup();
+    Ok(files)
+}
+
+fn collect_label_path(files: &mut Vec<PathBuf>, path: PathBuf) -> Result<()> {
+    if path.is_dir() {
+        collect_labels_from_dir(files, path)?;
+    } else {
+        files.push(path);
+    }
+    Ok(())
+}
+
+fn collect_labels_from_dir(files: &mut Vec<PathBuf>, dir: PathBuf) -> Result<()> {
+    for entry in std::fs::read_dir(&dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.is_file()
+            && path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.ends_with(".labels.jsonl"))
+        {
+            files.push(path);
+        }
+    }
+    Ok(())
+}
+
+fn resolve_label_source(source: &std::path::Path, label_dir: &std::path::Path) -> PathBuf {
+    if source.is_absolute() {
+        source.to_path_buf()
+    } else {
+        label_dir.join(source)
+    }
+}
+
+fn parse_label_score_mode(args: &[String]) -> LabelScoreMode {
+    match args
+        .windows(2)
+        .find(|w| w[0] == "--mode")
+        .map(|w| w[1].as_str())
+    {
+        Some("full-stream") => LabelScoreMode::FullStream,
+        _ => LabelScoreMode::ExactWindow,
+    }
+}
+
+fn arg_value_f32(args: &[String], key: &str) -> Option<f32> {
+    args.windows(2)
+        .find(|w| w[0] == key)
+        .and_then(|w| w[1].parse::<f32>().ok())
+}
+
+fn arg_value_u32(args: &[String], key: &str) -> Option<u32> {
+    args.windows(2)
+        .find(|w| w[0] == key)
+        .and_then(|w| w[1].parse::<u32>().ok())
+}
+
+fn arg_value_usize(args: &[String], key: &str) -> Option<usize> {
+    args.windows(2)
+        .find(|w| w[0] == key)
+        .and_then(|w| w[1].parse::<usize>().ok())
+}
+
+#[cfg(test)]
+mod label_eval_tests {
+    use super::{classify_failure, extract_transcript_delta};
+
+    #[test]
+    fn extract_transcript_delta_removes_prefix_tokens() {
+        assert_eq!(
+            extract_transcript_delta("QST QST", "QST QST QST DE W1AW"),
+            "QST DE W1AW"
+        );
+    }
+
+    #[test]
+    fn extract_transcript_delta_handles_overlap() {
+        assert_eq!(
+            extract_transcript_delta("QST QST QST", "QST DE W1AW"),
+            "DE W1AW"
+        );
+    }
+
+    #[test]
+    fn classify_failure_detects_spacing_only() {
+        assert_eq!(
+            classify_failure("N6ZO 5NN 5", "N6ZO5NN5", 2, 0.2),
+            "spacing_only_error"
+        );
+    }
+
+    #[test]
+    fn classify_failure_detects_leading_edge() {
+        assert_eq!(
+            classify_failure("QST QST QST", "TUST QST QST", 1, 0.09),
+            "leading_edge_error"
+        );
+    }
 }
 
 fn build_suite() -> Vec<TestCase> {

@@ -2,8 +2,185 @@
 
 use std::collections::VecDeque;
 
+use crate::decoder;
+
 pub fn normalize_snapshot_text(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct CausalBaselineConfig {
+    pub window_seconds: f32,
+    pub min_window_seconds: f32,
+    pub decode_every_ms: u32,
+    pub required_confirmations: usize,
+}
+
+impl Default for CausalBaselineConfig {
+    fn default() -> Self {
+        Self {
+            window_seconds: 20.0,
+            min_window_seconds: 4.0,
+            decode_every_ms: 1000,
+            required_confirmations: 2,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct CausalBaselineOutcome {
+    pub transcript: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct CausalBaselineSnapshot {
+    pub end_sample: usize,
+    pub transcript: String,
+    pub appended: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct CausalBaselineTrace {
+    pub transcript: String,
+    pub snapshots: Vec<CausalBaselineSnapshot>,
+}
+
+pub fn run_causal_baseline(
+    samples: &[f32],
+    sample_rate: u32,
+    cfg: CausalBaselineConfig,
+) -> CausalBaselineOutcome {
+    let trace = run_causal_baseline_trace(samples, sample_rate, cfg);
+    CausalBaselineOutcome {
+        transcript: trace.transcript,
+    }
+}
+
+pub fn run_causal_baseline_trace(
+    samples: &[f32],
+    sample_rate: u32,
+    cfg: CausalBaselineConfig,
+) -> CausalBaselineTrace {
+    if samples.is_empty() || sample_rate == 0 {
+        return CausalBaselineTrace {
+            transcript: String::new(),
+            snapshots: Vec::new(),
+        };
+    }
+
+    let mut streamer = CausalBaselineStreamer::new(sample_rate, cfg);
+    let mut snapshots = streamer.feed(samples);
+    snapshots.extend(streamer.flush());
+    CausalBaselineTrace {
+        transcript: streamer.transcript().to_string(),
+        snapshots,
+    }
+}
+
+pub struct CausalBaselineStreamer {
+    sample_rate: u32,
+    buffer: VecDeque<f32>,
+    window_samples: usize,
+    min_window_samples: usize,
+    decode_every_samples: usize,
+    stabilizer: PrefixStabilizer,
+    since_last_decode: usize,
+    processed_samples: usize,
+}
+
+impl CausalBaselineStreamer {
+    pub fn new(sample_rate: u32, cfg: CausalBaselineConfig) -> Self {
+        let window_samples =
+            ((cfg.window_seconds.max(0.5) * sample_rate as f32).round() as usize).max(1);
+        let min_window_samples = ((cfg.min_window_seconds.clamp(0.1, cfg.window_seconds.max(0.5))
+            * sample_rate as f32)
+            .round() as usize)
+            .min(window_samples)
+            .max(1);
+        let decode_every_samples =
+            ((((sample_rate as u64) * cfg.decode_every_ms as u64) / 1000) as usize).max(1);
+        Self {
+            sample_rate,
+            buffer: VecDeque::new(),
+            window_samples,
+            min_window_samples,
+            decode_every_samples,
+            stabilizer: PrefixStabilizer::new(cfg.required_confirmations),
+            since_last_decode: 0,
+            processed_samples: 0,
+        }
+    }
+
+    pub fn feed(&mut self, samples: &[f32]) -> Vec<CausalBaselineSnapshot> {
+        let mut snapshots = Vec::new();
+        for &sample in samples {
+            if self.buffer.len() == self.window_samples {
+                self.buffer.pop_front();
+            }
+            self.buffer.push_back(sample);
+            self.since_last_decode += 1;
+            self.processed_samples += 1;
+
+            if self.buffer.len() >= self.min_window_samples
+                && self.since_last_decode >= self.decode_every_samples
+            {
+                self.since_last_decode = 0;
+                snapshots.push(self.decode_snapshot());
+            }
+        }
+        snapshots
+    }
+
+    pub fn flush(&mut self) -> Vec<CausalBaselineSnapshot> {
+        if self.buffer.is_empty() {
+            return Vec::new();
+        }
+
+        let mut snapshots = Vec::new();
+        if self.buffer.len() >= self.min_window_samples && self.since_last_decode > 0 {
+            self.since_last_decode = 0;
+            snapshots.push(self.decode_snapshot());
+        } else if self.buffer.len() < self.min_window_samples {
+            snapshots.push(self.decode_snapshot());
+        }
+
+        let appended = self.stabilizer.finalize_latest();
+        let needs_final = !snapshots
+            .last()
+            .is_some_and(|snapshot| snapshot.end_sample == self.processed_samples
+                && snapshot.transcript == self.stabilizer.transcript());
+        if needs_final || !appended.is_empty() {
+            snapshots.push(CausalBaselineSnapshot {
+                end_sample: self.processed_samples,
+                transcript: self.stabilizer.transcript().to_string(),
+                appended,
+            });
+        }
+        snapshots
+    }
+
+    pub fn transcript(&self) -> &str {
+        self.stabilizer.transcript()
+    }
+
+    pub fn processed_samples(&self) -> usize {
+        self.processed_samples
+    }
+
+    pub fn window_snapshot(&self) -> Vec<f32> {
+        self.buffer.iter().copied().collect()
+    }
+
+    fn decode_snapshot(&mut self) -> CausalBaselineSnapshot {
+        let snapshot: Vec<f32> = self.buffer.iter().copied().collect();
+        let text = decoder::decode_text(&snapshot, self.sample_rate);
+        let appended = self.stabilizer.push_snapshot(&text);
+        CausalBaselineSnapshot {
+            end_sample: self.processed_samples,
+            transcript: self.stabilizer.transcript().to_string(),
+            appended,
+        }
+    }
 }
 
 pub struct PrefixStabilizer {
@@ -135,7 +312,10 @@ fn common_token_prefix(values: &VecDeque<String>) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{append_snapshot_text, normalize_snapshot_text, PrefixStabilizer};
+    use super::{
+        append_snapshot_text, normalize_snapshot_text, run_causal_baseline_trace, CausalBaselineConfig,
+        PrefixStabilizer,
+    };
 
     #[test]
     fn normalize_snapshot_text_collapses_whitespace() {
@@ -185,5 +365,24 @@ mod tests {
         assert_eq!(stabilizer.transcript(), "QST QST QST");
         assert_eq!(stabilizer.finalize_latest(), " DE");
         assert_eq!(stabilizer.transcript(), "QST QST QST DE");
+    }
+
+    #[test]
+    fn causal_baseline_trace_records_final_transcript_snapshot() {
+        let trace = run_causal_baseline_trace(
+            &[0.0; 64],
+            8_000,
+            CausalBaselineConfig {
+                window_seconds: 1.0,
+                min_window_seconds: 0.1,
+                decode_every_ms: 10,
+                required_confirmations: 1,
+            },
+        );
+        assert_eq!(trace.snapshots.last().map(|snapshot| snapshot.end_sample), Some(64));
+        assert_eq!(
+            trace.snapshots.last().map(|snapshot| snapshot.transcript.as_str()),
+            Some(trace.transcript.as_str())
+        );
     }
 }

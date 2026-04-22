@@ -39,11 +39,13 @@ crossterm = "0.28"
 
 # Concurrency
 parking_lot = "0.12"
+rayon = "1.10"
 
 # Sample utilities
 hound = "3.5"
 
 # JSON event output for the Avalonia GUI bridge
+serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
 [profile.release]

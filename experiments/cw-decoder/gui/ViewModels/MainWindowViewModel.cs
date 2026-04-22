@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Runtime.CompilerServices;
@@ -18,13 +19,21 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
 {
     private readonly CwDecoderProcess _process = new();
     private CancellationTokenSource? _profileLoadCts;
+    private CancellationTokenSource? _evaluationCts;
     private readonly Dictionary<string, SignalProfile> _profileCache = new();
     private readonly Dictionary<string, CandidateDraftState> _candidateDrafts = new();
+    private readonly Dictionary<string, HarvestSessionState> _harvestSessionCache = new(StringComparer.OrdinalIgnoreCase);
+    private SweepTopResult? _topSweepResult;
+
+    private const string CustomDecoderModeLabel = "Custom streaming";
+    private const string BaselineDecoderModeLabel = "Baseline ditdah";
 
     public MainWindowViewModel()
     {
         Devices = new ObservableCollection<string>(CwDecoderProcess.ListDevices());
+        DecoderModes = new ObservableCollection<string>(new[] { CustomDecoderModeLabel, BaselineDecoderModeLabel });
         SelectedDevice = Devices.Count > 0 ? Devices[0] : null;
+        SelectedDecoderMode = DecoderModes[0];
         Cells = new ObservableCollection<TranscriptCell>();
         WpmHistory = new ObservableCollection<double>();
         HarvestCandidates = new ObservableCollection<HarvestCandidate>();
@@ -39,12 +48,28 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
     }
 
     public ObservableCollection<string> Devices { get; }
+    public ObservableCollection<string> DecoderModes { get; }
     public ObservableCollection<TranscriptCell> Cells { get; }
     public ObservableCollection<double> WpmHistory { get; }
     public ObservableCollection<HarvestCandidate> HarvestCandidates { get; }
 
     private string? _selectedDevice;
     public string? SelectedDevice { get => _selectedDevice; set => Set(ref _selectedDevice, value); }
+
+    private string _selectedDecoderMode = CustomDecoderModeLabel;
+    public string SelectedDecoderMode
+    {
+        get => _selectedDecoderMode;
+        set
+        {
+            if (Set(ref _selectedDecoderMode, value))
+            {
+                OnPropertyChanged(nameof(IsCustomDecoderMode));
+                OnPropertyChanged(nameof(IsBaselineDecoderMode));
+                OnPropertyChanged(nameof(BaselineDecoderSummary));
+            }
+        }
+    }
 
     private bool _isRunning;
     public bool IsRunning
@@ -139,6 +164,117 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
     private double _previewSlowdown = 2.5;
     public double PreviewSlowdown { get => _previewSlowdown; set => Set(ref _previewSlowdown, value); }
 
+    private bool _evaluateAllLabels = true;
+    public bool EvaluateAllLabels
+    {
+        get => _evaluateAllLabels;
+        set
+        {
+            if (Set(ref _evaluateAllLabels, value))
+            {
+                OnPropertyChanged(nameof(LabelEvaluationTargetLabel));
+                OnPropertyChanged(nameof(CanRunLabelScore));
+                OnPropertyChanged(nameof(CanRunLabelSweep));
+            }
+        }
+    }
+
+    private bool _useWideSweep;
+    public bool UseWideSweep { get => _useWideSweep; set => Set(ref _useWideSweep, value); }
+
+    private bool _useFullStreamScorer;
+    public bool UseFullStreamScorer { get => _useFullStreamScorer; set => Set(ref _useFullStreamScorer, value); }
+
+    private double _labelEvalWindowSeconds = 20.0;
+    public double LabelEvalWindowSeconds
+    {
+        get => _labelEvalWindowSeconds;
+        set
+        {
+            if (Set(ref _labelEvalWindowSeconds, value))
+            {
+                OnPropertyChanged(nameof(BaselineDecoderSummary));
+            }
+        }
+    }
+
+    private double _labelEvalMinWindowSeconds = 0.5;
+    public double LabelEvalMinWindowSeconds
+    {
+        get => _labelEvalMinWindowSeconds;
+        set
+        {
+            if (Set(ref _labelEvalMinWindowSeconds, value))
+            {
+                OnPropertyChanged(nameof(BaselineDecoderSummary));
+            }
+        }
+    }
+
+    private double _labelEvalDecodeEveryMs = 1000;
+    public double LabelEvalDecodeEveryMs
+    {
+        get => _labelEvalDecodeEveryMs;
+        set
+        {
+            if (Set(ref _labelEvalDecodeEveryMs, value))
+            {
+                OnPropertyChanged(nameof(BaselineDecoderSummary));
+            }
+        }
+    }
+
+    private double _labelEvalConfirmations = 3;
+    public double LabelEvalConfirmations
+    {
+        get => _labelEvalConfirmations;
+        set
+        {
+            if (Set(ref _labelEvalConfirmations, value))
+            {
+                OnPropertyChanged(nameof(BaselineDecoderSummary));
+            }
+        }
+    }
+
+    private double _labelEvalTopResults = 10;
+    public double LabelEvalTopResults { get => _labelEvalTopResults; set => Set(ref _labelEvalTopResults, value); }
+
+    private double _labelEvalPreRollMs;
+    public double LabelEvalPreRollMs { get => _labelEvalPreRollMs; set => Set(ref _labelEvalPreRollMs, value); }
+
+    private double _labelEvalPostRollMs;
+    public double LabelEvalPostRollMs { get => _labelEvalPostRollMs; set => Set(ref _labelEvalPostRollMs, value); }
+
+    private bool _isEvaluationBusy;
+    public bool IsEvaluationBusy
+    {
+        get => _isEvaluationBusy;
+        set
+        {
+            if (Set(ref _isEvaluationBusy, value))
+            {
+                OnPropertyChanged(nameof(CanRunLabelScore));
+                OnPropertyChanged(nameof(CanRunLabelSweep));
+                OnPropertyChanged(nameof(CanApplyTopSweep));
+            }
+        }
+    }
+
+    private string _labelEvaluationStatusText = "Run label scoring or a parameter sweep to tune the causal ditdah baseline against saved labels.";
+    public string LabelEvaluationStatusText { get => _labelEvaluationStatusText; set => Set(ref _labelEvaluationStatusText, value); }
+
+    private string _labelEvaluationOutputText = "No label evaluation run yet.";
+    public string LabelEvaluationOutputText { get => _labelEvaluationOutputText; set => Set(ref _labelEvaluationOutputText, value); }
+
+    public bool IsCustomDecoderMode => string.Equals(SelectedDecoderMode, CustomDecoderModeLabel, StringComparison.Ordinal);
+    public bool IsBaselineDecoderMode => string.Equals(SelectedDecoderMode, BaselineDecoderModeLabel, StringComparison.Ordinal);
+    public string BaselineDecoderSummary => $"Baseline uses Tuning settings: {CurrentBaselineConfig().WindowSeconds:F1}s window / {CurrentBaselineConfig().MinWindowSeconds:F1}s min / {CurrentBaselineConfig().DecodeEveryMs}ms cadence / {CurrentBaselineConfig().Confirmations} confirmations.";
+    public bool CanApplyTopSweep => _topSweepResult is not null && !IsEvaluationBusy;
+    public string TopSweepSummary => _topSweepResult is null
+        ? "Run a sweep to capture the best baseline settings for quick A/B testing on the Decoder tab."
+        : $"Top sweep result: {_topSweepResult.WindowSeconds:F1}s window / {_topSweepResult.MinWindowSeconds:F1}s min / {_topSweepResult.DecodeEveryMs}ms cadence / {_topSweepResult.Confirmations} confirmations.";
+
     private bool _isAdvancedBusy;
     public bool IsAdvancedBusy
     {
@@ -152,6 +288,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
                 OnPropertyChanged(nameof(CanSaveLabel));
                 OnPropertyChanged(nameof(CanResetAdjustedSpan));
                 OnPropertyChanged(nameof(CanUseSuggestedSpan));
+                OnPropertyChanged(nameof(CanRunLabelScore));
+                OnPropertyChanged(nameof(CanRunLabelSweep));
             }
         }
     }
@@ -196,6 +334,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
                 OnPropertyChanged(nameof(CanSaveLabel));
                 OnPropertyChanged(nameof(CanResetAdjustedSpan));
                 OnPropertyChanged(nameof(CanUseSuggestedSpan));
+                OnPropertyChanged(nameof(CanRunLabelScore));
+                OnPropertyChanged(nameof(CanRunLabelSweep));
             }
         }
     }
@@ -332,6 +472,17 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
         && CurrentSignalProfile.HasData
         && (Math.Abs(AdjustedStartSeconds - CurrentSignalProfile.SuggestedStartSeconds) > 0.0005
             || Math.Abs(AdjustedEndSeconds - CurrentSignalProfile.SuggestedEndSeconds) > 0.0005);
+    public string LabelEvaluationTargetLabel => EvaluateAllLabels
+        ? @"Corpus: all labels under data\cw-samples"
+        : $"Corpus: {LabelFilePath}";
+    public bool CanRunLabelScore => !IsAdvancedBusy
+        && !IsProfileBusy
+        && !IsEvaluationBusy
+        && HasLabelEvaluationTarget();
+    public bool CanRunLabelSweep => !IsAdvancedBusy
+        && !IsProfileBusy
+        && !IsEvaluationBusy
+        && HasLabelEvaluationTarget();
 
     public void ResetSensitivity()
     {
@@ -341,60 +492,80 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
     }
 
     private DecoderConfig CurrentConfig() => new(MinSnrDb, PitchMinSnrDb, ThresholdScale);
+    private BaselineDecoderConfig CurrentBaselineConfig() => new(
+        WindowSeconds: LabelEvalWindowSeconds,
+        MinWindowSeconds: LabelEvalMinWindowSeconds,
+        DecodeEveryMs: Math.Max(100, (int)Math.Round(LabelEvalDecodeEveryMs)),
+        Confirmations: Math.Max(1, (int)Math.Round(LabelEvalConfirmations)));
 
     private void PushConfig()
     {
-        if (IsRunning) _process.SendConfig(CurrentConfig());
+        if (IsRunning && IsCustomDecoderMode) _process.SendConfig(CurrentConfig());
         OnPropertyChanged(nameof(SignalQualityLabel));
     }
 
     private const int MaxWpmHistory = 200;
     private double _powerCeiling = 1e-6;
 
-    public void ToggleStartStop()
+    private void ResetDecoderSurface()
     {
-        if (IsRunning) { _process.Stop(); IsRunning = false; return; }
         Cells.Clear();
         WpmHistory.Clear();
         Wpm = 0;
         PitchHz = 0;
         Power = 0;
         Threshold = 0;
+        Noise = 0;
+        Signal = false;
+        SnrDb = 0;
         NormalizedLevel = 0;
         NormalizedThreshold = 0;
         _powerCeiling = 1e-6;
+    }
+
+    public void ToggleStartStop()
+    {
+        if (IsRunning) { _process.Stop(); IsRunning = false; return; }
+        ResetDecoderSurface();
         StatusText = "Starting…";
-        _process.StartLive(SelectedDevice, CurrentConfig());
+        _process.StartLive(SelectedDevice, CurrentConfig(), CurrentBaselineConfig(), IsBaselineDecoderMode);
         IsRunning = true;
     }
 
     public void OpenFile(string path)
     {
         if (IsRunning) { _process.Stop(); IsRunning = false; }
-        Cells.Clear();
-        WpmHistory.Clear();
-        Wpm = 0;
-        _powerCeiling = 1e-6;
+        ResetDecoderSurface();
         SetHarvestFile(path);
         StatusText = $"Decoding {path}";
-        _process.StartFile(path, realtime: true, CurrentConfig());
+        _process.StartFile(path, realtime: true, CurrentConfig(), CurrentBaselineConfig(), IsBaselineDecoderMode);
         IsRunning = true;
     }
 
     public void SetHarvestFile(string path)
     {
+        if (string.Equals(HarvestFilePath, path, StringComparison.OrdinalIgnoreCase))
+        {
+            AdvancedStatusText = HarvestCandidates.Count > 0
+                ? $"Reusing cached harvest for {Path.GetFileName(path)}. Click HARVEST to rescan."
+                : $"Selected {Path.GetFileName(path)} for candidate harvest.";
+            return;
+        }
+
+        SaveCurrentHarvestSession();
         HarvestFilePath = path;
-        HarvestCandidates.Clear();
-        SelectedCandidate = null;
-        _profileCache.Clear();
-        _candidateDrafts.Clear();
-        CurrentSignalProfile = CreateEmptySignalProfile();
+        RestoreHarvestSession(path);
         ResetHarvestProgress();
-        AdvancedStatusText = $"Selected {Path.GetFileName(path)} for candidate harvest.";
+        AdvancedStatusText = HarvestCandidates.Count > 0
+            ? $"Restored cached harvest for {Path.GetFileName(path)}. Click HARVEST to rescan."
+            : $"Selected {Path.GetFileName(path)} for candidate harvest.";
         OnPropertyChanged(nameof(CanHarvestCandidates));
         OnPropertyChanged(nameof(LabelFilePath));
+        OnPropertyChanged(nameof(LabelEvaluationTargetLabel));
         OnPropertyChanged(nameof(CanPreviewCandidate));
         OnPropertyChanged(nameof(CanSaveLabel));
+        OnPropertyChanged(nameof(CanRunLabelScore));
+        OnPropertyChanged(nameof(CanRunLabelSweep));
     }
 
     public async Task HarvestCandidatesAsync()
@@ -430,6 +601,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
             foreach (var candidate in result.Candidates)
                 HarvestCandidates.Add(candidate);
             SelectedCandidate = HarvestCandidates.FirstOrDefault();
+            SaveCurrentHarvestSession();
             HarvestProgressValue = HarvestProgressMaximum;
             HarvestProgressLabel = HarvestCandidates.Count == 0
                 ? "Harvest finished with no candidate matches."
@@ -518,12 +690,144 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
             lines.Add(JsonSerializer.Serialize(label));
             File.WriteAllLines(labelPath, lines);
             _candidateDrafts[CandidateKey(SelectedCandidate)] = CandidateDraftState.FromLabel(label);
+            SaveCurrentHarvestSession();
             AdvancedStatusText = $"Saved verified copy to {Path.GetFileName(labelPath)}.";
+            OnPropertyChanged(nameof(CanRunLabelScore));
+            OnPropertyChanged(nameof(CanRunLabelSweep));
+            OnPropertyChanged(nameof(LabelEvaluationTargetLabel));
         }
         catch (Exception ex)
         {
             AdvancedStatusText = ex.Message;
         }
+    }
+
+    public async Task RunLabelScoreAsync()
+    {
+        if (!TryResolveLabelEvaluationTarget(out var labelPath))
+        {
+            return;
+        }
+
+        CancelAndDisposeEvaluation();
+        var cts = new CancellationTokenSource();
+        _evaluationCts = cts;
+
+        try
+        {
+            IsAdvancedBusy = true;
+            IsEvaluationBusy = true;
+            LabelEvaluationStatusText = EvaluateAllLabels
+                ? "Scoring the full label corpus…"
+                : $"Scoring {Path.GetFileName(labelPath)}…";
+            LabelEvaluationOutputText = string.Empty;
+            var output = await _process.RunLabelScoreAsync(
+                EvaluateAllLabels,
+                labelPath,
+                UseFullStreamScorer,
+                Math.Max(0, (int)Math.Round(LabelEvalPreRollMs)),
+                Math.Max(0, (int)Math.Round(LabelEvalPostRollMs)),
+                LabelEvalWindowSeconds,
+                LabelEvalMinWindowSeconds,
+                Math.Max(100, (int)Math.Round(LabelEvalDecodeEveryMs)),
+                Math.Max(1, (int)Math.Round(LabelEvalConfirmations)),
+                cts.Token).ConfigureAwait(true);
+            LabelEvaluationOutputText = output.Trim();
+            LabelEvaluationStatusText = EvaluateAllLabels
+                ? "Finished scoring the full label corpus."
+                : $"Finished scoring {Path.GetFileName(labelPath)}.";
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception ex)
+        {
+            LabelEvaluationStatusText = ex.Message;
+        }
+        finally
+        {
+            if (ReferenceEquals(_evaluationCts, cts))
+            {
+                _evaluationCts = null;
+            }
+            cts.Dispose();
+            IsEvaluationBusy = false;
+            IsAdvancedBusy = false;
+        }
+    }
+
+    public async Task RunLabelSweepAsync()
+    {
+        if (!TryResolveLabelEvaluationTarget(out var labelPath))
+        {
+            return;
+        }
+
+        CancelAndDisposeEvaluation();
+        var cts = new CancellationTokenSource();
+        _evaluationCts = cts;
+
+        try
+        {
+            IsAdvancedBusy = true;
+            IsEvaluationBusy = true;
+            LabelEvaluationStatusText = UseWideSweep
+                ? "Running wide parameter sweep…"
+                : "Running interactive parameter sweep…";
+            LabelEvaluationOutputText = string.Empty;
+            _topSweepResult = null;
+            OnPropertyChanged(nameof(CanApplyTopSweep));
+            OnPropertyChanged(nameof(TopSweepSummary));
+            var output = await _process.RunLabelSweepAsync(
+                EvaluateAllLabels,
+                labelPath,
+                UseFullStreamScorer,
+                Math.Max(0, (int)Math.Round(LabelEvalPreRollMs)),
+                Math.Max(0, (int)Math.Round(LabelEvalPostRollMs)),
+                UseWideSweep,
+                Math.Max(1, (int)Math.Round(LabelEvalTopResults)),
+                cts.Token).ConfigureAwait(true);
+            LabelEvaluationOutputText = output.Trim();
+            _topSweepResult = TryParseTopSweepResult(LabelEvaluationOutputText);
+            OnPropertyChanged(nameof(CanApplyTopSweep));
+            OnPropertyChanged(nameof(TopSweepSummary));
+            LabelEvaluationStatusText = UseWideSweep
+                ? "Finished wide parameter sweep."
+                : "Finished interactive parameter sweep.";
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception ex)
+        {
+            LabelEvaluationStatusText = ex.Message;
+        }
+        finally
+        {
+            if (ReferenceEquals(_evaluationCts, cts))
+            {
+                _evaluationCts = null;
+            }
+            cts.Dispose();
+            IsEvaluationBusy = false;
+            IsAdvancedBusy = false;
+        }
+    }
+
+    public void ApplyTopSweepResult()
+    {
+        if (_topSweepResult is null)
+        {
+            LabelEvaluationStatusText = "Run a sweep first to get an applied baseline candidate.";
+            return;
+        }
+
+        LabelEvalWindowSeconds = _topSweepResult.WindowSeconds;
+        LabelEvalMinWindowSeconds = _topSweepResult.MinWindowSeconds;
+        LabelEvalDecodeEveryMs = _topSweepResult.DecodeEveryMs;
+        LabelEvalConfirmations = _topSweepResult.Confirmations;
+        LabelEvaluationStatusText = "Applied the top sweep result to the shared baseline tuning settings. Decoder tab baseline mode now uses these values.";
+        OnPropertyChanged(nameof(BaselineDecoderSummary));
     }
 
     public void ResetAdjustedSpan()
@@ -567,10 +871,16 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
         switch (ev.Type)
         {
             case "ready":
-                SourceLabel = ev.Source == "live"
-                    ? $"LIVE · {ev.Device} · {ev.Rate} Hz"
-                    : $"FILE · {System.IO.Path.GetFileName(ev.Path ?? "?")}";
-                StatusText = "Listening for pitch lock…";
+                SourceLabel = ev.Source switch
+                {
+                    "live" => $"LIVE · {ev.Device} · {ev.Rate} Hz",
+                    "live-baseline" => $"LIVE BASELINE · {ev.Device} · {ev.Rate} Hz",
+                    "file-baseline" => $"FILE BASELINE · {System.IO.Path.GetFileName(ev.Path ?? "?")}",
+                    _ => $"FILE · {System.IO.Path.GetFileName(ev.Path ?? "?")}",
+                };
+                StatusText = ev.Source is "live-baseline" or "file-baseline"
+                    ? "Running baseline decode snapshots…"
+                    : "Listening for pitch lock…";
                 break;
             case "pitch":
                 if (ev.Hz is double hz)
@@ -588,8 +898,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
                 }
                 break;
             case "char":
-                if (!string.IsNullOrEmpty(ev.Ch) && !string.IsNullOrEmpty(ev.Morse))
-                    Cells.Add(TranscriptCell.Char(ev.Ch!, ev.Morse!));
+                if (!string.IsNullOrEmpty(ev.Ch))
+                    Cells.Add(TranscriptCell.Char(ev.Ch!, string.IsNullOrEmpty(ev.Morse) ? " " : ev.Morse!));
                 break;
             case "word":
                 Cells.Add(TranscriptCell.Word());
@@ -621,6 +931,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
     public void Dispose()
     {
         CancelAndDisposeProfileLoad();
+        CancelAndDisposeEvaluation();
         _process.Dispose();
     }
 
@@ -826,6 +1137,55 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
         return false;
     }
 
+    private void SaveCurrentHarvestSession()
+    {
+        if (string.IsNullOrWhiteSpace(HarvestFilePath))
+        {
+            return;
+        }
+
+        PersistDraftForCandidate(SelectedCandidate);
+        _harvestSessionCache[HarvestFilePath] = new HarvestSessionState(
+            HarvestCandidates.ToList(),
+            SelectedCandidate is null ? null : CandidateKey(SelectedCandidate),
+            new Dictionary<string, SignalProfile>(_profileCache),
+            new Dictionary<string, CandidateDraftState>(_candidateDrafts));
+    }
+
+    private void RestoreHarvestSession(string path)
+    {
+        HarvestCandidates.Clear();
+        SelectedCandidate = null;
+        _profileCache.Clear();
+        _candidateDrafts.Clear();
+        CurrentSignalProfile = CreateEmptySignalProfile();
+
+        if (!_harvestSessionCache.TryGetValue(path, out var session))
+        {
+            return;
+        }
+
+        foreach (var candidate in session.Candidates)
+        {
+            HarvestCandidates.Add(candidate);
+        }
+
+        foreach (var pair in session.ProfileCache)
+        {
+            _profileCache[pair.Key] = pair.Value;
+        }
+
+        foreach (var pair in session.CandidateDrafts)
+        {
+            _candidateDrafts[pair.Key] = pair.Value;
+        }
+
+        SelectedCandidate = session.SelectedCandidateKey is null
+            ? HarvestCandidates.FirstOrDefault()
+            : HarvestCandidates.FirstOrDefault(candidate => CandidateKey(candidate) == session.SelectedCandidateKey)
+                ?? HarvestCandidates.FirstOrDefault();
+    }
+
     private void ResetHarvestProgress()
     {
         IsHarvestBusy = false;
@@ -861,6 +1221,88 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
         }
 
         previous.Dispose();
+    }
+
+    private void CancelAndDisposeEvaluation()
+    {
+        var previous = _evaluationCts;
+        _evaluationCts = null;
+        if (previous is null)
+        {
+            return;
+        }
+
+        try
+        {
+            previous.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+
+        previous.Dispose();
+    }
+
+    private static SweepTopResult? TryParseTopSweepResult(string output)
+    {
+        foreach (var rawLine in output.Split('\n'))
+        {
+            var line = rawLine.Trim();
+            if (string.IsNullOrWhiteSpace(line) || !char.IsDigit(line[0]) || !line.Contains('/'))
+            {
+                continue;
+            }
+
+            var parts = line.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            if (parts.Length < 7)
+            {
+                continue;
+            }
+
+            if (double.TryParse(parts[3], NumberStyles.Float | NumberStyles.AllowThousands, CultureInfo.InvariantCulture, out var windowSeconds)
+                && double.TryParse(parts[4], NumberStyles.Float | NumberStyles.AllowThousands, CultureInfo.InvariantCulture, out var minWindowSeconds)
+                && int.TryParse(parts[5], NumberStyles.Integer, CultureInfo.InvariantCulture, out var decodeEveryMs)
+                && int.TryParse(parts[6], NumberStyles.Integer, CultureInfo.InvariantCulture, out var confirmations))
+            {
+                return new SweepTopResult(windowSeconds, minWindowSeconds, decodeEveryMs, confirmations);
+            }
+        }
+
+        return null;
+    }
+
+    private bool HasLabelEvaluationTarget()
+    {
+        if (EvaluateAllLabels)
+        {
+            return true;
+        }
+
+        return !string.IsNullOrWhiteSpace(HarvestFilePath) && File.Exists(LabelFilePath);
+    }
+
+    private bool TryResolveLabelEvaluationTarget(out string? labelPath)
+    {
+        labelPath = null;
+        if (EvaluateAllLabels)
+        {
+            return true;
+        }
+
+        if (string.IsNullOrWhiteSpace(HarvestFilePath))
+        {
+            LabelEvaluationStatusText = "Pick an audio file first, or enable ALL LABELS.";
+            return false;
+        }
+
+        labelPath = LabelFilePath;
+        if (!File.Exists(labelPath))
+        {
+            LabelEvaluationStatusText = $"No saved labels yet at {Path.GetFileName(labelPath)}.";
+            return false;
+        }
+
+        return true;
     }
 
     private static string ProfileCacheKey(HarvestCandidate candidate)
@@ -957,4 +1399,16 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
             label.ClipStart,
             label.ClipEnd);
     }
+
+    private sealed record HarvestSessionState(
+        IReadOnlyList<HarvestCandidate> Candidates,
+        string? SelectedCandidateKey,
+        Dictionary<string, SignalProfile> ProfileCache,
+        Dictionary<string, CandidateDraftState> CandidateDrafts);
+
+    private sealed record SweepTopResult(
+        double WindowSeconds,
+        double MinWindowSeconds,
+        int DecodeEveryMs,
+        int Confirmations);
 }
