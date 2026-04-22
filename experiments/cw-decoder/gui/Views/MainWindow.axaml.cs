@@ -20,6 +20,9 @@ public partial class MainWindow : Window
     private void OnRefreshClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
         => Vm?.RefreshDevices();
 
+    private void OnResetSensitivityClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+        => Vm?.ResetSensitivity();
+
     private async void OnOpenFileClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
         if (StorageProvider is null || Vm is null) return;

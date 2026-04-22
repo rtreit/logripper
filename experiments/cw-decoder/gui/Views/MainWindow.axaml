@@ -69,7 +69,7 @@
     </Style>
   </Window.Styles>
 
-  <Grid RowDefinitions="Auto,Auto,Auto,*,Auto">
+  <Grid RowDefinitions="Auto,Auto,Auto,Auto,*,Auto">
     <!-- Header -->
     <Border Grid.Row="0" Padding="18,14" Background="{StaticResource BgPanel}" BorderBrush="{StaticResource EdgeGlow}" BorderThickness="0,0,0,1">
       <Grid ColumnDefinitions="Auto,*,Auto">
@@ -101,8 +101,62 @@
       </Grid>
     </Border>
 
+    <!-- Sensitivity panel: 3 sliders + signal-quality readout + reset.
+         Sends config-update commands to the decoder over stdin in real time. -->
+    <Border Grid.Row="2" Padding="18,10" Background="{StaticResource BgPanel}"
+            BorderBrush="{StaticResource GridLine}" BorderThickness="0,0,0,1">
+      <Grid ColumnDefinitions="Auto,*,Auto,*,Auto,*,Auto,Auto" >
+        <TextBlock Text="SENS" Classes="label" VerticalAlignment="Center" Margin="0,0,8,0" />
+
+        <!-- SNR threshold (dB) -->
+        <StackPanel Grid.Column="1" Spacing="2" Margin="4,0,16,0">
+          <Grid ColumnDefinitions="Auto,*,Auto">
+            <TextBlock Text="MIN SNR" Classes="label" />
+            <TextBlock Grid.Column="2" Text="{Binding MinSnrDb, StringFormat={}{0:F1} dB}" Classes="label" Foreground="{StaticResource AccentLime}" />
+          </Grid>
+          <Slider Minimum="0" Maximum="15" SmallChange="0.5" LargeChange="2"
+                  TickFrequency="3" IsSnapToTickEnabled="False"
+                  Value="{Binding MinSnrDb, Mode=TwoWay}" />
+        </StackPanel>
+
+        <TextBlock Grid.Column="2" Text="·" Foreground="{StaticResource GridLine}" VerticalAlignment="Center" />
+
+        <!-- Pitch lock confidence (dB) -->
+        <StackPanel Grid.Column="3" Spacing="2" Margin="4,0,16,0">
+          <Grid ColumnDefinitions="Auto,*,Auto">
+            <TextBlock Text="PITCH LOCK" Classes="label" />
+            <TextBlock Grid.Column="2" Text="{Binding PitchMinSnrDb, StringFormat={}{0:F1} dB}" Classes="label" Foreground="{StaticResource AccentLime}" />
+          </Grid>
+          <Slider Minimum="0" Maximum="20" SmallChange="0.5" LargeChange="2"
+                  TickFrequency="4" Value="{Binding PitchMinSnrDb, Mode=TwoWay}" />
+        </StackPanel>
+
+        <TextBlock Grid.Column="4" Text="·" Foreground="{StaticResource GridLine}" VerticalAlignment="Center" />
+
+        <!-- Threshold scale -->
+        <StackPanel Grid.Column="5" Spacing="2" Margin="4,0,16,0">
+          <Grid ColumnDefinitions="Auto,*,Auto">
+            <TextBlock Text="THRESHOLD ×" Classes="label" />
+            <TextBlock Grid.Column="2" Text="{Binding ThresholdScale, StringFormat={}{0:F2}}" Classes="label" Foreground="{StaticResource AccentLime}" />
+          </Grid>
+          <Slider Minimum="0.3" Maximum="2.0" SmallChange="0.05" LargeChange="0.2"
+                  TickFrequency="0.5" Value="{Binding ThresholdScale, Mode=TwoWay}" />
+        </StackPanel>
+
+        <!-- Quality indicator (NOISE / WEAK / GOOD / STRONG / NO LOCK) -->
+        <Border Grid.Column="6" Padding="10,4" Margin="0,0,12,0" VerticalAlignment="Center"
+                Background="#0E2A3D" BorderBrush="{StaticResource AccentCyan}" BorderThickness="1" CornerRadius="2">
+          <TextBlock Text="{Binding SignalQualityLabel}" FontFamily="Consolas" FontSize="13"
+                     Foreground="{StaticResource AccentCyan}" LetterSpacing="3" />
+        </Border>
+
+        <Button Grid.Column="7" Classes="primary" Content="RESET" Click="OnResetSensitivityClick"
+                FontSize="11" Padding="14,4" />
+      </Grid>
+    </Border>
+
     <!-- Telemetry row: signal meter + WPM panel + sparkline -->
-    <Grid Grid.Row="2" ColumnDefinitions="*,*" Margin="14,12,14,0" >
+    <Grid Grid.Row="3" ColumnDefinitions="*,*" Margin="14,12,14,0" >
       <!-- Signal strength column -->
       <Border Classes="panel" Margin="0,0,7,0">
         <Grid RowDefinitions="Auto,Auto,Auto" RowSpacing="10">
@@ -190,7 +244,7 @@
     </Grid>
 
     <!-- Transcript area -->
-    <Border Grid.Row="3" Classes="panel" Margin="14,12,14,4">
+    <Border Grid.Row="4" Classes="panel" Margin="14,12,14,4">
       <Grid RowDefinitions="Auto,*">
         <Grid ColumnDefinitions="*,Auto">
           <TextBlock Text="DECODED MESSAGE" Classes="label" />
@@ -239,7 +293,7 @@
     </Border>
 
     <!-- Status -->
-    <Border Grid.Row="4" Padding="18,8" Background="{StaticResource BgPanel}" BorderBrush="{StaticResource EdgeGlow}" BorderThickness="0,1,0,0">
+    <Border Grid.Row="5" Padding="18,8" Background="{StaticResource BgPanel}" BorderBrush="{StaticResource EdgeGlow}" BorderThickness="0,1,0,0">
       <TextBlock Text="{Binding StatusText}" FontFamily="Consolas" FontSize="11" Foreground="{StaticResource TextDim}" LetterSpacing="2" />
     </Border>
   </Grid>

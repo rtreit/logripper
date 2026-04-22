@@ -74,6 +74,19 @@ enum Cmd {
         /// Emit one JSON object per event to stdout (for the Avalonia GUI bridge).
         #[arg(long)]
         json: bool,
+        /// Initial minimum tone-vs-noise ratio in dB (operator sensitivity).
+        #[arg(long, default_value_t = streaming::DEFAULT_MIN_SNR_DB)]
+        min_snr_db: f32,
+        /// Initial pitch-lock confidence in dB (peak-vs-median ratio).
+        #[arg(long, default_value_t = streaming::DEFAULT_PITCH_MIN_SNR_DB)]
+        pitch_min_snr_db: f32,
+        /// Initial threshold scale (>1 = less sensitive amplitude gate).
+        #[arg(long, default_value_t = streaming::DEFAULT_THRESHOLD_SCALE)]
+        threshold_scale: f32,
+        /// Read NDJSON config-update lines from stdin while streaming.
+        /// Each line: {"type":"config","min_snr_db":...,"pitch_min_snr_db":...,"threshold_scale":...}
+        #[arg(long)]
+        stdin_control: bool,
     },
 
     /// Stream live audio through the streaming decoder, printing events to stdout.
@@ -86,6 +99,18 @@ enum Cmd {
         /// Emit one JSON object per event to stdout (for the Avalonia GUI bridge).
         #[arg(long)]
         json: bool,
+        /// Initial minimum tone-vs-noise ratio in dB (operator sensitivity).
+        #[arg(long, default_value_t = streaming::DEFAULT_MIN_SNR_DB)]
+        min_snr_db: f32,
+        /// Initial pitch-lock confidence in dB.
+        #[arg(long, default_value_t = streaming::DEFAULT_PITCH_MIN_SNR_DB)]
+        pitch_min_snr_db: f32,
+        /// Initial threshold scale.
+        #[arg(long, default_value_t = streaming::DEFAULT_THRESHOLD_SCALE)]
+        threshold_scale: f32,
+        /// Read NDJSON config-update lines from stdin while streaming.
+        #[arg(long)]
+        stdin_control: bool,
     },
 }
 
@@ -122,11 +147,17 @@ fn main() -> Result<()> {
                 .context("opening live audio device")?;
             tui::run(capture, log_capture)
         }
-        Cmd::StreamFile { path, chunk_ms, realtime, quiet, json } => {
-            run_stream_file(&path, chunk_ms, realtime, quiet, json)
+        Cmd::StreamFile { path, chunk_ms, realtime, quiet, json, min_snr_db, pitch_min_snr_db, threshold_scale, stdin_control } => {
+            let cfg = streaming::DecoderConfig {
+                min_snr_db, pitch_min_snr_db, threshold_scale,
+            };
+            run_stream_file(&path, chunk_ms, realtime, quiet, json, cfg, stdin_control)
         }
-        Cmd::StreamLive { device, seconds, json } => {
-            run_stream_live(device.as_deref(), seconds, json)
+        Cmd::StreamLive { device, seconds, json, min_snr_db, pitch_min_snr_db, threshold_scale, stdin_control } => {
+            let cfg = streaming::DecoderConfig {
+                min_snr_db, pitch_min_snr_db, threshold_scale,
+            };
+            run_stream_live(device.as_deref(), seconds, json, cfg, stdin_control)
         }
     }
 }
@@ -215,7 +246,7 @@ fn run_file(
 }
 
 
-fn run_stream_file(path: &std::path::Path, chunk_ms: u32, realtime: bool, quiet: bool, json: bool) -> Result<()> {
+fn run_stream_file(path: &std::path::Path, chunk_ms: u32, realtime: bool, quiet: bool, json: bool, cfg: streaming::DecoderConfig, stdin_control: bool) -> Result<()> {
     use std::time::Instant;
     let audio = audio::decode_file(path).context("decoding audio file")?;
     let dur = audio.samples.len() as f32 / audio.sample_rate as f32;
@@ -227,6 +258,11 @@ fn run_stream_file(path: &std::path::Path, chunk_ms: u32, realtime: bool, quiet:
             "path": path.display().to_string(),
             "rate": audio.sample_rate,
             "duration": dur,
+            "config": serde_json::json!({
+                "min_snr_db": cfg.min_snr_db,
+                "pitch_min_snr_db": cfg.pitch_min_snr_db,
+                "threshold_scale": cfg.threshold_scale,
+            }),
         }));
     } else {
         println!(
@@ -236,6 +272,8 @@ fn run_stream_file(path: &std::path::Path, chunk_ms: u32, realtime: bool, quiet:
     }
 
     let mut decoder = streaming::StreamingDecoder::new(audio.sample_rate)?;
+    decoder.set_config(cfg);
+    let cfg_channel = stdin_control.then(spawn_stdin_config_channel);
     let chunk_samples = ((audio.sample_rate as u64 * chunk_ms as u64) / 1000) as usize;
     let chunk_samples = chunk_samples.max(64);
 
@@ -247,6 +285,22 @@ fn run_stream_file(path: &std::path::Path, chunk_ms: u32, realtime: bool, quiet:
     for chunk in audio.samples.chunks(chunk_samples) {
         let t_in_audio = consumed as f32 / audio.sample_rate as f32;
         consumed += chunk.len();
+
+        if let Some(rx) = cfg_channel.as_ref() {
+            let mut latest: Option<streaming::DecoderConfig> = None;
+            while let Ok(c) = rx.try_recv() { latest = Some(c); }
+            if let Some(c) = latest {
+                decoder.set_config(c);
+                if let Some(em) = emitter.as_mut() {
+                    em.emit(t_in_audio, serde_json::json!({
+                        "type": "config_ack",
+                        "min_snr_db": c.min_snr_db,
+                        "pitch_min_snr_db": c.pitch_min_snr_db,
+                        "threshold_scale": c.threshold_scale,
+                    }));
+                }
+            }
+        }
 
         let events = decoder.feed(chunk)?;
         let now_real = started.elapsed().as_secs_f32();
@@ -347,13 +401,15 @@ fn run_stream_file(path: &std::path::Path, chunk_ms: u32, realtime: bool, quiet:
     Ok(())
 }
 
-fn run_stream_live(device: Option<&str>, seconds: f32, json: bool) -> Result<()> {
+fn run_stream_live(device: Option<&str>, seconds: f32, json: bool, cfg: streaming::DecoderConfig, stdin_control: bool) -> Result<()> {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
     use std::time::{Duration, Instant};
 
     let capture = audio::open_input(device, 1.0)?;
     let mut decoder = streaming::StreamingDecoder::new(capture.sample_rate)?;
+    decoder.set_config(cfg);
+    let cfg_channel = stdin_control.then(spawn_stdin_config_channel);
     let mut emitter = if json { Some(json::JsonEmitter::new()) } else { None };
     if let Some(em) = emitter.as_mut() {
         em.emit(0.0, serde_json::json!({
@@ -361,6 +417,11 @@ fn run_stream_live(device: Option<&str>, seconds: f32, json: bool) -> Result<()>
             "source": "live",
             "device": capture.device_name,
             "rate": capture.sample_rate,
+            "config": serde_json::json!({
+                "min_snr_db": cfg.min_snr_db,
+                "pitch_min_snr_db": cfg.pitch_min_snr_db,
+                "threshold_scale": cfg.threshold_scale,
+            }),
         }));
     } else {
         println!("Live streaming from: {}", capture.device_name);
@@ -381,6 +442,22 @@ fn run_stream_live(device: Option<&str>, seconds: f32, json: bool) -> Result<()>
         if stop.load(Ordering::Relaxed) { break; }
         if seconds > 0.0 && started.elapsed().as_secs_f32() >= seconds { break; }
         std::thread::sleep(Duration::from_millis(50));
+
+        if let Some(rx) = cfg_channel.as_ref() {
+            let mut latest: Option<streaming::DecoderConfig> = None;
+            while let Ok(c) = rx.try_recv() { latest = Some(c); }
+            if let Some(c) = latest {
+                decoder.set_config(c);
+                if let Some(em) = emitter.as_mut() {
+                    em.emit(started.elapsed().as_secs_f32(), serde_json::json!({
+                        "type": "config_ack",
+                        "min_snr_db": c.min_snr_db,
+                        "pitch_min_snr_db": c.pitch_min_snr_db,
+                        "threshold_scale": c.threshold_scale,
+                    }));
+                }
+            }
+        }
 
         let chunk = {
             let lock = capture.buffer.lock();
@@ -465,4 +542,44 @@ fn run_stream_live(device: Option<&str>, seconds: f32, json: bool) -> Result<()>
 
 fn ctrlc_setup<F: FnMut() + Send + 'static>(_f: F) {
     // Best-effort: no ctrlc crate, rely on terminal interrupt for now.
+}
+
+/// Spawn a background thread that reads NDJSON config-update lines from
+/// stdin and forwards parsed [`streaming::DecoderConfig`] values to the
+/// returned receiver. Lines that don't parse as a config command are
+/// silently ignored so unknown messages don't crash the decoder.
+///
+/// Wire format (one JSON object per line):
+///   {"type":"config","min_snr_db":6.0,"pitch_min_snr_db":8.0,"threshold_scale":1.0}
+///
+/// Any field may be omitted; omitted fields keep their previous value.
+fn spawn_stdin_config_channel() -> std::sync::mpsc::Receiver<streaming::DecoderConfig> {
+    use std::io::BufRead;
+    let (tx, rx) = std::sync::mpsc::channel::<streaming::DecoderConfig>();
+    std::thread::spawn(move || {
+        let stdin = std::io::stdin();
+        let mut state = streaming::DecoderConfig::defaults();
+        for line in stdin.lock().lines().map_while(Result::ok) {
+            let trimmed = line.trim();
+            if trimmed.is_empty() { continue; }
+            let v: serde_json::Value = match serde_json::from_str(trimmed) {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+            if v.get("type").and_then(|t| t.as_str()) != Some("config") {
+                continue;
+            }
+            if let Some(x) = v.get("min_snr_db").and_then(|x| x.as_f64()) {
+                state.min_snr_db = x as f32;
+            }
+            if let Some(x) = v.get("pitch_min_snr_db").and_then(|x| x.as_f64()) {
+                state.pitch_min_snr_db = x as f32;
+            }
+            if let Some(x) = v.get("threshold_scale").and_then(|x| x.as_f64()) {
+                state.threshold_scale = x as f32;
+            }
+            if tx.send(state).is_err() { break; }
+        }
+    });
+    rx
 }

@@ -45,20 +45,70 @@ const PRIME_INTERVALS: usize = 8;
 /// EMA smoothing factor for post-bootstrap dit-length updates.
 const DIT_EMA_ALPHA: f32 = 0.15;
 
-/// Off-band noise reference offset from the locked pitch (Hz). We run two
-/// extra Goertzels at +/- this offset to estimate broadband noise at the
-/// same instant. CW is narrow-band so a real signal will dominate the
-/// pitch bin while staying well below the side bins.
-const NOISE_OFFSET_HZ: f32 = 250.0;
-/// Required signal-to-noise ratio (linear) for a power sample to be
-/// considered "tone present" by the keying state machine. 4.0 ~= 6 dB.
-/// Below this, the sample is treated as noise even if it crosses the
-/// adaptive amplitude threshold.
-const MIN_SNR_RATIO: f32 = 4.0;
+/// Off-band noise reference offsets from the locked pitch (Hz). We run extra
+/// Goertzels at ± each offset to estimate broadband noise around the same
+/// instant. CW is narrow-band so a real signal will dominate the pitch bin
+/// while staying well below ALL the side bins. Using multiple offsets and
+/// taking the *median* makes the gate robust against:
+///   * a single side bin landing on an adjacent CW signal
+///   * mains hum / harmonics at one specific offset
+///   * partial filter rolloff at the band edges
+const NOISE_OFFSETS_HZ: &[f32] = &[150.0, 300.0, 500.0, 700.0];
+/// Default required signal-to-noise ratio (dB) for a power sample to be
+/// considered "tone present" by the keying state machine. Below this, the
+/// sample is treated as noise even if it crosses the adaptive amplitude
+/// threshold. Operator-tunable at runtime via [`DecoderConfig::min_snr_db`].
+pub const DEFAULT_MIN_SNR_DB: f32 = 6.0;
+/// Default pitch-lock confidence (dB). The peak FFT bin must be at least
+/// this many dB above the in-band median for `detect_pitch` to succeed,
+/// otherwise we refuse to lock. This is what stops the decoder from
+/// pretending a pure-noise band has a tone in it.
+pub const DEFAULT_PITCH_MIN_SNR_DB: f32 = 8.0;
+/// Default scale on the IQR-derived adaptive amplitude threshold. >1 makes
+/// the decoder less sensitive (raises the on/off cutoff); <1 more sensitive.
+pub const DEFAULT_THRESHOLD_SCALE: f32 = 1.0;
 /// Smoothing window for the noise reference (ms). Longer than the signal
 /// smoother so brief tone leakage into side bins doesn't lift the noise
 /// floor and disable the gate.
 const NOISE_SMOOTH_MS: f32 = 200.0;
+
+/// Runtime-tunable decoder parameters. Cloneable so the GUI/CLI can
+/// snapshot, mutate, and resend without locking. All fields use
+/// natural units (dB, dimensionless scale) so the wire protocol
+/// matches what the operator sees in the UI.
+#[derive(Debug, Clone, Copy)]
+pub struct DecoderConfig {
+    /// Minimum tone-vs-noise ratio (dB) the streaming gate requires before
+    /// a power sample is treated as "tone present".
+    pub min_snr_db: f32,
+    /// Minimum FFT-peak vs in-band median (dB) required at pitch-lock
+    /// time. Higher = more conservative, refuses to lock onto pure noise.
+    pub pitch_min_snr_db: f32,
+    /// Scale factor on the IQR-derived adaptive amplitude threshold. 1.0
+    /// is the classic value; >1 desensitises, <1 sensitises.
+    pub threshold_scale: f32,
+}
+
+impl DecoderConfig {
+    pub fn defaults() -> Self {
+        Self {
+            min_snr_db: DEFAULT_MIN_SNR_DB,
+            pitch_min_snr_db: DEFAULT_PITCH_MIN_SNR_DB,
+            threshold_scale: DEFAULT_THRESHOLD_SCALE,
+        }
+    }
+    /// Convert min_snr_db → linear power ratio for the inner gate.
+    pub fn min_snr_linear(&self) -> f32 {
+        10.0_f32.powf(self.min_snr_db / 10.0)
+    }
+    pub fn pitch_min_snr_linear(&self) -> f32 {
+        10.0_f32.powf(self.pitch_min_snr_db / 10.0)
+    }
+}
+
+impl Default for DecoderConfig {
+    fn default() -> Self { Self::defaults() }
+}
 
 // --- Events ------------------------------------------------------------
 #[derive(Debug, Clone)]
@@ -198,7 +248,11 @@ impl Goertzel {
 }
 
 // --- Pitch detection: STFT over a buffered slice -----------------------
-fn detect_pitch(samples: &[f32], sample_rate: u32) -> Result<f32> {
+/// Detect the dominant in-band tone. `min_snr_linear` is the required ratio
+/// of peak power to in-band median power; if not met we refuse to lock and
+/// return Err so the caller stays in "no signal" state instead of
+/// hallucinating decodes from background noise.
+fn detect_pitch(samples: &[f32], sample_rate: u32, min_snr_linear: f32) -> Result<f32> {
     let fft_size = 4096;
     let step = fft_size / 4;
     if samples.len() < fft_size {
@@ -229,15 +283,33 @@ fn detect_pitch(samples: &[f32], sample_rate: u32) -> Result<f32> {
     let df = sample_rate as f32 / fft_size as f32;
     let mut best_idx = 0;
     let mut best_p = 0.0;
+    let mut in_band: Vec<f32> = Vec::new();
     for (i, &p) in sum.iter().enumerate() {
         let f = i as f32 * df;
-        if (FREQ_MIN_HZ..=FREQ_MAX_HZ).contains(&f) && p > best_p {
-            best_p = p;
-            best_idx = i;
+        if (FREQ_MIN_HZ..=FREQ_MAX_HZ).contains(&f) {
+            in_band.push(p);
+            if p > best_p {
+                best_p = p;
+                best_idx = i;
+            }
         }
     }
-    if best_p == 0.0 {
+    if best_p == 0.0 || in_band.is_empty() {
         return Err(anyhow!("no dominant pitch in band"));
+    }
+    // Peakiness check: peak power must clear the in-band median by at least
+    // `min_snr_linear`. Pure noise has roughly flat in-band power so the
+    // peak/median ratio sits near 1. A genuine CW tone produces a sharp
+    // bin much higher than median.
+    in_band.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let median = in_band[in_band.len() / 2].max(1e-30);
+    let ratio = best_p / median;
+    if ratio < min_snr_linear {
+        return Err(anyhow!(
+            "pitch peak {:.1} dB above median, need {:.1} dB",
+            10.0 * ratio.log10(),
+            10.0 * min_snr_linear.log10()
+        ));
     }
     Ok(best_idx as f32 * df)
 }
@@ -323,6 +395,8 @@ struct Decoder {
 
     threshold: f32,
     threshold_dirty_count: usize,
+    /// Operator-controlled multiplier on the IQR-derived threshold.
+    threshold_scale: f32,
 
     is_on: bool,
     current_run: usize,
@@ -353,6 +427,7 @@ impl Decoder {
             power_rate,
             threshold: 0.0,
             threshold_dirty_count: 0,
+            threshold_scale: DEFAULT_THRESHOLD_SCALE,
             is_on: false,
             current_run: 0,
             have_first_sample: false,
@@ -382,7 +457,9 @@ impl Decoder {
         let p25 = v[v.len() / 4];
         let p75 = v[3 * v.len() / 4];
         let iqr = p75 - p25;
-        self.threshold = p25 + iqr * 0.5;
+        // Multiply by `threshold_scale` so the operator can desensitise on
+        // noisy bands (>1.0) or sensitise on quiet bands (<1.0).
+        self.threshold = p25 + iqr * 0.5 * self.threshold_scale;
     }
 
     fn push_interval(&mut self, ivl: Interval) {
@@ -589,6 +666,9 @@ pub struct StreamingDecoder {
     hp: Biquad,
     lp: Biquad,
 
+    /// Operator-tunable runtime configuration.
+    config: DecoderConfig,
+
     /// Resampled+filtered audio waiting for pitch lock.
     pre_lock_buf: Vec<f32>,
     pitch_locked: Option<f32>,
@@ -596,10 +676,10 @@ pub struct StreamingDecoder {
     pitch_reeval_threshold: usize,
 
     goertzel: Option<Goertzel>,
-    /// Off-band noise references (lo and hi side-bins around the locked
-    /// pitch). Used to compute SNR per power sample.
-    noise_lo: Option<Goertzel>,
-    noise_hi: Option<Goertzel>,
+    /// Off-band noise references at multiple offsets around the locked
+    /// pitch. We take the *median* per power sample to estimate noise,
+    /// which is robust to a single bin landing on adjacent CW or hum.
+    noise_bins: Vec<Goertzel>,
     smooth_window: usize,
     /// Recent power samples for moving average.
     smooth_buf: VecDeque<f32>,
@@ -649,13 +729,13 @@ impl StreamingDecoder {
             raw_in: Vec::with_capacity(RESAMPLER_CHUNK * 2),
             hp: Biquad::new(FilterType::HighPass, FREQ_MIN_HZ, TARGET_RATE),
             lp: Biquad::new(FilterType::LowPass, FREQ_MAX_HZ, TARGET_RATE),
+            config: DecoderConfig::defaults(),
             pre_lock_buf: Vec::with_capacity((TARGET_RATE as f32 * PITCH_LOCK_SECONDS) as usize),
             pitch_locked: None,
             samples_since_pitch_eval: 0,
             pitch_reeval_threshold: (TARGET_RATE as f32 * PITCH_REEVAL_SECONDS) as usize,
             goertzel: None,
-            noise_lo: None,
-            noise_hi: None,
+            noise_bins: Vec::new(),
             smooth_window,
             smooth_buf: VecDeque::with_capacity(smooth_window + 1),
             smooth_sum: 0.0,
@@ -671,6 +751,15 @@ impl StreamingDecoder {
     pub fn pitch(&self) -> Option<f32> { self.pitch_locked }
     pub fn current_wpm(&self) -> Option<f32> { self.decoder.current_wpm() }
     pub fn current_threshold(&self) -> f32 { self.decoder.threshold }
+    #[allow(dead_code)]
+    pub fn config(&self) -> DecoderConfig { self.config }
+
+    /// Apply a new runtime configuration. Safe to call mid-stream — only
+    /// affects subsequent power samples and the next pitch re-lock.
+    pub fn set_config(&mut self, cfg: DecoderConfig) {
+        self.config = cfg;
+        self.decoder.threshold_scale = cfg.threshold_scale;
+    }
 
     /// Feed a chunk of raw audio at `source_rate`. Returns events emitted by
     /// this call (decoded characters, WPM updates, pitch lock).
@@ -689,21 +778,25 @@ impl StreamingDecoder {
             self.pre_lock_buf.extend_from_slice(&filtered);
             let need = (TARGET_RATE as f32 * PITCH_LOCK_SECONDS) as usize;
             if self.pre_lock_buf.len() >= need {
-                if let Ok(pitch) = detect_pitch(&self.pre_lock_buf, TARGET_RATE) {
+                if let Ok(pitch) = detect_pitch(&self.pre_lock_buf, TARGET_RATE, self.config.pitch_min_snr_linear()) {
                     self.pitch_locked = Some(pitch);
                     let win_size = (TARGET_RATE as f32 * GOERTZEL_WIN_MS / 1000.0) as usize;
                     let step = (win_size / 4).max(1);
                     self.goertzel = Some(Goertzel::new(pitch, TARGET_RATE, win_size, step));
-                    // Side-band noise references. Skip a side if it would land
-                    // outside the audio passband — we'll just use the other one.
-                    let lo_f = pitch - NOISE_OFFSET_HZ;
-                    let hi_f = pitch + NOISE_OFFSET_HZ;
-                    self.noise_lo = if lo_f >= FREQ_MIN_HZ {
-                        Some(Goertzel::new(lo_f, TARGET_RATE, win_size, step))
-                    } else { None };
-                    self.noise_hi = if hi_f <= FREQ_MAX_HZ {
-                        Some(Goertzel::new(hi_f, TARGET_RATE, win_size, step))
-                    } else { None };
+                    // Multi-bin off-band noise references. Each offset is
+                    // tried on both sides; only those that fit inside the
+                    // audio passband [FREQ_MIN_HZ, FREQ_MAX_HZ] are used.
+                    self.noise_bins.clear();
+                    for &off in NOISE_OFFSETS_HZ {
+                        let lo = pitch - off;
+                        let hi = pitch + off;
+                        if lo >= FREQ_MIN_HZ {
+                            self.noise_bins.push(Goertzel::new(lo, TARGET_RATE, win_size, step));
+                        }
+                        if hi <= FREQ_MAX_HZ {
+                            self.noise_bins.push(Goertzel::new(hi, TARGET_RATE, win_size, step));
+                        }
+                    }
                     events.push(StreamEvent::PitchUpdate { pitch_hz: pitch });
                     // Replay the pre-lock audio through Goertzel so we don't lose it.
                     let drained = std::mem::take(&mut self.pre_lock_buf);
@@ -740,17 +833,15 @@ impl StreamingDecoder {
         let mut power_out = Vec::new();
         goertzel.push(audio, &mut power_out);
 
-        // Same audio fed through both side-band Goertzels emits the same
-        // number of power samples (identical win_size/step), so they align
-        // 1:1 with `power_out`.
-        let mut noise_lo_out = Vec::new();
-        let mut noise_hi_out = Vec::new();
-        if let Some(nl) = self.noise_lo.as_mut() {
-            nl.push(audio, &mut noise_lo_out);
+        // Run all noise-bin Goertzels in lockstep (identical win_size/step,
+        // so each emits exactly the same number of samples as `power_out`).
+        let mut noise_outs: Vec<Vec<f32>> = (0..self.noise_bins.len())
+            .map(|_| Vec::new())
+            .collect();
+        for (idx, nb) in self.noise_bins.iter_mut().enumerate() {
+            nb.push(audio, &mut noise_outs[idx]);
         }
-        if let Some(nh) = self.noise_hi.as_mut() {
-            nh.push(audio, &mut noise_hi_out);
-        }
+        let snr_threshold = self.config.min_snr_linear();
 
         for (i, p) in power_out.iter().copied().enumerate() {
             // Signal moving average.
@@ -763,16 +854,20 @@ impl StreamingDecoder {
             }
             let smoothed = self.smooth_sum / self.smooth_buf.len() as f32;
 
-            // Noise reference: take the smaller of the two side bins so a
-            // single bleed-through can't disable the gate. If only one side
-            // exists, use it directly.
-            let nl = noise_lo_out.get(i).copied();
-            let nh = noise_hi_out.get(i).copied();
-            let noise_raw = match (nl, nh) {
-                (Some(a), Some(b)) => a.min(b),
-                (Some(a), None) => a,
-                (None, Some(b)) => b,
-                (None, None) => 0.0,
+            // Noise reference: take the *median* of the side-bin readings
+            // at this instant. Median (vs min) is robust to a single bin
+            // landing on adjacent CW/hum and stays representative even
+            // when one bin happens to be quiet.
+            let noise_raw = if noise_outs.is_empty() {
+                0.0
+            } else {
+                let mut buf: Vec<f32> = noise_outs.iter().filter_map(|v| v.get(i).copied()).collect();
+                if buf.is_empty() {
+                    0.0
+                } else {
+                    buf.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+                    buf[buf.len() / 2]
+                }
             };
             self.noise_smooth_buf.push_back(noise_raw);
             self.noise_smooth_sum += noise_raw;
@@ -787,7 +882,7 @@ impl StreamingDecoder {
             // reference. With no noise reading yet we default to "OK" so the
             // existing amplitude threshold still does its job.
             let snr = if noise > 0.0 { smoothed / noise } else { f32::INFINITY };
-            let snr_ok = snr >= MIN_SNR_RATIO;
+            let snr_ok = snr >= snr_threshold;
 
             // Throttled Power event for UI meters (~POWER_EVENT_HZ).
             self.power_emit_accum += 1.0;

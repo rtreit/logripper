@@ -54,20 +54,34 @@ internal sealed class CwDecoderProcess : IDisposable
         catch { return Array.Empty<string>(); }
     }
 
-    public void StartLive(string? device)
+    public void StartLive(string? device, DecoderConfig cfg)
     {
         Stop();
-        var args = "stream-live --json";
+        var args = $"stream-live --json --stdin-control {cfg.ToCliArgs()}";
         if (!string.IsNullOrWhiteSpace(device)) args += $" --device \"{device}\"";
         Spawn(args);
     }
 
-    public void StartFile(string path, bool realtime)
+    public void StartFile(string path, bool realtime, DecoderConfig cfg)
     {
         Stop();
-        var args = $"stream-file --json \"{path}\"";
+        var args = $"stream-file --json --stdin-control {cfg.ToCliArgs()} \"{path}\"";
         if (realtime) args += " --realtime";
         Spawn(args);
+    }
+
+    /// <summary>Send a runtime config update to the running decoder via stdin.
+    /// No-op if no decoder is running. Safe to call from any thread.</summary>
+    public void SendConfig(DecoderConfig cfg)
+    {
+        var p = _proc;
+        if (p is null || p.HasExited) return;
+        try
+        {
+            p.StandardInput.WriteLine(cfg.ToJsonCommand());
+            p.StandardInput.Flush();
+        }
+        catch { /* best effort: process may be in shutdown */ }
     }
 
     public void Stop()
@@ -95,6 +109,7 @@ internal sealed class CwDecoderProcess : IDisposable
         {
             RedirectStandardOutput = true,
             RedirectStandardError = true,
+            RedirectStandardInput = true,
             UseShellExecute = false,
             CreateNoWindow = true,
             WorkingDirectory = Path.GetDirectoryName(exe)!,

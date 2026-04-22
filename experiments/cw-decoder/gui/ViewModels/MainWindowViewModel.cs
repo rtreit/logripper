@@ -56,7 +56,11 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
     public double Wpm { get => _wpm; set => Set(ref _wpm, value); }
 
     private double _pitchHz;
-    public double PitchHz { get => _pitchHz; set => Set(ref _pitchHz, value); }
+    public double PitchHz
+    {
+        get => _pitchHz;
+        set { if (Set(ref _pitchHz, value)) OnPropertyChanged(nameof(SignalQualityLabel)); }
+    }
 
     private double _power;
     public double Power { get => _power; set => Set(ref _power, value); }
@@ -68,7 +72,11 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
     public bool Signal { get => _signal; set => Set(ref _signal, value); }
 
     private double _snrDb;
-    public double SnrDb { get => _snrDb; set => Set(ref _snrDb, value); }
+    public double SnrDb
+    {
+        get => _snrDb;
+        set { if (Set(ref _snrDb, value)) OnPropertyChanged(nameof(SignalQualityLabel)); }
+    }
 
     private double _noise;
     public double Noise { get => _noise; set => Set(ref _noise, value); }
@@ -86,6 +94,54 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
     private double _normalizedThreshold;
     public double NormalizedThreshold { get => _normalizedThreshold; set => Set(ref _normalizedThreshold, value); }
 
+    private double _minSnrDb = DecoderConfig.DefaultMinSnrDb;
+    public double MinSnrDb
+    {
+        get => _minSnrDb;
+        set { if (Set(ref _minSnrDb, value)) PushConfig(); }
+    }
+
+    private double _pitchMinSnrDb = DecoderConfig.DefaultPitchMinSnrDb;
+    public double PitchMinSnrDb
+    {
+        get => _pitchMinSnrDb;
+        set { if (Set(ref _pitchMinSnrDb, value)) PushConfig(); }
+    }
+
+    private double _thresholdScale = DecoderConfig.DefaultThresholdScale;
+    public double ThresholdScale
+    {
+        get => _thresholdScale;
+        set { if (Set(ref _thresholdScale, value)) PushConfig(); }
+    }
+
+    public string SignalQualityLabel
+    {
+        get
+        {
+            if (PitchHz <= 0) return "NO LOCK";
+            if (SnrDb < MinSnrDb - 2) return "NOISE";
+            if (SnrDb < MinSnrDb + 2) return "WEAK";
+            if (SnrDb < MinSnrDb + 10) return "GOOD";
+            return "STRONG";
+        }
+    }
+
+    public void ResetSensitivity()
+    {
+        MinSnrDb = DecoderConfig.DefaultMinSnrDb;
+        PitchMinSnrDb = DecoderConfig.DefaultPitchMinSnrDb;
+        ThresholdScale = DecoderConfig.DefaultThresholdScale;
+    }
+
+    private DecoderConfig CurrentConfig() => new(MinSnrDb, PitchMinSnrDb, ThresholdScale);
+
+    private void PushConfig()
+    {
+        if (IsRunning) _process.SendConfig(CurrentConfig());
+        OnPropertyChanged(nameof(SignalQualityLabel));
+    }
+
     private const int MaxWpmHistory = 200;
     private double _powerCeiling = 1e-6;
 
@@ -102,7 +158,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
         NormalizedThreshold = 0;
         _powerCeiling = 1e-6;
         StatusText = "Starting…";
-        _process.StartLive(SelectedDevice);
+        _process.StartLive(SelectedDevice, CurrentConfig());
         IsRunning = true;
     }
 
@@ -114,7 +170,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
         Wpm = 0;
         _powerCeiling = 1e-6;
         StatusText = $"Decoding {path}";
-        _process.StartFile(path, realtime: true);
+        _process.StartFile(path, realtime: true, CurrentConfig());
         IsRunning = true;
     }
 
