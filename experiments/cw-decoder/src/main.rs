@@ -5,13 +5,19 @@ use clap::{Parser, Subcommand};
 
 mod audio;
 mod decoder;
+mod ditdah_streaming;
+mod harvest;
 mod json;
 mod log_capture;
+mod preview;
 mod streaming;
 mod tui;
 
 #[derive(Parser, Debug)]
-#[command(name = "cw-decoder", about = "QsoRipper CW PoC: ditdah-based decoder + live WPM")]
+#[command(
+    name = "cw-decoder",
+    about = "QsoRipper CW PoC: ditdah-based decoder + live WPM"
+)]
 struct Cli {
     #[command(subcommand)]
     cmd: Cmd,
@@ -89,6 +95,105 @@ enum Cmd {
         stdin_control: bool,
     },
 
+    /// Stream a file causally by repeatedly re-running whole-window ditdah.
+    StreamFileDitdah {
+        path: PathBuf,
+        /// Chunk size in milliseconds for causal playback.
+        #[arg(long, default_value_t = 50)]
+        chunk_ms: u32,
+        /// Maximum decode history window in seconds.
+        #[arg(long, default_value_t = 20.0)]
+        window: f32,
+        /// Minimum buffered audio before the first decode.
+        #[arg(long, default_value_t = 4.0)]
+        min_window: f32,
+        /// How often to re-run ditdah on the current rolling buffer.
+        #[arg(long, default_value_t = 1000)]
+        decode_every_ms: u32,
+        /// If true, sleep between chunks to simulate real-time playback.
+        #[arg(long)]
+        realtime: bool,
+        /// Suppress per-snapshot lines and only print the final transcript.
+        #[arg(long)]
+        quiet: bool,
+    },
+
+    /// Scan a file in overlapping windows and surface candidate "golden copy"
+    /// spans by comparing baseline ditdah output with the streaming decoder.
+    HarvestFile {
+        path: PathBuf,
+        /// Window length in seconds.
+        #[arg(long, default_value_t = 4.0)]
+        window: f32,
+        /// Hop length in seconds.
+        #[arg(long, default_value_t = 1.0)]
+        hop: f32,
+        /// Streaming chunk size in milliseconds for the comparison pass.
+        #[arg(long, default_value_t = 50)]
+        chunk_ms: u32,
+        /// Maximum number of candidate windows to print.
+        #[arg(long, default_value_t = 12)]
+        top: usize,
+        /// Minimum shared compact characters between offline and streaming
+        /// outputs when no needles are supplied.
+        #[arg(long, default_value_t = 4)]
+        min_shared_chars: usize,
+        /// Anchor string to hunt for (repeatable). Matches are compacted to
+        /// uppercase alphanumerics, so `K5ZD 5NN` matches `K5ZD5NN`.
+        #[arg(long = "needle")]
+        needles: Vec<String>,
+        /// Emit machine-readable JSON instead of human text.
+        #[arg(long)]
+        json: bool,
+        /// Initial minimum tone-vs-noise ratio in dB for the streaming path.
+        #[arg(long, default_value_t = streaming::DEFAULT_MIN_SNR_DB)]
+        min_snr_db: f32,
+        /// Initial pitch-lock confidence in dB for the streaming path.
+        #[arg(long, default_value_t = streaming::DEFAULT_PITCH_MIN_SNR_DB)]
+        pitch_min_snr_db: f32,
+        /// Initial threshold scale for the streaming path.
+        #[arg(long, default_value_t = streaming::DEFAULT_THRESHOLD_SCALE)]
+        threshold_scale: f32,
+    },
+
+    /// Render a slowed WAV preview for a specific file window so a human can
+    /// listen and enter verified copy.
+    PreviewWindow {
+        path: PathBuf,
+        /// Window start in seconds.
+        #[arg(long)]
+        start: f32,
+        /// Window length in seconds.
+        #[arg(long, default_value_t = 4.0)]
+        window: f32,
+        /// Slowdown factor (>1 = slower / longer).
+        #[arg(long, default_value_t = 2.5)]
+        slowdown: f32,
+        /// Leading/trailing silence padding in milliseconds.
+        #[arg(long, default_value_t = 150)]
+        padding_ms: u32,
+        /// Output WAV path.
+        #[arg(long)]
+        output: PathBuf,
+    },
+
+    /// Build a tone-energy profile around a candidate region for the labeling UI.
+    ProfileWindow {
+        path: PathBuf,
+        /// Selected region start in seconds.
+        #[arg(long)]
+        start: f32,
+        /// Selected region end in seconds.
+        #[arg(long)]
+        end: f32,
+        /// Tone to inspect.
+        #[arg(long)]
+        pitch_hz: f32,
+        /// Optional WPM estimate used for pause suggestions.
+        #[arg(long)]
+        wpm: Option<f32>,
+    },
+
     /// Stream live audio through the streaming decoder, printing events to stdout.
     StreamLive {
         #[arg(long)]
@@ -147,15 +252,98 @@ fn main() -> Result<()> {
                 .context("opening live audio device")?;
             tui::run(capture, log_capture)
         }
-        Cmd::StreamFile { path, chunk_ms, realtime, quiet, json, min_snr_db, pitch_min_snr_db, threshold_scale, stdin_control } => {
+        Cmd::StreamFile {
+            path,
+            chunk_ms,
+            realtime,
+            quiet,
+            json,
+            min_snr_db,
+            pitch_min_snr_db,
+            threshold_scale,
+            stdin_control,
+        } => {
             let cfg = streaming::DecoderConfig {
-                min_snr_db, pitch_min_snr_db, threshold_scale,
+                min_snr_db,
+                pitch_min_snr_db,
+                threshold_scale,
             };
             run_stream_file(&path, chunk_ms, realtime, quiet, json, cfg, stdin_control)
         }
-        Cmd::StreamLive { device, seconds, json, min_snr_db, pitch_min_snr_db, threshold_scale, stdin_control } => {
+        Cmd::StreamFileDitdah {
+            path,
+            chunk_ms,
+            window,
+            min_window,
+            decode_every_ms,
+            realtime,
+            quiet,
+        } => run_stream_file_ditdah(
+            &path,
+            chunk_ms,
+            window,
+            min_window,
+            decode_every_ms,
+            realtime,
+            quiet,
+            &log_capture,
+        ),
+        Cmd::HarvestFile {
+            path,
+            window,
+            hop,
+            chunk_ms,
+            top,
+            min_shared_chars,
+            needles,
+            json,
+            min_snr_db,
+            pitch_min_snr_db,
+            threshold_scale,
+        } => {
+            let stream_cfg = streaming::DecoderConfig {
+                min_snr_db,
+                pitch_min_snr_db,
+                threshold_scale,
+            };
+            let harvest_cfg = harvest::HarvestConfig {
+                window_seconds: window,
+                hop_seconds: hop,
+                chunk_ms,
+                top,
+                min_shared_chars,
+                needles,
+            };
+            run_harvest_file(&path, harvest_cfg, stream_cfg, json, &log_capture)
+        }
+        Cmd::PreviewWindow {
+            path,
+            start,
+            window,
+            slowdown,
+            padding_ms,
+            output,
+        } => run_preview_window(&path, start, window, slowdown, padding_ms, &output),
+        Cmd::ProfileWindow {
+            path,
+            start,
+            end,
+            pitch_hz,
+            wpm,
+        } => run_profile_window(&path, start, end, pitch_hz, wpm),
+        Cmd::StreamLive {
+            device,
+            seconds,
+            json,
+            min_snr_db,
+            pitch_min_snr_db,
+            threshold_scale,
+            stdin_control,
+        } => {
             let cfg = streaming::DecoderConfig {
-                min_snr_db, pitch_min_snr_db, threshold_scale,
+                min_snr_db,
+                pitch_min_snr_db,
+                threshold_scale,
             };
             run_stream_live(device.as_deref(), seconds, json, cfg, stdin_control)
         }
@@ -245,29 +433,214 @@ fn run_file(
     Ok(())
 }
 
+fn run_harvest_file(
+    path: &std::path::Path,
+    harvest_cfg: harvest::HarvestConfig,
+    stream_cfg: streaming::DecoderConfig,
+    json: bool,
+    log_capture: &log_capture::DitdahLogCapture,
+) -> Result<()> {
+    let audio = audio::decode_file(path).context("decoding audio file")?;
+    let dur = audio.samples.len() as f32 / audio.sample_rate as f32;
+    let candidates = harvest::harvest_candidates_with_progress(
+        &audio.samples,
+        audio.sample_rate,
+        log_capture,
+        stream_cfg,
+        &harvest_cfg,
+        |completed, total, start_s, end_s| {
+            if json {
+                eprintln!(
+                    "HARVEST_PROGRESS\t{}\t{}\t{:.3}\t{:.3}",
+                    completed, total, start_s, end_s
+                );
+            }
+        },
+    )?;
 
-fn run_stream_file(path: &std::path::Path, chunk_ms: u32, realtime: bool, quiet: bool, json: bool, cfg: streaming::DecoderConfig, stdin_control: bool) -> Result<()> {
+    if json {
+        let payload = serde_json::json!({
+            "path": path.display().to_string(),
+            "sample_rate": audio.sample_rate,
+            "duration_s": dur,
+            "window_s": harvest_cfg.window_seconds,
+            "hop_s": harvest_cfg.hop_seconds,
+            "chunk_ms": harvest_cfg.chunk_ms,
+            "needles": harvest_cfg.needles,
+            "candidates": candidates.iter().map(|c| serde_json::json!({
+                "start_s": c.start_s,
+                "end_s": c.end_s,
+                "shared_chars": c.shared_chars,
+                "strongest_copy_len": c.strongest_copy_len,
+                "matched_needles": c.matched_needles,
+                "offline": {
+                    "text": c.offline_text,
+                    "pitch_hz": c.offline_pitch_hz,
+                    "wpm": c.offline_wpm,
+                },
+                "stream": {
+                    "text": c.stream_text,
+                    "pitch_hz": c.stream_pitch_hz,
+                    "wpm": c.stream_wpm,
+                    "threshold": c.stream_threshold,
+                },
+            })).collect::<Vec<_>>(),
+        });
+        println!("{}", serde_json::to_string_pretty(&payload)?);
+        return Ok(());
+    }
+
+    println!(
+        "Harvest: {} ({} Hz, {:.2} s)",
+        path.display(),
+        audio.sample_rate,
+        dur
+    );
+    println!(
+        "Window {:.1}s / hop {:.1}s / chunk {}ms / top {}",
+        harvest_cfg.window_seconds, harvest_cfg.hop_seconds, harvest_cfg.chunk_ms, harvest_cfg.top
+    );
+    if harvest_cfg.needles.is_empty() {
+        println!(
+            "Mode: agreement harvest (min shared compact chars = {})",
+            harvest_cfg.min_shared_chars
+        );
+    } else {
+        println!("Needles: {}", harvest_cfg.needles.join(", "));
+    }
+    println!("{}", "=".repeat(96));
+
+    if candidates.is_empty() {
+        println!("No candidate windows matched.");
+        return Ok(());
+    }
+
+    for c in candidates {
+        let offline_pitch = c
+            .offline_pitch_hz
+            .map(|v| format!("{v:.1}Hz"))
+            .unwrap_or_else(|| "--".to_string());
+        let offline_wpm = c
+            .offline_wpm
+            .map(|v| format!("{v:.1}"))
+            .unwrap_or_else(|| "--".to_string());
+        let stream_pitch = c
+            .stream_pitch_hz
+            .map(|v| format!("{v:.1}Hz"))
+            .unwrap_or_else(|| "--".to_string());
+        let stream_wpm = c
+            .stream_wpm
+            .map(|v| format!("{v:.1}"))
+            .unwrap_or_else(|| "--".to_string());
+        let needles = if c.matched_needles.is_empty() {
+            "-".to_string()
+        } else {
+            c.matched_needles.join(",")
+        };
+
+        println!(
+            "[{:>6.2}-{:<6.2}] shared={} best={} needles={}",
+            c.start_s, c.end_s, c.shared_chars, c.strongest_copy_len, needles
+        );
+        println!(
+            "  offline  pitch={} wpm={}  {}",
+            offline_pitch, offline_wpm, c.offline_text
+        );
+        println!(
+            "  stream   pitch={} wpm={} thr={:.4e}  {}",
+            stream_pitch, stream_wpm, c.stream_threshold, c.stream_text
+        );
+        println!();
+    }
+
+    Ok(())
+}
+
+fn run_preview_window(
+    path: &std::path::Path,
+    start: f32,
+    window: f32,
+    slowdown: f32,
+    padding_ms: u32,
+    output: &std::path::Path,
+) -> Result<()> {
+    preview::render_preview_wav(path, start, window, slowdown, padding_ms, output)
+}
+
+fn run_profile_window(
+    path: &std::path::Path,
+    start: f32,
+    end: f32,
+    pitch_hz: f32,
+    wpm: Option<f32>,
+) -> Result<()> {
+    let audio = audio::decode_file(path).context("decoding audio file")?;
+    let profile =
+        harvest::build_signal_profile(&audio.samples, audio.sample_rate, start, end, pitch_hz, wpm)
+            .context("building signal profile")?;
+    let payload = serde_json::json!({
+        "path": path.display().to_string(),
+        "sample_rate": audio.sample_rate,
+        "display_start_s": profile.display_start_s,
+        "display_end_s": profile.display_end_s,
+        "selection_start_s": profile.selection_start_s,
+        "selection_end_s": profile.selection_end_s,
+        "suggested_start_s": profile.suggested_start_s,
+        "suggested_end_s": profile.suggested_end_s,
+        "pitch_hz": profile.pitch_hz,
+        "threshold": profile.threshold,
+        "frame_step_s": profile.frame_step_s,
+        "frame_len_s": profile.frame_len_s,
+        "points": profile.points.iter().map(|p| serde_json::json!({
+            "time_s": p.time_s,
+            "power": p.power,
+            "active": p.active,
+        })).collect::<Vec<_>>(),
+    });
+    println!("{}", serde_json::to_string(&payload)?);
+    Ok(())
+}
+
+fn run_stream_file(
+    path: &std::path::Path,
+    chunk_ms: u32,
+    realtime: bool,
+    quiet: bool,
+    json: bool,
+    cfg: streaming::DecoderConfig,
+    stdin_control: bool,
+) -> Result<()> {
     use std::time::Instant;
     let audio = audio::decode_file(path).context("decoding audio file")?;
     let dur = audio.samples.len() as f32 / audio.sample_rate as f32;
-    let mut emitter = if json { Some(json::JsonEmitter::new()) } else { None };
+    let mut emitter = if json {
+        Some(json::JsonEmitter::new())
+    } else {
+        None
+    };
     if let Some(em) = emitter.as_mut() {
-        em.emit(0.0, serde_json::json!({
-            "type": "ready",
-            "source": "file",
-            "path": path.display().to_string(),
-            "rate": audio.sample_rate,
-            "duration": dur,
-            "config": serde_json::json!({
-                "min_snr_db": cfg.min_snr_db,
-                "pitch_min_snr_db": cfg.pitch_min_snr_db,
-                "threshold_scale": cfg.threshold_scale,
+        em.emit(
+            0.0,
+            serde_json::json!({
+                "type": "ready",
+                "source": "file",
+                "path": path.display().to_string(),
+                "rate": audio.sample_rate,
+                "duration": dur,
+                "config": serde_json::json!({
+                    "min_snr_db": cfg.min_snr_db,
+                    "pitch_min_snr_db": cfg.pitch_min_snr_db,
+                    "threshold_scale": cfg.threshold_scale,
+                }),
             }),
-        }));
+        );
     } else {
         println!(
             "Streaming: {} ({} Hz, {:.2} s, {} samples)",
-            path.display(), audio.sample_rate, dur, audio.samples.len()
+            path.display(),
+            audio.sample_rate,
+            dur,
+            audio.samples.len()
         );
     }
 
@@ -288,16 +661,21 @@ fn run_stream_file(path: &std::path::Path, chunk_ms: u32, realtime: bool, quiet:
 
         if let Some(rx) = cfg_channel.as_ref() {
             let mut latest: Option<streaming::DecoderConfig> = None;
-            while let Ok(c) = rx.try_recv() { latest = Some(c); }
+            while let Ok(c) = rx.try_recv() {
+                latest = Some(c);
+            }
             if let Some(c) = latest {
                 decoder.set_config(c);
                 if let Some(em) = emitter.as_mut() {
-                    em.emit(t_in_audio, serde_json::json!({
-                        "type": "config_ack",
-                        "min_snr_db": c.min_snr_db,
-                        "pitch_min_snr_db": c.pitch_min_snr_db,
-                        "threshold_scale": c.threshold_scale,
-                    }));
+                    em.emit(
+                        t_in_audio,
+                        serde_json::json!({
+                            "type": "config_ack",
+                            "min_snr_db": c.min_snr_db,
+                            "pitch_min_snr_db": c.pitch_min_snr_db,
+                            "threshold_scale": c.threshold_scale,
+                        }),
+                    );
                 }
             }
         }
@@ -321,14 +699,20 @@ fn run_stream_file(path: &std::path::Path, chunk_ms: u32, realtime: bool, quiet:
             match ev {
                 streaming::StreamEvent::PitchUpdate { pitch_hz } => {
                     if !quiet {
-                        println!("[t={:>6.2}s real+{:>4}ms] PITCH lock: {:.1} Hz", t_in_audio, lag_ms, pitch_hz);
+                        println!(
+                            "[t={:>6.2}s real+{:>4}ms] PITCH lock: {:.1} Hz",
+                            t_in_audio, lag_ms, pitch_hz
+                        );
                     }
                 }
                 streaming::StreamEvent::WpmUpdate { wpm } => {
                     let changed = last_wpm.map(|w| (w - wpm).abs() >= 1.0).unwrap_or(true);
                     if changed {
                         if !quiet {
-                            println!("[t={:>6.2}s real+{:>4}ms] WPM    -> {:.1}", t_in_audio, lag_ms, wpm);
+                            println!(
+                                "[t={:>6.2}s real+{:>4}ms] WPM    -> {:.1}",
+                                t_in_audio, lag_ms, wpm
+                            );
                         }
                         last_wpm = Some(wpm);
                     }
@@ -351,7 +735,10 @@ fn run_stream_file(path: &std::path::Path, chunk_ms: u32, realtime: bool, quiet:
                 streaming::StreamEvent::Garbled { morse } => {
                     transcript.push('?');
                     if !quiet {
-                        println!("[t={:>6.2}s real+{:>4}ms] ???  garbled morse: {}", t_in_audio, lag_ms, morse);
+                        println!(
+                            "[t={:>6.2}s real+{:>4}ms] ???  garbled morse: {}",
+                            t_in_audio, lag_ms, morse
+                        );
                     }
                 }
                 streaming::StreamEvent::Power { .. } => {
@@ -382,18 +769,33 @@ fn run_stream_file(path: &std::path::Path, chunk_ms: u32, realtime: bool, quiet:
     }
 
     if let Some(em) = emitter.as_mut() {
-        em.emit(consumed as f32 / audio.sample_rate as f32, serde_json::json!({
-            "type": "end",
-            "transcript": transcript.trim(),
-            "wpm": decoder.current_wpm(),
-            "pitch": decoder.pitch(),
-        }));
+        em.emit(
+            consumed as f32 / audio.sample_rate as f32,
+            serde_json::json!({
+                "type": "end",
+                "transcript": transcript.trim(),
+                "wpm": decoder.current_wpm(),
+                "pitch": decoder.pitch(),
+            }),
+        );
         return Ok(());
     }
 
     println!();
-    println!("Final pitch:    {}", decoder.pitch().map(|p| format!("{p:.1} Hz")).unwrap_or_else(|| "(none)".into()));
-    println!("Final WPM:      {}", decoder.current_wpm().map(|w| format!("{w:.1}")).unwrap_or_else(|| "(none)".into()));
+    println!(
+        "Final pitch:    {}",
+        decoder
+            .pitch()
+            .map(|p| format!("{p:.1} Hz"))
+            .unwrap_or_else(|| "(none)".into())
+    );
+    println!(
+        "Final WPM:      {}",
+        decoder
+            .current_wpm()
+            .map(|w| format!("{w:.1}"))
+            .unwrap_or_else(|| "(none)".into())
+    );
     println!("Threshold:      {:.4e}", decoder.current_threshold());
     println!();
     println!("Transcript:");
@@ -401,7 +803,158 @@ fn run_stream_file(path: &std::path::Path, chunk_ms: u32, realtime: bool, quiet:
     Ok(())
 }
 
-fn run_stream_live(device: Option<&str>, seconds: f32, json: bool, cfg: streaming::DecoderConfig, stdin_control: bool) -> Result<()> {
+fn run_stream_file_ditdah(
+    path: &std::path::Path,
+    chunk_ms: u32,
+    window_seconds: f32,
+    min_window_seconds: f32,
+    decode_every_ms: u32,
+    realtime: bool,
+    quiet: bool,
+    log_capture: &log_capture::DitdahLogCapture,
+) -> Result<()> {
+    use std::collections::VecDeque;
+    use std::time::Instant;
+
+    let audio = audio::decode_file(path).context("decoding audio file")?;
+    let dur = audio.samples.len() as f32 / audio.sample_rate as f32;
+    let chunk_samples = (((audio.sample_rate as u64) * chunk_ms as u64) / 1000) as usize;
+    let chunk_samples = chunk_samples.max(64);
+    let window_samples = ((window_seconds.max(0.5) * audio.sample_rate as f32).round() as usize)
+        .max(chunk_samples);
+    let min_window_samples = ((min_window_seconds.clamp(0.5, window_seconds.max(0.5))
+        * audio.sample_rate as f32)
+        .round() as usize)
+        .min(window_samples)
+        .max(chunk_samples);
+    let decode_every_samples =
+        ((((audio.sample_rate as u64) * decode_every_ms as u64) / 1000) as usize).max(chunk_samples);
+
+    if !quiet {
+        println!(
+            "Rolling ditdah streaming: {} ({} Hz, {:.2} s, {} samples)",
+            path.display(),
+            audio.sample_rate,
+            dur,
+            audio.samples.len()
+        );
+        println!(
+            "Window {:.1}s / min {:.1}s / decode every {}ms / chunk {}ms",
+            window_seconds, min_window_seconds, decode_every_ms, chunk_ms
+        );
+    }
+
+    let started = Instant::now();
+    let mut buffer = VecDeque::with_capacity(window_samples + chunk_samples);
+    let mut stabilizer = ditdah_streaming::PrefixStabilizer::new(2);
+    let mut last_stats: Option<log_capture::DitdahStats> = None;
+    let mut consumed = 0usize;
+    let mut since_last_decode = 0usize;
+    let mut decode_count = 0usize;
+
+    for chunk in audio.samples.chunks(chunk_samples) {
+        let t_in_audio = consumed as f32 / audio.sample_rate as f32;
+        consumed += chunk.len();
+        since_last_decode += chunk.len();
+
+        for &sample in chunk {
+            if buffer.len() == window_samples {
+                buffer.pop_front();
+            }
+            buffer.push_back(sample);
+        }
+
+        if buffer.len() >= min_window_samples && since_last_decode >= decode_every_samples {
+            since_last_decode = 0;
+            decode_count += 1;
+            let snapshot: Vec<f32> = buffer.iter().copied().collect();
+            let out = decoder::decode_window(&snapshot, audio.sample_rate, log_capture)?;
+            let snapshot_text = ditdah_streaming::normalize_snapshot_text(&out.text);
+            let appended = stabilizer.push_snapshot(&snapshot_text);
+            let lag_ms = ((started.elapsed().as_secs_f32() - t_in_audio) * 1000.0) as i32;
+            if !quiet {
+                let pitch = out
+                    .stats
+                    .pitch_hz
+                    .map(|p| format!("{p:.1} Hz"))
+                    .unwrap_or_else(|| "(unknown)".into());
+                let wpm = out
+                    .stats
+                    .wpm
+                    .map(|w| format!("{w:.1}"))
+                    .unwrap_or_else(|| "(unknown)".into());
+                println!(
+                    "[t={:>6.2}s real+{:>4}ms] SNAP #{:>2} pitch={} wpm={} appended: {}",
+                    t_in_audio,
+                    lag_ms,
+                    decode_count,
+                    pitch,
+                    wpm,
+                    if appended.is_empty() { "(none)" } else { appended.trim_start() }
+                );
+                if !snapshot_text.is_empty() {
+                    println!("                      snapshot: {}", snapshot_text);
+                }
+            }
+            last_stats = Some(out.stats);
+        }
+
+        if realtime {
+            let target_real = t_in_audio;
+            let now_real = started.elapsed().as_secs_f32();
+            if now_real < target_real {
+                std::thread::sleep(std::time::Duration::from_secs_f32(target_real - now_real));
+            }
+        }
+    }
+
+    if buffer.len() >= min_window_samples && since_last_decode > 0 {
+        let snapshot: Vec<f32> = buffer.iter().copied().collect();
+        let out = decoder::decode_window(&snapshot, audio.sample_rate, log_capture)?;
+        stabilizer.push_snapshot(&out.text);
+        last_stats = Some(out.stats);
+    }
+
+    stabilizer.finalize_latest();
+
+    if !quiet {
+        println!();
+        println!(
+            "Final pitch:    {}",
+            last_stats
+                .and_then(|s| s.pitch_hz)
+                .map(|p| format!("{p:.1} Hz"))
+                .unwrap_or_else(|| "(none)".into())
+        );
+        println!(
+            "Final WPM:      {}",
+            last_stats
+                .and_then(|s| s.wpm)
+                .map(|w| format!("{w:.1}"))
+                .unwrap_or_else(|| "(none)".into())
+        );
+        println!(
+            "Threshold:      {}",
+            last_stats
+                .and_then(|s| s.threshold)
+                .map(|t| format!("{t:.4e}"))
+                .unwrap_or_else(|| "(none)".into())
+        );
+        println!();
+    }
+
+    println!("Transcript:");
+    println!("{}", stabilizer.transcript());
+    Ok(())
+}
+
+fn run_stream_live(
+    device: Option<&str>,
+    seconds: f32,
+    json: bool,
+    cfg: streaming::DecoderConfig,
+    stdin_control: bool,
+) -> Result<()> {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
     use std::time::{Duration, Instant};
@@ -410,19 +963,26 @@ fn run_stream_live(device: Option<&str>, seconds: f32, json: bool, cfg: streamin
     let mut decoder = streaming::StreamingDecoder::new(capture.sample_rate)?;
     decoder.set_config(cfg);
     let cfg_channel = stdin_control.then(spawn_stdin_config_channel);
-    let mut emitter = if json { Some(json::JsonEmitter::new()) } else { None };
+    let mut emitter = if json {
+        Some(json::JsonEmitter::new())
+    } else {
+        None
+    };
     if let Some(em) = emitter.as_mut() {
-        em.emit(0.0, serde_json::json!({
-            "type": "ready",
-            "source": "live",
-            "device": capture.device_name,
-            "rate": capture.sample_rate,
-            "config": serde_json::json!({
-                "min_snr_db": cfg.min_snr_db,
-                "pitch_min_snr_db": cfg.pitch_min_snr_db,
-                "threshold_scale": cfg.threshold_scale,
+        em.emit(
+            0.0,
+            serde_json::json!({
+                "type": "ready",
+                "source": "live",
+                "device": capture.device_name,
+                "rate": capture.sample_rate,
+                "config": serde_json::json!({
+                    "min_snr_db": cfg.min_snr_db,
+                    "pitch_min_snr_db": cfg.pitch_min_snr_db,
+                    "threshold_scale": cfg.threshold_scale,
+                }),
             }),
-        }));
+        );
     } else {
         println!("Live streaming from: {}", capture.device_name);
     }
@@ -430,7 +990,9 @@ fn run_stream_live(device: Option<&str>, seconds: f32, json: bool, cfg: streamin
     let stop = Arc::new(AtomicBool::new(false));
     {
         let stop = Arc::clone(&stop);
-        ctrlc_setup(move || { stop.store(true, Ordering::Relaxed); });
+        ctrlc_setup(move || {
+            stop.store(true, Ordering::Relaxed);
+        });
     }
 
     let started = Instant::now();
@@ -439,22 +1001,31 @@ fn run_stream_live(device: Option<&str>, seconds: f32, json: bool, cfg: streamin
     let mut last_drain_at: u64 = 0;
 
     loop {
-        if stop.load(Ordering::Relaxed) { break; }
-        if seconds > 0.0 && started.elapsed().as_secs_f32() >= seconds { break; }
+        if stop.load(Ordering::Relaxed) {
+            break;
+        }
+        if seconds > 0.0 && started.elapsed().as_secs_f32() >= seconds {
+            break;
+        }
         std::thread::sleep(Duration::from_millis(50));
 
         if let Some(rx) = cfg_channel.as_ref() {
             let mut latest: Option<streaming::DecoderConfig> = None;
-            while let Ok(c) = rx.try_recv() { latest = Some(c); }
+            while let Ok(c) = rx.try_recv() {
+                latest = Some(c);
+            }
             if let Some(c) = latest {
                 decoder.set_config(c);
                 if let Some(em) = emitter.as_mut() {
-                    em.emit(started.elapsed().as_secs_f32(), serde_json::json!({
-                        "type": "config_ack",
-                        "min_snr_db": c.min_snr_db,
-                        "pitch_min_snr_db": c.pitch_min_snr_db,
-                        "threshold_scale": c.threshold_scale,
-                    }));
+                    em.emit(
+                        started.elapsed().as_secs_f32(),
+                        serde_json::json!({
+                            "type": "config_ack",
+                            "min_snr_db": c.min_snr_db,
+                            "pitch_min_snr_db": c.pitch_min_snr_db,
+                            "threshold_scale": c.threshold_scale,
+                        }),
+                    );
                 }
             }
         }
@@ -474,7 +1045,9 @@ fn run_stream_live(device: Option<&str>, seconds: f32, json: bool, cfg: streamin
                 snap[start..].to_vec()
             }
         };
-        if chunk.is_empty() { continue; }
+        if chunk.is_empty() {
+            continue;
+        }
 
         let events = decoder.feed(&chunk)?;
         let t = started.elapsed().as_secs_f32();
@@ -521,16 +1094,21 @@ fn run_stream_live(device: Option<&str>, seconds: f32, json: bool, cfg: streamin
         if let Some(em) = emitter.as_mut() {
             em.emit_event(started.elapsed().as_secs_f32(), &ev);
         }
-        if let streaming::StreamEvent::Char { ch, .. } = ev { transcript.push(ch); }
+        if let streaming::StreamEvent::Char { ch, .. } = ev {
+            transcript.push(ch);
+        }
     }
 
     if let Some(em) = emitter.as_mut() {
-        em.emit(started.elapsed().as_secs_f32(), serde_json::json!({
-            "type": "end",
-            "transcript": transcript.trim(),
-            "wpm": decoder.current_wpm(),
-            "pitch": decoder.pitch(),
-        }));
+        em.emit(
+            started.elapsed().as_secs_f32(),
+            serde_json::json!({
+                "type": "end",
+                "transcript": transcript.trim(),
+                "wpm": decoder.current_wpm(),
+                "pitch": decoder.pitch(),
+            }),
+        );
         return Ok(());
     }
 
@@ -561,7 +1139,9 @@ fn spawn_stdin_config_channel() -> std::sync::mpsc::Receiver<streaming::DecoderC
         let mut state = streaming::DecoderConfig::defaults();
         for line in stdin.lock().lines().map_while(Result::ok) {
             let trimmed = line.trim();
-            if trimmed.is_empty() { continue; }
+            if trimmed.is_empty() {
+                continue;
+            }
             let v: serde_json::Value = match serde_json::from_str(trimmed) {
                 Ok(v) => v,
                 Err(_) => continue,
@@ -578,7 +1158,9 @@ fn spawn_stdin_config_channel() -> std::sync::mpsc::Receiver<streaming::DecoderC
             if let Some(x) = v.get("threshold_scale").and_then(|x| x.as_f64()) {
                 state.threshold_scale = x as f32;
             }
-            if tx.send(state).is_err() { break; }
+            if tx.send(state).is_err() {
+                break;
+            }
         }
     });
     rx

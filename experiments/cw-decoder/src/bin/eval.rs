@@ -30,8 +30,13 @@ struct TestCase {
 #[derive(Debug, Clone)]
 enum Source {
     File(PathBuf),
-    Silence { secs: f32 },
-    WhiteNoise { secs: f32, amplitude: f32 },
+    Silence {
+        secs: f32,
+    },
+    WhiteNoise {
+        secs: f32,
+        amplitude: f32,
+    },
     /// Noise with periodic impulse spikes (simulates QRN/static crashes
     /// from atmospherics or switching equipment near the rig).
     BurstyNoise {
@@ -163,17 +168,35 @@ fn build_suite() -> Vec<TestCase> {
         TestCase {
             name: "silence-30s",
             source: Source::Silence { secs: 30.0 },
-            expectation: Expectation { reference: None, max_chars: Some(0), min_chars: None },
+            expectation: Expectation {
+                reference: None,
+                max_chars: Some(0),
+                min_chars: None,
+            },
         },
         TestCase {
             name: "white-noise-30s",
-            source: Source::WhiteNoise { secs: 30.0, amplitude: 0.05 },
-            expectation: Expectation { reference: None, max_chars: Some(0), min_chars: None },
+            source: Source::WhiteNoise {
+                secs: 30.0,
+                amplitude: 0.05,
+            },
+            expectation: Expectation {
+                reference: None,
+                max_chars: Some(0),
+                min_chars: None,
+            },
         },
         TestCase {
             name: "white-noise-loud-30s",
-            source: Source::WhiteNoise { secs: 30.0, amplitude: 0.3 },
-            expectation: Expectation { reference: None, max_chars: Some(0), min_chars: None },
+            source: Source::WhiteNoise {
+                secs: 30.0,
+                amplitude: 0.3,
+            },
+            expectation: Expectation {
+                reference: None,
+                max_chars: Some(0),
+                min_chars: None,
+            },
         },
         TestCase {
             name: "bursty-noise-30s",
@@ -184,17 +207,37 @@ fn build_suite() -> Vec<TestCase> {
                 spike_hz: 4.0,
                 spike_dur_ms: 60.0,
             },
-            expectation: Expectation { reference: None, max_chars: Some(0), min_chars: None },
+            expectation: Expectation {
+                reference: None,
+                max_chars: Some(0),
+                min_chars: None,
+            },
         },
         TestCase {
             name: "colored-hiss-700hz",
-            source: Source::ColoredHiss { secs: 30.0, amplitude: 0.1, peak_hz: 700.0 },
-            expectation: Expectation { reference: None, max_chars: Some(0), min_chars: None },
+            source: Source::ColoredHiss {
+                secs: 30.0,
+                amplitude: 0.1,
+                peak_hz: 700.0,
+            },
+            expectation: Expectation {
+                reference: None,
+                max_chars: Some(0),
+                min_chars: None,
+            },
         },
         TestCase {
             name: "colored-hiss-500hz",
-            source: Source::ColoredHiss { secs: 30.0, amplitude: 0.1, peak_hz: 500.0 },
-            expectation: Expectation { reference: None, max_chars: Some(0), min_chars: None },
+            source: Source::ColoredHiss {
+                secs: 30.0,
+                amplitude: 0.1,
+                peak_hz: 500.0,
+            },
+            expectation: Expectation {
+                reference: None,
+                max_chars: Some(0),
+                min_chars: None,
+            },
         },
         TestCase {
             name: "clean-cw-20wpm",
@@ -278,9 +321,17 @@ fn build_suite() -> Vec<TestCase> {
             name: leak(name.to_string()),
             source: Source::File(p),
             expectation: if expect_signal {
-                Expectation { reference: None, max_chars: None, min_chars: Some(5) }
+                Expectation {
+                    reference: None,
+                    max_chars: None,
+                    min_chars: Some(5),
+                }
             } else {
-                Expectation { reference: None, max_chars: Some(0), min_chars: None }
+                Expectation {
+                    reference: None,
+                    max_chars: Some(0),
+                    min_chars: None,
+                }
             },
         });
     }
@@ -405,7 +456,13 @@ fn synthesize(src: &Source) -> Result<(Vec<f32>, u32)> {
             }
             Ok((v, SYNTH_RATE))
         }
-        Source::BurstyNoise { secs, floor, spike_amp, spike_hz, spike_dur_ms } => {
+        Source::BurstyNoise {
+            secs,
+            floor,
+            spike_amp,
+            spike_hz,
+            spike_dur_ms,
+        } => {
             let n = (SYNTH_RATE as f32 * secs) as usize;
             let mut rng = SmallRng::new(0xBADBEEF);
             let mut v: Vec<f32> = (0..n).map(|_| rng.normal() * floor).collect();
@@ -427,7 +484,11 @@ fn synthesize(src: &Source) -> Result<(Vec<f32>, u32)> {
             }
             Ok((v, SYNTH_RATE))
         }
-        Source::ColoredHiss { secs, amplitude, peak_hz } => {
+        Source::ColoredHiss {
+            secs,
+            amplitude,
+            peak_hz,
+        } => {
             // Simple resonator on white noise to add a colored peak around
             // peak_hz. Mimics receiver hiss with passband shape.
             let n = (SYNTH_RATE as f32 * secs) as usize;
@@ -448,7 +509,13 @@ fn synthesize(src: &Source) -> Result<(Vec<f32>, u32)> {
             }
             Ok((v, SYNTH_RATE))
         }
-        Source::SynthCw { text, wpm, tone_hz, snr_db, secs_padding } => {
+        Source::SynthCw {
+            text,
+            wpm,
+            tone_hz,
+            snr_db,
+            secs_padding,
+        } => {
             let mut samples = synth_morse(text, *wpm, *tone_hz, SYNTH_RATE, *secs_padding);
             if let Some(snr_db) = snr_db {
                 let signal_amp = 0.5_f32;
@@ -512,16 +579,42 @@ fn push_tone(out: &mut Vec<f32>, n: usize, freq_hz: f32, rate: u32) {
 
 fn char_to_morse(c: char) -> &'static str {
     match c {
-        'A' => ".-",   'B' => "-...", 'C' => "-.-.", 'D' => "-..",
-        'E' => ".",    'F' => "..-.", 'G' => "--.",  'H' => "....",
-        'I' => "..",   'J' => ".---", 'K' => "-.-",  'L' => ".-..",
-        'M' => "--",   'N' => "-.",   'O' => "---",  'P' => ".--.",
-        'Q' => "--.-", 'R' => ".-.",  'S' => "...",  'T' => "-",
-        'U' => "..-",  'V' => "...-", 'W' => ".--",  'X' => "-..-",
-        'Y' => "-.--", 'Z' => "--..",
-        '0' => "-----", '1' => ".----", '2' => "..---", '3' => "...--",
-        '4' => "....-", '5' => ".....", '6' => "-....", '7' => "--...",
-        '8' => "---..", '9' => "----.",
+        'A' => ".-",
+        'B' => "-...",
+        'C' => "-.-.",
+        'D' => "-..",
+        'E' => ".",
+        'F' => "..-.",
+        'G' => "--.",
+        'H' => "....",
+        'I' => "..",
+        'J' => ".---",
+        'K' => "-.-",
+        'L' => ".-..",
+        'M' => "--",
+        'N' => "-.",
+        'O' => "---",
+        'P' => ".--.",
+        'Q' => "--.-",
+        'R' => ".-.",
+        'S' => "...",
+        'T' => "-",
+        'U' => "..-",
+        'V' => "...-",
+        'W' => ".--",
+        'X' => "-..-",
+        'Y' => "-.--",
+        'Z' => "--..",
+        '0' => "-----",
+        '1' => ".----",
+        '2' => "..---",
+        '3' => "...--",
+        '4' => "....-",
+        '5' => ".....",
+        '6' => "-....",
+        '7' => "--...",
+        '8' => "---..",
+        '9' => "----.",
         _ => "",
     }
 }
@@ -547,8 +640,14 @@ fn char_error_rate(reference: &str, hypothesis: &str) -> f32 {
 
 fn print_case(case: &TestCase, m: &Metrics) {
     let mark = if m.pass { "PASS" } else { "FAIL" };
-    let pitch = m.pitch_hz.map(|p| format!("{p:>6.1}Hz")).unwrap_or_else(|| "    --".into());
-    let wpm = m.wpm_last.map(|w| format!("{w:>4.1}")).unwrap_or_else(|| "  --".into());
+    let pitch = m
+        .pitch_hz
+        .map(|p| format!("{p:>6.1}Hz"))
+        .unwrap_or_else(|| "    --".into());
+    let wpm = m
+        .wpm_last
+        .map(|w| format!("{w:>4.1}"))
+        .unwrap_or_else(|| "  --".into());
     let cer = m
         .cer
         .map(|c| format!("cer={:.2}", c))
@@ -567,10 +666,14 @@ fn print_case(case: &TestCase, m: &Metrics) {
 }
 
 // --- Tiny deterministic PRNG (avoid pulling in `rand` for one helper) ---
-struct SmallRng { state: u64 }
+struct SmallRng {
+    state: u64,
+}
 impl SmallRng {
     fn new(seed: u64) -> Self {
-        Self { state: seed.wrapping_mul(0xDEADBEEF).wrapping_add(1) }
+        Self {
+            state: seed.wrapping_mul(0xDEADBEEF).wrapping_add(1),
+        }
     }
     fn next_u64(&mut self) -> u64 {
         self.state ^= self.state << 13;

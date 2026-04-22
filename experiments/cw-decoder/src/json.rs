@@ -64,7 +64,13 @@ impl JsonEmitter {
                 "type": "garbled",
                 "morse": morse,
             }),
-            StreamEvent::Power { power, threshold, noise, snr, signal } => json!({
+            StreamEvent::Power {
+                power,
+                threshold,
+                noise,
+                snr,
+                signal,
+            } => json!({
                 "type": "power",
                 "power": *power,
                 "threshold": *threshold,

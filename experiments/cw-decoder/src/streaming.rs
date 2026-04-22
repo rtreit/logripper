@@ -107,7 +107,9 @@ impl DecoderConfig {
 }
 
 impl Default for DecoderConfig {
-    fn default() -> Self { Self::defaults() }
+    fn default() -> Self {
+        Self::defaults()
+    }
 }
 
 // --- Events ------------------------------------------------------------
@@ -126,7 +128,13 @@ pub enum StreamEvent {
     /// Periodic snapshot of the smoothed Goertzel power vs threshold.
     /// Emitted at roughly `POWER_EVENT_HZ` Hz, throttled in `feed_goertzel`.
     /// `noise` is the smoothed off-band reference; `snr` is power/noise.
-    Power { power: f32, threshold: f32, noise: f32, snr: f32, signal: bool },
+    Power {
+        power: f32,
+        threshold: f32,
+        noise: f32,
+        snr: f32,
+        signal: bool,
+    },
 }
 
 /// Target rate (events / sec) for `StreamEvent::Power`. A subset of the
@@ -140,14 +148,28 @@ enum FilterType {
     LowPass,
 }
 struct Biquad {
-    a0: f32, a1: f32, a2: f32, b1: f32, b2: f32,
-    x1: f32, x2: f32, y1: f32, y2: f32,
+    a0: f32,
+    a1: f32,
+    a2: f32,
+    b1: f32,
+    b2: f32,
+    x1: f32,
+    x2: f32,
+    y1: f32,
+    y2: f32,
 }
 impl Biquad {
     fn new(filter_type: FilterType, cutoff_hz: f32, sample_rate: u32) -> Self {
         let mut f = Self {
-            a0: 1.0, a1: 0.0, a2: 0.0, b1: 0.0, b2: 0.0,
-            x1: 0.0, x2: 0.0, y1: 0.0, y2: 0.0,
+            a0: 1.0,
+            a1: 0.0,
+            a2: 0.0,
+            b1: 0.0,
+            b2: 0.0,
+            x1: 0.0,
+            x2: 0.0,
+            y1: 0.0,
+            y2: 0.0,
         };
         let c = (std::f32::consts::PI * cutoff_hz / sample_rate as f32).tan();
         let sqrt2 = 2.0_f32.sqrt();
@@ -177,8 +199,10 @@ impl Biquad {
             let y0 = self.a0 * x0 + self.a1 * self.x1 + self.a2 * self.x2
                 - self.b1 * self.y1
                 - self.b2 * self.y2;
-            self.x2 = self.x1; self.x1 = x0;
-            self.y2 = self.y1; self.y1 = y0;
+            self.x2 = self.x1;
+            self.x1 = x0;
+            self.y2 = self.y1;
+            self.y1 = y0;
             *s = y0;
         }
     }
@@ -202,9 +226,7 @@ impl Goertzel {
         let omega = (2.0 * std::f32::consts::PI * k) / win_size as f32;
         let coeff = 2.0 * omega.cos();
         let window = (0..win_size)
-            .map(|i| {
-                0.54 - 0.46 * (2.0 * std::f32::consts::PI * i as f32 / win_size as f32).cos()
-            })
+            .map(|i| 0.54 - 0.46 * (2.0 * std::f32::consts::PI * i as f32 / win_size as f32).cos())
             .collect();
         Self {
             coeff,
@@ -943,11 +965,19 @@ impl StreamingDecoder {
         })
     }
 
-    pub fn pitch(&self) -> Option<f32> { self.pitch_locked }
-    pub fn current_wpm(&self) -> Option<f32> { self.decoder.current_wpm() }
-    pub fn current_threshold(&self) -> f32 { self.decoder.threshold }
+    pub fn pitch(&self) -> Option<f32> {
+        self.pitch_locked
+    }
+    pub fn current_wpm(&self) -> Option<f32> {
+        self.decoder.current_wpm()
+    }
+    pub fn current_threshold(&self) -> f32 {
+        self.decoder.threshold
+    }
     #[allow(dead_code)]
-    pub fn config(&self) -> DecoderConfig { self.config }
+    pub fn config(&self) -> DecoderConfig {
+        self.config
+    }
 
     /// Apply a new runtime configuration. Safe to call mid-stream — only
     /// affects subsequent power samples and the next pitch re-lock.
@@ -973,7 +1003,11 @@ impl StreamingDecoder {
             self.pre_lock_buf.extend_from_slice(&filtered);
             let need = (TARGET_RATE as f32 * PITCH_LOCK_SECONDS) as usize;
             if self.pre_lock_buf.len() >= need {
-                if let Ok(pitch) = detect_pitch(&self.pre_lock_buf, TARGET_RATE, self.config.pitch_min_snr_linear()) {
+                if let Ok(pitch) = detect_pitch(
+                    &self.pre_lock_buf,
+                    TARGET_RATE,
+                    self.config.pitch_min_snr_linear(),
+                ) {
                     self.pitch_locked = Some(pitch);
                     let win_size = (TARGET_RATE as f32 * GOERTZEL_WIN_MS / 1000.0) as usize;
                     let step = (win_size / 4).max(1);
@@ -986,10 +1020,12 @@ impl StreamingDecoder {
                         let lo = pitch - off;
                         let hi = pitch + off;
                         if lo >= FREQ_MIN_HZ {
-                            self.noise_bins.push(Goertzel::new(lo, TARGET_RATE, win_size, step));
+                            self.noise_bins
+                                .push(Goertzel::new(lo, TARGET_RATE, win_size, step));
                         }
                         if hi <= FREQ_MAX_HZ {
-                            self.noise_bins.push(Goertzel::new(hi, TARGET_RATE, win_size, step));
+                            self.noise_bins
+                                .push(Goertzel::new(hi, TARGET_RATE, win_size, step));
                         }
                     }
                     events.push(StreamEvent::PitchUpdate { pitch_hz: pitch });
@@ -1030,9 +1066,8 @@ impl StreamingDecoder {
 
         // Run all noise-bin Goertzels in lockstep (identical win_size/step,
         // so each emits exactly the same number of samples as `power_out`).
-        let mut noise_outs: Vec<Vec<f32>> = (0..self.noise_bins.len())
-            .map(|_| Vec::new())
-            .collect();
+        let mut noise_outs: Vec<Vec<f32>> =
+            (0..self.noise_bins.len()).map(|_| Vec::new()).collect();
         for (idx, nb) in self.noise_bins.iter_mut().enumerate() {
             nb.push(audio, &mut noise_outs[idx]);
         }
@@ -1056,7 +1091,10 @@ impl StreamingDecoder {
             let noise_raw = if noise_outs.is_empty() {
                 0.0
             } else {
-                let mut buf: Vec<f32> = noise_outs.iter().filter_map(|v| v.get(i).copied()).collect();
+                let mut buf: Vec<f32> = noise_outs
+                    .iter()
+                    .filter_map(|v| v.get(i).copied())
+                    .collect();
                 if buf.is_empty() {
                     0.0
                 } else {
@@ -1076,7 +1114,11 @@ impl StreamingDecoder {
             // SNR: how many times louder is the tone bin vs the off-band
             // reference. With no noise reading yet we default to "OK" so the
             // existing amplitude threshold still does its job.
-            let snr = if noise > 0.0 { smoothed / noise } else { f32::INFINITY };
+            let snr = if noise > 0.0 {
+                smoothed / noise
+            } else {
+                f32::INFINITY
+            };
             let snr_ok = snr >= snr_threshold;
 
             // Throttled Power event for UI meters (~POWER_EVENT_HZ).
@@ -1128,18 +1170,41 @@ impl StreamingDecoder {
 // --- morse table (lifted from ditdah) ----------------------------------
 fn morse_to_char(s: &str) -> Option<char> {
     match s {
-        ".-" => Some('A'), "-..." => Some('B'), "-.-." => Some('C'),
-        "-.." => Some('D'), "." => Some('E'), "..-." => Some('F'),
-        "--." => Some('G'), "...." => Some('H'), ".." => Some('I'),
-        ".---" => Some('J'), "-.-" => Some('K'), ".-.." => Some('L'),
-        "--" => Some('M'), "-." => Some('N'), "---" => Some('O'),
-        ".--." => Some('P'), "--.-" => Some('Q'), ".-." => Some('R'),
-        "..." => Some('S'), "-" => Some('T'), "..-" => Some('U'),
-        "...-" => Some('V'), ".--" => Some('W'), "-..-" => Some('X'),
-        "-.--" => Some('Y'), "--.." => Some('Z'),
-        ".----" => Some('1'), "..---" => Some('2'), "...--" => Some('3'),
-        "....-" => Some('4'), "....." => Some('5'), "-...." => Some('6'),
-        "--..." => Some('7'), "---.." => Some('8'), "----." => Some('9'),
+        ".-" => Some('A'),
+        "-..." => Some('B'),
+        "-.-." => Some('C'),
+        "-.." => Some('D'),
+        "." => Some('E'),
+        "..-." => Some('F'),
+        "--." => Some('G'),
+        "...." => Some('H'),
+        ".." => Some('I'),
+        ".---" => Some('J'),
+        "-.-" => Some('K'),
+        ".-.." => Some('L'),
+        "--" => Some('M'),
+        "-." => Some('N'),
+        "---" => Some('O'),
+        ".--." => Some('P'),
+        "--.-" => Some('Q'),
+        ".-." => Some('R'),
+        "..." => Some('S'),
+        "-" => Some('T'),
+        "..-" => Some('U'),
+        "...-" => Some('V'),
+        ".--" => Some('W'),
+        "-..-" => Some('X'),
+        "-.--" => Some('Y'),
+        "--.." => Some('Z'),
+        ".----" => Some('1'),
+        "..---" => Some('2'),
+        "...--" => Some('3'),
+        "....-" => Some('4'),
+        "....." => Some('5'),
+        "-...." => Some('6'),
+        "--..." => Some('7'),
+        "---.." => Some('8'),
+        "----." => Some('9'),
         "-----" => Some('0'),
         _ => None,
     }

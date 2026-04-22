@@ -1,6 +1,9 @@
 using System;
+using System.Globalization;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
+using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -70,6 +73,159 @@ internal sealed class CwDecoderProcess : IDisposable
         Spawn(args);
     }
 
+    public async Task<HarvestResult> HarvestFileAsync(
+        string path,
+        double windowSeconds,
+        double hopSeconds,
+        int chunkMs,
+        int top,
+        int minSharedChars,
+        string[] needles,
+        DecoderConfig cfg,
+        Action<int, int, double, double>? onProgress = null,
+        CancellationToken ct = default)
+    {
+        var psi = CreateBaseStartInfo();
+        psi.ArgumentList.Add("harvest-file");
+        psi.ArgumentList.Add(path);
+        psi.ArgumentList.Add("--json");
+        psi.ArgumentList.Add("--window");
+        psi.ArgumentList.Add(F(windowSeconds));
+        psi.ArgumentList.Add("--hop");
+        psi.ArgumentList.Add(F(hopSeconds));
+        psi.ArgumentList.Add("--chunk-ms");
+        psi.ArgumentList.Add(chunkMs.ToString(CultureInfo.InvariantCulture));
+        psi.ArgumentList.Add("--top");
+        psi.ArgumentList.Add(top.ToString(CultureInfo.InvariantCulture));
+        psi.ArgumentList.Add("--min-shared-chars");
+        psi.ArgumentList.Add(minSharedChars.ToString(CultureInfo.InvariantCulture));
+        psi.ArgumentList.Add("--min-snr-db");
+        psi.ArgumentList.Add(F(cfg.MinSnrDb));
+        psi.ArgumentList.Add("--pitch-min-snr-db");
+        psi.ArgumentList.Add(F(cfg.PitchMinSnrDb));
+        psi.ArgumentList.Add("--threshold-scale");
+        psi.ArgumentList.Add(F(cfg.ThresholdScale));
+        foreach (var needle in needles)
+        {
+            psi.ArgumentList.Add("--needle");
+            psi.ArgumentList.Add(needle);
+        }
+
+        using var process = Process.Start(psi)
+            ?? throw new InvalidOperationException("Failed to start cw-decoder.");
+        using var registration = ct.Register(() =>
+        {
+            try
+            {
+                if (!process.HasExited)
+                {
+                    process.Kill(entireProcessTree: true);
+                }
+            }
+            catch
+            {
+            }
+        });
+
+        var stdoutTask = process.StandardOutput.ReadToEndAsync();
+        var stderrTask = Task.Run(async () =>
+        {
+            var stderr = new StringBuilder();
+            string? line;
+            while ((line = await process.StandardError.ReadLineAsync().ConfigureAwait(false)) is not null)
+            {
+                if (TryParseHarvestProgress(line, out var completed, out var total, out var startSeconds, out var endSeconds))
+                {
+                    onProgress?.Invoke(completed, total, startSeconds, endSeconds);
+                    continue;
+                }
+
+                if (stderr.Length > 0)
+                {
+                    stderr.AppendLine();
+                }
+                stderr.Append(line);
+            }
+
+            return stderr.ToString();
+        }, ct);
+
+        await process.WaitForExitAsync(ct).ConfigureAwait(false);
+        var stdout = await stdoutTask.ConfigureAwait(false);
+        var stderr = await stderrTask.ConfigureAwait(false);
+        if (process.ExitCode != 0)
+        {
+            throw new InvalidOperationException(
+                string.IsNullOrWhiteSpace(stderr) ? $"cw-decoder exited with code {process.ExitCode}." : stderr.Trim());
+        }
+
+        return JsonSerializer.Deserialize<HarvestResult>(stdout)
+            ?? throw new InvalidOperationException("Failed to parse harvest-file output.");
+    }
+
+    public async Task<string> RenderPreviewAsync(
+        string path,
+        double startSeconds,
+        double windowSeconds,
+        double slowdown,
+        CancellationToken ct = default)
+    {
+        var previewDir = Path.Combine(Path.GetTempPath(), "cw-decoder-preview");
+        Directory.CreateDirectory(previewDir);
+        var output = Path.Combine(
+            previewDir,
+            $"{Path.GetFileNameWithoutExtension(path)}_{startSeconds:0000.000}_{DateTime.UtcNow:yyyyMMddHHmmssfff}.wav");
+
+        var psi = CreateBaseStartInfo();
+        psi.ArgumentList.Add("preview-window");
+        psi.ArgumentList.Add(path);
+        psi.ArgumentList.Add("--start");
+        psi.ArgumentList.Add(F(startSeconds));
+        psi.ArgumentList.Add("--window");
+        psi.ArgumentList.Add(F(windowSeconds));
+        psi.ArgumentList.Add("--slowdown");
+        psi.ArgumentList.Add(F(slowdown));
+        psi.ArgumentList.Add("--output");
+        psi.ArgumentList.Add(output);
+
+        await RunOneShotAsync(psi, ct).ConfigureAwait(false);
+        return output;
+    }
+
+    public async Task<SignalProfile> LoadSignalProfileAsync(
+        string path,
+        double startSeconds,
+        double endSeconds,
+        double pitchHz,
+        double? wpm,
+        CancellationToken ct = default)
+    {
+        var psi = CreateBaseStartInfo();
+        psi.ArgumentList.Add("profile-window");
+        psi.ArgumentList.Add(path);
+        psi.ArgumentList.Add("--start");
+        psi.ArgumentList.Add(F(startSeconds));
+        psi.ArgumentList.Add("--end");
+        psi.ArgumentList.Add(F(endSeconds));
+        psi.ArgumentList.Add("--pitch-hz");
+        psi.ArgumentList.Add(F(pitchHz));
+        if (wpm is double wpmValue && wpmValue > 0)
+        {
+            psi.ArgumentList.Add("--wpm");
+            psi.ArgumentList.Add(F(wpmValue));
+        }
+
+        var stdout = await RunOneShotAsync(psi, ct).ConfigureAwait(false);
+        return JsonSerializer.Deserialize<SignalProfile>(stdout)
+            ?? throw new InvalidOperationException("Failed to parse profile-window output.");
+    }
+
+    public static void OpenPreview(string path)
+    {
+        var psi = new ProcessStartInfo(path) { UseShellExecute = true };
+        Process.Start(psi);
+    }
+
     /// <summary>Send a runtime config update to the running decoder via stdin.
     /// No-op if no decoder is running. Safe to call from any thread.</summary>
     public void SendConfig(DecoderConfig cfg)
@@ -103,17 +259,8 @@ internal sealed class CwDecoderProcess : IDisposable
 
     private void Spawn(string args)
     {
-        var exe = LocateBinary() ?? throw new InvalidOperationException(
-            "Could not locate cw-decoder.exe. Run `cargo build --release` in experiments/cw-decoder first.");
-        var psi = new ProcessStartInfo(exe, args)
-        {
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            RedirectStandardInput = true,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            WorkingDirectory = Path.GetDirectoryName(exe)!,
-        };
+        var psi = CreateBaseStartInfo(args);
+        psi.RedirectStandardInput = true;
         var p = Process.Start(psi) ?? throw new InvalidOperationException("Failed to start cw-decoder.");
         _proc = p;
         _cts = new CancellationTokenSource();
@@ -169,17 +316,81 @@ internal sealed class CwDecoderProcess : IDisposable
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
         for (int i = 0; dir is not null && i < 8; i++, dir = dir.Parent)
         {
-            // Inside the cw-decoder folder?
-            var rel1 = Path.Combine(dir.FullName, "target", "release", exeName);
-            if (File.Exists(rel1)) return rel1;
-            var rel2 = Path.Combine(dir.FullName, "target", "debug", exeName);
-            if (File.Exists(rel2)) return rel2;
-            // Or in the parent?
-            var rel3 = Path.Combine(dir.FullName, "cw-decoder", "target", "release", exeName);
-            if (File.Exists(rel3)) return rel3;
-            var rel4 = Path.Combine(dir.FullName, "experiments", "cw-decoder", "target", "release", exeName);
-            if (File.Exists(rel4)) return rel4;
+            var candidates = new[]
+            {
+                Path.Combine(dir.FullName, "target", "release", exeName),
+                Path.Combine(dir.FullName, "target", "debug", exeName),
+                Path.Combine(dir.FullName, "cw-decoder", "target", "release", exeName),
+                Path.Combine(dir.FullName, "cw-decoder", "target", "debug", exeName),
+                Path.Combine(dir.FullName, "experiments", "cw-decoder", "target", "release", exeName),
+                Path.Combine(dir.FullName, "experiments", "cw-decoder", "target", "debug", exeName),
+            };
+
+            var newest = candidates
+                .Where(File.Exists)
+                .Select(path => new FileInfo(path))
+                .OrderByDescending(info => info.LastWriteTimeUtc)
+                .FirstOrDefault();
+            if (newest is not null) return newest.FullName;
         }
         return null;
+    }
+
+    private static ProcessStartInfo CreateBaseStartInfo(string? args = null)
+    {
+        var exe = LocateBinary() ?? throw new InvalidOperationException(
+            "Could not locate cw-decoder.exe. Run `cargo build --release` in experiments/cw-decoder first.");
+        var psi = string.IsNullOrWhiteSpace(args)
+            ? new ProcessStartInfo(exe)
+            : new ProcessStartInfo(exe, args);
+        psi.RedirectStandardOutput = true;
+        psi.RedirectStandardError = true;
+        psi.UseShellExecute = false;
+        psi.CreateNoWindow = true;
+        psi.WorkingDirectory = Path.GetDirectoryName(exe)!;
+        return psi;
+    }
+
+    private static async Task<string> RunOneShotAsync(ProcessStartInfo psi, CancellationToken ct)
+    {
+        using var process = Process.Start(psi)
+            ?? throw new InvalidOperationException("Failed to start cw-decoder.");
+        var stdoutTask = process.StandardOutput.ReadToEndAsync();
+        var stderrTask = process.StandardError.ReadToEndAsync();
+        await process.WaitForExitAsync(ct).ConfigureAwait(false);
+        var stdout = await stdoutTask.ConfigureAwait(false);
+        var stderr = await stderrTask.ConfigureAwait(false);
+        if (process.ExitCode != 0)
+        {
+            throw new InvalidOperationException(
+                string.IsNullOrWhiteSpace(stderr) ? $"cw-decoder exited with code {process.ExitCode}." : stderr.Trim());
+        }
+        return stdout;
+    }
+
+    private static string F(double value) => value.ToString(CultureInfo.InvariantCulture);
+
+    private static bool TryParseHarvestProgress(
+        string line,
+        out int completed,
+        out int total,
+        out double startSeconds,
+        out double endSeconds)
+    {
+        completed = 0;
+        total = 0;
+        startSeconds = 0;
+        endSeconds = 0;
+
+        var parts = line.Split('\t', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (parts.Length != 5 || !string.Equals(parts[0], "HARVEST_PROGRESS", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        return int.TryParse(parts[1], CultureInfo.InvariantCulture, out completed)
+            && int.TryParse(parts[2], CultureInfo.InvariantCulture, out total)
+            && double.TryParse(parts[3], CultureInfo.InvariantCulture, out startSeconds)
+            && double.TryParse(parts[4], CultureInfo.InvariantCulture, out endSeconds);
     }
 }

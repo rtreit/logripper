@@ -20,6 +20,7 @@ use ratatui::Terminal;
 
 use crate::audio::LiveCapture;
 use crate::decoder::decode_window;
+use crate::ditdah_streaming::PrefixStabilizer;
 use crate::log_capture::DitdahLogCapture;
 
 const WPM_HISTORY_CAP: usize = 120;
@@ -71,6 +72,7 @@ pub fn run(capture: LiveCapture, log_capture: DitdahLogCapture) -> Result<()> {
     let stop_thread = Arc::clone(&stop);
     let worker = std::thread::spawn(move || {
         let min_samples = (sample_rate as f32 * 4.0) as usize; // need ~4s for ditdah
+        let mut stabilizer = PrefixStabilizer::new(2);
         while !stop_thread.load(std::sync::atomic::Ordering::Relaxed) {
             std::thread::sleep(Duration::from_millis(1500));
             let snapshot = {
@@ -90,10 +92,8 @@ pub fn run(capture: LiveCapture, log_capture: DitdahLogCapture) -> Result<()> {
                 Ok(out) => {
                     let mut s = state_thread.lock();
                     if !out.text.trim().is_empty() {
-                        if !s.decoded.is_empty() && !s.decoded.ends_with(' ') {
-                            s.decoded.push(' ');
-                        }
-                        s.decoded.push_str(out.text.trim());
+                        stabilizer.push_snapshot(&out.text);
+                        s.decoded = stabilizer.transcript().to_string();
                         // Cap to last ~600 chars
                         if s.decoded.len() > 600 {
                             let start = s.decoded.len() - 600;
@@ -163,20 +163,16 @@ pub fn run(capture: LiveCapture, log_capture: DitdahLogCapture) -> Result<()> {
     Ok(())
 }
 
-fn draw(
-    f: &mut ratatui::Frame,
-    capture: &LiveCapture,
-    state: &Arc<Mutex<AppState>>,
-) {
+fn draw(f: &mut ratatui::Frame, capture: &LiveCapture, state: &Arc<Mutex<AppState>>) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3),  // header / status
-            Constraint::Length(8),  // waveform
-            Constraint::Length(3),  // wpm gauge
-            Constraint::Length(6),  // wpm history
-            Constraint::Min(5),     // decoded text
-            Constraint::Length(2),  // help
+            Constraint::Length(3), // header / status
+            Constraint::Length(8), // waveform
+            Constraint::Length(3), // wpm gauge
+            Constraint::Length(6), // wpm history
+            Constraint::Min(5),    // decoded text
+            Constraint::Length(2), // help
         ])
         .split(f.area());
 
@@ -203,11 +199,21 @@ fn draw_header(f: &mut ratatui::Frame, area: Rect, s: &AppState) {
         .map(|w| format!("{:.0}", w))
         .unwrap_or_else(|| "—".into());
     let line = Line::from(vec![
-        Span::styled("CW Decoder PoC ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            "CW Decoder PoC ",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::raw(" | pitch: "),
         Span::styled(pitch, Style::default().fg(Color::Yellow)),
         Span::raw("  WPM (smoothed): "),
-        Span::styled(smooth, Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            smooth,
+            Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::raw("  raw: "),
         Span::styled(raw, Style::default().fg(Color::DarkGray)),
         Span::raw("  | "),
@@ -222,7 +228,9 @@ fn draw_waveform(f: &mut ratatui::Frame, area: Rect, capture: &LiveCapture) {
     let samples = capture.buffer.lock().snapshot();
     let take = (capture.sample_rate as usize / 2).min(samples.len());
     if take == 0 {
-        let block = Block::default().borders(Borders::ALL).title("waveform (no audio yet)");
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .title("waveform (no audio yet)");
         f.render_widget(block, area);
         return;
     }
@@ -240,7 +248,11 @@ fn draw_waveform(f: &mut ratatui::Frame, area: Rect, capture: &LiveCapture) {
     }
     let max = *bars.iter().max().unwrap_or(&1).max(&1);
     let sparkline = Sparkline::default()
-        .block(Block::default().borders(Borders::ALL).title("waveform (RMS, ~0.5 s)"))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title("waveform (RMS, ~0.5 s)"),
+        )
         .data(&bars)
         .max(max)
         .style(Style::default().fg(Color::Cyan))
@@ -257,7 +269,11 @@ fn draw_wpm(f: &mut ratatui::Frame, area: Rect, s: &AppState) {
         "— WPM".to_string()
     };
     let gauge = Gauge::default()
-        .block(Block::default().borders(Borders::ALL).title("speed (5–40 WPM range)"))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title("speed (5–40 WPM range)"),
+        )
         .gauge_style(Style::default().fg(Color::Green))
         .ratio(ratio)
         .label(label);
@@ -266,7 +282,9 @@ fn draw_wpm(f: &mut ratatui::Frame, area: Rect, s: &AppState) {
 
 fn draw_wpm_history(f: &mut ratatui::Frame, area: Rect, s: &AppState) {
     if s.wpm_history.is_empty() {
-        let block = Block::default().borders(Borders::ALL).title("WPM history (no decodes yet)");
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .title("WPM history (no decodes yet)");
         f.render_widget(block, area);
         return;
     }

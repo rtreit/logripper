@@ -18,8 +18,7 @@ pub fn decode_window(
     sample_rate: u32,
     capture: &DitdahLogCapture,
 ) -> Result<DecodeOutcome> {
-    let text = decode_samples(samples, sample_rate)
-        .unwrap_or_default(); // ditdah bails on tiny/empty buffers; treat as "no decode"
+    let text = decode_samples(samples, sample_rate).unwrap_or_default(); // ditdah bails on tiny/empty buffers; treat as "no decode"
     let stats = capture.snapshot();
     Ok(DecodeOutcome { text, stats })
 }
