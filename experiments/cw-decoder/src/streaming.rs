@@ -63,7 +63,7 @@ pub const DEFAULT_MIN_SNR_DB: f32 = 6.0;
 /// this many dB above the in-band median for `detect_pitch` to succeed,
 /// otherwise we refuse to lock. This is what stops the decoder from
 /// pretending a pure-noise band has a tone in it.
-pub const DEFAULT_PITCH_MIN_SNR_DB: f32 = 8.0;
+pub const DEFAULT_PITCH_MIN_SNR_DB: f32 = 12.0;
 /// Default scale on the IQR-derived adaptive amplitude threshold. >1 makes
 /// the decoder less sensitive (raises the on/off cutoff); <1 more sensitive.
 pub const DEFAULT_THRESHOLD_SCALE: f32 = 1.0;
@@ -323,6 +323,179 @@ struct Interval {
     is_on: bool,
 }
 
+/// Sliding-window Morse rhythm coherence gate.
+///
+/// Holds the last `WINDOW` intervals and asks "do these look like Morse at
+/// the current dot estimate?" Three independent checks that ALL must pass:
+///
+/// 1. **Per-interval fit**: each interval's normalised length (L/dot) must
+///    sit close to its nearest valid Morse unit (1 / 3 for ON; 1 / 3 / 7
+///    for OFF). At least `OPEN_FRACTION` of recent intervals must fit.
+/// 2. **Bimodality**: ON intervals must split into both a 1-cluster and a
+///    3-cluster, with cluster means actually near 1 and 3. Pure noise
+///    rarely produces a clean bimodal ON distribution.
+/// 3. **Duty cycle**: on-time fraction over the window must lie in the
+///    band typical of human CW (~25-65%). Receiver hiss with a bad
+///    threshold sits well outside this band.
+///
+/// All three together are much more discriminating than any single test
+/// because the noise-derived k-means dot estimate trivially passes (1) —
+/// the dot length is *defined* as where noise intervals cluster — but
+/// noise rarely passes (2) and (3) at the same time.
+struct RhythmGate {
+    window: VecDeque<Interval>,
+    is_open: bool,
+    bad_streak: usize,
+    /// Consecutive intervals during which `compute_open` returned true.
+    /// We require this to exceed `MATURITY` before reporting `is_open()`,
+    /// which forces a brief noise-burst that *looks* like CW for a few
+    /// intervals to still be suppressed.
+    good_streak: usize,
+}
+
+impl RhythmGate {
+    const WINDOW: usize = 24;
+    const OPEN_FRACTION: f32 = 0.80;
+    const MIN_INTERVALS: usize = 12;
+    const STICKY_BAD: usize = 6;
+    const DUTY_MIN: f32 = 0.25;
+    const DUTY_MAX: f32 = 0.65;
+    const TOL_FRAC: f32 = 0.30;
+    const TOL_FLOOR: f32 = 0.35;
+    const BIMODAL_MIN: usize = 2;
+    /// Number of consecutive good intervals required after the gate first
+    /// opens before character emission is allowed.
+    const MATURITY: usize = 6;
+
+    fn new() -> Self {
+        Self {
+            window: VecDeque::with_capacity(Self::WINDOW),
+            is_open: false,
+            bad_streak: 0,
+            good_streak: 0,
+        }
+    }
+
+    fn push(&mut self, ivl: Interval, dot: f32) {
+        if self.window.len() == Self::WINDOW {
+            self.window.pop_front();
+        }
+        self.window.push_back(ivl);
+        let was_open = self.is_open;
+        let now_open = self.compute_open(dot);
+        if was_open && !now_open {
+            self.bad_streak += 1;
+            self.is_open = self.bad_streak < Self::STICKY_BAD;
+            if !self.is_open {
+                self.bad_streak = 0;
+                self.good_streak = 0;
+            }
+        } else {
+            self.is_open = now_open;
+            if now_open {
+                self.bad_streak = 0;
+                self.good_streak = self.good_streak.saturating_add(1);
+            } else {
+                self.good_streak = 0;
+            }
+        }
+    }
+
+    fn is_open(&self) -> bool {
+        self.is_open && self.good_streak >= Self::MATURITY
+    }
+
+    #[allow(dead_code)]
+    fn reset(&mut self) {
+        self.window.clear();
+        self.is_open = false;
+        self.bad_streak = 0;
+        self.good_streak = 0;
+    }
+
+    fn compute_open(&self, dot: f32) -> bool {
+        if self.window.len() < Self::MIN_INTERVALS || dot <= 0.0 {
+            return false;
+        }
+        // (1) Per-interval fit.
+        let good = self
+            .window
+            .iter()
+            .filter(|i| Self::interval_good(**i, dot))
+            .count();
+        let frac = good as f32 / self.window.len() as f32;
+        if frac < Self::OPEN_FRACTION {
+            return false;
+        }
+        // (2) Bimodality of ON intervals.
+        let mut dits = Vec::new();
+        let mut dahs = Vec::new();
+        for i in &self.window {
+            if i.is_on {
+                let n = i.len as f32 / dot;
+                if n < 2.0 {
+                    dits.push(n);
+                } else if n <= 5.0 {
+                    dahs.push(n);
+                }
+            }
+        }
+        if dits.len() < Self::BIMODAL_MIN || dahs.len() < Self::BIMODAL_MIN {
+            return false;
+        }
+        let dit_mean = dits.iter().copied().sum::<f32>() / dits.len() as f32;
+        let dah_mean = dahs.iter().copied().sum::<f32>() / dahs.len() as f32;
+        if !(0.6..=1.4).contains(&dit_mean) {
+            return false;
+        }
+        if !(2.4..=3.6).contains(&dah_mean) {
+            return false;
+        }
+        // (3) Duty cycle. Word/silence gaps are excluded so a station
+        // pausing between exchanges doesn't pull duty below DUTY_MIN.
+        let mut on_total = 0usize;
+        let mut counted_total = 0usize;
+        for i in &self.window {
+            let n = i.len as f32 / dot;
+            if !i.is_on && n > 8.0 {
+                continue; // ambient silence — excluded from duty calculation
+            }
+            counted_total += i.len;
+            if i.is_on {
+                on_total += i.len;
+            }
+        }
+        if counted_total == 0 {
+            return false;
+        }
+        let duty = on_total as f32 / counted_total as f32;
+        if !(Self::DUTY_MIN..=Self::DUTY_MAX).contains(&duty) {
+            return false;
+        }
+        true
+    }
+
+    fn interval_good(ivl: Interval, dot: f32) -> bool {
+        let n = ivl.len as f32 / dot;
+        let targets: &[f32] = if ivl.is_on {
+            if n > 5.0 {
+                return false;
+            }
+            &[1.0, 3.0]
+        } else {
+            if n > 14.0 {
+                return true;
+            }
+            &[1.0, 3.0, 7.0]
+        };
+        targets.iter().any(|&t| {
+            let dist = (n - t).abs();
+            let tol = (Self::TOL_FRAC * t).max(Self::TOL_FLOOR);
+            dist <= tol
+        })
+    }
+}
+
 /// Run 1-D k-means (k=2) on a slice of lengths and return (low_mean, high_mean)
 /// if the two clusters are plausibly "dit" and "dah" (ratio between ~2.3x and
 /// ~4.0x, with each cluster holding at least two points). Requiring both
@@ -415,6 +588,11 @@ struct Decoder {
     bootstrap: Vec<Interval>,
     primed: bool,
 
+    /// Sliding rhythm-coherence gate: gates emission on whether recent
+    /// intervals actually look like Morse (1/3/7 dot units). Open by
+    /// default after enough intervals; closed on noise.
+    rhythm: RhythmGate,
+
     current_letter: String,
 }
 
@@ -436,6 +614,7 @@ impl Decoder {
             dah_len: None,
             bootstrap: Vec::new(),
             primed: false,
+            rhythm: RhythmGate::new(),
             current_letter: String::new(),
         }
     }
@@ -549,21 +728,37 @@ impl Decoder {
             _ => return,
         };
         let len_norm = ivl.len as f32 / dot;
+        // Feed the rhythm gate first so it always sees every interval.
+        self.rhythm.push(ivl, dot);
         if ivl.is_on {
             if len_norm < DIT_DAH_BOUNDARY {
                 self.current_letter.push('.');
             } else {
                 self.current_letter.push('-');
             }
-            if let Some(w) = self.current_wpm() {
-                events.push(StreamEvent::WpmUpdate { wpm: w });
+            // WPM events are cheap and informative even when the gate is
+            // closed (they help the operator see when the decoder has at
+            // least estimated a tempo from the noise).
+            if self.rhythm.is_open() {
+                if let Some(w) = self.current_wpm() {
+                    events.push(StreamEvent::WpmUpdate { wpm: w });
+                }
             }
         } else if len_norm > LETTER_SPACE_BOUNDARY {
-            if let Some(ev) = self.classify_letter() {
-                events.push(ev);
-            }
-            if len_norm > WORD_SPACE_BOUNDARY {
-                events.push(StreamEvent::Word);
+            // Letter / word boundary. Only flush characters when the rhythm
+            // gate believes this is a real signal.
+            if self.rhythm.is_open() {
+                if let Some(ev) = self.classify_letter() {
+                    events.push(ev);
+                }
+                if len_norm > WORD_SPACE_BOUNDARY {
+                    events.push(StreamEvent::Word);
+                }
+            } else {
+                // Drop the in-progress letter so we don't accumulate a long
+                // tail of dots/dashes from noise that suddenly emerges as
+                // garbage when the gate finally opens.
+                self.current_letter.clear();
             }
         }
     }
