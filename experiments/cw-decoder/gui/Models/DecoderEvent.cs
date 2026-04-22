@@ -33,6 +33,8 @@ internal sealed class DecoderEvent
     // power
     [JsonPropertyName("power")] public double? Power { get; set; }
     [JsonPropertyName("threshold")] public double? Threshold { get; set; }
+    [JsonPropertyName("noise")] public double? Noise { get; set; }
+    [JsonPropertyName("snr")] public double? Snr { get; set; }
     [JsonPropertyName("signal")] public bool? Signal { get; set; }
 
     // end

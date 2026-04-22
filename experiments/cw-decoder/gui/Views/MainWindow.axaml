@@ -105,17 +105,16 @@
     <Grid Grid.Row="2" ColumnDefinitions="*,*" Margin="14,12,14,0" >
       <!-- Signal strength column -->
       <Border Classes="panel" Margin="0,0,7,0">
-        <Grid RowDefinitions="Auto,Auto,Auto,*">
+        <Grid RowDefinitions="Auto,Auto,52" RowSpacing="10">
+          <!-- Header: section title + pitch -->
           <Grid ColumnDefinitions="*,Auto" >
             <TextBlock Text="SIGNAL STRENGTH" Classes="label" />
             <TextBlock Grid.Column="1" Text="{Binding PitchHz, StringFormat={}{0:F1} Hz}"
                        Classes="value" Foreground="{StaticResource AccentLime}" />
           </Grid>
-          <v:SignalMeter Grid.Row="1" Height="42" Margin="0,8,0,0"
-                         Level="{Binding NormalizedLevel}"
-                         Threshold="{Binding NormalizedThreshold}"
-                         Signal="{Binding Signal}" />
-          <Grid Grid.Row="2" ColumnDefinitions="*,*,*" Margin="0,8,0,0">
+
+          <!-- Numeric readouts (above the bar so they never collide) -->
+          <Grid Grid.Row="1" ColumnDefinitions="*,*,*,*">
             <StackPanel Spacing="2">
               <TextBlock Text="POWER" Classes="label" />
               <TextBlock Text="{Binding Power, StringFormat={}{0:E2}}" Classes="value" FontSize="14" Foreground="{StaticResource TextHi}" />
@@ -125,6 +124,10 @@
               <TextBlock Text="{Binding Threshold, StringFormat={}{0:E2}}" Classes="value" FontSize="14" Foreground="{StaticResource AccentAmber}" />
             </StackPanel>
             <StackPanel Grid.Column="2" Spacing="2">
+              <TextBlock Text="SNR" Classes="label" />
+              <TextBlock Text="{Binding SnrDb, StringFormat={}{0:F1} dB}" Classes="value" FontSize="14" Foreground="{StaticResource AccentLime}" />
+            </StackPanel>
+            <StackPanel Grid.Column="3" Spacing="2">
               <TextBlock Text="KEYING" Classes="label" />
               <StackPanel Orientation="Horizontal" Spacing="8">
                 <Ellipse Width="14" Height="14" Fill="{Binding Signal, Converter={StaticResource KeyingBrush}}" VerticalAlignment="Center" />
@@ -133,6 +136,13 @@
               </StackPanel>
             </StackPanel>
           </Grid>
+
+          <!-- The meter (last row has explicit pixel height) -->
+          <v:SignalMeter Grid.Row="2"
+                         HorizontalAlignment="Stretch" VerticalAlignment="Stretch"
+                         Level="{Binding NormalizedLevel}"
+                         Threshold="{Binding NormalizedThreshold}"
+                         Signal="{Binding Signal}" />
         </Grid>
       </Border>
       <!-- WPM column -->

@@ -45,6 +45,21 @@ const PRIME_INTERVALS: usize = 8;
 /// EMA smoothing factor for post-bootstrap dit-length updates.
 const DIT_EMA_ALPHA: f32 = 0.15;
 
+/// Off-band noise reference offset from the locked pitch (Hz). We run two
+/// extra Goertzels at +/- this offset to estimate broadband noise at the
+/// same instant. CW is narrow-band so a real signal will dominate the
+/// pitch bin while staying well below the side bins.
+const NOISE_OFFSET_HZ: f32 = 250.0;
+/// Required signal-to-noise ratio (linear) for a power sample to be
+/// considered "tone present" by the keying state machine. 4.0 ~= 6 dB.
+/// Below this, the sample is treated as noise even if it crosses the
+/// adaptive amplitude threshold.
+const MIN_SNR_RATIO: f32 = 4.0;
+/// Smoothing window for the noise reference (ms). Longer than the signal
+/// smoother so brief tone leakage into side bins doesn't lift the noise
+/// floor and disable the gate.
+const NOISE_SMOOTH_MS: f32 = 200.0;
+
 // --- Events ------------------------------------------------------------
 #[derive(Debug, Clone)]
 pub enum StreamEvent {
@@ -60,7 +75,8 @@ pub enum StreamEvent {
     Garbled { morse: String },
     /// Periodic snapshot of the smoothed Goertzel power vs threshold.
     /// Emitted at roughly `POWER_EVENT_HZ` Hz, throttled in `feed_goertzel`.
-    Power { power: f32, threshold: f32, signal: bool },
+    /// `noise` is the smoothed off-band reference; `snr` is power/noise.
+    Power { power: f32, threshold: f32, noise: f32, snr: f32, signal: bool },
 }
 
 /// Target rate (events / sec) for `StreamEvent::Power`. A subset of the
@@ -504,8 +520,10 @@ impl Decoder {
         self.consume_interval(ivl, events);
     }
 
-    /// Feed one power-signal sample. Emits zero or more events.
-    fn push_power(&mut self, p: f32, events: &mut Vec<StreamEvent>) {
+    /// Feed one power-signal sample. `snr_ok` indicates whether the off-band
+    /// noise reference says the bin actually contains a tone (gain-independent).
+    /// Emits zero or more events.
+    fn push_power(&mut self, p: f32, snr_ok: bool, events: &mut Vec<StreamEvent>) {
         if self.power_history.len() == self.power_capacity {
             self.power_history.pop_front();
         }
@@ -520,7 +538,10 @@ impl Decoder {
             return;
         }
 
-        let above = p > self.threshold;
+        // Both gates must agree: amplitude above adaptive threshold AND the
+        // tone bin is meaningfully louder than the off-band reference. The
+        // SNR gate is what keeps background hiss from being decoded as morse.
+        let above = p > self.threshold && snr_ok;
         if !self.have_first_sample {
             self.is_on = above;
             self.current_run = 1;
@@ -575,10 +596,19 @@ pub struct StreamingDecoder {
     pitch_reeval_threshold: usize,
 
     goertzel: Option<Goertzel>,
+    /// Off-band noise references (lo and hi side-bins around the locked
+    /// pitch). Used to compute SNR per power sample.
+    noise_lo: Option<Goertzel>,
+    noise_hi: Option<Goertzel>,
     smooth_window: usize,
     /// Recent power samples for moving average.
     smooth_buf: VecDeque<f32>,
     smooth_sum: f32,
+
+    /// Smoother for the off-band noise reference.
+    noise_smooth_window: usize,
+    noise_smooth_buf: VecDeque<f32>,
+    noise_smooth_sum: f32,
 
     /// Decimation counter for `StreamEvent::Power` throttling.
     power_emit_accum: f32,
@@ -611,6 +641,7 @@ impl StreamingDecoder {
         let step = (win_size / 4).max(1);
         let power_rate = TARGET_RATE as f32 / step as f32;
         let smooth_window = ((power_rate * POWER_SMOOTH_MS / 1000.0).round() as usize).max(1);
+        let noise_smooth_window = ((power_rate * NOISE_SMOOTH_MS / 1000.0).round() as usize).max(1);
         let power_emit_step = (power_rate / POWER_EVENT_HZ).max(1.0);
 
         Ok(Self {
@@ -623,9 +654,14 @@ impl StreamingDecoder {
             samples_since_pitch_eval: 0,
             pitch_reeval_threshold: (TARGET_RATE as f32 * PITCH_REEVAL_SECONDS) as usize,
             goertzel: None,
+            noise_lo: None,
+            noise_hi: None,
             smooth_window,
             smooth_buf: VecDeque::with_capacity(smooth_window + 1),
             smooth_sum: 0.0,
+            noise_smooth_window,
+            noise_smooth_buf: VecDeque::with_capacity(noise_smooth_window + 1),
+            noise_smooth_sum: 0.0,
             power_emit_accum: 0.0,
             power_emit_step,
             decoder: Decoder::new(power_rate),
@@ -658,6 +694,16 @@ impl StreamingDecoder {
                     let win_size = (TARGET_RATE as f32 * GOERTZEL_WIN_MS / 1000.0) as usize;
                     let step = (win_size / 4).max(1);
                     self.goertzel = Some(Goertzel::new(pitch, TARGET_RATE, win_size, step));
+                    // Side-band noise references. Skip a side if it would land
+                    // outside the audio passband — we'll just use the other one.
+                    let lo_f = pitch - NOISE_OFFSET_HZ;
+                    let hi_f = pitch + NOISE_OFFSET_HZ;
+                    self.noise_lo = if lo_f >= FREQ_MIN_HZ {
+                        Some(Goertzel::new(lo_f, TARGET_RATE, win_size, step))
+                    } else { None };
+                    self.noise_hi = if hi_f <= FREQ_MAX_HZ {
+                        Some(Goertzel::new(hi_f, TARGET_RATE, win_size, step))
+                    } else { None };
                     events.push(StreamEvent::PitchUpdate { pitch_hz: pitch });
                     // Replay the pre-lock audio through Goertzel so we don't lose it.
                     let drained = std::mem::take(&mut self.pre_lock_buf);
@@ -693,8 +739,21 @@ impl StreamingDecoder {
         };
         let mut power_out = Vec::new();
         goertzel.push(audio, &mut power_out);
-        for p in power_out {
-            // Moving average.
+
+        // Same audio fed through both side-band Goertzels emits the same
+        // number of power samples (identical win_size/step), so they align
+        // 1:1 with `power_out`.
+        let mut noise_lo_out = Vec::new();
+        let mut noise_hi_out = Vec::new();
+        if let Some(nl) = self.noise_lo.as_mut() {
+            nl.push(audio, &mut noise_lo_out);
+        }
+        if let Some(nh) = self.noise_hi.as_mut() {
+            nh.push(audio, &mut noise_hi_out);
+        }
+
+        for (i, p) in power_out.iter().copied().enumerate() {
+            // Signal moving average.
             self.smooth_buf.push_back(p);
             self.smooth_sum += p;
             if self.smooth_buf.len() > self.smooth_window {
@@ -704,16 +763,49 @@ impl StreamingDecoder {
             }
             let smoothed = self.smooth_sum / self.smooth_buf.len() as f32;
 
+            // Noise reference: take the smaller of the two side bins so a
+            // single bleed-through can't disable the gate. If only one side
+            // exists, use it directly.
+            let nl = noise_lo_out.get(i).copied();
+            let nh = noise_hi_out.get(i).copied();
+            let noise_raw = match (nl, nh) {
+                (Some(a), Some(b)) => a.min(b),
+                (Some(a), None) => a,
+                (None, Some(b)) => b,
+                (None, None) => 0.0,
+            };
+            self.noise_smooth_buf.push_back(noise_raw);
+            self.noise_smooth_sum += noise_raw;
+            if self.noise_smooth_buf.len() > self.noise_smooth_window {
+                if let Some(old) = self.noise_smooth_buf.pop_front() {
+                    self.noise_smooth_sum -= old;
+                }
+            }
+            let noise = self.noise_smooth_sum / self.noise_smooth_buf.len() as f32;
+
+            // SNR: how many times louder is the tone bin vs the off-band
+            // reference. With no noise reading yet we default to "OK" so the
+            // existing amplitude threshold still does its job.
+            let snr = if noise > 0.0 { smoothed / noise } else { f32::INFINITY };
+            let snr_ok = snr >= MIN_SNR_RATIO;
+
             // Throttled Power event for UI meters (~POWER_EVENT_HZ).
             self.power_emit_accum += 1.0;
             if self.power_emit_accum >= self.power_emit_step {
                 self.power_emit_accum -= self.power_emit_step;
                 let threshold = self.decoder.threshold;
-                let signal = threshold > 0.0 && smoothed > threshold;
-                events.push(StreamEvent::Power { power: smoothed, threshold, signal });
+                let signal = threshold > 0.0 && smoothed > threshold && snr_ok;
+                let snr_clean = if snr.is_finite() { snr } else { 0.0 };
+                events.push(StreamEvent::Power {
+                    power: smoothed,
+                    threshold,
+                    noise,
+                    snr: snr_clean,
+                    signal,
+                });
             }
 
-            self.decoder.push_power(smoothed, events);
+            self.decoder.push_power(smoothed, snr_ok, events);
         }
     }
 

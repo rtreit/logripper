@@ -67,6 +67,12 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
     private bool _signal;
     public bool Signal { get => _signal; set => Set(ref _signal, value); }
 
+    private double _snrDb;
+    public double SnrDb { get => _snrDb; set => Set(ref _snrDb, value); }
+
+    private double _noise;
+    public double Noise { get => _noise; set => Set(ref _noise, value); }
+
     private string? _statusText;
     public string? StatusText { get => _statusText; set => Set(ref _statusText, value); }
 
@@ -165,7 +171,10 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
                 {
                     Power = p;
                     Threshold = th;
+                    Noise = ev.Noise ?? 0;
                     Signal = ev.Signal ?? false;
+                    if (ev.Snr is double snrLin && snrLin > 0)
+                        SnrDb = 10.0 * Math.Log10(snrLin);
                     // Maintain a slowly-decaying ceiling so the meter auto-scales
                     // to the current signal envelope.
                     _powerCeiling = Math.Max(_powerCeiling * 0.9985, p);

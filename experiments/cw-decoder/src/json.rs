@@ -11,7 +11,7 @@
 //!   {"t": ..., "type": "char",    "ch": "A", "morse": ".-"}
 //!   {"t": ..., "type": "word"}
 //!   {"t": ..., "type": "garbled", "morse": "...-.."}
-//!   {"t": ..., "type": "power",   "power": 0.0123, "threshold": 0.005, "signal": true}
+//!   {"t": ..., "type": "power",   "power": 0.0123, "threshold": 0.005, "noise": 0.0008, "snr": 15.4, "signal": true}
 //!   {"t": ..., "type": "stats",   "wpm": 18.4, "pitch": 700.5, "threshold": 0.005}
 //!   {"t": ..., "type": "end"}
 
@@ -64,10 +64,12 @@ impl JsonEmitter {
                 "type": "garbled",
                 "morse": morse,
             }),
-            StreamEvent::Power { power, threshold, signal } => json!({
+            StreamEvent::Power { power, threshold, noise, snr, signal } => json!({
                 "type": "power",
                 "power": *power,
                 "threshold": *threshold,
+                "noise": *noise,
+                "snr": round2(*snr),
                 "signal": *signal,
             }),
         };
