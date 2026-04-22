@@ -113,6 +113,7 @@ mod tests {
             country: Some("United States".to_string()),
             grid: Some("CN87".to_string()),
             name: Some("John Smith".to_string()),
+            duration: None,
             source_record: QsoRecord {
                 local_id: id.to_string(),
                 worked_callsign: callsign.to_string(),

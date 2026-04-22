@@ -28,8 +28,8 @@ import "services/update_qso_response.proto";
 // Core logbook operations. Covers local QSO CRUD, QRZ logbook sync, and ADIF import/export.
 //
 // Implementation status:
-//   LogQso        — implemented for local storage; optional QRZ sync still reports unimplemented
-//   UpdateQso     — implemented for local storage; optional QRZ sync still reports unimplemented
+//   LogQso        — implemented; optional per-operation QRZ sync implemented (sync_to_qrz=true)
+//   UpdateQso     — implemented; optional per-operation QRZ sync implemented (sync_to_qrz=true)
 //   DeleteQso     — implemented for local storage; QRZ delete supported when delete_from_qrz=true
 //   GetQso        — implemented for local storage
 //   ListQsos      — implemented for local storage

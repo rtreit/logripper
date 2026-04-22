@@ -5,6 +5,7 @@ use chrono::{NaiveDate, NaiveDateTime, NaiveTime};
 use tonic::transport::{Channel, Endpoint};
 
 use qsoripper_core::domain::band::{band_from_adif, band_to_adif};
+use qsoripper_core::domain::duration::format_qso_duration;
 use qsoripper_core::domain::mode::{mode_from_adif, mode_to_adif};
 use qsoripper_core::proto::qsoripper::domain::{Band, LookupState, Mode, RstReport};
 use qsoripper_core::proto::qsoripper::services::{
@@ -158,6 +159,7 @@ pub(crate) async fn list_recent_qsos(
             country: qso.worked_country.clone(),
             grid: qso.worked_grid.clone(),
             name: qso.worked_operator_name.clone(),
+            duration: format_qso_duration(&qso),
             source_record: qso,
         });
     }
