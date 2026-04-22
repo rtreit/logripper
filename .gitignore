@@ -76,3 +76,8 @@ compile_commands.json
 
 # Stress test reports
 stress-report.html
+
+# Experimental audio test artifacts
+*.mp3
+*.wav
+
