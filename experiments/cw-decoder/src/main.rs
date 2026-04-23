@@ -1596,6 +1596,9 @@ fn run_stream_file(
                 streaming::StreamEvent::Power { .. } => {
                     // Power events are JSON-only by default; suppress in human output.
                 }
+                streaming::StreamEvent::Confidence { .. } => {
+                    // Confidence events are JSON-only by default; suppress in human output.
+                }
             }
         }
 
@@ -2367,6 +2370,7 @@ fn run_stream_live(
                     println!("[t={t:>6.2}s] ???  garbled morse: {morse}{pitch_suffix}");
                 }
                 streaming::StreamEvent::Power { .. } => {}
+                streaming::StreamEvent::Confidence { .. } => {}
             }
         }
     }

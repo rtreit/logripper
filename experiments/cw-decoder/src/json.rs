@@ -101,6 +101,10 @@ impl JsonEmitter {
                 "snr": round2(*snr),
                 "signal": *signal,
             }),
+            StreamEvent::Confidence { state } => json!({
+                "type": "confidence",
+                "state": state.as_str(),
+            }),
         };
         self.emit(t, v);
     }

@@ -47,6 +47,21 @@ const MIN_HOLD_FISHER: f32 = 3.5;
 /// Number of consecutive failed quality checks required before we
 /// drop the lock (hysteresis against QSB / brief pauses).
 const QUALITY_DROP_CONSECUTIVE: u32 = 2;
+/// Trial-Fisher score below which the watchdog drops the lock on a
+/// SINGLE failed check, bypassing `QUALITY_DROP_CONSECUTIVE`. This
+/// catches the "we just locked onto voice/garbage" case where Fisher
+/// is essentially zero (no coherent dit/dah clusters at all).
+/// Borderline-bad signals (Fisher in [FAST_DROP, MIN_HOLD)) still get
+/// the normal 2-check hysteresis so QSB doesn't drop a real lock.
+const QUALITY_FAST_DROP_FISHER: f32 = 1.0;
+/// Pitch-lock buffer size after a recent watchdog drop. Smaller than
+/// PITCH_LOCK_SECONDS so we can re-acquire on the new clean signal
+/// quickly (typical case: voice ended, real CW just started — we
+/// don't want to lose another 6 s of valid CW characters waiting for
+/// a full window to refill). The flag is sticky only until the next
+/// lock survives its probation check, so this doesn't degrade
+/// steady-state false-lock resistance.
+const RELOCK_SECONDS: f32 = 3.0;
 const POWER_HISTORY_SECONDS: f32 = 4.0;
 const DIT_HISTORY: usize = 32;
 const DIT_DAH_BOUNDARY: f32 = 2.0;
@@ -268,6 +283,43 @@ pub enum StreamEvent {
         snr: f32,
         signal: bool,
     },
+    /// Coarse confidence state that surfaces decoder lifecycle to the
+    /// UI so operators can see when emitted characters are trusted vs
+    /// when the decoder is still searching/verifying.
+    ///
+    /// Lifecycle:
+    /// * `Hunting` — no pitch lock; decoder is searching the spectrum
+    ///   for a viable CW tone. No `Char` events will be emitted.
+    /// * `Probation` — a candidate pitch was just locked but has not
+    ///   yet passed its first quality check. `Char`/`Garbled`/`Word`/
+    ///   `WpmUpdate` events are SUPPRESSED so the operator never sees
+    ///   characters from a bogus lock (e.g. one made on voice
+    ///   formants in audio recorded before the CW transmission
+    ///   actually starts).
+    /// * `Locked` — lock survived its probation; decoder is emitting
+    ///   characters with normal confidence. The watchdog can still
+    ///   drop the lock later if the signal degrades.
+    Confidence { state: ConfidenceState },
+}
+
+/// See [`StreamEvent::Confidence`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConfidenceState {
+    Hunting,
+    Probation,
+    Locked,
+}
+
+impl ConfidenceState {
+    /// Stable lowercase label, used by the JSON event bridge so the
+    /// .NET GUI can render a status badge.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ConfidenceState::Hunting => "hunting",
+            ConfidenceState::Probation => "probation",
+            ConfidenceState::Locked => "locked",
+        }
+    }
 }
 
 /// Target rate (events / sec) for `StreamEvent::Power`. A subset of the
@@ -1517,6 +1569,33 @@ pub struct StreamingDecoder {
     /// MIN_HOLD_FISHER. Lock is dropped when this hits
     /// QUALITY_DROP_CONSECUTIVE.
     quality_failed_consecutive: u32,
+    /// True between acquiring a fresh lock and passing the first
+    /// post-lock probation check. While set we use a SHORT quality
+    /// window so we can detect and drop a bogus lock fast (e.g. one
+    /// that happened on voice formants).
+    just_locked: bool,
+    /// True after a watchdog-driven drop, until the next surviving
+    /// lock. Tells `pitch_lock_samples_needed()` to use the smaller
+    /// RELOCK_SECONDS window so we re-acquire quickly when (in the
+    /// typical case) the signal we lost was masking real CW arriving
+    /// right after.
+    had_pitch_loss: bool,
+    /// Current confidence state. Used to gate which decoder events
+    /// reach the operator (chars/wpm/word are suppressed unless
+    /// `Locked`) and to avoid duplicate Confidence events.
+    confidence: ConfidenceState,
+    /// Set to `true` on the very first feed_pcm call so we emit the
+    /// initial `Confidence::Hunting` event lazily (we can't push to
+    /// `events` from `new()`).
+    confidence_emitted: bool,
+    /// While we're in `Probation`, decoded character/word/wpm events
+    /// are held here instead of being passed straight to the
+    /// caller. If the lock survives probation (transitions to
+    /// `Locked`) we flush them in order so genuine CW that started
+    /// emitting during the verification window isn't silently lost.
+    /// On a probation drop we discard them — they came from a bogus
+    /// lock.
+    held_events: Vec<StreamEvent>,
 
     goertzel: Option<Goertzel>,
     /// Optional companion Goertzels at pitch ± k*bin_width for k=1..=N
@@ -1595,6 +1674,11 @@ impl StreamingDecoder {
             samples_since_quality_check: 0,
             quality_check_threshold: (TARGET_RATE as f32 * QUALITY_CHECK_SECONDS) as usize,
             quality_failed_consecutive: 0,
+            just_locked: false,
+            had_pitch_loss: false,
+            confidence: ConfidenceState::Hunting,
+            confidence_emitted: false,
+            held_events: Vec::new(),
             goertzel: None,
             wide_bins: Vec::new(),
             noise_bins: Vec::new(),
@@ -1677,6 +1761,14 @@ impl StreamingDecoder {
     /// this call (decoded characters, WPM updates, pitch lock).
     pub fn feed(&mut self, samples: &[f32]) -> Result<Vec<StreamEvent>> {
         let mut events = Vec::new();
+        // Lazy initial Confidence emit — the operator sees "hunting"
+        // from the very first frame even before any audio classifies.
+        if !self.confidence_emitted {
+            events.push(StreamEvent::Confidence {
+                state: self.confidence,
+            });
+            self.confidence_emitted = true;
+        }
         let resampled = self.resample(samples)?;
         if resampled.is_empty() {
             return Ok(events);
@@ -1693,14 +1785,18 @@ impl StreamingDecoder {
             if let Some(forced) = self.config.force_pitch_hz {
                 if forced.is_finite() && forced > 0.0 {
                     self.install_forced_pitch(forced, &mut events);
+                    // Forced pitch is "operator declares this IS the
+                    // pitch" — skip probation and go straight to
+                    // Locked. The watchdog stays off in this mode too.
+                    self.set_confidence(ConfidenceState::Locked, &mut events);
                     self.feed_goertzel(&filtered, &mut events);
-                    return Ok(events);
+                    return Ok(self.filter_for_confidence(events));
                 }
             }
             self.emit_unlock_power(&filtered, &mut events);
             self.pre_lock_buf.extend_from_slice(&filtered);
             self.try_acquire_pitch_lock(&mut events);
-            return Ok(events);
+            return Ok(self.filter_for_confidence(events));
         }
 
         for &s in &filtered {
@@ -1712,44 +1808,83 @@ impl StreamingDecoder {
 
         self.feed_goertzel(&filtered, &mut events);
 
-        // --- Quality watchdog: roll a window of recent audio and
-        // periodically re-check the trial-decode Fisher score at the
-        // currently locked pitch. If the signal degrades to noise we
-        // drop the lock so the next caller doesn't keep emitting
-        // letters from random spikes.
+        // --- Quality watchdog --------------------------------------------
+        // We always evaluate on the full QUALITY_WINDOW_SECONDS rolling
+        // buffer (8 s at TARGET_RATE). The first time it fires after a
+        // fresh lock acts as the "probation" promotion gate: if Fisher
+        // is healthy we transition Probation → Locked and flush any
+        // held character events; if it's too low we drop the lock and
+        // discard the held events. While the lock is in Probation the
+        // operator never sees decoded chars, so a bogus lock made on
+        // voice formants or a random impulse gets cleared without
+        // polluting the transcript.
+        //
+        // A Fisher essentially at zero (`< QUALITY_FAST_DROP_FISHER`)
+        // drops on the FIRST failed check — there's no QSB pattern that
+        // produces zero Fisher; that's "this isn't CW at all".
         self.samples_since_quality_check += filtered.len();
-        if self.config.force_pitch_hz.is_none()
-            && self.samples_since_quality_check >= self.quality_check_threshold
-            && self.quality_buf.len() >= self.quality_buf_capacity
-        {
-            self.samples_since_quality_check = 0;
-            if let Some(pitch) = self.pitch_locked {
-                let buf: Vec<f32> = self.quality_buf.iter().copied().collect();
-                let fisher = trial_decode_score(&buf, TARGET_RATE, pitch);
-                let debug = std::env::var("CW_PITCH_DEBUG").is_ok();
-                if debug {
-                    eprintln!(
-                        "[cw-decoder quality] pitch={:.1} Hz fisher={:.3} (hold>={:.1}, fails={})",
-                        pitch, fisher, MIN_HOLD_FISHER, self.quality_failed_consecutive
-                    );
-                }
-                if fisher < MIN_HOLD_FISHER {
-                    self.quality_failed_consecutive += 1;
-                    if self.quality_failed_consecutive >= QUALITY_DROP_CONSECUTIVE {
+        if self.config.force_pitch_hz.is_none() && self.pitch_locked.is_some() {
+            let in_probation = self.just_locked;
+            if self.samples_since_quality_check >= self.quality_check_threshold
+                && self.quality_buf.len() >= self.quality_buf_capacity
+            {
+                self.samples_since_quality_check = 0;
+                if let Some(pitch) = self.pitch_locked {
+                    let buf: Vec<f32> = self.quality_buf.iter().copied().collect();
+                    let fisher = trial_decode_score(&buf, TARGET_RATE, pitch);
+                    let debug = std::env::var("CW_PITCH_DEBUG").is_ok();
+                    if debug {
+                        eprintln!(
+                            "[cw-decoder quality] phase={} pitch={:.1} Hz fisher={:.3} (hold>={:.1}, fast_drop<{:.1}, fails={})",
+                            if in_probation { "probation" } else { "steady" },
+                            pitch,
+                            fisher,
+                            MIN_HOLD_FISHER,
+                            QUALITY_FAST_DROP_FISHER,
+                            self.quality_failed_consecutive
+                        );
+                    }
+                    let fast_drop = fisher < QUALITY_FAST_DROP_FISHER;
+                    if fast_drop {
+                        let phase = if in_probation { "probation" } else { "steady" };
                         let reason = format!(
-                            "quality watchdog: Fisher {:.2} < {:.1} for {} consecutive checks",
-                            fisher, MIN_HOLD_FISHER, self.quality_failed_consecutive
+                            "quality watchdog ({phase}): Fisher {fisher:.2} < {QUALITY_FAST_DROP_FISHER:.1} (fast drop, signal not coherent CW)"
                         );
                         let preserve_pre_lock_buf = self.seed_fast_relock_from_recent_audio(&buf);
                         self.drop_pitch_lock(preserve_pre_lock_buf);
                         events.push(StreamEvent::PitchLost { reason });
+                        self.set_confidence(ConfidenceState::Hunting, &mut events);
+                    } else if fisher < MIN_HOLD_FISHER {
+                        self.quality_failed_consecutive += 1;
+                        if self.quality_failed_consecutive >= QUALITY_DROP_CONSECUTIVE {
+                            let reason = format!(
+                                "quality watchdog: Fisher {:.2} < {:.1} for {} consecutive checks",
+                                fisher, MIN_HOLD_FISHER, self.quality_failed_consecutive
+                            );
+                            let preserve_pre_lock_buf =
+                                self.seed_fast_relock_from_recent_audio(&buf);
+                            self.drop_pitch_lock(preserve_pre_lock_buf);
+                            events.push(StreamEvent::PitchLost { reason });
+                            self.set_confidence(ConfidenceState::Hunting, &mut events);
+                        } else if in_probation {
+                            // Borderline lock during probation: don't
+                            // promote yet, wait for the next check.
+                            // Held chars stay buffered.
+                        }
+                    } else {
+                        // Lock is healthy. Clear hysteresis. If we're
+                        // in probation, promote to Locked now —
+                        // this is the gate that flushes held chars.
+                        self.quality_failed_consecutive = 0;
+                        if in_probation {
+                            self.just_locked = false;
+                            self.had_pitch_loss = false;
+                            self.set_confidence(ConfidenceState::Locked, &mut events);
+                        }
                     }
-                } else {
-                    self.quality_failed_consecutive = 0;
                 }
             }
         }
-
         // --- Periodic pitch re-eval (with hysteresis) ------------------
         self.samples_since_pitch_eval += filtered.len();
         if self.samples_since_pitch_eval >= self.pitch_reeval_threshold {
@@ -1761,7 +1896,60 @@ impl StreamingDecoder {
             // stable for a single QSO/channel.)
         }
 
-        Ok(events)
+        Ok(self.filter_for_confidence(events))
+    }
+
+    /// While the decoder is `Hunting` we drop decoded char-class
+    /// events outright. While `Probation` we *hold* them — same
+    /// semantics from the operator's point of view (no characters
+    /// appear) but they get flushed as soon as the lock is confirmed
+    /// so genuine CW that began streaming during the verification
+    /// window survives. On a probation drop, the held buffer is
+    /// discarded (those chars came from a bogus lock).
+    fn filter_for_confidence(&mut self, events: Vec<StreamEvent>) -> Vec<StreamEvent> {
+        match self.confidence {
+            ConfidenceState::Locked => events,
+            ConfidenceState::Hunting => events
+                .into_iter()
+                .filter(|ev| !is_decoded_char_event(ev))
+                .collect(),
+            ConfidenceState::Probation => {
+                let mut out = Vec::with_capacity(events.len());
+                for ev in events {
+                    if is_decoded_char_event(&ev) {
+                        self.held_events.push(ev);
+                    } else {
+                        out.push(ev);
+                    }
+                }
+                out
+            }
+        }
+    }
+
+    /// Push a `Confidence` event only if the state actually changed.
+    /// Updates the cached state. On promotion to `Locked` the held
+    /// probation events get appended to the outgoing list. On a drop
+    /// to `Hunting` the held buffer is cleared.
+    fn set_confidence(&mut self, next: ConfidenceState, events: &mut Vec<StreamEvent>) {
+        if self.confidence != next {
+            self.confidence = next;
+            events.push(StreamEvent::Confidence { state: next });
+            match next {
+                ConfidenceState::Locked => {
+                    if !self.held_events.is_empty() {
+                        events.append(&mut self.held_events);
+                    }
+                }
+                ConfidenceState::Hunting => {
+                    self.held_events.clear();
+                }
+                ConfidenceState::Probation => {}
+            }
+        }
+        // Make sure the lazy-emit flag is set so we don't double-emit
+        // the initial Hunting on the first feed call.
+        self.confidence_emitted = true;
     }
 
     /// Tear down all per-lock state so the next pitch search starts
@@ -1805,6 +1993,8 @@ impl StreamingDecoder {
         self.samples_since_quality_check = 0;
         self.quality_failed_consecutive = 0;
         self.quality_buf.clear();
+        self.just_locked = false;
+        self.had_pitch_loss = true;
         if !preserve_pre_lock_buf {
             self.pre_lock_buf.clear();
         }
@@ -1852,7 +2042,13 @@ impl StreamingDecoder {
             // noise bins above are reused at instantaneous time inside
             // `feed_goertzel` for the tone-purity gate.
             self.unlock_power_history.clear();
+            self.just_locked = true;
             events.push(StreamEvent::PitchUpdate { pitch_hz: pitch });
+            // Surface the lock immediately as Probation so the UI
+            // shows "VERIFYING SIGNAL". The probation watchdog will
+            // promote to Locked (or drop back to Hunting) within a
+            // few seconds.
+            self.set_confidence(ConfidenceState::Probation, events);
             let drained = std::mem::take(&mut self.pre_lock_buf);
             self.feed_goertzel(&drained, events);
         } else {
@@ -1865,7 +2061,13 @@ impl StreamingDecoder {
     }
 
     fn pitch_lock_samples_needed(&self) -> usize {
-        let seconds = if self.config.pitch_lock_bounds().is_some() {
+        let seconds = if self.had_pitch_loss {
+            // Recent watchdog-driven drop: prefer to re-acquire fast
+            // because the typical case is "voice/QRM ended, real CW
+            // started right after" and we don't want to lose more
+            // characters waiting for a full PITCH_LOCK_SECONDS window.
+            RELOCK_SECONDS
+        } else if self.config.pitch_lock_bounds().is_some() {
             RANGE_LOCK_SECONDS
         } else {
             PITCH_LOCK_SECONDS
@@ -2077,8 +2279,28 @@ impl StreamingDecoder {
         if let Some(ev) = self.decoder.classify_letter(self.pitch_locked) {
             events.push(ev);
         }
+        // If the stream ends while still in probation, emit whatever
+        // we've accumulated. The lock survived to end-of-input, which
+        // is the best evidence we have that it was real.
+        if matches!(self.confidence, ConfidenceState::Probation) && !self.held_events.is_empty() {
+            events.append(&mut self.held_events);
+        }
         events
     }
+}
+
+/// Whether a `StreamEvent` carries decoded character output that
+/// should be gated by the confidence state machine. Pitch / power /
+/// confidence / lifecycle events are diagnostic and always pass
+/// through.
+fn is_decoded_char_event(ev: &StreamEvent) -> bool {
+    matches!(
+        ev,
+        StreamEvent::Char { .. }
+            | StreamEvent::Garbled { .. }
+            | StreamEvent::Word
+            | StreamEvent::WpmUpdate { .. }
+    )
 }
 
 // --- morse table (lifted from ditdah) ----------------------------------
@@ -2792,8 +3014,11 @@ mod min_pulse_filter_tests {
         // Lead-in noise so pitch lock can warm up on a real-ish backdrop.
         audio.extend(lcg(0xCAFE, sr as usize * 2, 0.005));
         // Add a stretch of clean CW first so the decoder has a real
-        // dot-length estimate to compare blips against.
-        audio.extend(synth_paris(sr, 700.0, 18.0, 4.0));
+        // dot-length estimate to compare blips against. Length is
+        // sized so that the probation watchdog has clean CW in its
+        // ~2s rolling buffer when it fires (lock acquires after
+        // ~6 s of pre-buffer; probation runs ~2 s after that).
+        audio.extend(synth_paris(sr, 700.0, 18.0, 8.0));
         // Then silence punctuated by short blips.
         for k in 0..6 {
             audio.extend(lcg(0xBEEF + k, gap_n, 0.005));

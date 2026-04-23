@@ -887,7 +887,8 @@ fn append_stream_events(transcript: &mut String, events: Vec<StreamEvent>) {
             StreamEvent::PitchUpdate { .. }
             | StreamEvent::PitchLost { .. }
             | StreamEvent::WpmUpdate { .. }
-            | StreamEvent::Power { .. } => {}
+            | StreamEvent::Power { .. }
+            | StreamEvent::Confidence { .. } => {}
         }
     }
 }

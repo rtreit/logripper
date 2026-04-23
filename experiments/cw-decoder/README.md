@@ -108,6 +108,15 @@ Recent custom-streaming changes on this branch added:
 - **trial-decode Fisher scoring** to rank candidate tones
 - **auto-threshold tuning** from running SNR margin so threshold follows QSB
 - **post-lock quality watchdog** so weak/dirty locks can be dropped instead of drifting forever
+- **adjacent-bin tone purity gate** to suppress broadband impulses (finger snaps, key clicks, splatter) at the source
+- **wide-bin sniff** (`--wide-bin-count`) to integrate energy across ±N Goertzel bins for acoustically re-captured CW
+- **force-pitch override** (`--force-pitch-hz`) that bypasses acquisition when the operator already knows the target
+- **min-pulse / min-gap dot-fraction filters** that reject sub-dot blips and fill sub-dot gaps in the keying envelope (mic-mode default off, file-mode default off, mic preset turns them on)
+- **WASAPI loopback capture** (`stream-live --loopback`) for same-machine digital playback (YouTube, browsers, local files) — separates "speaker→mic acoustic recapture" (research) from "render→loopback digital pipe" (operational)
+- **centroid pitch picking** as a tiebreaker so locks centre on the energy ridge instead of edge-locking on a side bin
+- **mic-mode preset** that bundles wider bins, lower purity, and the min-pulse/min-gap filters in one toggle
+- **lockstep decode-and-play** (`stream-file --decode-and-play` / GUI **DECODE+PLAY**) so the audio you hear is exactly the audio being decoded, with a single cursor controlling pause / seek / region trim
+- **confidence state machine + held-event buffer** (`hunting` / `probation` / `locked`) so decoded characters never reach the operator until the lock has cleared its first quality watchdog. Bogus locks made on voice formants or impulse noise are silently discarded; genuine CW that started streaming during the verification window is buffered and flushed in order at the moment the lock is confirmed. The GUI surfaces this as a prominent **● LOCKED / ◐ VERIFYING SIGNAL / ○ ACQUIRING TARGET** badge in the status bar.
 
 This path is the more ambitious live decoder, but it still needs better corpus-driven measurement.
 
@@ -130,6 +139,147 @@ This baseline exists because it is:
 
 It is the current reference path for label-driven tuning.
 
+## Signal processing architecture
+
+The custom streaming decoder (`src\streaming.rs`) is a chain of stages, each addressing a specific failure mode the project has hit on real off-air audio. Read top-to-bottom — each stage assumes the previous one has done its job.
+
+```
+                    raw input audio (file or capture device)
+                                    │
+                                    ▼
+                     ┌───────────────────────────────┐
+                     │  resample to 12 kHz mono f32  │  rubato
+                     └───────────────┬───────────────┘
+                                     ▼
+                     ┌───────────────────────────────┐
+                     │   HP / LP biquad chain        │  300–1500 Hz CW band
+                     └───────────────┬───────────────┘
+                                     ▼
+                ┌────────────────────┴────────────────────┐
+                │ pitch_locked == None?                   │
+                └────┬──────────────────────────┬─────────┘
+                     │ yes                      │ no
+                     ▼                          ▼
+        ┌──────────────────────┐   ┌────────────────────────┐
+        │ ACQUISITION          │   │ TRACKING               │
+        │  • emit "hunting"    │   │  • Goertzel @ pitch    │
+        │  • build pre-lock    │   │  • + side bins for     │
+        │    audio buffer      │   │    instantaneous       │
+        │    (PITCH_LOCK_S or  │   │    tone-purity ratio   │
+        │    RELOCK_S after a  │   │  • + wide-bin sniff    │
+        │    recent loss)      │   │    (mic-mode integ.)   │
+        │  • try_acquire:      │   │                        │
+        │     trial_decode     │   │  per-sample gates:     │
+        │     Fisher per cand  │   │    amplitude > thr ∧   │
+        │     pitch (ditdah    │   │    smoothed SNR ok ∧   │
+        │     re-decode)       │   │    tone_purity > k ∧   │
+        │  • centroid tiebreak │   │    not impulse         │
+        │  • commit best ≥     │   │                        │
+        │    MIN_LOCK_FISHER   │   │  on/off → durations →  │
+        │  • emit "probation"  │   │  ditdah symbol classif │
+        └──────────┬───────────┘   │  → Char / Word events  │
+                   │ lock          └─────────┬──────────────┘
+                   ▼                         │
+                                             ▼
+                              ┌──────────────────────────────┐
+                              │ CONFIDENCE FILTER            │
+                              │   hunting   → drop chars     │
+                              │   probation → hold chars     │
+                              │   locked    → pass chars     │
+                              └──────────┬───────────────────┘
+                                         ▼
+                              ┌──────────────────────────────┐
+                              │ QUALITY WATCHDOG             │
+                              │  every QUALITY_CHECK_S over  │
+                              │  QUALITY_WINDOW_S buffer:    │
+                              │    Fisher < FAST_DROP        │
+                              │      → drop, "hunting",      │
+                              │        discard held          │
+                              │    Fisher in [FAST_DROP,     │
+                              │      MIN_HOLD) for N checks  │
+                              │      → drop, hysteresis      │
+                              │    Fisher ≥ MIN_HOLD         │
+                              │      → if probation:         │
+                              │          promote, flush held │
+                              │        else: keep            │
+                              └──────────┬───────────────────┘
+                                         ▼
+                                  StreamEvent stream
+                            (PitchUpdate, Char, Word, Garbled,
+                             WpmUpdate, Power, PitchLost,
+                             Confidence)
+```
+
+### Key design properties
+
+- **Two-stage detection.** Acquisition uses `trial_decode_score` (a real
+  ditdah pass on a candidate window) so we only lock on tones that
+  actually look like CW — not just strong tones. Tracking is a much
+  cheaper per-sample Goertzel + gates path so the steady-state CPU
+  cost is small.
+- **Acquisition-first hypothesis.** The custom decoder was originally
+  the bottleneck; it now isn't. The remaining hard cases on the
+  9-label corpus are dominated by **wrong-tone lock**, **late lock**,
+  and **lock on noise**, not by symbol classification errors. The
+  oracle-tone eval mode and the planned top-K tracker (Phase 3) target
+  these directly.
+- **Confidence machine = first-class operator UX.** The decoder's
+  internal lifecycle (`Hunting` / `Probation` / `Locked`) is exposed
+  to the GUI as a coloured status badge, and char-class events are
+  gated by it. Bogus locks made on voice formants or transient impulses
+  never reach the transcript, even when the watchdog needs several
+  seconds of accumulated audio to confirm them as bogus.
+- **Held-event buffer keeps probation honest.** While in `Probation`,
+  decoded characters are held (not dropped). If the lock survives,
+  the held buffer is flushed in order so genuine CW that started
+  during the verification window is preserved. If the lock is rejected,
+  the held buffer is discarded.
+- **Two acquisition surfaces, one engine.** Voice-acoustic capture
+  (mic) and digital same-machine playback (loopback) flow through the
+  same streaming decoder; the mic path layers on the wide-bin /
+  min-pulse / min-gap / lower-purity preset, while loopback uses the
+  default file-mode tuning because the audio is bit-identical to the
+  source.
+
+### Confidence state machine
+
+```
+       (start)
+          │
+          ▼
+   ┌─────────────┐    pitch_lock acquired
+   │  Hunting    ├──────────────────────────┐
+   │ (red badge) │                          │
+   └─────▲───────┘                          ▼
+         │                            ┌──────────────┐
+         │                            │  Probation   │
+         │ watchdog drop              │ (amber badge)│
+         │ (Fisher < FAST_DROP, or    └──────┬───────┘
+         │  MIN_HOLD failed N times)         │
+         │                                   │ first watchdog check
+         │                                   │ Fisher ≥ MIN_HOLD
+         │ ←─────────── watchdog drop ───────┤
+         │                                   ▼
+         │                            ┌──────────────┐
+         │                            │   Locked     │
+         │                            │ (green badge)│
+         │                            └──────┬───────┘
+         │                                   │
+         └─── watchdog drop ─────────────────┘
+```
+
+Char-class events (`Char`, `Garbled`, `Word`, `WpmUpdate`):
+
+| State      | Treatment of decoded chars |
+|------------|----------------------------|
+| Hunting    | Dropped at the gate (lock not even attempted yet, or just lost) |
+| Probation  | Buffered in `held_events`, awaiting verdict |
+| Locked     | Passed through unchanged; held buffer is flushed on the transition |
+
+Confidence transitions emit `StreamEvent::Confidence { state }`, which serializes as `{"type":"confidence","state":"hunting|probation|locked"}` over NDJSON. The Avalonia GUI reads this on the Decode tab and updates the status badge plus colour scheme.
+
+This was added specifically in response to the YouTube reference clip (`cw_30wpm_youtube_12k.wav`) where the pre-CW voice section was producing decoded garbage like `MI U I EIE N` and the decoder was missing the actual `CQ DE K UR` because the bad voice lock had to age out via the slow steady-state watchdog. With the confidence machine: the bad lock now goes through Probation silently, the watchdog rejects it, the held buffer is discarded, and the operator sees nothing until the real lock at ~604 Hz survives its check and flushes the genuine `73 TNX RST R TU = OM FB ...` transcript.
+
 ## GUI architecture
 
 The Avalonia app under `gui\` (titled **CW SCOPE**) is the main operator surface. It launches the Rust `cw-decoder` and `eval` binaries from `experiments\cw-decoder\target\{release,debug}\`, walking up from `AppContext.BaseDirectory` to find them — either build flavor works, with release preferred when both are present. The key constraint is that the GUI does **not** rebuild the Rust engine on its own; if no binary is found it throws with a hint to run `cargo build` (typically `--release`) in `experiments\cw-decoder` first.
@@ -150,6 +300,7 @@ Current decode-tab workflow also includes:
 - explicit source control semantics:
   - **DECODE FILE...** opens and immediately decodes a chosen file
   - **START LIVE** captures from the selected input device
+  - **DECODE+PLAY** opens a file, decodes it, and plays the same audio in lockstep so what you hear is exactly what is being processed
 - live capture
 - optional recording of live audio to `data\cw-recordings\`
 - offline replay of the last opened source (live recording or file decode)
@@ -157,10 +308,13 @@ Current decode-tab workflow also includes:
 - inline audio playback with a shared transport / progress surface
 - a real-time playback signal view driven by the same broad-band profile pipeline used in labeling
 - an explicit **CURRENT TONE** readout during live decode and playback
+- a prominent confidence badge — **● LOCKED** (green), **◐ VERIFYING SIGNAL** (amber), or **○ ACQUIRING TARGET** (red) — that surfaces the streaming decoder's confidence machine to the operator. Decoded characters do not appear in the transcript until the badge is green; while the badge is amber the engine is buffering candidate output and waiting for a quality watchdog confirmation.
+- a **Mic mode** preset toggle that bundles wide-bin sniff, lower tone-purity threshold, and the min-pulse/min-gap dot filters into one click for acoustically re-captured CW
+- **WASAPI loopback** capture (`stream-live --loopback`) — for same-machine playback decode (YouTube, browsers, local files) the audio is taken from the system render endpoint instead of a microphone, bypassing the speaker→room→mic chain entirely
 - an experimental **RANGE LOCK** mode for custom streaming, so live/file decode can prefer the strongest tone inside a chosen Hz window
 - an experimental **TONE PURITY** gate that compares each instantaneous target-bin power against the off-band noise bins (q25 of bins at ±150/300/500/700 Hz) at the *same* sample. A real CW tone scores 5–20+ instantaneous purity; a 5 ms broadband impulse (finger snap, key click, lightning, switching ground) lights up *all* bins together so the ratio collapses to ~1 and is rejected at the source. Default `min_tone_purity = 3.0`; set to 0 to disable. Reuses the existing noise bins (no new Goertzels), and runs *before* smoothing so the gate fires faster than the 200 ms noise smoother can equalize.
 - an optional **SHOW CHAR HZ** overlay so each decoded character can display the tone the streaming decoder had locked when it emitted that symbol; a companion **SHOW PURITY** toggle adds the per-character peak tone-purity ratio under the Hz line, so spurious characters from broadband impulses (typically `purity ~1`) are visually distinguishable from real CW (`purity 5-20+`)
-- a **FORCE PITCH (Hz)** acquisition override that locks the streaming decoder to an exact pitch instead of running auto-acquisition (0 = auto). The Fisher quality watchdog is disabled when forced so the lock cannot be dropped. Useful when the operator already knows the target tone, or as a diagnostic ("does the decoder fail because of acquisition or downstream?")
+- a **FORCE PITCH (Hz)** acquisition override that locks the streaming decoder to an exact pitch instead of running auto-acquisition (0 = auto). The Fisher quality watchdog AND the confidence machine are both bypassed when forced — the decoder goes straight to Locked and stays there. Useful when the operator already knows the target tone, or as a diagnostic ("does the decoder fail because of acquisition or downstream?")
 - a **WIDE BINS** wide-bin sniff (0–8) that adds companion Goertzels at `pitch ± k * bin_width` and sums their power into the main signal estimate. `0` = single 40 Hz bin (default). `N=2` ≈ 200 Hz of integration bandwidth. Built specifically for **acoustically re-captured CW** (speaker → mic round-trip) where speaker frequency response, room reverb, and slight pitch drift smear the tone across many Goertzel bins; without this gate a single 40 Hz slice catches only ~30% of the signal energy and the keying envelope flickers within elements. CLI: `--wide-bin-count <N>` on `stream-file` and `stream-live`. NDJSON: `"wide_bin_count": <N>`. Combine with `--force-pitch-hz` for live mic capture: e.g. `--force-pitch-hz 620 --wide-bin-count 2`.
 
 The tone-purity gate replaces an earlier "recent-audio re-detection" guard that ran at character emission time. That earlier guard could not catch transient impulses because by the time it re-ran pitch detection the impulse was already history; the new gate runs per Goertzel power sample and ANDs with the existing amplitude / smoothed-SNR gates so a sample only counts as key-down when the locked bin is meaningfully louder than its closely-spaced neighbors.
@@ -423,19 +577,19 @@ But improvements there should be measured back against:
 
 ## Recommended next steps
 
-1. **Add richer label metadata for hard cases**
-   - target tone
+1. **Close the acquisition-latency gap on cold-start CW after a long voice lead-in.**
+   On the YouTube reference clip the decoder now correctly silences the bogus voice lock and recovers when real CW arrives, but the first ~10 characters (`CQ DE K UR ...`) are missed because the pre-lock Fisher search needs ~12 s of CW audio to commit a lock once a stale lock has been dropped. The fix is on the acquisition side, not the confidence machine: faster Fisher convergence, shorter `RELOCK_SECONDS` for the cold-start case, or a reduced `PITCH_LOCK_SECONDS` window once the previous lock has been explicitly rejected as bogus.
+2. **Add richer label metadata for hard cases**
+   - target tone (Phase 1A oracle-tone eval)
    - multi-signal flag
-   - negative/no-copy labels
-2. **Score the custom streaming path against the same corpus**
+   - negative/no-copy labels (Phase 2 false-chars/min metric)
+3. **Score the custom streaming path against the same corpus end-to-end**
    The branch now has stronger custom logic, but the corpus README story should eventually include real custom-vs-baseline numbers rather than replay-only intuition.
-3. **Improve full-stream commit behavior**
+4. **Improve full-stream commit behavior**
    The baseline full-stream score shows that finalization and region-close behavior are still weak.
-4. **Use `probe-fisher` and label metadata together**
+5. **Use `probe-fisher` and label metadata together**
    This looks like the right next diagnostic loop for multi-signal contest audio.
-5. **Decide whether the next major investment is**
-   - target isolation first, or
-   - segmentation / commit policy first
+6. **Top-K candidate tracker (Phase 3)** — replace single-pitch lock with a CFAR-scored ridge tracker over 350–1500 Hz so multi-signal contest audio can present per-track candidates instead of one winner-takes-all lock.
 
 Current evidence suggests:
 

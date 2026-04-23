@@ -204,6 +204,48 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
     private string? _statusText;
     public string? StatusText { get => _statusText; set => Set(ref _statusText, value); }
 
+    /// <summary>
+    /// Coarse decoder confidence: "hunting" / "probation" / "locked".
+    /// Drives the prominent ACQUIRING TARGET / VERIFYING SIGNAL / LOCKED
+    /// badge in the Decode tab. Matches the JSON `state` field of
+    /// `StreamEvent::Confidence` from the Rust streaming engine.
+    /// </summary>
+    private string _confidenceState = "hunting";
+    public string ConfidenceState
+    {
+        get => _confidenceState;
+        set
+        {
+            if (Set(ref _confidenceState, value ?? "hunting"))
+            {
+                OnPropertyChanged(nameof(ConfidenceLabel));
+                OnPropertyChanged(nameof(ConfidenceColor));
+                OnPropertyChanged(nameof(ConfidenceBackground));
+            }
+        }
+    }
+
+    public string ConfidenceLabel => _confidenceState switch
+    {
+        "locked" => "● LOCKED",
+        "probation" => "◐ VERIFYING SIGNAL",
+        _ => "○ ACQUIRING TARGET",
+    };
+
+    public string ConfidenceColor => _confidenceState switch
+    {
+        "locked" => "#FFE6FFE6",      // pale green text
+        "probation" => "#FFFFF0C0",   // pale amber text
+        _ => "#FFFFD0D0",             // pale red text
+    };
+
+    public string ConfidenceBackground => _confidenceState switch
+    {
+        "locked" => "#FF1F6F1F",      // dark green
+        "probation" => "#FF7F5F00",   // dark amber
+        _ => "#FF7F1F1F",             // dark red
+    };
+
     private string _sourceLabel = "(idle)";
     public string SourceLabel { get => _sourceLabel; set => Set(ref _sourceLabel, value); }
 
@@ -2080,12 +2122,19 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
                 {
                     LastRecordingPath = ev.Recording;
                 }
+                ConfidenceState = "hunting";
                 break;
             case "pitch":
                 if (ev.Hz is double hz)
                 {
                     PitchHz = hz;
                     StatusText = $"Pitch lock: {hz:F1} Hz";
+                }
+                break;
+            case "confidence":
+                if (!string.IsNullOrEmpty(ev.State))
+                {
+                    ConfidenceState = ev.State!;
                 }
                 break;
             case "wpm":

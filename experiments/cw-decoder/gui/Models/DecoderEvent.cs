@@ -52,4 +52,5 @@ internal sealed class DecoderEvent
     [JsonPropertyName("region_start")] public double? RegionStart { get; set; }
     [JsonPropertyName("region_end")] public double? RegionEnd { get; set; }
     [JsonPropertyName("file_duration")] public double? FileDuration { get; set; }
+    [JsonPropertyName("state")] public string? State { get; set; }
 }

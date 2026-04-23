@@ -885,7 +885,20 @@
 
     <!-- Status -->
     <Border Grid.Row="6" Padding="18,8" Background="{StaticResource BgPanel}" BorderBrush="{StaticResource EdgeGlow}" BorderThickness="0,1,0,0">
-      <TextBlock Text="{Binding StatusText}" FontFamily="Consolas" FontSize="11" Foreground="{StaticResource TextDim}" LetterSpacing="2" />
+      <DockPanel LastChildFill="True">
+        <Border DockPanel.Dock="Right"
+                Padding="10,3"
+                CornerRadius="3"
+                Background="{Binding ConfidenceBackground}">
+          <TextBlock Text="{Binding ConfidenceLabel}"
+                     FontFamily="Consolas"
+                     FontSize="11"
+                     FontWeight="Bold"
+                     LetterSpacing="2"
+                     Foreground="{Binding ConfidenceColor}" />
+        </Border>
+        <TextBlock Text="{Binding StatusText}" FontFamily="Consolas" FontSize="11" Foreground="{StaticResource TextDim}" LetterSpacing="2" VerticalAlignment="Center" />
+      </DockPanel>
     </Border>
   </Grid>
 </Window>
