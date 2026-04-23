@@ -137,6 +137,10 @@ enum Cmd {
         /// Number of repeated snapshots that must agree before committing text.
         #[arg(long, default_value_t = 3)]
         confirmations: usize,
+        /// Optional WAV path to mirror raw mono samples to (16-bit PCM at the
+        /// device's native sample rate). Useful for post-stop offline analysis.
+        #[arg(long)]
+        record: Option<PathBuf>,
         /// Emit newline-delimited JSON events for the GUI bridge.
         #[arg(long)]
         json: bool,
@@ -237,6 +241,10 @@ enum Cmd {
         /// Initial threshold scale.
         #[arg(long, default_value_t = streaming::DEFAULT_THRESHOLD_SCALE)]
         threshold_scale: f32,
+        /// Optional WAV path to mirror raw mono samples to (16-bit PCM at the
+        /// device's native sample rate). Useful for post-stop offline analysis.
+        #[arg(long)]
+        record: Option<PathBuf>,
         /// Read NDJSON config-update lines from stdin while streaming.
         #[arg(long)]
         stdin_control: bool,
@@ -324,6 +332,7 @@ fn main() -> Result<()> {
             min_window,
             decode_every_ms,
             confirmations,
+            record,
             json,
         } => run_stream_live_ditdah(
             device.as_deref(),
@@ -333,6 +342,7 @@ fn main() -> Result<()> {
             min_window,
             decode_every_ms,
             confirmations,
+            record.as_deref(),
             json,
             &log_capture,
         ),
@@ -386,6 +396,7 @@ fn main() -> Result<()> {
             min_snr_db,
             pitch_min_snr_db,
             threshold_scale,
+            record,
             stdin_control,
         } => {
             let cfg = streaming::DecoderConfig {
@@ -393,7 +404,7 @@ fn main() -> Result<()> {
                 pitch_min_snr_db,
                 threshold_scale,
             };
-            run_stream_live(device.as_deref(), seconds, json, cfg, stdin_control)
+            run_stream_live(device.as_deref(), seconds, json, cfg, record.as_deref(), stdin_control)
         }
     }
 }
@@ -1026,6 +1037,7 @@ fn run_stream_live_ditdah(
     min_window_seconds: f32,
     decode_every_ms: u32,
     required_confirmations: usize,
+    record_path: Option<&std::path::Path>,
     json: bool,
     log_capture: &log_capture::DitdahLogCapture,
 ) -> Result<()> {
@@ -1033,7 +1045,7 @@ fn run_stream_live_ditdah(
     use std::sync::Arc;
     use std::time::{Duration, Instant};
 
-    let capture = audio::open_input(device, 1.0)?;
+    let capture = audio::open_input_with_recording(device, 1.0, record_path)?;
     let baseline_cfg = ditdah_streaming::CausalBaselineConfig {
         window_seconds,
         min_window_seconds: min_window_seconds.clamp(0.1, window_seconds.max(0.5)),
@@ -1054,6 +1066,7 @@ fn run_stream_live_ditdah(
                 "source": "live-baseline",
                 "device": capture.device_name,
                 "rate": capture.sample_rate,
+                "recording": capture.record_path().map(|p| p.display().to_string()),
                 "config": {
                     "window_seconds": baseline_cfg.window_seconds,
                     "min_window_seconds": baseline_cfg.min_window_seconds,
@@ -1149,6 +1162,8 @@ fn run_stream_live_ditdah(
     }
 
     let transcript = streamer.transcript().to_string();
+    let recording_path = capture.record_path().map(|p| p.display().to_string());
+    let recording_saved = capture.finalize_recording().map(|p| p.display().to_string());
     if let Some(em) = emitter.as_mut() {
         em.emit(
             started.elapsed().as_secs_f32(),
@@ -1157,6 +1172,7 @@ fn run_stream_live_ditdah(
                 "transcript": transcript.trim(),
                 "wpm": last_stats.and_then(|s| s.wpm),
                 "pitch": last_stats.and_then(|s| s.pitch_hz),
+                "recording": recording_saved.or(recording_path),
             }),
         );
         return Ok(());
@@ -1280,13 +1296,14 @@ fn run_stream_live(
     seconds: f32,
     json: bool,
     cfg: streaming::DecoderConfig,
+    record_path: Option<&std::path::Path>,
     stdin_control: bool,
 ) -> Result<()> {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
     use std::time::{Duration, Instant};
 
-    let capture = audio::open_input(device, 1.0)?;
+    let capture = audio::open_input_with_recording(device, 1.0, record_path)?;
     let mut decoder = streaming::StreamingDecoder::new(capture.sample_rate)?;
     decoder.set_config(cfg);
     let cfg_channel = stdin_control.then(spawn_stdin_config_channel);
@@ -1303,6 +1320,7 @@ fn run_stream_live(
                 "source": "live",
                 "device": capture.device_name,
                 "rate": capture.sample_rate,
+                "recording": capture.record_path().map(|p| p.display().to_string()),
                 "config": serde_json::json!({
                     "min_snr_db": cfg.min_snr_db,
                     "pitch_min_snr_db": cfg.pitch_min_snr_db,
@@ -1426,6 +1444,8 @@ fn run_stream_live(
         }
     }
 
+    let recording_path = capture.record_path().map(|p| p.display().to_string());
+    let recording_saved = capture.finalize_recording().map(|p| p.display().to_string());
     if let Some(em) = emitter.as_mut() {
         em.emit(
             started.elapsed().as_secs_f32(),
@@ -1434,6 +1454,7 @@ fn run_stream_live(
                 "transcript": transcript.trim(),
                 "wpm": decoder.current_wpm(),
                 "pitch": decoder.pitch(),
+                "recording": recording_saved.or(recording_path),
             }),
         );
         return Ok(());

@@ -57,13 +57,18 @@ internal sealed class CwDecoderProcess : IDisposable
         catch { return Array.Empty<string>(); }
     }
 
-    public void StartLive(string? device, DecoderConfig cfg, BaselineDecoderConfig baselineCfg, bool useBaseline)
+    public void StartLive(string? device, DecoderConfig cfg, BaselineDecoderConfig baselineCfg, bool useBaseline, string? recordPath = null)
     {
         Stop();
+        // For live capture, override baseline cadence/confirmations to be far more
+        // responsive than the offline defaults (which are tuned for accuracy on
+        // recorded files, not real-time feedback).
+        var liveBaselineArgs = "--window 8 --min-window 0.5 --decode-every-ms 200 --confirmations 1";
         var args = useBaseline
-            ? $"stream-live-ditdah --json --chunk-ms 50 {baselineCfg.ToCliArgs()}"
+            ? $"stream-live-ditdah --json --chunk-ms 50 {liveBaselineArgs}"
             : $"stream-live --json --stdin-control {cfg.ToCliArgs()}";
         if (!string.IsNullOrWhiteSpace(device)) args += $" --device \"{device}\"";
+        if (!string.IsNullOrWhiteSpace(recordPath)) args += $" --record \"{recordPath}\"";
         Spawn(args);
     }
 

@@ -1,7 +1,8 @@
 //! Audio sources: file decoding (via Symphonia) and live capture (via cpal).
 
 use std::fs::File;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::Mutex as StdMutex;
 
 use anyhow::{anyhow, Context, Result};
 use symphonia::core::audio::SampleBuffer;
@@ -112,6 +113,32 @@ pub struct LiveCapture {
     /// Rolling ring buffer of the most recent N seconds of mono f32 samples.
     pub buffer: Arc<Mutex<RingBuffer>>,
     _stream: cpal::Stream,
+    recorder: Option<Arc<StdMutex<Option<hound::WavWriter<std::io::BufWriter<File>>>>>>,
+    record_path: Option<PathBuf>,
+}
+
+impl LiveCapture {
+    /// Path the recording is being written to (if any).
+    pub fn record_path(&self) -> Option<&Path> {
+        self.record_path.as_deref()
+    }
+
+    /// Flushes and closes the recording. Idempotent. Returns the WAV path on
+    /// first close, `None` otherwise. Called automatically on drop.
+    pub fn finalize_recording(&self) -> Option<PathBuf> {
+        let recorder = self.recorder.as_ref()?;
+        let mut guard = recorder.lock().ok()?;
+        let writer = guard.take()?;
+        // best-effort flush+close; ignore IO errors
+        let _ = writer.finalize();
+        self.record_path.clone()
+    }
+}
+
+impl Drop for LiveCapture {
+    fn drop(&mut self) {
+        let _ = self.finalize_recording();
+    }
 }
 
 pub struct RingBuffer {
@@ -158,6 +185,18 @@ impl RingBuffer {
 /// Find an input device whose name contains `query` (case-insensitive). When
 /// `query` is `None`, the host default input is used.
 pub fn open_input(query: Option<&str>, window_seconds: f32) -> Result<LiveCapture> {
+    open_input_with_recording(query, window_seconds, None)
+}
+
+/// Same as [`open_input`] but additionally writes mono PCM samples to a WAV
+/// file at the device's native sample rate. The file is written from inside
+/// the cpal callback, so allocations are kept minimal and the decoder gets
+/// the same samples it would have gotten without recording.
+pub fn open_input_with_recording(
+    query: Option<&str>,
+    window_seconds: f32,
+    record_to: Option<&Path>,
+) -> Result<LiveCapture> {
     let host = cpal::default_host();
 
     let device = if let Some(q) = query {
@@ -181,14 +220,37 @@ pub fn open_input(query: Option<&str>, window_seconds: f32) -> Result<LiveCaptur
     let capacity = ((sample_rate as f32 * window_seconds) as usize).max(1);
     let buffer = Arc::new(Mutex::new(RingBuffer::new(capacity)));
 
+    let (recorder, record_path) = if let Some(path) = record_to {
+        if let Some(parent) = path.parent() {
+            if !parent.as_os_str().is_empty() {
+                std::fs::create_dir_all(parent).ok();
+            }
+        }
+        let spec = hound::WavSpec {
+            channels: 1,
+            sample_rate,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let writer = hound::WavWriter::create(path, spec)
+            .with_context(|| format!("creating WAV file {}", path.display()))?;
+        (
+            Some(Arc::new(StdMutex::new(Some(writer)))),
+            Some(path.to_path_buf()),
+        )
+    } else {
+        (None, None)
+    };
+
     let err_fn = |e| eprintln!("cpal stream error: {e}");
     let buffer_cb = Arc::clone(&buffer);
+    let recorder_cb = recorder.clone();
 
     let stream = match config.sample_format() {
         cpal::SampleFormat::F32 => device.build_input_stream(
             &config.into(),
             move |data: &[f32], _| {
-                push_mono(&buffer_cb, data, channels);
+                push_mono(&buffer_cb, data, channels, recorder_cb.as_ref());
             },
             err_fn,
             None,
@@ -197,7 +259,7 @@ pub fn open_input(query: Option<&str>, window_seconds: f32) -> Result<LiveCaptur
             &config.into(),
             move |data: &[i16], _| {
                 let f: Vec<f32> = data.iter().map(|s| *s as f32 / i16::MAX as f32).collect();
-                push_mono(&buffer_cb, &f, channels);
+                push_mono(&buffer_cb, &f, channels, recorder_cb.as_ref());
             },
             err_fn,
             None,
@@ -209,7 +271,7 @@ pub fn open_input(query: Option<&str>, window_seconds: f32) -> Result<LiveCaptur
                     .iter()
                     .map(|s| (*s as f32 - 32768.0) / 32768.0)
                     .collect();
-                push_mono(&buffer_cb, &f, channels);
+                push_mono(&buffer_cb, &f, channels, recorder_cb.as_ref());
             },
             err_fn,
             None,
@@ -223,20 +285,41 @@ pub fn open_input(query: Option<&str>, window_seconds: f32) -> Result<LiveCaptur
         device_name,
         buffer,
         _stream: stream,
+        recorder,
+        record_path,
     })
 }
 
-fn push_mono(buf: &Arc<Mutex<RingBuffer>>, data: &[f32], channels: usize) {
-    let mut lock = buf.lock();
-    if channels == 1 {
-        lock.push_slice(data);
+fn push_mono(
+    buf: &Arc<Mutex<RingBuffer>>,
+    data: &[f32],
+    channels: usize,
+    recorder: Option<&Arc<StdMutex<Option<hound::WavWriter<std::io::BufWriter<File>>>>>>,
+) {
+    // Compute the mono buffer once; share it with both the ring and the WAV.
+    let mono: Vec<f32> = if channels == 1 {
+        data.to_vec()
     } else {
-        let mut mono = Vec::with_capacity(data.len() / channels);
+        let mut m = Vec::with_capacity(data.len() / channels);
         for frame in data.chunks_exact(channels) {
             let avg = frame.iter().copied().sum::<f32>() / channels as f32;
-            mono.push(avg);
+            m.push(avg);
         }
+        m
+    };
+    {
+        let mut lock = buf.lock();
         lock.push_slice(&mono);
+    }
+    if let Some(rec) = recorder {
+        if let Ok(mut guard) = rec.lock() {
+            if let Some(w) = guard.as_mut() {
+                for s in &mono {
+                    let v = (s.clamp(-1.0, 1.0) * i16::MAX as f32) as i16;
+                    let _ = w.write_sample(v);
+                }
+            }
+        }
     }
 }
 

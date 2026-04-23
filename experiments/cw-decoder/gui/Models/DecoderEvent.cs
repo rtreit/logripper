@@ -40,4 +40,7 @@ internal sealed class DecoderEvent
     // end
     [JsonPropertyName("transcript")] public string? Transcript { get; set; }
     [JsonPropertyName("pitch")] public double? Pitch { get; set; }
+
+    // recording (ready / end)
+    [JsonPropertyName("recording")] public string? Recording { get; set; }
 }

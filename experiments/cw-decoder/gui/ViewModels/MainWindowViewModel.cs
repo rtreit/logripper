@@ -122,6 +122,33 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
     private string _sourceLabel = "(idle)";
     public string SourceLabel { get => _sourceLabel; set => Set(ref _sourceLabel, value); }
 
+    private string? _lastRecordingPath;
+    public string? LastRecordingPath
+    {
+        get => _lastRecordingPath;
+        set
+        {
+            if (Set(ref _lastRecordingPath, value))
+            {
+                OnPropertyChanged(nameof(HasLastRecording));
+                OnPropertyChanged(nameof(LastRecordingDisplay));
+            }
+        }
+    }
+
+    public bool HasLastRecording => !string.IsNullOrEmpty(_lastRecordingPath) && System.IO.File.Exists(_lastRecordingPath);
+    public string LastRecordingDisplay => string.IsNullOrEmpty(_lastRecordingPath) ? "" : System.IO.Path.GetFileName(_lastRecordingPath);
+
+    private string? _liveTranscriptForReplay;
+    private string? _replayTranscript;
+    public string? ReplayTranscript { get => _replayTranscript; set => Set(ref _replayTranscript, value); }
+
+    private string? _replayStatus;
+    public string? ReplayStatus { get => _replayStatus; set => Set(ref _replayStatus, value); }
+
+    private double? _replayCer;
+    public double? ReplayCer { get => _replayCer; set => Set(ref _replayCer, value); }
+
     private double _normalizedLevel;
     public double NormalizedLevel { get => _normalizedLevel; set => Set(ref _normalizedLevel, value); }
 
@@ -528,8 +555,168 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
         if (IsRunning) { _process.Stop(); IsRunning = false; return; }
         ResetDecoderSurface();
         StatusText = "Starting…";
-        _process.StartLive(SelectedDevice, CurrentConfig(), CurrentBaselineConfig(), IsBaselineDecoderMode);
+
+        // Generate timestamped recording path under <repo>/data/cw-recordings/
+        string? recordPath = null;
+        try
+        {
+            var recDir = LocateRecordingsDirectory();
+            System.IO.Directory.CreateDirectory(recDir);
+            recordPath = System.IO.Path.Combine(recDir, $"live-{DateTime.Now:yyyyMMdd-HHmmss}.wav");
+        }
+        catch (Exception ex)
+        {
+            StatusText = $"Recording disabled: {ex.Message}";
+        }
+
+        _liveTranscriptForReplay = null;
+        ReplayTranscript = null;
+        ReplayStatus = null;
+        ReplayCer = null;
+
+        _process.StartLive(SelectedDevice, CurrentConfig(), CurrentBaselineConfig(), IsBaselineDecoderMode, recordPath);
         IsRunning = true;
+    }
+
+    private static string LocateRecordingsDirectory()
+    {
+        var dir = new System.IO.DirectoryInfo(AppContext.BaseDirectory);
+        for (int i = 0; dir is not null && i < 8; i++, dir = dir.Parent)
+        {
+            var candidate = System.IO.Path.Combine(dir.FullName, "data", "cw-recordings");
+            // Anchor on a directory we know is in the repo
+            if (System.IO.Directory.Exists(System.IO.Path.Combine(dir.FullName, "data")))
+            {
+                return candidate;
+            }
+            // Or where the experiments folder lives
+            if (System.IO.Directory.Exists(System.IO.Path.Combine(dir.FullName, "experiments", "cw-decoder")))
+            {
+                return System.IO.Path.Combine(dir.FullName, "data", "cw-recordings");
+            }
+        }
+        return System.IO.Path.Combine(AppContext.BaseDirectory, "cw-recordings");
+    }
+
+    public async Task ReplayLastRecordingAsync()
+    {
+        var path = LastRecordingPath;
+        if (string.IsNullOrEmpty(path) || !System.IO.File.Exists(path))
+        {
+            ReplayStatus = "No recording available.";
+            return;
+        }
+
+        ReplayStatus = $"Re-decoding {System.IO.Path.GetFileName(path)} offline…";
+        ReplayTranscript = null;
+        ReplayCer = null;
+
+        try
+        {
+            var transcript = await Task.Run(() => RunOfflineReplay(path)).ConfigureAwait(false);
+            await Dispatcher.UIThread.InvokeAsync(() =>
+            {
+                ReplayTranscript = transcript;
+                if (!string.IsNullOrWhiteSpace(_liveTranscriptForReplay) && !string.IsNullOrWhiteSpace(transcript))
+                {
+                    ReplayCer = CharacterErrorRate(_liveTranscriptForReplay!.Trim(), transcript.Trim());
+                    ReplayStatus = $"CER (live vs offline): {ReplayCer:P1}";
+                }
+                else
+                {
+                    ReplayStatus = "Offline transcript ready.";
+                }
+            });
+        }
+        catch (Exception ex)
+        {
+            await Dispatcher.UIThread.InvokeAsync(() => ReplayStatus = $"Replay failed: {ex.Message}");
+        }
+    }
+
+    private static string RunOfflineReplay(string wavPath)
+    {
+        var exeEnv = Environment.GetEnvironmentVariable("CW_DECODER_EXE");
+        string? exe = (!string.IsNullOrWhiteSpace(exeEnv) && System.IO.File.Exists(exeEnv)) ? exeEnv : null;
+        if (exe is null)
+        {
+            var name = OperatingSystem.IsWindows() ? "cw-decoder.exe" : "cw-decoder";
+            var dir = new System.IO.DirectoryInfo(AppContext.BaseDirectory);
+            for (int i = 0; dir is not null && i < 8 && exe is null; i++, dir = dir.Parent)
+            {
+                foreach (var rel in new[]
+                {
+                    System.IO.Path.Combine("target", "release", name),
+                    System.IO.Path.Combine("target", "debug", name),
+                    System.IO.Path.Combine("experiments", "cw-decoder", "target", "release", name),
+                    System.IO.Path.Combine("experiments", "cw-decoder", "target", "debug", name),
+                })
+                {
+                    var p = System.IO.Path.Combine(dir.FullName, rel);
+                    if (System.IO.File.Exists(p)) { exe = p; break; }
+                }
+            }
+        }
+        if (exe is null) throw new InvalidOperationException("cw-decoder.exe not found.");
+
+        var psi = new System.Diagnostics.ProcessStartInfo(exe)
+        {
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        psi.ArgumentList.Add("stream-file-ditdah");
+        psi.ArgumentList.Add("--json");
+        psi.ArgumentList.Add("--chunk-ms");
+        psi.ArgumentList.Add("50");
+        psi.ArgumentList.Add(wavPath);
+
+        using var proc = System.Diagnostics.Process.Start(psi)
+            ?? throw new InvalidOperationException("Failed to start cw-decoder.");
+        var stdout = proc.StandardOutput.ReadToEnd();
+        proc.WaitForExit(180_000);
+        return ExtractEndTranscript(stdout);
+    }
+
+    private static string ExtractEndTranscript(string stdout)
+    {
+        // Walk NDJSON lines and pick the `end` event's transcript.
+        string? lastTranscript = null;
+        foreach (var raw in stdout.Split('\n'))
+        {
+            var line = raw.TrimEnd('\r');
+            if (string.IsNullOrWhiteSpace(line)) continue;
+            try
+            {
+                using var doc = System.Text.Json.JsonDocument.Parse(line);
+                var root = doc.RootElement;
+                if (root.TryGetProperty("type", out var type) && type.GetString() == "end" &&
+                    root.TryGetProperty("transcript", out var tx))
+                {
+                    lastTranscript = tx.GetString();
+                }
+            }
+            catch (System.Text.Json.JsonException) { /* tolerate non-JSON noise */ }
+        }
+        return lastTranscript?.Trim() ?? string.Empty;
+    }
+
+    private static double CharacterErrorRate(string reference, string hypothesis)
+    {
+        if (reference.Length == 0) return hypothesis.Length == 0 ? 0.0 : 1.0;
+        var dp = new int[reference.Length + 1, hypothesis.Length + 1];
+        for (int i = 0; i <= reference.Length; i++) dp[i, 0] = i;
+        for (int j = 0; j <= hypothesis.Length; j++) dp[0, j] = j;
+        for (int i = 1; i <= reference.Length; i++)
+        {
+            for (int j = 1; j <= hypothesis.Length; j++)
+            {
+                var cost = reference[i - 1] == hypothesis[j - 1] ? 0 : 1;
+                dp[i, j] = Math.Min(Math.Min(dp[i - 1, j] + 1, dp[i, j - 1] + 1), dp[i - 1, j - 1] + cost);
+            }
+        }
+        return (double)dp[reference.Length, hypothesis.Length] / reference.Length;
     }
 
     public void OpenFile(string path)
@@ -881,6 +1068,10 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
                 StatusText = ev.Source is "live-baseline" or "file-baseline"
                     ? "Running baseline decode snapshots…"
                     : "Listening for pitch lock…";
+                if (!string.IsNullOrEmpty(ev.Recording))
+                {
+                    LastRecordingPath = ev.Recording;
+                }
                 break;
             case "pitch":
                 if (ev.Hz is double hz)
@@ -923,6 +1114,16 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
                 break;
             case "end":
                 StatusText = $"Done. {ev.Transcript ?? ""}";
+                _liveTranscriptForReplay = ev.Transcript;
+                if (!string.IsNullOrEmpty(ev.Recording))
+                {
+                    LastRecordingPath = ev.Recording;
+                }
+                else
+                {
+                    // Refresh HasLastRecording in case the file is now flushed.
+                    OnPropertyChanged(nameof(HasLastRecording));
+                }
                 IsRunning = false;
                 break;
         }

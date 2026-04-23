@@ -20,6 +20,12 @@ public partial class MainWindow : Window
     private void OnRefreshClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
         => Vm?.RefreshDevices();
 
+    private async void OnReplayClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (Vm is null) return;
+        await Vm.ReplayLastRecordingAsync();
+    }
+
     private void OnResetSensitivityClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
         => Vm?.ResetSensitivity();
 

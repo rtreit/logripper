@@ -1206,6 +1206,25 @@ fn morse_to_char(s: &str) -> Option<char> {
         "---.." => Some('8'),
         "----." => Some('9'),
         "-----" => Some('0'),
+        // ITU punctuation (commonly heard in QSOs).
+        ".-.-.-" => Some('.'),
+        "--..--" => Some(','),
+        "..--.." => Some('?'),
+        ".----." => Some('\''),
+        "-.-.--" => Some('!'),
+        "-..-." => Some('/'),
+        "-.--." => Some('('),
+        "-.--.-" => Some(')'),
+        ".-..." => Some('&'),
+        "---..." => Some(':'),
+        "-.-.-." => Some(';'),
+        "-...-" => Some('='),  // also BT prosign
+        ".-.-." => Some('+'),  // also AR prosign
+        "-....-" => Some('-'),
+        "..--.-" => Some('_'),
+        ".-..-." => Some('"'),
+        "...-..-" => Some('$'),
+        ".--.-." => Some('@'),
         _ => None,
     }
 }

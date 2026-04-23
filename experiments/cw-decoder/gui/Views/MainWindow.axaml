@@ -87,7 +87,7 @@
 
     <!-- Controls -->
     <Border Grid.Row="1" Padding="18,12" Background="{StaticResource BgDeep}" BorderBrush="{StaticResource GridLine}" BorderThickness="0,0,0,1">
-      <Grid ColumnDefinitions="Auto,Auto,*,Auto,Auto,Auto,Auto" ColumnSpacing="12">
+      <Grid ColumnDefinitions="Auto,Auto,*,Auto,Auto,Auto,Auto,Auto" ColumnSpacing="12">
         <StackPanel Orientation="Vertical" Spacing="2">
           <TextBlock Text="INPUT DEVICE" Classes="label" />
           <ComboBox Width="320" ItemsSource="{Binding Devices}" SelectedItem="{Binding SelectedDevice}"
@@ -101,7 +101,11 @@
         <Button Grid.Column="3" x:Name="RefreshButton" Margin="0,16,0,0" Classes="primary" Content="REFRESH" Click="OnRefreshClick" />
         <Button Grid.Column="4" x:Name="OpenFileButton" Margin="0,16,0,0" Classes="primary" Content="OPEN FILE…" Click="OnOpenFileClick" />
         <ToggleButton Grid.Column="5" Margin="0,16,0,0" Classes="primary" IsChecked="{Binding HideDecoded, Mode=TwoWay}" Content="HIDE DECODING" />
-        <Button Grid.Column="6" x:Name="StartStopButton" Margin="0,16,0,0" Classes="primary"
+        <Button Grid.Column="6" x:Name="ReplayButton" Margin="0,16,0,0" Classes="primary"
+                Content="REPLAY &amp; SCORE" Click="OnReplayClick" MinWidth="140"
+                IsEnabled="{Binding HasLastRecording}"
+                ToolTip.Tip="Re-decode the last live recording offline and compare to the live transcript." />
+        <Button Grid.Column="7" x:Name="StartStopButton" Margin="0,16,0,0" Classes="primary"
                 Content="{Binding StartStopLabel}" Click="OnStartStopClick" MinWidth="120" />
       </Grid>
     </Border>
@@ -147,10 +151,11 @@
                     TickFrequency="0.5" Value="{Binding ThresholdScale, Mode=TwoWay}" />
           </StackPanel>
 
-          <Border Grid.Column="6" Padding="10,4" Margin="0,0,12,0" VerticalAlignment="Center"
+          <Border Grid.Column="6" Width="110" Padding="10,4" Margin="0,0,12,0" VerticalAlignment="Center"
                   Background="#0E2A3D" BorderBrush="{StaticResource AccentCyan}" BorderThickness="1" CornerRadius="2">
             <TextBlock Text="{Binding SignalQualityLabel}" FontFamily="Consolas" FontSize="13"
-                       Foreground="{StaticResource AccentCyan}" LetterSpacing="3" />
+                       Foreground="{StaticResource AccentCyan}" LetterSpacing="3"
+                       HorizontalAlignment="Center" TextAlignment="Center" />
           </Border>
 
           <Button Grid.Column="7" Classes="primary" Content="RESET" Click="OnResetSensitivityClick"
@@ -259,7 +264,7 @@
     <TabControl Grid.Row="4" Margin="14,12,14,4">
       <TabItem Header="DECODE">
         <Border Classes="panel">
-          <Grid RowDefinitions="Auto,*">
+          <Grid RowDefinitions="Auto,*,Auto">
             <Grid ColumnDefinitions="*,Auto">
               <TextBlock Text="DECODED MESSAGE" Classes="label" />
               <TextBlock Grid.Column="1" Text="morse always visible · letters blur with HIDE DECODING" Classes="label" />
@@ -290,17 +295,32 @@
                                      Effect="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).HideDecoded, Converter={StaticResource BlurFx}}" />
                         </StackPanel>
                       </Border>
-                      <Border Margin="4,2" Width="14" Height="56"
+                      <Border Margin="6,2" Width="20" Height="56"
                               IsVisible="{Binding ., Converter={StaticResource IsWordCell}}">
-                        <TextBlock Text="/" FontFamily="Consolas" FontSize="32"
-                                   Foreground="{StaticResource AccentLime}" Opacity="0.7"
-                                   HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        <Rectangle Width="3" Height="44" Fill="{StaticResource AccentLime}"
+                                   Opacity="0.85"
+                                   HorizontalAlignment="Center" VerticalAlignment="Center"
+                                   RadiusX="1" RadiusY="1" />
                       </Border>
                     </Grid>
                   </DataTemplate>
                 </ItemsControl.ItemTemplate>
               </ItemsControl>
             </ScrollViewer>
+            <Border Grid.Row="2" Margin="0,8,0,0" Padding="10,6"
+                    Background="{StaticResource BgDeep}"
+                    BorderBrush="{StaticResource GridLine}" BorderThickness="1"
+                    IsVisible="{Binding HasLastRecording}">
+              <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="12">
+                <TextBlock Text="LAST RECORDING:" Classes="label" VerticalAlignment="Center" />
+                <TextBlock Grid.Column="1" Text="{Binding LastRecordingDisplay}"
+                           FontFamily="Consolas" FontSize="12"
+                           Foreground="{StaticResource AccentCyan}" VerticalAlignment="Center" />
+                <TextBlock Grid.Column="2" Text="{Binding ReplayStatus}"
+                           FontFamily="Consolas" FontSize="12"
+                           Foreground="{StaticResource AccentLime}" VerticalAlignment="Center" />
+              </Grid>
+            </Border>
           </Grid>
         </Border>
       </TabItem>
