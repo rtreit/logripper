@@ -1163,9 +1163,18 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
             case "wpm":
                 if (ev.Wpm is double wpm)
                 {
-                    Wpm = wpm;
                     WpmHistory.Add(wpm);
                     while (WpmHistory.Count > MaxWpmHistory) WpmHistory.RemoveAt(0);
+                    // Big number = rolling average of last N samples so it
+                    // doesn't bounce wildly on every snapshot. Sparkline
+                    // still shows the per-snapshot raw history.
+                    int avgWindow = Math.Min(WpmHistory.Count, 12);
+                    if (avgWindow > 0)
+                    {
+                        double sum = 0;
+                        for (int i = WpmHistory.Count - avgWindow; i < WpmHistory.Count; i++) sum += WpmHistory[i];
+                        Wpm = sum / avgWindow;
+                    }
                 }
                 break;
             case "char":

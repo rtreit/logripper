@@ -254,9 +254,26 @@ pub fn append_snapshot_text(transcript: &mut String, snapshot_text: &str) -> Str
         return rest.to_string();
     }
 
+    // Try a TOKEN-level suffix/prefix overlap first. Char-level overlap
+    // matches single letters too aggressively (committed=" K", snapshot="K
+    // RRR N2QLV" → overlap=1 → re-emits "RRR N2QLV", reintroducing N2QLV
+    // that's already in the committed text).
+    let token_overlap = longest_token_suffix_prefix_overlap(transcript, &snapshot);
+    if token_overlap > 0 {
+        let appended = snapshot[token_overlap..].to_string();
+        if dedup_blocks(transcript, &appended) {
+            return String::new();
+        }
+        transcript.push_str(&appended);
+        return appended;
+    }
+
     let overlap = longest_suffix_prefix_overlap(transcript, &snapshot);
     if overlap > 0 {
         let appended = snapshot[overlap..].to_string();
+        if dedup_blocks(transcript, &appended) {
+            return String::new();
+        }
         transcript.push_str(&appended);
         return appended;
     }
@@ -267,6 +284,9 @@ pub fn append_snapshot_text(transcript: &mut String, snapshot_text: &str) -> Str
         return appended;
     }
 
+    if dedup_blocks(transcript, &snapshot) {
+        return String::new();
+    }
     let separator = if transcript.ends_with(' ') || snapshot.starts_with(' ') {
         ""
     } else {
@@ -275,6 +295,68 @@ pub fn append_snapshot_text(transcript: &mut String, snapshot_text: &str) -> Str
     let appended = format!("{separator}{snapshot}");
     transcript.push_str(&appended);
     appended
+}
+
+/// Returns true if `appended` should NOT be added to `transcript` because
+/// it would re-introduce a recognizable repeat. Heuristics:
+///   * any token of length >= 4 in `appended` already exists in the
+///     recent tail of `transcript` (last 32 tokens) — a multi-char token
+///     is almost always a real word/callsign and shouldn't legitimately
+///     repeat back-to-back due to decoder re-segmentation
+///   * any 3-token contiguous run in `appended` matches a 3-token
+///     contiguous run in the recent tail of `transcript`
+/// Short tokens like "K", "DE", "ES", "R" really do repeat in CW
+/// exchanges, so they're allowed.
+fn dedup_blocks(transcript: &str, appended: &str) -> bool {
+    let cand_tokens: Vec<&str> = appended.split_whitespace().collect();
+    if cand_tokens.is_empty() {
+        return false;
+    }
+    let trans_tokens: Vec<&str> = transcript.split_whitespace().collect();
+    if trans_tokens.is_empty() {
+        return false;
+    }
+    // Look at the last 32 committed tokens — recent tail only, so we
+    // don't suppress a callsign that legitimately recurs minutes later.
+    let tail_start = trans_tokens.len().saturating_sub(32);
+    let tail = &trans_tokens[tail_start..];
+
+    for t in &cand_tokens {
+        if t.len() >= 4 && tail.contains(t) {
+            return true;
+        }
+    }
+    if cand_tokens.len() >= 3 && tail.len() >= 3 {
+        for window in cand_tokens.windows(3) {
+            for tail_window in tail.windows(3) {
+                if window == tail_window {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+/// Token-level analogue of [`longest_suffix_prefix_overlap`]: returns the
+/// byte length (within `right`) of the largest whitespace-token suffix of
+/// `left` that equals a prefix of `right`.
+fn longest_token_suffix_prefix_overlap(left: &str, right: &str) -> usize {
+    let left_tokens: Vec<&str> = left.split_whitespace().collect();
+    let right_tokens: Vec<&str> = right.split_whitespace().collect();
+    if left_tokens.is_empty() || right_tokens.is_empty() {
+        return 0;
+    }
+    let max = left_tokens.len().min(right_tokens.len());
+    for n in (1..=max).rev() {
+        let left_tail = &left_tokens[left_tokens.len() - n..];
+        let right_head = &right_tokens[..n];
+        if left_tail == right_head {
+            // Byte length of the joined head tokens (incl. internal spaces).
+            return right_head.iter().map(|t| t.len()).sum::<usize>() + n.saturating_sub(1);
+        }
+    }
+    0
 }
 
 fn longest_suffix_prefix_overlap(left: &str, right: &str) -> usize {
