@@ -13,8 +13,8 @@ public readonly record struct DecoderConfig(
     double PitchMinSnrDb,
     double ThresholdScale)
 {
-    public const double DefaultMinSnrDb = 6.0;
-    public const double DefaultPitchMinSnrDb = 8.0;
+    public const double DefaultMinSnrDb = 3.0;
+    public const double DefaultPitchMinSnrDb = 6.0;
     public const double DefaultThresholdScale = 1.0;
 
     public static DecoderConfig Defaults => new(DefaultMinSnrDb, DefaultPitchMinSnrDb, DefaultThresholdScale);

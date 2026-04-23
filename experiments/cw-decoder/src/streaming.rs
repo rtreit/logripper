@@ -58,12 +58,12 @@ const NOISE_OFFSETS_HZ: &[f32] = &[150.0, 300.0, 500.0, 700.0];
 /// considered "tone present" by the keying state machine. Below this, the
 /// sample is treated as noise even if it crosses the adaptive amplitude
 /// threshold. Operator-tunable at runtime via [`DecoderConfig::min_snr_db`].
-pub const DEFAULT_MIN_SNR_DB: f32 = 6.0;
+pub const DEFAULT_MIN_SNR_DB: f32 = 3.0;
 /// Default pitch-lock confidence (dB). The peak FFT bin must be at least
 /// this many dB above the in-band median for `detect_pitch` to succeed,
 /// otherwise we refuse to lock. This is what stops the decoder from
 /// pretending a pure-noise band has a tone in it.
-pub const DEFAULT_PITCH_MIN_SNR_DB: f32 = 12.0;
+pub const DEFAULT_PITCH_MIN_SNR_DB: f32 = 6.0;
 /// Default scale on the IQR-derived adaptive amplitude threshold. >1 makes
 /// the decoder less sensitive (raises the on/off cutoff); <1 more sensitive.
 pub const DEFAULT_THRESHOLD_SCALE: f32 = 1.0;
@@ -668,12 +668,18 @@ impl Decoder {
             return;
         }
         v.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-        let p25 = v[v.len() / 4];
-        let p75 = v[3 * v.len() / 4];
-        let iqr = p75 - p25;
-        // Multiply by `threshold_scale` so the operator can desensitise on
-        // noisy bands (>1.0) or sensitise on quiet bands (<1.0).
-        self.threshold = p25 + iqr * 0.5 * self.threshold_scale;
+        // Use Q10 (noise floor) and Q90 (signal peak) rather than IQR,
+        // because typical CW has ~30% on / 70% off (with word gaps), so
+        // Q25 and Q75 both sit in the off-region for slow code, biasing
+        // the threshold low and missing dits. Q10/Q90 brackets the true
+        // bimodal distribution far better across realistic duty cycles.
+        let p10 = v[v.len() / 10];
+        let p90 = v[v.len() * 9 / 10];
+        let span = p90 - p10;
+        // Threshold sits halfway between off- and on-state by default;
+        // `threshold_scale` lets the operator slide it toward noise (<1)
+        // or toward signal (>1).
+        self.threshold = p10 + span * 0.5 * self.threshold_scale;
     }
 
     fn push_interval(&mut self, ivl: Interval) {
@@ -1099,10 +1105,11 @@ impl StreamingDecoder {
             }
             let smoothed = self.smooth_sum / self.smooth_buf.len() as f32;
 
-            // Noise reference: take the *median* of the side-bin readings
-            // at this instant. Median (vs min) is robust to a single bin
-            // landing on adjacent CW/hum and stays representative even
-            // when one bin happens to be quiet.
+            // Noise reference: take the 25th percentile of the side-bin
+            // readings at this instant. Lower percentile is more robust
+            // against a single bin landing on adjacent QRM (which would
+            // inflate the noise floor and disable the gate). At Q25 of
+            // 4-8 side bins we tolerate up to ~2 contaminated bins.
             let noise_raw = if noise_outs.is_empty() {
                 0.0
             } else {
@@ -1114,7 +1121,7 @@ impl StreamingDecoder {
                     0.0
                 } else {
                     buf.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-                    buf[buf.len() / 2]
+                    buf[buf.len() / 4]
                 }
             };
             self.noise_smooth_buf.push_back(noise_raw);

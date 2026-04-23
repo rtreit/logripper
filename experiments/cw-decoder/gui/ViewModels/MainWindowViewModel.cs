@@ -150,6 +150,9 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
     private string? _replayStatus;
     public string? ReplayStatus { get => _replayStatus; set => Set(ref _replayStatus, value); }
 
+    private string _replayDecoderLabel = "OFFLINE REPLAY";
+    public string ReplayDecoderLabel { get => _replayDecoderLabel; set => Set(ref _replayDecoderLabel, value); }
+
     private double? _replayCer;
     public double? ReplayCer
     {
@@ -683,7 +686,10 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
 
         try
         {
-            var transcript = await Task.Run(() => RunOfflineReplay(path)).ConfigureAwait(false);
+            var useBaseline = IsBaselineDecoderMode;
+            var cfg = CurrentConfig();
+            ReplayDecoderLabel = useBaseline ? "OFFLINE REPLAY (BASELINE)" : "OFFLINE REPLAY (CUSTOM)";
+            var transcript = await Task.Run(() => RunOfflineReplay(path, useBaseline, cfg)).ConfigureAwait(false);
             await Dispatcher.UIThread.InvokeAsync(() =>
             {
                 ReplayTranscript = string.IsNullOrWhiteSpace(transcript) ? "(empty)" : transcript.Trim();
@@ -714,7 +720,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
         }
     }
 
-    private static string RunOfflineReplay(string wavPath)
+    private static string RunOfflineReplay(string wavPath, bool useBaseline, DecoderConfig cfg)
     {
         var exeEnv = Environment.GetEnvironmentVariable("CW_DECODER_EXE");
         string? exe = (!string.IsNullOrWhiteSpace(exeEnv) && System.IO.File.Exists(exeEnv)) ? exeEnv : null;
@@ -746,11 +752,31 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
             UseShellExecute = false,
             CreateNoWindow = true,
         };
-        psi.ArgumentList.Add("stream-file-ditdah");
-        psi.ArgumentList.Add("--json");
-        psi.ArgumentList.Add("--chunk-ms");
-        psi.ArgumentList.Add("50");
-        psi.ArgumentList.Add(wavPath);
+        if (useBaseline)
+        {
+            psi.ArgumentList.Add("stream-file-ditdah");
+            psi.ArgumentList.Add("--json");
+            psi.ArgumentList.Add("--chunk-ms");
+            psi.ArgumentList.Add("50");
+            psi.ArgumentList.Add(wavPath);
+        }
+        else
+        {
+            // Custom streaming decoder: pass operator SNR/threshold so the
+            // offline replay matches the live decoder configuration.
+            var ic = System.Globalization.CultureInfo.InvariantCulture;
+            psi.ArgumentList.Add("stream-file");
+            psi.ArgumentList.Add("--json");
+            psi.ArgumentList.Add("--chunk-ms");
+            psi.ArgumentList.Add("50");
+            psi.ArgumentList.Add("--min-snr-db");
+            psi.ArgumentList.Add(cfg.MinSnrDb.ToString(ic));
+            psi.ArgumentList.Add("--pitch-min-snr-db");
+            psi.ArgumentList.Add(cfg.PitchMinSnrDb.ToString(ic));
+            psi.ArgumentList.Add("--threshold-scale");
+            psi.ArgumentList.Add(cfg.ThresholdScale.ToString(ic));
+            psi.ArgumentList.Add(wavPath);
+        }
 
         using var proc = System.Diagnostics.Process.Start(psi)
             ?? throw new InvalidOperationException("Failed to start cw-decoder.");

@@ -353,7 +353,7 @@
                   </Border>
                   <Border Grid.Column="1" Padding="8,6" Background="#0C1A28" BorderBrush="{StaticResource GridLine}" BorderThickness="1">
                     <StackPanel>
-                      <TextBlock Text="OFFLINE REPLAY (BASELINE)" Classes="label" Foreground="{StaticResource AccentCyan}" />
+                      <TextBlock Text="{Binding ReplayDecoderLabel}" Classes="label" Foreground="{StaticResource AccentCyan}" />
                       <SelectableTextBlock Text="{Binding ReplayTranscript}"
                                            FontFamily="Consolas" FontSize="12"
                                            Foreground="{StaticResource TextHi}"
