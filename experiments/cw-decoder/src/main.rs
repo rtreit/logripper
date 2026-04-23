@@ -1115,6 +1115,12 @@ fn run_stream_live_ditdah(
     let mut decode_count = 0usize;
     let mut last_emitted_pitch: Option<f32> = None;
     let mut last_emitted_wpm: Option<f32> = None;
+    // Lightweight power meter for the GUI signal-strength bars in baseline
+    // mode. We don't have a Goertzel running here (the ditdah library does
+    // its own decoding internally), so approximate with chunk RMS-squared
+    // as `power` and a rolling 25th-percentile as the noise/threshold.
+    let mut power_history: std::collections::VecDeque<f32> = std::collections::VecDeque::with_capacity(128);
+    let mut last_power_emit = Instant::now();
 
     loop {
         if stop.load(Ordering::Relaxed) {
@@ -1141,6 +1147,43 @@ fn run_stream_live_ditdah(
         };
         if chunk.is_empty() {
             continue;
+        }
+
+        // Update power meter from chunk RMS² and emit a power event every
+        // ~50ms regardless of whether the streamer produced a snapshot —
+        // this keeps the signal-strength indicator alive between decodes.
+        let power = if !chunk.is_empty() {
+            let sum_sq: f32 = chunk.iter().map(|s| s * s).sum();
+            sum_sq / chunk.len() as f32
+        } else {
+            0.0
+        };
+        if power_history.len() == 128 {
+            power_history.pop_front();
+        }
+        power_history.push_back(power);
+        if let Some(em) = emitter.as_mut() {
+            if last_power_emit.elapsed().as_millis() >= 50 {
+                last_power_emit = Instant::now();
+                let mut sorted: Vec<f32> = power_history.iter().copied().collect();
+                sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+                let q25 = sorted[sorted.len() / 4];
+                let noise = q25.max(1e-10);
+                let threshold = noise * 4.0; // ~6 dB above noise floor
+                let snr = power / noise;
+                let signal = power > threshold;
+                em.emit(
+                    started.elapsed().as_secs_f32(),
+                    serde_json::json!({
+                        "type": "power",
+                        "power": power,
+                        "threshold": threshold,
+                        "noise": noise,
+                        "signal": signal,
+                        "snr": snr,
+                    }),
+                );
+            }
         }
 
         let snapshots = streamer.feed(&chunk);

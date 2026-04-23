@@ -268,17 +268,6 @@ pub fn append_snapshot_text(transcript: &mut String, snapshot_text: &str) -> Str
     } else {
         " "
     };
-    // Defensive: when none of the overlap heuristics above match, the new
-    // snapshot represents a completely different read of the rolling window
-    // than what we already committed — almost always a transient garbage
-    // decode from a partial window or a WPM mis-estimate. Concatenating it
-    // produced runaway duplicated transcripts (CER >2000%) in live mode.
-    // Only allow zero-overlap concatenation if the snapshot is short enough
-    // that it could plausibly be one or two newly-decoded tokens.
-    let snapshot_tokens = snapshot.split_whitespace().count();
-    if snapshot_tokens > 3 {
-        return String::new();
-    }
     let appended = format!("{separator}{snapshot}");
     transcript.push_str(&appended);
     appended
