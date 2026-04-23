@@ -68,6 +68,13 @@ Primary goals:
 - Use `rg` for text search operations.
 - Keep build and test loops fast to support tight iteration.
 
+## Pull Requests
+
+- Before pushing commits to a branch that has an associated PR, check the PR status with `gh pr view` first. The PR may have already been merged or closed. If so, create a new PR.
+- When creating PRs, use a plain text description. Avoid heavy markdown with lists, headings, and bullet points.
+- When creating feature branches, use `u/<alias>/BranchName` as the convention.
+- When a PR implements only part of a GitHub issue, do not reference the parent issue with a closing keyword (`Closes`, `Fixes`, `Resolves`). Instead, create a sub-issue scoped to the work in the PR, reference that sub-issue with a closing keyword in the PR, and add a comment on the parent issue linking to the PR and the sub-issue so progress is traceable. This prevents a partial merge from auto-closing an issue that still has open work.
+
 ## Quality and Coverage Gates
 
 - Treat the existing CI quality and coverage thresholds as local pre-push requirements, not something to discover only after opening a PR.
