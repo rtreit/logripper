@@ -50,6 +50,43 @@ Current uses:
 - fast parameter sweeps for the causal `ditdah` baseline (`--sweep-ditdah`, optionally `--wide-sweep`)
 - a built-in synthetic regression suite (silence, white/bursty/colored noise, clean and noisy synthesized CW at multiple SNRs) when no label flags are supplied
 
+### Stress-test harness (`scripts\stress-gen.ps1` + `scripts\stress-eval.ps1`)
+
+Generates a deterministic matrix of "stressed" copies of a clean baseline WAV via `ffmpeg`, then runs the cw-decoder over every variant and emits a degradation summary + CSV. Useful for catching regressions when changing acquisition or decoding logic, and for honestly measuring how far down the SNR ladder the current implementation can still find and decode a known signal.
+
+The matrix currently covers (per baseline):
+
+- **clean** passthrough at the decoder's native 12 kHz mono s16
+- **attenuation ladder**: -6, -12, -18, -24, -30 dB (no added noise)
+- **white noise** SNR ladder: 20, 10, 6, 3, 0 dB
+- **pink noise** SNR ladder: 20, 10, 6, 3, 0 dB (closer to band hiss)
+- **brown / red noise**: 10, 6, 3 dB (atmospheric / QRN-like)
+- **narrow IF**: 250–1100 Hz bandpass (simulates a narrow CW filter)
+- **QRM**: steady carrier at 850 Hz mixed at -16 dB
+- **combined weak-signal presets**: `weak_pink_snr6` (-18 dB signal + pink @6 dB SNR), `weak_pink_snr3` (-24 dB + pink @3 dB SNR)
+
+Generate and score:
+
+```powershell
+# Produces 23 .wav variants in data\cw-stress\30wpm\ (gitignored).
+.\experiments\cw-decoder\scripts\stress-gen.ps1 `
+    -InputWav   data\cw-samples\cw_30wpm_youtube_70s_2min_12k.wav `
+    -OutputDir  data\cw-stress\30wpm
+
+# Decodes every variant with the current decoder (default purity 3.0) and
+# prints colored per-variant {pitch, WPM, char count, transcript preview}
+# plus a stress-results.csv next to the inputs. Add -Truth "..." to also
+# get CER vs an operator-supplied ground-truth string.
+.\experiments\cw-decoder\scripts\stress-eval.ps1 -StressDir data\cw-stress\30wpm
+```
+
+Current observed behavior on the 30 WPM youtube baseline (sender at ~30 WPM):
+
+- decoder reports **29.5 WPM** on `clean` and remains at 28–30 WPM down through the entire attenuation ladder (including -30 dB), through brown/pink/white noise SNR ≥ 6 dB, through the narrow IF, and through QRM at +250 Hz from the CW pitch
+- pitch lock starts to wander to a side-bin (~574 Hz) at pink_snr6, white_snr6, weak_pink_snr3 — these are the cases where the next experimental work (top-K candidate tracking, oracle-tone eval) should pay off
+
+Stress audio is large and reproducible from the script, so `data/cw-stress/` is gitignored. Commit only the script changes and any operator-curated `TRUTH.txt` files.
+
 ## Decoder families
 
 ### 1. Custom streaming decoder
@@ -121,8 +158,8 @@ Current decode-tab workflow also includes:
 - a real-time playback signal view driven by the same broad-band profile pipeline used in labeling
 - an explicit **CURRENT TONE** readout during live decode and playback
 - an experimental **RANGE LOCK** mode for custom streaming, so live/file decode can prefer the strongest tone inside a chosen Hz window
-- an experimental **TONE PURITY** gate that gives each power sample an instantaneous adjacent-bin ratio test (`min_tone_purity`, default 3.0), so broadband impulses (finger snaps, key clicks, lightning, switching ground) stop being decoded as letters
-- an optional **SHOW CHAR HZ** overlay so each decoded character can display the tone the streaming decoder had locked when it emitted that symbol; a companion **SHOW PURITY** toggle adds the per-character peak adjacent-bin tone-purity ratio under the Hz line, so spurious characters from broadband impulses (typically `purity ~1`) are visually distinguishable from real CW (`purity 5-20+`)
+- an experimental **TONE PURITY** gate that compares each instantaneous target-bin power against the off-band noise bins (q25 of bins at ±150/300/500/700 Hz) at the *same* sample. A real CW tone scores 5–20+ instantaneous purity; a 5 ms broadband impulse (finger snap, key click, lightning, switching ground) lights up *all* bins together so the ratio collapses to ~1 and is rejected at the source. Default `min_tone_purity = 3.0`; set to 0 to disable. Reuses the existing noise bins (no new Goertzels), and runs *before* smoothing so the gate fires faster than the 200 ms noise smoother can equalize.
+- an optional **SHOW CHAR HZ** overlay so each decoded character can display the tone the streaming decoder had locked when it emitted that symbol; a companion **SHOW PURITY** toggle adds the per-character peak tone-purity ratio under the Hz line, so spurious characters from broadband impulses (typically `purity ~1`) are visually distinguishable from real CW (`purity 5-20+`)
 
 The tone-purity gate replaces an earlier "recent-audio re-detection" guard that ran at character emission time. That earlier guard could not catch transient impulses because by the time it re-ran pitch detection the impulse was already history; the new gate runs per Goertzel power sample and ANDs with the existing amplitude / smoothed-SNR gates so a sample only counts as key-down when the locked bin is meaningfully louder than its closely-spaced neighbors.
 

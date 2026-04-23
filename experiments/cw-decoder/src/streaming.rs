@@ -68,29 +68,8 @@ const DIT_EMA_ALPHA: f32 = 0.15;
 ///   * mains hum / harmonics at one specific offset
 ///   * partial filter rolloff at the band edges
 const NOISE_OFFSETS_HZ: &[f32] = &[150.0, 300.0, 500.0, 700.0];
-/// Adjacent-bin offsets (Hz) used for the *tone purity* check. These sit
-/// just outside the Goertzel main lobe of a clean CW tone (bin width is
-/// ~40 Hz at the 25 ms / 12 kHz Goertzel window — main lobe ~80 Hz wide)
-/// but close enough that a broadband impulse energizes them as much as
-/// the target bin.
-///
-/// A narrowband CW tone at `f` produces:
-///   * large power at `f`
-///   * small power at `f ± 60 Hz` and `f ± 120 Hz` (sidelobes / noise)
-///
-/// → purity ratio (`target / max(adjacent)`) is large (typically 5–20+).
-///
-/// A broadband impulse (finger snap, key click, lightning, switching ground)
-/// dumps energy into *all* bins simultaneously:
-///   * comparable power at `f` and at every adjacent offset
-///
-/// → purity ratio is ~1.
-///
-/// This is the gate that distinguishes "actually a tone" from "broadband
-/// thump that happened to land in the locked bin," which the smoothed
-/// off-band SNR cannot do (the noise smoother is 200 ms, so a 5 ms snap
-/// fires through the SNR gate before the noise floor catches up).
-const PURITY_OFFSETS_HZ: &[f32] = &[60.0, 120.0];
+// (Tone-purity uses the existing off-band noise bins at instantaneous time
+// rather than a separate set of close-in bins. See `feed_goertzel`.)
 /// Default required signal-to-noise ratio (dB) for a power sample to be
 /// considered "tone present" by the keying state machine. Below this, the
 /// sample is treated as noise even if it crosses the adaptive amplitude
@@ -1394,14 +1373,11 @@ pub struct StreamingDecoder {
     /// Off-band noise references at multiple offsets around the locked
     /// pitch. We take the *median* per power sample to estimate noise,
     /// which is robust to a single bin landing on adjacent CW or hum.
+    /// These same bins are also used *instantaneously* (no smoothing) for
+    /// the tone-purity gate: a broadband impulse lights up all of them at
+    /// the same instant the target bin spikes; a narrowband CW tone leaves
+    /// them at the noise floor.
     noise_bins: Vec<Goertzel>,
-    /// Tightly-spaced adjacent bins (`PURITY_OFFSETS_HZ` Hz from the locked
-    /// pitch) used for the *instantaneous* tone-purity check. Distinct from
-    /// `noise_bins` (which sit hundreds of Hz away to estimate the noise
-    /// floor) — the purity bins live close enough to the carrier that a
-    /// real CW tone leaves them mostly empty while a broadband impulse
-    /// energizes them just as much as the target bin.
-    purity_bins: Vec<Goertzel>,
     smooth_window: usize,
     /// Recent power samples for moving average.
     smooth_buf: VecDeque<f32>,
@@ -1466,7 +1442,6 @@ impl StreamingDecoder {
             quality_failed_consecutive: 0,
             goertzel: None,
             noise_bins: Vec::new(),
-            purity_bins: Vec::new(),
             smooth_window,
             smooth_buf: VecDeque::with_capacity(smooth_window + 1),
             smooth_sum: 0.0,
@@ -1590,7 +1565,6 @@ impl StreamingDecoder {
         self.pitch_locked = None;
         self.goertzel = None;
         self.noise_bins.clear();
-        self.purity_bins.clear();
         self.smooth_buf.clear();
         self.smooth_sum = 0.0;
         self.noise_smooth_buf.clear();
@@ -1639,24 +1613,9 @@ impl StreamingDecoder {
                         .push(Goertzel::new(hi, TARGET_RATE, win_size, step));
                 }
             }
-            // Adjacent purity bins (closely spaced — see PURITY_OFFSETS_HZ
-            // doc comment). These are the gate that distinguishes a real
-            // narrowband CW tone from a broadband impulse: the impulse
-            // spreads its energy across all of these bins; a tone leaves
-            // them mostly empty.
-            self.purity_bins.clear();
-            for &off in PURITY_OFFSETS_HZ {
-                let lo = pitch - off;
-                let hi = pitch + off;
-                if lo >= FREQ_MIN_HZ {
-                    self.purity_bins
-                        .push(Goertzel::new(lo, TARGET_RATE, win_size, step));
-                }
-                if hi <= FREQ_MAX_HZ {
-                    self.purity_bins
-                        .push(Goertzel::new(hi, TARGET_RATE, win_size, step));
-                }
-            }
+            // Adjacent purity bins are no longer needed — the same off-band
+            // noise bins above are reused at instantaneous time inside
+            // `feed_goertzel` for the tone-purity gate.
             self.unlock_power_history.clear();
             events.push(StreamEvent::PitchUpdate { pitch_hz: pitch });
             let drained = std::mem::take(&mut self.pre_lock_buf);
@@ -1726,16 +1685,12 @@ impl StreamingDecoder {
 
         // Run all noise-bin Goertzels in lockstep (identical win_size/step,
         // so each emits exactly the same number of samples as `power_out`).
+        // These same outputs feed both the smoothed noise floor (for SNR)
+        // *and* the instantaneous tone-purity gate.
         let mut noise_outs: Vec<Vec<f32>> =
             (0..self.noise_bins.len()).map(|_| Vec::new()).collect();
         for (idx, nb) in self.noise_bins.iter_mut().enumerate() {
             nb.push(audio, &mut noise_outs[idx]);
-        }
-        // Run the adjacent purity bins in lockstep too.
-        let mut purity_outs: Vec<Vec<f32>> =
-            (0..self.purity_bins.len()).map(|_| Vec::new()).collect();
-        for (idx, pb) in self.purity_bins.iter_mut().enumerate() {
-            pb.push(audio, &mut purity_outs[idx]);
         }
         let snr_threshold = self.config.min_snr_linear();
         let purity_threshold = self.config.min_tone_purity;
@@ -1779,9 +1734,10 @@ impl StreamingDecoder {
             }
             let noise = self.noise_smooth_sum / self.noise_smooth_buf.len() as f32;
 
-            // SNR: how many times louder is the tone bin vs the off-band
-            // reference. With no noise reading yet we default to "OK" so the
-            // existing amplitude threshold still does its job.
+            // SNR: how many times louder is the smoothed tone bin vs the
+            // smoothed off-band reference. With no noise reading yet we
+            // default to "OK" so the existing amplitude threshold still
+            // does its job.
             let snr = if noise > 0.0 {
                 smoothed / noise
             } else {
@@ -1789,36 +1745,27 @@ impl StreamingDecoder {
             };
             let snr_ok = snr >= snr_threshold;
 
-            // Instantaneous tone-purity ratio: raw target-bin power divided
-            // by the *maximum* of the closely-spaced adjacent purity bins.
-            // No smoothing on either side — the entire point of this gate is
-            // to react in the same Goertzel step as the smoothed SNR gate
-            // would falsely fire on a broadband impulse. A real CW tone
-            // produces a target/adjacent ratio well above 1 (typically 5+);
-            // a broadband impulse spreads energy roughly equally across all
-            // close bins so the ratio collapses toward 1.
+            // Tone purity: instantaneous target-bin power vs instantaneous
+            // off-band noise (q25 of noise bins at *this* sample). The SNR
+            // check above smooths both numerator and denominator, so a 5 ms
+            // broadband impulse beats it (the noise smoother is ~200 ms).
+            // Comparing this-sample target against this-sample noise
+            // exposes the impulse: the impulse spikes ALL bins together,
+            // so target/noise stays near 1; a real CW tone is concentrated
+            // at the locked frequency, so target/noise jumps to >>1.
             //
             // When the gate is disabled (`min_tone_purity <= 0`) or no
-            // purity bins are configured, treat purity as always-OK so the
+            // noise bins are configured, treat purity as always-OK so the
             // decoder reverts to the pre-gate behavior.
-            let (tone_purity, purity_ok) = if purity_threshold <= 0.0 || purity_outs.is_empty() {
+            let (tone_purity, purity_ok) = if purity_threshold <= 0.0 || noise_outs.is_empty() {
                 (0.0_f32, true)
+            } else if noise_raw <= 1e-12 {
+                // No measurable off-band energy at this instant → trivially
+                // pure (the only thing in the band is at the locked freq).
+                (f32::INFINITY, true)
             } else {
-                let mut max_adjacent = 0.0_f32;
-                for v in &purity_outs {
-                    if let Some(&pp) = v.get(i) {
-                        if pp > max_adjacent {
-                            max_adjacent = pp;
-                        }
-                    }
-                }
-                if max_adjacent <= 1e-12 {
-                    // No measurable adjacent energy → trivially pure.
-                    (f32::INFINITY, true)
-                } else {
-                    let ratio = p / max_adjacent;
-                    (ratio, ratio >= purity_threshold)
-                }
+                let ratio = p / noise_raw;
+                (ratio, ratio >= purity_threshold)
             };
 
             // Throttled Power event for UI meters (~POWER_EVENT_HZ).
