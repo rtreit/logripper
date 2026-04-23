@@ -479,9 +479,6 @@ pub enum LogbookError {
     /// The QSO is soft-deleted and must be restored before it can be updated.
     #[error("QSO '{0}' is deleted; restore it before updating.")]
     AlreadyDeleted(String),
-    /// A precondition for the requested operation was not met.
-    #[error("Precondition failed: {0}")]
-    PreconditionFailed(String),
     /// The underlying storage layer failed to complete the requested operation.
     #[error(transparent)]
     Storage(#[from] StorageError),

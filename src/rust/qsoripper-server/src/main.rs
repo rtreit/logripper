@@ -495,8 +495,10 @@ impl LogbookService for DeveloperLogbookService {
             ));
         }
 
-        // Sync gating: refuse if sync is in progress.
-        if self.sync_scheduler.is_syncing().await {
+        // Sync gating: hold the sync lock across the entire purge so that
+        // no sync can start between the check and the storage DELETE.
+        let sync_guard = self.sync_scheduler.sync_guard().await;
+        if *sync_guard {
             return Err(Status::failed_precondition(
                 "Cannot purge while a sync is in progress.",
             ));
@@ -517,6 +519,9 @@ impl LogbookService for DeveloperLogbookService {
             .purge_deleted_qsos(&request.local_ids, older_than)
             .await
             .map_err(map_logbook_error)?;
+
+        // Release sync guard after purge completes.
+        drop(sync_guard);
 
         Ok(Response::new(PurgeDeletedQsosResponse {
             purged_count: purged,
@@ -1209,7 +1214,6 @@ fn map_logbook_error(error: LogbookError) -> Status {
         LogbookError::AlreadyDeleted(local_id) => Status::failed_precondition(format!(
             "QSO '{local_id}' is deleted; restore it before updating."
         )),
-        LogbookError::PreconditionFailed(message) => Status::failed_precondition(message),
         LogbookError::Storage(StorageError::Duplicate { entity, key }) => {
             Status::already_exists(format!("{entity} '{key}' already exists."))
         }
