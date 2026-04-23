@@ -80,6 +80,10 @@ pub fn run_causal_baseline_trace(
 pub struct CausalBaselineStreamer {
     sample_rate: u32,
     buffer: VecDeque<f32>,
+    /// Maximum buffered audio. Buffer GROWS up to this and then slides off
+    /// the oldest sample for each new one (FIFO ring). Larger windows give
+    /// the prefix stabilizer more opportunity to commit text before it ages
+    /// off the front of the buffer; smaller windows give lower latency.
     window_samples: usize,
     min_window_samples: usize,
     decode_every_samples: usize,
