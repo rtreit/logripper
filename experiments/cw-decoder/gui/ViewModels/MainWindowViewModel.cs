@@ -140,8 +140,12 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
     public string LastRecordingDisplay => string.IsNullOrEmpty(_lastRecordingPath) ? "" : System.IO.Path.GetFileName(_lastRecordingPath);
 
     private string? _liveTranscriptForReplay;
+    private readonly System.Text.StringBuilder _liveTranscriptBuilder = new();
     private string? _replayTranscript;
     public string? ReplayTranscript { get => _replayTranscript; set => Set(ref _replayTranscript, value); }
+
+    private string? _liveTranscriptDisplay;
+    public string? LiveTranscriptDisplay { get => _liveTranscriptDisplay; set => Set(ref _liveTranscriptDisplay, value); }
 
     private string? _replayStatus;
     public string? ReplayStatus { get => _replayStatus; set => Set(ref _replayStatus, value); }
@@ -552,7 +556,21 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
 
     public void ToggleStartStop()
     {
-        if (IsRunning) { _process.Stop(); IsRunning = false; return; }
+        if (IsRunning)
+        {
+            // Snapshot whatever we accumulated from char/word events before
+            // killing the process — Stop won't reliably wait for the `end` JSON.
+            _liveTranscriptForReplay = _liveTranscriptBuilder.ToString();
+            _process.Stop();
+            IsRunning = false;
+            // Give the WAV writer a moment to flush via Drop, then refresh button.
+            _ = Task.Run(async () =>
+            {
+                await Task.Delay(300).ConfigureAwait(false);
+                await Dispatcher.UIThread.InvokeAsync(() => OnPropertyChanged(nameof(HasLastRecording)));
+            });
+            return;
+        }
         ResetDecoderSurface();
         StatusText = "Starting…";
 
@@ -570,6 +588,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
         }
 
         _liveTranscriptForReplay = null;
+        _liveTranscriptBuilder.Clear();
         ReplayTranscript = null;
         ReplayStatus = null;
         ReplayCer = null;
@@ -611,20 +630,37 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
         ReplayTranscript = null;
         ReplayCer = null;
 
+        // Snapshot the live transcript right now in case the user clicks
+        // Replay before the `end` event arrives (or after Stop killed it).
+        var liveSnapshot = !string.IsNullOrWhiteSpace(_liveTranscriptForReplay)
+            ? _liveTranscriptForReplay
+            : _liveTranscriptBuilder.ToString();
+        LiveTranscriptDisplay = string.IsNullOrWhiteSpace(liveSnapshot) ? "(empty)" : liveSnapshot.Trim();
+
         try
         {
             var transcript = await Task.Run(() => RunOfflineReplay(path)).ConfigureAwait(false);
             await Dispatcher.UIThread.InvokeAsync(() =>
             {
-                ReplayTranscript = transcript;
-                if (!string.IsNullOrWhiteSpace(_liveTranscriptForReplay) && !string.IsNullOrWhiteSpace(transcript))
+                ReplayTranscript = string.IsNullOrWhiteSpace(transcript) ? "(empty)" : transcript.Trim();
+                if (!string.IsNullOrWhiteSpace(liveSnapshot) && !string.IsNullOrWhiteSpace(transcript))
                 {
-                    ReplayCer = CharacterErrorRate(_liveTranscriptForReplay!.Trim(), transcript.Trim());
-                    ReplayStatus = $"CER (live vs offline): {ReplayCer:P1}";
+                    var live = liveSnapshot!.Trim();
+                    var off = transcript.Trim();
+                    var cer = CharacterErrorRate(off, live); // reference = offline (more reliable), hyp = live
+                    ReplayCer = cer;
+                    var lenL = live.Length;
+                    var lenO = off.Length;
+                    var coverage = lenO > 0 ? (double)lenL / lenO : 0.0;
+                    ReplayStatus = $"Live vs offline · live={lenL} ch · offline={lenO} ch · coverage={coverage:P0} · CER={cer:P1}";
+                }
+                else if (!string.IsNullOrWhiteSpace(transcript))
+                {
+                    ReplayStatus = $"Offline transcript ready ({transcript.Trim().Length} chars). No live transcript captured to score against.";
                 }
                 else
                 {
-                    ReplayStatus = "Offline transcript ready.";
+                    ReplayStatus = "Offline transcript was empty — recording may be silent or pitch lock failed.";
                 }
             });
         }
@@ -1090,10 +1126,15 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
                 break;
             case "char":
                 if (!string.IsNullOrEmpty(ev.Ch))
+                {
                     Cells.Add(TranscriptCell.Char(ev.Ch!, string.IsNullOrEmpty(ev.Morse) ? " " : ev.Morse!));
+                    _liveTranscriptBuilder.Append(ev.Ch);
+                }
                 break;
             case "word":
                 Cells.Add(TranscriptCell.Word());
+                if (_liveTranscriptBuilder.Length > 0 && _liveTranscriptBuilder[^1] != ' ')
+                    _liveTranscriptBuilder.Append(' ');
                 break;
             case "garbled":
                 break;
@@ -1114,14 +1155,15 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
                 break;
             case "end":
                 StatusText = $"Done. {ev.Transcript ?? ""}";
-                _liveTranscriptForReplay = ev.Transcript;
+                _liveTranscriptForReplay = !string.IsNullOrWhiteSpace(ev.Transcript)
+                    ? ev.Transcript
+                    : _liveTranscriptBuilder.ToString();
                 if (!string.IsNullOrEmpty(ev.Recording))
                 {
                     LastRecordingPath = ev.Recording;
                 }
                 else
                 {
-                    // Refresh HasLastRecording in case the file is now flushed.
                     OnPropertyChanged(nameof(HasLastRecording));
                 }
                 IsRunning = false;

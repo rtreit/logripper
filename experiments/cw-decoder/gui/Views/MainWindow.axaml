@@ -307,18 +307,42 @@
                 </ItemsControl.ItemTemplate>
               </ItemsControl>
             </ScrollViewer>
-            <Border Grid.Row="2" Margin="0,8,0,0" Padding="10,6"
+            <Border Grid.Row="2" Margin="0,8,0,0" Padding="10,8"
                     Background="{StaticResource BgDeep}"
                     BorderBrush="{StaticResource GridLine}" BorderThickness="1"
                     IsVisible="{Binding HasLastRecording}">
-              <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="12">
-                <TextBlock Text="LAST RECORDING:" Classes="label" VerticalAlignment="Center" />
-                <TextBlock Grid.Column="1" Text="{Binding LastRecordingDisplay}"
+              <Grid RowDefinitions="Auto,Auto,Auto" RowSpacing="6">
+                <Grid ColumnDefinitions="Auto,*" ColumnSpacing="12">
+                  <TextBlock Text="LAST RECORDING:" Classes="label" VerticalAlignment="Center" />
+                  <TextBlock Grid.Column="1" Text="{Binding LastRecordingDisplay}"
+                             FontFamily="Consolas" FontSize="12"
+                             Foreground="{StaticResource AccentCyan}" VerticalAlignment="Center" />
+                </Grid>
+                <TextBlock Grid.Row="1" Text="{Binding ReplayStatus}"
                            FontFamily="Consolas" FontSize="12"
-                           Foreground="{StaticResource AccentCyan}" VerticalAlignment="Center" />
-                <TextBlock Grid.Column="2" Text="{Binding ReplayStatus}"
-                           FontFamily="Consolas" FontSize="12"
-                           Foreground="{StaticResource AccentLime}" VerticalAlignment="Center" />
+                           Foreground="{StaticResource AccentLime}"
+                           IsVisible="{Binding ReplayStatus, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                <Grid Grid.Row="2" ColumnDefinitions="*,*" ColumnSpacing="10"
+                      IsVisible="{Binding ReplayTranscript, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                  <Border Padding="8,6" Background="#0C1A28" BorderBrush="{StaticResource GridLine}" BorderThickness="1">
+                    <StackPanel>
+                      <TextBlock Text="LIVE TRANSCRIPT" Classes="label" Foreground="{StaticResource AccentAmber}" />
+                      <SelectableTextBlock Text="{Binding LiveTranscriptDisplay}"
+                                           FontFamily="Consolas" FontSize="12"
+                                           Foreground="{StaticResource TextHi}"
+                                           TextWrapping="Wrap" />
+                    </StackPanel>
+                  </Border>
+                  <Border Grid.Column="1" Padding="8,6" Background="#0C1A28" BorderBrush="{StaticResource GridLine}" BorderThickness="1">
+                    <StackPanel>
+                      <TextBlock Text="OFFLINE REPLAY (BASELINE)" Classes="label" Foreground="{StaticResource AccentCyan}" />
+                      <SelectableTextBlock Text="{Binding ReplayTranscript}"
+                                           FontFamily="Consolas" FontSize="12"
+                                           Foreground="{StaticResource TextHi}"
+                                           TextWrapping="Wrap" />
+                    </StackPanel>
+                  </Border>
+                </Grid>
               </Grid>
             </Border>
           </Grid>
