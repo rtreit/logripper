@@ -31,7 +31,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
     public MainWindowViewModel()
     {
         Devices = new ObservableCollection<string>(CwDecoderProcess.ListDevices());
-        DecoderModes = new ObservableCollection<string>(new[] { CustomDecoderModeLabel, BaselineDecoderModeLabel });
+        DecoderModes = new ObservableCollection<string>(new[] { BaselineDecoderModeLabel, CustomDecoderModeLabel });
         SelectedDevice = Devices.Count > 0 ? Devices[0] : null;
         SelectedDecoderMode = DecoderModes[0];
         Cells = new ObservableCollection<TranscriptCell>();
@@ -56,7 +56,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
     private string? _selectedDevice;
     public string? SelectedDevice { get => _selectedDevice; set => Set(ref _selectedDevice, value); }
 
-    private string _selectedDecoderMode = CustomDecoderModeLabel;
+    private string _selectedDecoderMode = BaselineDecoderModeLabel;
     public string SelectedDecoderMode
     {
         get => _selectedDecoderMode;
@@ -151,7 +151,51 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
     public string? ReplayStatus { get => _replayStatus; set => Set(ref _replayStatus, value); }
 
     private double? _replayCer;
-    public double? ReplayCer { get => _replayCer; set => Set(ref _replayCer, value); }
+    public double? ReplayCer
+    {
+        get => _replayCer;
+        set
+        {
+            if (Set(ref _replayCer, value))
+            {
+                OnPropertyChanged(nameof(HasReplayCer));
+                OnPropertyChanged(nameof(ReplayCerDisplay));
+                OnPropertyChanged(nameof(ReplayCerForeground));
+                OnPropertyChanged(nameof(ReplayCerBackground));
+                OnPropertyChanged(nameof(ReplayGradeLabel));
+            }
+        }
+    }
+
+    public bool HasReplayCer => _replayCer.HasValue;
+    public string ReplayCerDisplay => _replayCer is double c ? $"{c * 100:F1}%" : "—";
+    public string ReplayGradeLabel => _replayCer switch
+    {
+        null => "",
+        double c when c <= 0.05 => "EXCELLENT",
+        double c when c <= 0.15 => "GOOD",
+        double c when c <= 0.30 => "FAIR",
+        double c when c <= 0.50 => "POOR",
+        _ => "BAD",
+    };
+    public Avalonia.Media.IBrush ReplayCerForeground => _replayCer switch
+    {
+        null => Avalonia.Media.Brushes.Gray,
+        double c when c <= 0.05 => Avalonia.Media.Brush.Parse("#7CFF7C"),
+        double c when c <= 0.15 => Avalonia.Media.Brush.Parse("#B6FF7C"),
+        double c when c <= 0.30 => Avalonia.Media.Brush.Parse("#FFD37C"),
+        double c when c <= 0.50 => Avalonia.Media.Brush.Parse("#FF9F50"),
+        _ => Avalonia.Media.Brush.Parse("#FF6464"),
+    };
+    public Avalonia.Media.IBrush ReplayCerBackground => _replayCer switch
+    {
+        null => Avalonia.Media.Brushes.Transparent,
+        double c when c <= 0.05 => Avalonia.Media.Brush.Parse("#0E2A14"),
+        double c when c <= 0.15 => Avalonia.Media.Brush.Parse("#15281A"),
+        double c when c <= 0.30 => Avalonia.Media.Brush.Parse("#2A2415"),
+        double c when c <= 0.50 => Avalonia.Media.Brush.Parse("#2A1A12"),
+        _ => Avalonia.Media.Brush.Parse("#2A1010"),
+    };
 
     private double _normalizedLevel;
     public double NormalizedLevel { get => _normalizedLevel; set => Set(ref _normalizedLevel, value); }
