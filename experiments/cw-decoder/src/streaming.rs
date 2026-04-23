@@ -31,8 +31,8 @@ const FREQ_MAX_HZ: f32 = 1200.0;
 const RESAMPLER_CHUNK: usize = 1024;
 const GOERTZEL_WIN_MS: f32 = 25.0;
 const POWER_SMOOTH_MS: f32 = 20.0;
-const PITCH_LOCK_SECONDS: f32 = 2.0;
-const PITCH_REEVAL_SECONDS: f32 = 5.0;
+const PITCH_LOCK_SECONDS: f32 = 6.0;
+const PITCH_REEVAL_SECONDS: f32 = 8.0;
 const POWER_HISTORY_SECONDS: f32 = 4.0;
 const DIT_HISTORY: usize = 32;
 const DIT_DAH_BOUNDARY: f32 = 2.0;
@@ -285,7 +285,10 @@ fn detect_pitch(samples: &[f32], sample_rate: u32, min_snr_linear: f32) -> Resul
     let win: Vec<f32> = (0..fft_size)
         .map(|i| 0.54 - 0.46 * (2.0 * std::f32::consts::PI * i as f32 / fft_size as f32).cos())
         .collect();
-    let mut sum = vec![0.0_f32; fft_size / 2];
+    let half = fft_size / 2;
+    // Per-bin time-series power (one entry per FFT frame), for keying-score eval.
+    let mut frames: Vec<Vec<f32>> = vec![Vec::new(); half];
+    let mut sum = vec![0.0_f32; half];
     let mut count = 0;
     for chunk in samples.windows(fft_size).step_by(step) {
         let mut buf: Vec<Complex<f32>> = chunk
@@ -294,8 +297,10 @@ fn detect_pitch(samples: &[f32], sample_rate: u32, min_snr_linear: f32) -> Resul
             .map(|(s, w)| Complex::new(s * w, 0.0))
             .collect();
         fft.process(&mut buf);
-        for (i, v) in buf.iter().take(fft_size / 2).enumerate() {
-            sum[i] += v.norm_sqr();
+        for (i, v) in buf.iter().take(half).enumerate() {
+            let p = v.norm_sqr();
+            sum[i] += p;
+            frames[i].push(p);
         }
         count += 1;
     }
@@ -303,33 +308,81 @@ fn detect_pitch(samples: &[f32], sample_rate: u32, min_snr_linear: f32) -> Resul
         return Err(anyhow!("no FFT frames"));
     }
     let df = sample_rate as f32 / fft_size as f32;
-    let mut best_idx = 0;
-    let mut best_p = 0.0;
-    let mut in_band: Vec<f32> = Vec::new();
+    // Build candidates: every in-band bin that is a local maximum (peak)
+    // in the cumulative spectrum. We then score each by combined power AND
+    // bimodality of its time-series, so a continuous carrier (loud but flat
+    // over time) loses to a real CW keying signal (slightly quieter but
+    // strongly ON/OFF over time).
+    let mut in_band_powers: Vec<f32> = Vec::new();
+    let mut candidates: Vec<usize> = Vec::new();
     for (i, &p) in sum.iter().enumerate() {
         let f = i as f32 * df;
-        if (FREQ_MIN_HZ..=FREQ_MAX_HZ).contains(&f) {
-            in_band.push(p);
-            if p > best_p {
-                best_p = p;
-                best_idx = i;
+        if !(FREQ_MIN_HZ..=FREQ_MAX_HZ).contains(&f) {
+            continue;
+        }
+        in_band_powers.push(p);
+        // Local max with a 5-bin neighbourhood. This avoids picking flat
+        // shoulders of a single broader peak as separate candidates.
+        let lo = i.saturating_sub(2);
+        let hi = (i + 2).min(half - 1);
+        let mut is_peak = true;
+        for j in lo..=hi {
+            if j != i && sum[j] > p {
+                is_peak = false;
+                break;
             }
         }
+        if is_peak && p > 0.0 {
+            candidates.push(i);
+        }
     }
-    if best_p == 0.0 || in_band.is_empty() {
-        return Err(anyhow!("no dominant pitch in band"));
+    if candidates.is_empty() || in_band_powers.is_empty() {
+        return Err(anyhow!("no candidate peaks in band"));
     }
-    // Peakiness check: peak power must clear the in-band median by at least
-    // `min_snr_linear`. Pure noise has roughly flat in-band power so the
-    // peak/median ratio sits near 1. A genuine CW tone produces a sharp
-    // bin much higher than median.
-    in_band.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    let median = in_band[in_band.len() / 2].max(1e-30);
-    let ratio = best_p / median;
-    if ratio < min_snr_linear {
+    // Compute peak/median ratio over in-band power for the SNR gate.
+    let mut sorted = in_band_powers.clone();
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let median = sorted[sorted.len() / 2].max(1e-30);
+
+    // Score each candidate.
+    //
+    // Power alone is misleading: a chorus of nearby stations or a strong
+    // continuous carrier can be loud yet decode to garbage. We add a
+    // bimodality (keying-ratio) factor so a slightly quieter strongly
+    // keyed bin can beat a louder near-flat one. SNR uses a sqrt
+    // weighting so absolute loudness can't completely dominate.
+    let mut best_idx = candidates[0];
+    let mut best_score = -1.0_f32;
+    for &i in &candidates {
+        let p = sum[i];
+        let snr = p / median;
+        if snr < min_snr_linear {
+            continue;
+        }
+        let mut series = frames[i].clone();
+        if series.len() < 8 {
+            continue;
+        }
+        series.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let q10 = series[series.len() / 10].max(1e-30);
+        let q90 = series[series.len() * 9 / 10].max(1e-30);
+        let keying = (q90 / q10).clamp(1.0, 5000.0);
+        // Require at least mild bimodality so a pure carrier can't win.
+        if keying < 5.0 {
+            continue;
+        }
+        // sqrt(SNR) × keying. The sqrt softens the power dominance so a
+        // bin that's a little quieter but much more strongly keyed can
+        // still win.
+        let score = snr.sqrt() * keying;
+        if score > best_score {
+            best_score = score;
+            best_idx = i;
+        }
+    }
+    if best_score < 0.0 {
         return Err(anyhow!(
-            "pitch peak {:.1} dB above median, need {:.1} dB",
-            10.0 * ratio.log10(),
+            "no candidate cleared SNR gate of {:.1} dB",
             10.0 * min_snr_linear.log10()
         ));
     }
