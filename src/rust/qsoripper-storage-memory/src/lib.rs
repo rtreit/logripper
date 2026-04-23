@@ -180,6 +180,31 @@ impl LogbookStore for MemoryStorage {
         state.sync_metadata = metadata.clone();
         Ok(())
     }
+
+    async fn purge_deleted_qsos(
+        &self,
+        local_ids: &[String],
+        older_than_ms: Option<i64>,
+    ) -> Result<u32, StorageError> {
+        let mut state = self.state.write().await;
+        let ids_to_purge: Vec<String> = state
+            .qsos
+            .iter()
+            .filter(|(_, record)| record.deleted_at.is_some())
+            .filter(|(id, _)| local_ids.is_empty() || local_ids.contains(id))
+            .filter(|(_, record)| {
+                older_than_ms
+                    .is_none_or(|cutoff| timestamp_to_millis(record.deleted_at.as_ref()) <= cutoff)
+            })
+            .map(|(id, _)| id.clone())
+            .collect();
+
+        let count = u32::try_from(ids_to_purge.len()).unwrap_or(u32::MAX);
+        for id in &ids_to_purge {
+            state.qsos.remove(id);
+        }
+        Ok(count)
+    }
 }
 
 #[tonic::async_trait]
@@ -587,5 +612,169 @@ mod tests {
         }));
 
         assert_eq!(value, i64::MIN);
+    }
+
+    #[tokio::test]
+    async fn memory_purge_removes_only_soft_deleted_rows() {
+        let storage: Arc<dyn EngineStorage> = Arc::new(MemoryStorage::new());
+        let engine = LogbookEngine::new(storage.clone());
+
+        let active = engine
+            .log_qso(
+                QsoRecordBuilder::new("W1AW", "K7ACT")
+                    .band(Band::Band20m)
+                    .mode(Mode::Ft8)
+                    .timestamp(Timestamp {
+                        seconds: 1_700_000_000,
+                        nanos: 0,
+                    })
+                    .build(),
+            )
+            .await
+            .unwrap();
+        let deleted = engine
+            .log_qso(
+                QsoRecordBuilder::new("W1AW", "K7DEL")
+                    .band(Band::Band40m)
+                    .mode(Mode::Cw)
+                    .timestamp(Timestamp {
+                        seconds: 1_700_001_000,
+                        nanos: 0,
+                    })
+                    .build(),
+            )
+            .await
+            .unwrap();
+        engine.delete_qso(&deleted.local_id, false).await.unwrap();
+
+        let purged = storage
+            .logbook()
+            .purge_deleted_qsos(&[], None)
+            .await
+            .unwrap();
+        assert_eq!(purged, 1);
+
+        // Active row survives.
+        assert!(storage
+            .logbook()
+            .get_qso(&active.local_id)
+            .await
+            .unwrap()
+            .is_some());
+        // Deleted row is gone.
+        assert!(storage
+            .logbook()
+            .get_qso(&deleted.local_id)
+            .await
+            .unwrap()
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn memory_purge_filters_by_local_ids() {
+        let storage: Arc<dyn EngineStorage> = Arc::new(MemoryStorage::new());
+        let engine = LogbookEngine::new(storage.clone());
+
+        let d1 = engine
+            .log_qso(
+                QsoRecordBuilder::new("W1AW", "K7D1")
+                    .band(Band::Band20m)
+                    .mode(Mode::Ft8)
+                    .timestamp(Timestamp {
+                        seconds: 1_700_000_000,
+                        nanos: 0,
+                    })
+                    .build(),
+            )
+            .await
+            .unwrap();
+        let d2 = engine
+            .log_qso(
+                QsoRecordBuilder::new("W1AW", "K7D2")
+                    .band(Band::Band40m)
+                    .mode(Mode::Cw)
+                    .timestamp(Timestamp {
+                        seconds: 1_700_001_000,
+                        nanos: 0,
+                    })
+                    .build(),
+            )
+            .await
+            .unwrap();
+        engine.delete_qso(&d1.local_id, false).await.unwrap();
+        engine.delete_qso(&d2.local_id, false).await.unwrap();
+
+        // Purge only d1.
+        let purged = storage
+            .logbook()
+            .purge_deleted_qsos(&[d1.local_id.clone()], None)
+            .await
+            .unwrap();
+        assert_eq!(purged, 1);
+
+        // d2 is still in trash.
+        assert!(storage
+            .logbook()
+            .get_qso(&d2.local_id)
+            .await
+            .unwrap()
+            .is_some());
+    }
+
+    #[tokio::test]
+    async fn memory_purge_filters_by_older_than() {
+        let storage: Arc<dyn EngineStorage> = Arc::new(MemoryStorage::new());
+        let logbook = storage.logbook();
+
+        // Insert two QSOs and soft-delete at different times.
+        let q1 = QsoRecordBuilder::new("W1AW", "K7OLD")
+            .band(Band::Band20m)
+            .mode(Mode::Ft8)
+            .timestamp(Timestamp {
+                seconds: 1_700_000_000,
+                nanos: 0,
+            })
+            .build();
+        let q2 = QsoRecordBuilder::new("W1AW", "K7NEW")
+            .band(Band::Band40m)
+            .mode(Mode::Cw)
+            .timestamp(Timestamp {
+                seconds: 1_700_001_000,
+                nanos: 0,
+            })
+            .build();
+
+        let engine = LogbookEngine::new(storage.clone());
+        let stored1 = engine.log_qso(q1).await.unwrap();
+        let stored2 = engine.log_qso(q2).await.unwrap();
+
+        // Soft-delete with explicit timestamps: q1 "old" at 1000ms, q2 "new" at 5000ms.
+        logbook
+            .soft_delete_qso(&stored1.local_id, 1000, false)
+            .await
+            .unwrap();
+        logbook
+            .soft_delete_qso(&stored2.local_id, 5000, false)
+            .await
+            .unwrap();
+
+        // Purge only rows deleted before 3000ms.
+        let purged = logbook.purge_deleted_qsos(&[], Some(3000)).await.unwrap();
+        assert_eq!(purged, 1);
+
+        // q1 purged, q2 survives.
+        assert!(logbook.get_qso(&stored1.local_id).await.unwrap().is_none());
+        assert!(logbook.get_qso(&stored2.local_id).await.unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn memory_purge_no_match_returns_zero() {
+        let storage: Arc<dyn EngineStorage> = Arc::new(MemoryStorage::new());
+        let purged = storage
+            .logbook()
+            .purge_deleted_qsos(&[], None)
+            .await
+            .unwrap();
+        assert_eq!(purged, 0);
     }
 }

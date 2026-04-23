@@ -185,6 +185,7 @@ internal sealed class ManagedEngineState
                 "runtime-config",
                 "rig-control",
                 "space-weather",
+                "purge",
             }
         };
     }
@@ -619,6 +620,14 @@ internal sealed class ManagedEngineState
         }
     }
 
+    public int PurgeDeletedQsos(IReadOnlyList<string>? localIds, DateTimeOffset? olderThan)
+    {
+        lock (_gate)
+        {
+            return Sync(_storage.Logbook.PurgeDeletedQsosAsync(localIds, olderThan));
+        }
+    }
+
     public QsoRecord? GetQso(string localId)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(localId);
@@ -687,6 +696,8 @@ internal sealed class ManagedEngineState
                     ProcessedRecords = result.DownloadedCount + result.UploadedCount,
                     CurrentAction = "Sync completed.",
                     Complete = true,
+                    RemoteDeletesPushed = result.RemoteDeletesPushed,
+                    DeletesSkippedRemote = result.DeletesSkippedRemote,
                 };
 
                 if (result.ErrorSummary is not null)

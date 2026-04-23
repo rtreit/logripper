@@ -325,6 +325,38 @@ public sealed class SqliteStorage : IEngineStorage, ILogbookStore, ILookupSnapsh
     }
 
     /// <inheritdoc />
+    public ValueTask<int> PurgeDeletedQsosAsync(IReadOnlyList<string>? localIds, DateTimeOffset? olderThan)
+    {
+        lock (_lock)
+        {
+            ThrowIfDisposed();
+
+            if (localIds is { Count: 0 })
+            {
+                return new ValueTask<int>(0);
+            }
+
+            var totalDeleted = 0;
+
+            if (localIds is not null)
+            {
+                const int chunkSize = 500;
+                for (var i = 0; i < localIds.Count; i += chunkSize)
+                {
+                    var chunk = localIds.Skip(i).Take(chunkSize).ToList();
+                    totalDeleted += ExecutePurgeChunk(chunk, olderThan);
+                }
+            }
+            else
+            {
+                totalDeleted = ExecutePurgeChunk(null, olderThan);
+            }
+
+            return new ValueTask<int>(totalDeleted);
+        }
+    }
+
+    /// <inheritdoc />
     public ValueTask<LogbookCounts> GetCountsAsync()
     {
         lock (_lock)
@@ -609,6 +641,36 @@ public sealed class SqliteStorage : IEngineStorage, ILogbookStore, ILookupSnapsh
         cmd.CommandText = $"PRAGMA {pragma} = {value}";
 #pragma warning restore CA2100
         cmd.ExecuteNonQuery();
+    }
+
+    private int ExecutePurgeChunk(List<string>? localIds, DateTimeOffset? olderThan)
+    {
+        using var cmd = _connection.CreateCommand();
+        var sql = "DELETE FROM qsos WHERE deleted_at_ms IS NOT NULL";
+
+        if (localIds is not null)
+        {
+            var paramNames = new List<string>(localIds.Count);
+            for (var i = 0; i < localIds.Count; i++)
+            {
+                var paramName = string.Create(CultureInfo.InvariantCulture, $"$id{i}");
+                paramNames.Add(paramName);
+                cmd.Parameters.AddWithValue(paramName, localIds[i]);
+            }
+
+            sql += $" AND local_id IN ({string.Join(", ", paramNames)})";
+        }
+
+        if (olderThan is { } cutoff)
+        {
+            sql += " AND deleted_at_ms <= $older_than_ms";
+            cmd.Parameters.AddWithValue("$older_than_ms", cutoff.ToUnixTimeMilliseconds());
+        }
+
+#pragma warning disable CA2100 // SQL is built from controlled parameter names, all user input is parameterized
+        cmd.CommandText = sql;
+#pragma warning restore CA2100
+        return cmd.ExecuteNonQuery();
     }
 
     private void ThrowIfDisposed()

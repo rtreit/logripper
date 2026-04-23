@@ -373,6 +373,61 @@ internal sealed partial class RecentQsoListViewModel : ObservableObject
         DeleteConfirmCallsign = string.Empty;
     }
 
+    [ObservableProperty]
+    private bool _isPurgePending;
+
+    [ObservableProperty]
+    private string _purgeConfirmText = string.Empty;
+
+    [RelayCommand]
+    internal void RequestPurge()
+    {
+        IsPurgePending = true;
+        PurgeConfirmText = string.Empty;
+    }
+
+    [RelayCommand]
+    private void CancelPurge()
+    {
+        IsPurgePending = false;
+        PurgeConfirmText = string.Empty;
+    }
+
+    [RelayCommand]
+    internal async Task ConfirmPurgeAsync()
+    {
+        if (!string.Equals(PurgeConfirmText, "YES", StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        IsPurgePending = false;
+        PurgeConfirmText = string.Empty;
+
+        try
+        {
+            var response = await _engine.PurgeDeletedQsosAsync();
+            if (response.PurgedCount > 0)
+            {
+                ErrorMessage = $"Purged {response.PurgedCount} deleted QSO(s).";
+            }
+            else
+            {
+                ErrorMessage = "No deleted QSOs to purge.";
+            }
+
+            NotifyStatusPropertiesChanged();
+            await RefreshAsync();
+        }
+        catch (RpcException ex)
+        {
+            ErrorMessage = string.IsNullOrWhiteSpace(ex.Status.Detail)
+                ? $"Purge failed ({ex.StatusCode})."
+                : ex.Status.Detail;
+            NotifyStatusPropertiesChanged();
+        }
+    }
+
     [RelayCommand]
     private void ZoomIn()
     {

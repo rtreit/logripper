@@ -41,10 +41,11 @@ use qsoripper_core::proto::qsoripper::services::{
     GetRigStatusResponse, GetRuntimeConfigRequest, GetRuntimeConfigResponse, GetSyncStatusRequest,
     GetSyncStatusResponse, ImportAdifRequest, ImportAdifResponse, ListQsosRequest,
     ListQsosResponse, LogQsoRequest, LogQsoResponse, LookupRequest, LookupResponse,
-    QsoSortOrder as ProtoQsoSortOrder, RefreshSpaceWeatherRequest, RefreshSpaceWeatherResponse,
-    ResetRuntimeConfigRequest, ResetRuntimeConfigResponse, RestoreQsoRequest, RestoreQsoResponse,
-    StreamLookupRequest, StreamLookupResponse, SyncWithQrzRequest, SyncWithQrzResponse,
-    TestRigConnectionRequest, TestRigConnectionResponse, UpdateQsoRequest, UpdateQsoResponse,
+    PurgeDeletedQsosRequest, PurgeDeletedQsosResponse, QsoSortOrder as ProtoQsoSortOrder,
+    RefreshSpaceWeatherRequest, RefreshSpaceWeatherResponse, ResetRuntimeConfigRequest,
+    ResetRuntimeConfigResponse, RestoreQsoRequest, RestoreQsoResponse, StreamLookupRequest,
+    StreamLookupResponse, SyncWithQrzRequest, SyncWithQrzResponse, TestRigConnectionRequest,
+    TestRigConnectionResponse, UpdateQsoRequest, UpdateQsoResponse,
 };
 use qsoripper_core::rig_control::{
     RigControlProvider, RigctldConfig, RigctldProvider, DEFAULT_RIGCTLD_HOST, DEFAULT_RIGCTLD_PORT,
@@ -480,6 +481,56 @@ impl LogbookService for DeveloperLogbookService {
         }))
     }
 
+    async fn purge_deleted_qsos(
+        &self,
+        request: Request<PurgeDeletedQsosRequest>,
+    ) -> Result<Response<PurgeDeletedQsosResponse>, Status> {
+        let engine = self.runtime_config.logbook_engine().await;
+        let request = request.into_inner();
+
+        // Safety latch: require explicit confirmation.
+        if !request.confirm {
+            return Err(Status::invalid_argument(
+                "PurgeDeletedQsos requires confirm=true to proceed.",
+            ));
+        }
+
+        // Sync gating: hold the sync lock across the entire purge so that
+        // no sync can start between the check and the storage DELETE.
+        let sync_guard = self.sync_scheduler.sync_guard().await;
+        if *sync_guard {
+            return Err(Status::failed_precondition(
+                "Cannot purge while a sync is in progress.",
+            ));
+        }
+
+        let older_than = request.older_than;
+
+        // When include_pending_remote_deletes is true, we need to push
+        // QRZ deletes first. For the initial implementation, we skip the
+        // remote-delete flow and treat it as a local-only purge. Rows
+        // with pending_remote_delete=true are included in the purge
+        // regardless — the operator chose to purge locally.
+        //
+        // A follow-up can wire up the remote delete flow when QRZ
+        // adapter access is available at this layer.
+
+        let purged = engine
+            .purge_deleted_qsos(&request.local_ids, older_than)
+            .await
+            .map_err(map_logbook_error)?;
+
+        // Release sync guard after purge completes.
+        drop(sync_guard);
+
+        Ok(Response::new(PurgeDeletedQsosResponse {
+            purged_count: purged,
+            remote_deletes_pushed: 0,
+            remote_deletes_failed: 0,
+            error_summary: String::new(),
+        }))
+    }
+
     async fn get_qso(
         &self,
         request: Request<GetQsoRequest>,
@@ -815,6 +866,7 @@ const RUST_ENGINE_CAPABILITIES: &[&str] = &[
     "runtime-config",
     "rig-control",
     "space-weather",
+    "purge",
 ];
 
 #[derive(Debug, Default)]

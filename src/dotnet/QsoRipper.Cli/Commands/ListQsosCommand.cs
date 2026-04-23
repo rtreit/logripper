@@ -92,6 +92,11 @@ internal static class ListQsosCommand
             header += $" {"Comment",-40}";
         }
 
+        if (options.ShowDeletedAt)
+        {
+            header += $" {"Deleted",-22} {"Pending QRZ Delete",-18}";
+        }
+
         Console.WriteLine(header);
         Console.WriteLine(new string('-', header.Length));
     }
@@ -133,6 +138,13 @@ internal static class ListQsosCommand
             row += $" {FormatCommentPreview(qso),-40}";
         }
 
+        if (options.ShowDeletedAt)
+        {
+            var deletedAt = qso.DeletedAt is not null ? qso.DeletedAt.ToDateTime().ToString("u") : "";
+            var pendingRemoteDelete = qso.PendingRemoteDelete ? "yes" : "";
+            row += $" {deletedAt,-22} {pendingRemoteDelete,-18}";
+        }
+
         Console.WriteLine(row);
     }
 
@@ -141,6 +153,9 @@ internal static class ListQsosCommand
         request = new ListQsosRequest { Limit = 20 };
         displayOptions = new ListDisplayOptions();
         error = null;
+
+        var hasDeleted = false;
+        var hasIncludeDeleted = false;
 
         for (var i = 0; i < args.Length; i++)
         {
@@ -157,6 +172,12 @@ internal static class ListQsosCommand
                     break;
                 case "--show-duration":
                     displayOptions.ShowDuration = true;
+                    break;
+                case "--deleted":
+                    hasDeleted = true;
+                    break;
+                case "--include-deleted":
+                    hasIncludeDeleted = true;
                     break;
                 case "--callsign" when i < args.Length - 1:
                     request.CallsignFilter = args[++i].ToUpperInvariant();
@@ -239,6 +260,23 @@ internal static class ListQsosCommand
             }
         }
 
+        if (hasDeleted && hasIncludeDeleted)
+        {
+            error = "--deleted and --include-deleted cannot be combined. Use --deleted for trash-only or --include-deleted for all records.";
+            return false;
+        }
+
+        if (hasDeleted)
+        {
+            request.DeletedFilter = DeletedRecordsFilter.DeletedOnly;
+            displayOptions.ShowDeletedAt = true;
+        }
+        else if (hasIncludeDeleted)
+        {
+            request.DeletedFilter = DeletedRecordsFilter.All;
+            displayOptions.ShowDeletedAt = true;
+        }
+
         return true;
     }
 
@@ -300,4 +338,6 @@ internal sealed class ListDisplayOptions
     public bool ShowId { get; set; }
 
     public bool ShowRst { get; set; }
+
+    public bool ShowDeletedAt { get; set; }
 }

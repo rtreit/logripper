@@ -131,6 +131,7 @@ The primary QSO CRUD and sync surface. This is the most critical service in the 
 | `LogQso` | `LogQsoRequest` | `LogQsoResponse` | Unary |
 | `UpdateQso` | `UpdateQsoRequest` | `UpdateQsoResponse` | Unary |
 | `DeleteQso` | `DeleteQsoRequest` | `DeleteQsoResponse` | Unary |
+| `RestoreQso` | `RestoreQsoRequest` | `RestoreQsoResponse` | Unary |
 | `GetQso` | `GetQsoRequest` | `GetQsoResponse` | Unary |
 | `ListQsos` | `ListQsosRequest` | `stream ListQsosResponse` | Server-streaming |
 | `SyncWithQrz` | `SyncWithQrzRequest` | `stream SyncWithQrzResponse` | Server-streaming |
@@ -230,6 +231,21 @@ The sync follows a three-phase lifecycle:
 3. **Metadata phase** — Update the `sync_metadata` record with the current QRZ QSO count, last sync timestamp, and logbook owner callsign.
 
 Stream progress messages throughout all phases so clients can display real-time sync state.
+
+**Response fields (`SyncWithQrzResponse`):**
+
+| Field | Type | Description |
+|---|---|---|
+| `total_records` | `uint32` | Total records in scope for the sync pass. |
+| `processed_records` | `uint32` | Records processed so far. |
+| `uploaded_records` | `uint32` | Records successfully uploaded to QRZ. |
+| `downloaded_records` | `uint32` | Records downloaded (inserted or merged) from QRZ. |
+| `conflict_records` | `uint32` | Records flagged for conflict resolution. |
+| `current_action` | `string` (optional) | Human-readable status string for progress display. |
+| `complete` | `bool` | `true` on the terminal message; `false` on intermediate progress. |
+| `error` | `string` (optional) | Accumulated error summary if any phase encountered failures. |
+| `remote_deletes_pushed` | `uint32` | Number of pending remote deletes successfully pushed to QRZ (Phase 2.5). |
+| `deletes_skipped_remote` | `uint32` | Number of download records skipped because they matched a soft-deleted local row (Phase 1). |
 
 **Error semantics:**
 - `FAILED_PRECONDITION` — QRZ logbook credentials not configured.
@@ -1289,6 +1305,64 @@ Storage backends MUST persist both fields and MUST default `deleted_at` to null 
 
 - Sync Phase 1 (download) MUST skip a remote row whose `qrz_logid` matches a soft-deleted local row. The local user's delete intent wins. The sync summary SHOULD report skipped count.
 - Sync Phase 2 (upload) MUST, after the normal upload pass, iterate rows where `pending_remote_delete = true`, call QRZ `ACTION=DELETE&KEY=…&LOGID=…`, and on success or HTTP 404 ("logid not found") clear both `qrz_logid` and `pending_remote_delete` while leaving `deleted_at` set. On other failures, leave the flags and surface the error in the sync summary.
+- Permanent purge of soft-deleted rows is handled by `PurgeDeletedQsos` (§7.9), which reuses the Phase 2 remote delete flow when `include_pending_remote_deletes = true`.
+
+---
+
+### 7.9 Purge Deleted QSOs
+
+`PurgeDeletedQsos` permanently removes soft-deleted rows from local storage ("empty trash"). This is a destructive, non-recoverable operation that is intentionally distinct from the recoverable `DeleteQso`.
+
+#### Contract
+
+- Request: `PurgeDeletedQsosRequest` with `local_ids`, `older_than`, `include_pending_remote_deletes`, and `confirm`.
+- Response: `PurgeDeletedQsosResponse` with `purged_count`, `remote_deletes_pushed`, `remote_deletes_failed`, and `error_summary`.
+
+#### Preconditions
+
+1. `confirm` MUST be `true`. If `false`, the engine MUST return `INVALID_ARGUMENT`.
+2. The engine MUST return `FAILED_PRECONDITION` if a sync is currently in progress. Purging a row mid-sync is racy and could lead to inconsistent state.
+
+#### Eligibility
+
+Only rows with `deleted_at IS NOT NULL` are eligible for purge. Rows that are not soft-deleted MUST be silently ignored (never purged).
+
+- If `local_ids` is non-empty, only those IDs are eligible (still must be soft-deleted).
+- If `older_than` is set, only rows with `deleted_at <= older_than` are eligible.
+- If both filters are set, both must match (AND semantics).
+- If both are empty/unset, all soft-deleted rows are purged.
+
+#### Remote delete behavior
+
+When `include_pending_remote_deletes = true`:
+
+1. Before the local hard-delete, the engine MUST iterate eligible rows that have `pending_remote_delete = true` and a non-empty `qrz_logid`.
+2. For each such row, the engine SHOULD issue a QRZ `ACTION=DELETE` call using the same flow as sync Phase 2 (§7.3).
+3. On success or HTTP 404 ("logid not found"): count toward `remote_deletes_pushed`. The row is then eligible for local purge.
+4. On other failures: count toward `remote_deletes_failed`. The row MUST NOT be purged locally; the operator can retry.
+5. If QRZ is not configured: rows needing remote deletes are counted as failed and are not purged locally.
+
+When `include_pending_remote_deletes = false`:
+
+- The engine skips the remote delete entirely. Rows with `pending_remote_delete = true` are purged locally regardless. The remote QSO on QRZ survives — this is the operator's explicit choice.
+
+#### Storage operation
+
+The engine delegates to a `purge_deleted_qsos` storage path that performs `DELETE FROM qsos WHERE deleted_at IS NOT NULL` (with the applicable ID and timestamp filters). This is a physical row removal, not a soft-delete.
+
+#### Idempotency
+
+Purging an already-purged row (or a non-existent ID) is a no-op: `purged_count` simply does not include it. There is no error.
+
+#### Sync metadata
+
+The engine MUST NOT attempt to adjust `qrz_qso_count` or other sync metadata inline during a purge. The next `SyncWithQrz` will recompute the remote count via QRZ `STATUS` naturally. This avoids drift from partial remote-delete results.
+
+#### Cross-references
+
+- Soft-delete semantics: §7.8
+- Sync Phase 2 remote delete flow: §7.3
+- Storage trait: `purge_deleted_qsos` on `LogbookStore` / `ILogbookStore`
 
 ---
 
@@ -1325,6 +1399,7 @@ Both engines currently report the following capabilities:
 | `runtime-config` | Runtime configuration updates |
 | `rig-control` | rigctld integration |
 | `space-weather` | NOAA space weather data |
+| `purge` | Permanent removal of soft-deleted QSOs (§7.9) |
 
 > **Note:** Earlier drafts listed aspirational names (`sync`, `rig_control`, `stress`, `adif_import`, `adif_export`) that were never adopted. The canonical names above use kebab-case and match what both engines actually report. New capabilities should follow this convention.
 
@@ -1471,3 +1546,4 @@ The following gaps are documented tracking items. They do not affect the normati
 - **.NET engine — `SyncWithQrz` streaming granularity.** The .NET engine currently produces a single terminal `SyncWithQrzResponse` instead of per-phase progress messages. Matches the spec's RPC signature but loses UI progress fidelity vs. the Rust engine.
 - **.NET engine — QRZ ADIF field coverage.** The .NET `AdifCodec` does not yet parse/emit every QRZ-specific field the Rust mapper covers (e.g., `ARRL_SECT`, SKCC, QSL/LOTW/EQSL date and flag variants, `MY_LAT`/`MY_LON`, `MY_ARRL_SECT`, `MY_CQ_ZONE`/`MY_ITU_ZONE`). Missing fields round-trip via `extra_fields` today, but should graduate to dedicated domain columns.
 - **.NET engine — per-operation `sync_to_qrz=true` on `LogQso`/`UpdateQso`.** `ManagedEngineState.LogQso`/`UpdateQso` run inside a synchronous lock and do not yet issue the per-op QRZ HTTP call. Currently returns either a placeholder logid (when configured) or a `sync_error`. Reaching parity requires moving the HTTP call out of the lock (likely making the handlers async). The Rust engine implements this fully via `sync::sync_single_qso`. See §7.3 "Per-Operation Sync".
+- **Both engines — `PurgeDeletedQsos` remote-delete-first flow.** When `include_pending_remote_deletes = true`, the purge handler should push QRZ `ACTION=DELETE` for qualifying rows before the local hard-delete. The initial implementation purges locally without the remote-delete pass. See §7.9.

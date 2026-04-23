@@ -19,6 +19,7 @@
 #include <stdint.h>
 #include "qsoripper_ffi.h"
 #include "backend_ffi_gate.h"
+#include "json_parser.h"
 #include "app.h"
 
 /* ── Compile-time settings ─────────────────────────────────────────────── */
@@ -475,102 +476,6 @@ static double freq_parse_mhz(const char *s)
         return 0.0;
     }
     return atof(s);
-}
-
-/* ── Minimal JSON value extractor (no dependency) ──────────────────────── */
-
-/* Finds "key": "value" or "key": number in a JSON string.
-   Returns a malloc'd string with the value, or NULL.  */
-static char *json_get_string(const char *json, const char *key)
-{
-    if (!json || !key) return NULL;
-    char pattern[128];
-    snprintf(pattern, sizeof(pattern), "\"%s\"", key);
-    const char *p = strstr(json, pattern);
-    if (!p) return NULL;
-    p += strlen(pattern);
-    while (*p == ' ' || *p == ':') p++;
-    if (*p == '"') {
-        p++;
-        const char *end = p;
-        while (*end && *end != '"') {
-            if (*end == '\\' && *(end + 1)) end++;
-            end++;
-        }
-        size_t len = (size_t)(end - p);
-        char *val = (char *)malloc(len + 1);
-        if (!val) return NULL;
-        memcpy(val, p, len);
-        val[len] = 0;
-        return val;
-    }
-    /* Numeric or boolean value */
-    const char *end = p;
-    while (*end && *end != ',' && *end != '}' && *end != ']' && *end != '\n') end++;
-    size_t len = (size_t)(end - p);
-    while (len > 0 && (p[len - 1] == ' ' || p[len - 1] == '\r')) len--;
-    char *val = (char *)malloc(len + 1);
-    if (!val) return NULL;
-    memcpy(val, p, len);
-    val[len] = 0;
-    return val;
-}
-
-static double json_get_double(const char *json, const char *key, double dflt)
-{
-    char *v = json_get_string(json, key);
-    if (!v) return dflt;
-    double r = atof(v);
-    free(v);
-    return r;
-}
-
-static int json_get_int(const char *json, const char *key, int dflt)
-{
-    char *v = json_get_string(json, key);
-    if (!v) return dflt;
-    int r = atoi(v);
-    free(v);
-    return r;
-}
-
-static const char *json_array_nth(const char *json, int n)
-{
-    const char *p = strchr(json, '[');
-    if (!p) return NULL;
-    p++;
-    int depth = 0, idx = 0;
-    for (; *p; p++) {
-        if (*p == '{') {
-            if (depth == 0 && idx == n) return p;
-            depth++;
-        } else if (*p == '}') {
-            depth--;
-        } else if (*p == ',' && depth == 0) {
-            idx++;
-        } else if (*p == ']' && depth == 0) {
-            break;
-        }
-    }
-    return NULL;
-}
-
-static char *json_extract_object(const char *start)
-{
-    if (!start || *start != '{') return NULL;
-    int depth = 0;
-    const char *p = start;
-    for (; *p; p++) {
-        if (*p == '{') depth++;
-        else if (*p == '}') { depth--; if (depth == 0) break; }
-    }
-    if (depth != 0) return NULL;
-    size_t len = (size_t)(p - start + 1);
-    char *obj = (char *)malloc(len + 1);
-    if (!obj) return NULL;
-    memcpy(obj, start, len);
-    obj[len] = 0;
-    return obj;
 }
 
 /* ── CLI runner: execute `qr <args>` and capture stdout ────────────────── */

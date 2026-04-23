@@ -13,4 +13,8 @@ message SyncWithQrzResponse {
   optional string current_action = 6;  // Human-readable status
   bool complete = 7;
   optional string error = 8;
+  // Number of pending remote deletes successfully pushed to QRZ (Phase 2.5).
+  uint32 remote_deletes_pushed = 9;
+  // Number of QRZ download records skipped because they matched a soft-deleted local row (Phase 1).
+  uint32 deletes_skipped_remote = 10;
 }

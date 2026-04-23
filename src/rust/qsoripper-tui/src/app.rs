@@ -43,6 +43,8 @@ pub(crate) enum View {
     Help,
     /// Confirmation dialog before deleting a QSO.
     ConfirmDeleteQso,
+    /// Confirmation dialog before purging all soft-deleted QSOs.
+    ConfirmPurge,
 }
 
 /// Resolved callsign information from a QRZ lookup (used for field auto-population).
@@ -85,6 +87,8 @@ pub(crate) struct RecentQso {
     pub(crate) grid: Option<String>,
     /// Worked operator name.
     pub(crate) name: Option<String>,
+    /// Calculated QSO duration (e.g. "2m 35s"), or `None` when end time is absent.
+    pub(crate) duration: Option<String>,
     /// Full proto record from the engine, preserved for lossless round-trip during edits.
     pub(crate) source_record: QsoRecord,
 }
@@ -354,6 +358,7 @@ mod tests {
             country: None,
             grid: None,
             name: None,
+            duration: None,
             source_record: QsoRecord {
                 local_id: id.to_string(),
                 worked_callsign: callsign.to_string(),
@@ -575,6 +580,7 @@ mod tests {
             country: Some("United States".to_string()),
             grid: Some("CN87".to_string()),
             name: Some("John".to_string()),
+            duration: None,
             source_record: QsoRecord::default(),
         };
         assert!(qso.matches_search("40m"));
@@ -604,6 +610,7 @@ mod tests {
             country: None,
             grid: None,
             name: None,
+            duration: None,
             source_record: QsoRecord::default(),
         };
         assert!(!qso.matches_search("united"));

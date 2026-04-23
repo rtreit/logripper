@@ -180,6 +180,15 @@ internal sealed class StorageWorkbenchService
         }
     }
 
+    public async Task<PurgeDeletedQsosResponse> PurgeDeletedQsosAsync(CancellationToken cancellationToken = default)
+    {
+        var client = _clientFactory.CreateLogbookClient();
+
+        return await client.PurgeDeletedQsosAsync(
+            new PurgeDeletedQsosRequest { Confirm = true },
+            cancellationToken: cancellationToken);
+    }
+
     internal static QsoRecord BuildUpdatedQso(QsoRecord source)
     {
         ArgumentNullException.ThrowIfNull(source);

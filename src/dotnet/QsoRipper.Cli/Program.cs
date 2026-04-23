@@ -57,6 +57,8 @@ try
             "list" => await ListQsosCommand.RunAsync(channel, arguments.RemainingArgs, arguments.JsonOutput, cancellationSource.Token),
             "update" => await UpdateQsoCommand.RunAsync(channel, arguments.Callsign!, arguments.RemainingArgs),
             "delete" => await DeleteQsoCommand.RunAsync(channel, arguments.Callsign!),
+            "restore" => await RestoreQsoCommand.RunAsync(channel, arguments.Callsign!),
+            "purge" => await PurgeCommand.RunAsync(channel, arguments.RemainingArgs),
             "import" => await ImportAdifCommand.RunAsync(channel, arguments.Callsign ?? arguments.RemainingArgs.FirstOrDefault() ?? "", arguments.Refresh, cancellationSource.Token),
             "export" => await ExportAdifCommand.RunAsync(channel, arguments.RemainingArgs, cancellationSource.Token),
             "config" => await ConfigCommand.RunAsync(channel, arguments.RemainingArgs, arguments.JsonOutput),

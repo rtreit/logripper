@@ -183,6 +183,13 @@ impl SyncScheduler {
         *self.is_syncing.lock().await
     }
 
+    /// Return a guard holding the `is_syncing` lock. While the guard is held,
+    /// the sync loop cannot flip the flag, providing mutual exclusion for
+    /// operations that must not overlap with sync (e.g., purge).
+    pub(crate) async fn sync_guard(&self) -> tokio::sync::MutexGuard<'_, bool> {
+        self.is_syncing.lock().await
+    }
+
     pub(crate) async fn last_error(&self) -> Option<String> {
         self.last_error.lock().await.clone()
     }

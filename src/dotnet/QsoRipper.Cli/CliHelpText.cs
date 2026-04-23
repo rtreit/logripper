@@ -14,7 +14,9 @@ internal static class CliHelpText
               get <local-id>                   Get a QSO by ID
               list [filters]                   List QSOs (--callsign, --band, --mode, --limit)
               update <local-id> [fields]       Update a QSO (--grid, --freq, --enrich, etc.)
-              delete <local-id>                Delete a QSO
+              delete <local-id>                Soft-delete a QSO (recoverable via restore)
+              restore <local-id>               Restore a soft-deleted QSO
+              purge [options]                  Permanently delete soft-deleted QSOs
 
             ADIF:
               import <file>                    Import QSOs from an ADIF file
@@ -85,7 +87,7 @@ internal static class CliHelpText
             "list" => """
                 Usage: list [options]
 
-                List QSOs with optional filters.
+                List QSOs with optional filters. By default shows only active (non-deleted) QSOs.
 
                   --callsign <call>    Filter by worked callsign
                   --band <band>        Filter by band (e.g., 20m)
@@ -96,6 +98,8 @@ internal static class CliHelpText
                   --show-id            Include the QSO local ID column
                   --show-rst           Include RST sent/received columns
                   --show-comment       Include comment/notes column (default)
+                  --deleted            Show only soft-deleted QSOs (trash view)
+                  --include-deleted    Show all QSOs including soft-deleted ones
                 """,
             "update" => """
                 Usage: update <local-id> [options]
@@ -122,7 +126,36 @@ internal static class CliHelpText
             "delete" => """
                 Usage: delete <local-id>
 
-                Delete a QSO by its local ID.
+                Soft-delete a QSO by its local ID. The QSO is moved to trash and hidden from
+                normal list output, but remains recoverable via the restore command until purged.
+                Use --show-id on the list command to find local IDs.
+                """,
+            "restore" => """
+                Usage: restore <local-id>
+
+                Restore a soft-deleted QSO by its local ID. Clears deleted_at and cancels any
+                pending remote delete so the QSO reappears in normal list output.
+                If the QRZ copy was already deleted, the QSO is re-queued for upload on the
+                next sync. Use list --deleted --show-id to find local IDs of trashed QSOs.
+                """,
+            "purge" => """
+                Usage: purge [options]
+
+                Permanently remove soft-deleted QSOs from storage ("empty trash").
+                This is non-recoverable. By default, prompts for confirmation.
+
+                  --older-than <duration>    Only purge QSOs deleted before this duration
+                                             (e.g., 7.days, 30.days, 1.hours)
+                  --ids <id1,id2,...>         Only purge specific local IDs (comma-separated)
+                  --include-pending-remote-deletes
+                                             Include QSOs with pending QRZ remote deletes
+                  --confirm                  Skip interactive confirmation prompt
+
+                Examples:
+                  purge                              Purge all deleted QSOs (with confirmation)
+                  purge --older-than 30.days         Purge QSOs deleted more than 30 days ago
+                  purge --ids abc123,def456          Purge specific QSOs
+                  purge --confirm                    Skip confirmation prompt
                 """,
             "import" => """
                 Usage: import <file-path> [--refresh]
@@ -204,7 +237,8 @@ internal static class CliHelpText
             "sync" => """
                 Usage: sync [--force]
 
-                Trigger a sync with the QRZ logbook. Shows streaming progress updates.
+                Trigger a sync with the QRZ logbook. Shows streaming progress updates and
+                a summary including downloaded, uploaded, conflict, and delete counters.
 
                   --force              Run a full sync instead of incremental
                 """,

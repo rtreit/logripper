@@ -6,6 +6,7 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 
 add_executable(qsoripper-win32 WIN32
     src/main.c
+    src/json_parser.c
     src/backend_ffi_gate.c
     resources/app.rc
 )
@@ -60,6 +61,23 @@ add_test(
     COMMAND qsoripper-win32-backend-lifetime-tests
 )
 
+add_executable(qsoripper-win32-json-parser-tests
+    tests/json_parser_tests.c
+    src/json_parser.c
+)
+target_include_directories(qsoripper-win32-json-parser-tests PRIVATE
+    ${FFI_INCLUDE}
+)
+if(MSVC)
+    target_compile_options(qsoripper-win32-json-parser-tests PRIVATE /W4 /WX)
+else()
+    target_compile_options(qsoripper-win32-json-parser-tests PRIVATE -Wall -Wextra)
+endif()
+add_test(
+    NAME qsoripper-win32-json-parser-tests
+    COMMAND qsoripper-win32-json-parser-tests
+)
+
 # cppcheck static analysis
 find_program(CPPCHECK_EXE NAMES cppcheck)
 if(CPPCHECK_EXE)
@@ -83,6 +101,7 @@ if(BUILD_TESTING)
     add_executable(qsoripper-win32-cli-exitcode-regression
         tests/cli_exit_code_regression.c
         src/main.c
+        src/json_parser.c
         src/backend_ffi_gate.c
     )
 
@@ -111,6 +130,7 @@ if(BUILD_TESTING)
     add_executable(qsoripper-win32-issue-regressions
         tests/win32_issue_regressions.c
         src/main.c
+        src/json_parser.c
         src/backend_ffi_gate.c
     )
     target_include_directories(qsoripper-win32-issue-regressions PRIVATE ${FFI_INCLUDE} ${WIN32_RES_DIR})

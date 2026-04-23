@@ -5,6 +5,7 @@ use chrono::{NaiveDate, NaiveDateTime, NaiveTime};
 use tonic::transport::{Channel, Endpoint};
 
 use qsoripper_core::domain::band::{band_from_adif, band_to_adif};
+use qsoripper_core::domain::duration::format_qso_duration;
 use qsoripper_core::domain::mode::{mode_from_adif, mode_to_adif};
 use qsoripper_core::proto::qsoripper::domain::{Band, LookupState, Mode, RstReport};
 use qsoripper_core::proto::qsoripper::services::{
@@ -12,7 +13,7 @@ use qsoripper_core::proto::qsoripper::services::{
     rig_control_service_client::RigControlServiceClient,
     space_weather_service_client::SpaceWeatherServiceClient, DeleteQsoRequest,
     GetCurrentSpaceWeatherRequest, GetRigSnapshotRequest, ListQsosRequest, LogQsoRequest,
-    LookupRequest, UpdateQsoRequest,
+    LookupRequest, PurgeDeletedQsosRequest, UpdateQsoRequest,
 };
 
 use crate::app::{CallsignInfo, RecentQso, RigInfo, RigStatus, SpaceWeatherInfo};
@@ -158,6 +159,7 @@ pub(crate) async fn list_recent_qsos(
             country: qso.worked_country.clone(),
             grid: qso.worked_grid.clone(),
             name: qso.worked_operator_name.clone(),
+            duration: format_qso_duration(&qso),
             source_record: qso,
         });
     }
@@ -387,6 +389,19 @@ pub(crate) async fn delete_qso(channel: Channel, local_id: &str) -> anyhow::Resu
     };
     client.delete_qso(request).await?;
     Ok(())
+}
+
+/// Permanently purge all soft-deleted QSOs and return the number of records removed.
+pub(crate) async fn purge_deleted_qsos(channel: Channel) -> anyhow::Result<u32> {
+    let mut client = LogbookServiceClient::new(channel);
+    let request = PurgeDeletedQsosRequest {
+        local_ids: vec![],
+        older_than: None,
+        include_pending_remote_deletes: false,
+        confirm: true,
+    };
+    let response = client.purge_deleted_qsos(request).await?.into_inner();
+    Ok(response.purged_count)
 }
 
 /// Convert a frequency in MHz to Hz as a `u64`.
