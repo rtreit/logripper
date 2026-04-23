@@ -188,15 +188,15 @@ fn draw(f: &mut ratatui::Frame, capture: &LiveCapture, state: &Arc<Mutex<AppStat
 fn draw_header(f: &mut ratatui::Frame, area: Rect, s: &AppState) {
     let pitch = s
         .pitch
-        .map(|p| format!("{:.0} Hz", p))
+        .map(|p| format!("{p:.0} Hz"))
         .unwrap_or_else(|| "—".into());
     let raw = s
         .wpm
-        .map(|w| format!("{:.0}", w))
+        .map(|w| format!("{w:.0}"))
         .unwrap_or_else(|| "—".into());
     let smooth = s
         .wpm_smoothed
-        .map(|w| format!("{:.0}", w))
+        .map(|w| format!("{w:.0}"))
         .unwrap_or_else(|| "—".into());
     let line = Line::from(vec![
         Span::styled(
@@ -264,7 +264,7 @@ fn draw_wpm(f: &mut ratatui::Frame, area: Rect, s: &AppState) {
     let wpm = s.wpm_smoothed.unwrap_or(0.0).clamp(0.0, 50.0);
     let ratio = (wpm / 50.0) as f64;
     let label = if let Some(w) = s.wpm_smoothed {
-        format!("{:.0} WPM (smoothed)", w)
+        format!("{w:.0} WPM (smoothed)")
     } else {
         "— WPM".to_string()
     };

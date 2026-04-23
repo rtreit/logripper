@@ -483,7 +483,11 @@ fn sort_sweep_summaries(summaries: &mut [SweepSummary]) {
                     .unwrap_or(std::cmp::Ordering::Equal)
             })
             .then_with(|| a.cfg.decode_every_ms.cmp(&b.cfg.decode_every_ms))
-            .then_with(|| a.cfg.required_confirmations.cmp(&b.cfg.required_confirmations))
+            .then_with(|| {
+                a.cfg
+                    .required_confirmations
+                    .cmp(&b.cfg.required_confirmations)
+            })
     });
 }
 
@@ -537,7 +541,11 @@ fn build_refined_sweep_configs(
     seen: &mut HashSet<(i32, i32, u32, usize)>,
 ) -> Vec<CausalBaselineConfig> {
     let seed_limit = if wide { 2 } else { 1 };
-    let window_deltas: &[f32] = if wide { &[-2.0, -1.0, 1.0, 2.0] } else { &[-1.0, 1.0] };
+    let window_deltas: &[f32] = if wide {
+        &[-2.0, -1.0, 1.0, 2.0]
+    } else {
+        &[-1.0, 1.0]
+    };
     let min_deltas: &[f32] = if wide {
         &[-0.5, -0.25, 0.25, 0.5]
     } else {
@@ -587,8 +595,13 @@ fn build_refined_sweep_configs(
             );
         }
 
-        for &(window_delta, min_delta) in &[(-1.0, -0.25), (-1.0, 0.25), (1.0, -0.25), (1.0, 0.25)] {
-            let scaled_window_delta = if wide { window_delta * 2.0 } else { window_delta };
+        for &(window_delta, min_delta) in &[(-1.0, -0.25), (-1.0, 0.25), (1.0, -0.25), (1.0, 0.25)]
+        {
+            let scaled_window_delta = if wide {
+                window_delta * 2.0
+            } else {
+                window_delta
+            };
             let scaled_min_delta = if wide { min_delta * 2.0 } else { min_delta };
             push_sweep_config(
                 &mut configs,
@@ -604,9 +617,13 @@ fn build_refined_sweep_configs(
         }
 
         for &(every_delta, confirmation_delta) in &[(-1, -1), (-1, 1), (1, -1), (1, 1)] {
-            let scaled_every_delta = if wide { every_delta * 250 } else { every_delta * 100 };
-            let confirmations = (base.required_confirmations as isize + confirmation_delta)
-                .clamp(1, 6) as usize;
+            let scaled_every_delta = if wide {
+                every_delta * 250
+            } else {
+                every_delta * 100
+            };
+            let confirmations =
+                (base.required_confirmations as isize + confirmation_delta).clamp(1, 6) as usize;
             push_sweep_config(
                 &mut configs,
                 seen,
@@ -1120,8 +1137,7 @@ fn parse_streaming_decoder_config(args: &[String]) -> DecoderConfig {
             .unwrap_or(cw_decoder_poc::streaming::DEFAULT_RANGE_LOCK_MAX_HZ),
         min_tone_purity: arg_value_f32(args, "--min-tone-purity")
             .unwrap_or(cw_decoder_poc::streaming::DEFAULT_MIN_TONE_PURITY),
-        force_pitch_hz: arg_value_f32(args, "--force-pitch-hz")
-            .filter(|x| *x > 0.0),
+        force_pitch_hz: arg_value_f32(args, "--force-pitch-hz").filter(|x| *x > 0.0),
         wide_bin_count: arg_value_f32(args, "--wide-bin-count")
             .map(|x| x.clamp(0.0, 16.0) as u8)
             .unwrap_or(0),
@@ -1147,43 +1163,6 @@ fn arg_value_usize(args: &[String], key: &str) -> Option<usize> {
     args.windows(2)
         .find(|w| w[0] == key)
         .and_then(|w| w[1].parse::<usize>().ok())
-}
-
-#[cfg(test)]
-mod label_eval_tests {
-    use super::{classify_failure, extract_transcript_delta};
-
-    #[test]
-    fn extract_transcript_delta_removes_prefix_tokens() {
-        assert_eq!(
-            extract_transcript_delta("QST QST", "QST QST QST DE W1AW"),
-            "QST DE W1AW"
-        );
-    }
-
-    #[test]
-    fn extract_transcript_delta_handles_overlap() {
-        assert_eq!(
-            extract_transcript_delta("QST QST QST", "QST DE W1AW"),
-            "DE W1AW"
-        );
-    }
-
-    #[test]
-    fn classify_failure_detects_spacing_only() {
-        assert_eq!(
-            classify_failure("N6ZO 5NN 5", "N6ZO5NN5", 2, 0.2),
-            "spacing_only_error"
-        );
-    }
-
-    #[test]
-    fn classify_failure_detects_leading_edge() {
-        assert_eq!(
-            classify_failure("QST QST QST", "TUST QST QST", 1, 0.09),
-            "leading_edge_error"
-        );
-    }
 }
 
 fn build_suite() -> Vec<TestCase> {
@@ -1431,19 +1410,19 @@ fn run_case(case: &TestCase, cfg: DecoderConfig) -> Result<Metrics> {
     if let Some(max) = case.expectation.max_chars {
         if nchars > max {
             pass = false;
-            notes.push_str(&format!("ghost: got {} chars, max {}; ", nchars, max));
+            notes.push_str(&format!("ghost: got {nchars} chars, max {max}; "));
         }
     }
     if let Some(min) = case.expectation.min_chars {
         if nchars < min {
             pass = false;
-            notes.push_str(&format!("recall: got {} chars, min {}; ", nchars, min));
+            notes.push_str(&format!("recall: got {nchars} chars, min {min}; "));
         }
     }
     if let Some(c) = cer {
         if c > 0.5 {
             pass = false;
-            notes.push_str(&format!("cer={:.2} > 0.5; ", c));
+            notes.push_str(&format!("cer={c:.2} > 0.5; "));
         }
     }
 
@@ -1566,7 +1545,7 @@ fn synth_morse(text: &str, wpm: f32, tone_hz: f32, rate: u32, secs_padding: f32)
     let mut out: Vec<f32> = vec![0.0; (secs_padding * r) as usize];
     for ch in text.chars() {
         if ch == ' ' {
-            out.extend(std::iter::repeat(0.0).take(word_n));
+            out.extend(std::iter::repeat_n(0.0, word_n));
             continue;
         }
         let morse = char_to_morse(ch.to_ascii_uppercase());
@@ -1574,12 +1553,12 @@ fn synth_morse(text: &str, wpm: f32, tone_hz: f32, rate: u32, secs_padding: f32)
             let n = if m == '.' { dot_n } else { dah_n };
             push_tone(&mut out, n, tone_hz, rate);
             if i + 1 < morse.len() {
-                out.extend(std::iter::repeat(0.0).take(intra_n));
+                out.extend(std::iter::repeat_n(0.0, intra_n));
             }
         }
-        out.extend(std::iter::repeat(0.0).take(inter_n));
+        out.extend(std::iter::repeat_n(0.0, inter_n));
     }
-    out.extend(std::iter::repeat(0.0).take((secs_padding * r) as usize));
+    out.extend(std::iter::repeat_n(0.0, (secs_padding * r) as usize));
     out
 }
 
@@ -1673,7 +1652,7 @@ fn print_case(case: &TestCase, m: &Metrics) {
         .unwrap_or_else(|| "  --".into());
     let cer = m
         .cer
-        .map(|c| format!("cer={:.2}", c))
+        .map(|c| format!("cer={c:.2}"))
         .unwrap_or_else(|| "        ".into());
     println!(
         "{:<22} {} {:>5}c  cpm={:>5.1}  wpm={}  {} {}",
@@ -1681,7 +1660,7 @@ fn print_case(case: &TestCase, m: &Metrics) {
     );
     if !m.decoded.is_empty() {
         let preview: String = m.decoded.chars().take(80).collect();
-        println!("    > {}", preview);
+        println!("    > {preview}");
     }
     if !m.notes.is_empty() {
         println!("    ! {}", m.notes);
@@ -1708,10 +1687,47 @@ impl SmallRng {
         ((self.next_u64() >> 8) as f32) / ((1u64 << 56) as f32)
     }
     fn normal(&mut self) -> f32 {
-        let u1 = (self.next_f32().max(1e-7)).min(1.0 - 1e-7);
+        let u1 = self.next_f32().clamp(1e-7, 1.0 - 1e-7);
         let u2 = self.next_f32();
         let r = (-2.0_f32 * u1.ln()).sqrt();
         let theta = 2.0 * std::f32::consts::PI * u2;
         r * theta.cos()
+    }
+}
+
+#[cfg(test)]
+mod label_eval_tests {
+    use super::{classify_failure, extract_transcript_delta};
+
+    #[test]
+    fn extract_transcript_delta_removes_prefix_tokens() {
+        assert_eq!(
+            extract_transcript_delta("QST QST", "QST QST QST DE W1AW"),
+            "QST DE W1AW"
+        );
+    }
+
+    #[test]
+    fn extract_transcript_delta_handles_overlap() {
+        assert_eq!(
+            extract_transcript_delta("QST QST QST", "QST DE W1AW"),
+            "DE W1AW"
+        );
+    }
+
+    #[test]
+    fn classify_failure_detects_spacing_only() {
+        assert_eq!(
+            classify_failure("N6ZO 5NN 5", "N6ZO5NN5", 2, 0.2),
+            "spacing_only_error"
+        );
+    }
+
+    #[test]
+    fn classify_failure_detects_leading_edge() {
+        assert_eq!(
+            classify_failure("QST QST QST", "TUST QST QST", 1, 0.09),
+            "leading_edge_error"
+        );
     }
 }

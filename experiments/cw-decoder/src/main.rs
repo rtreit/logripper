@@ -1,3 +1,7 @@
+// CLI handler functions take many decoder/render parameters by design.
+// Bundling them into structs would add ceremony without improving clarity.
+#![allow(clippy::too_many_arguments)]
+
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
@@ -617,10 +621,7 @@ fn run_probe_fisher(
     s2.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     let p50 = s2[s2.len() / 2];
     let p90 = s2[s2.len() * 9 / 10];
-    println!(
-        "Distribution: max={:.3} p90={:.3} p50={:.3} mean={:.3}",
-        max_fisher, p90, p50, mean
-    );
+    println!("Distribution: max={max_fisher:.3} p90={p90:.3} p50={p50:.3} mean={mean:.3}");
     Ok(())
 }
 
@@ -677,8 +678,7 @@ fn run_file(
     let win_samples = ((window * audio.sample_rate as f32) as usize).max(1);
     let hop_samples = ((hop * audio.sample_rate as f32) as usize).max(1);
     println!(
-        "Sliding window: {:.1}s window, {:.1}s hop ({} samples / {} samples)",
-        window, hop, win_samples, hop_samples
+        "Sliding window: {window:.1}s window, {hop:.1}s hop ({win_samples} samples / {hop_samples} samples)"
     );
     println!("{:>7}  {:>6}  {:>7}  text", "t (s)", "WPM", "pitch");
     println!("{}", "-".repeat(60));
@@ -700,7 +700,7 @@ fn run_file(
             .map(|p| format!("{p:>5.0}Hz"))
             .unwrap_or_else(|| "    --".into());
         let text = out.text.replace('\n', " ");
-        println!("{:>7.2}  {}  {}  {}", t, wpm, pitch, text);
+        println!("{t:>7.2}  {wpm}  {pitch}  {text}");
         start += hop_samples;
     }
 
@@ -724,10 +724,7 @@ fn run_harvest_file(
         &harvest_cfg,
         |completed, total, start_s, end_s| {
             if json {
-                eprintln!(
-                    "HARVEST_PROGRESS\t{}\t{}\t{:.3}\t{:.3}",
-                    completed, total, start_s, end_s
-                );
+                eprintln!("HARVEST_PROGRESS\t{completed}\t{total}\t{start_s:.3}\t{end_s:.3}");
             }
         },
     )?;
@@ -1040,17 +1037,13 @@ fn run_stream_file(
                 streaming::StreamEvent::PitchUpdate { pitch_hz } => {
                     if !quiet {
                         println!(
-                            "[t={:>6.2}s real+{:>4}ms] PITCH lock: {:.1} Hz",
-                            t_in_audio, lag_ms, pitch_hz
+                            "[t={t_in_audio:>6.2}s real+{lag_ms:>4}ms] PITCH lock: {pitch_hz:.1} Hz"
                         );
                     }
                 }
                 streaming::StreamEvent::PitchLost { reason } => {
                     if !quiet {
-                        println!(
-                            "[t={:>6.2}s real+{:>4}ms] PITCH lost ({})",
-                            t_in_audio, lag_ms, reason
-                        );
+                        println!("[t={t_in_audio:>6.2}s real+{lag_ms:>4}ms] PITCH lost ({reason})");
                     }
                 }
                 streaming::StreamEvent::WpmUpdate { wpm } => {
@@ -1058,40 +1051,44 @@ fn run_stream_file(
                     if changed {
                         if !quiet {
                             println!(
-                                "[t={:>6.2}s real+{:>4}ms] WPM    -> {:.1}",
-                                t_in_audio, lag_ms, wpm
+                                "[t={t_in_audio:>6.2}s real+{lag_ms:>4}ms] WPM    -> {wpm:.1}"
                             );
                         }
                         last_wpm = Some(wpm);
                     }
                 }
-                streaming::StreamEvent::Char { ch, morse, pitch_hz, .. } => {
+                streaming::StreamEvent::Char {
+                    ch,
+                    morse,
+                    pitch_hz,
+                    ..
+                } => {
                     transcript.push(ch);
                     if !quiet {
                         let pitch_suffix = pitch_hz
-                            .map(|hz| format!("  @{:>6.1} Hz", hz))
+                            .map(|hz| format!("  @{hz:>6.1} Hz"))
                             .unwrap_or_default();
                         println!(
-                            "[t={:>6.2}s real+{:>4}ms] CHAR  '{}' ({:>5}){}  transcript: {}",
-                            t_in_audio, lag_ms, ch, morse, pitch_suffix, transcript
+                            "[t={t_in_audio:>6.2}s real+{lag_ms:>4}ms] CHAR  '{ch}' ({morse:>5}){pitch_suffix}  transcript: {transcript}"
                         );
                     }
                 }
                 streaming::StreamEvent::Word => {
                     transcript.push(' ');
                     if !quiet {
-                        println!("[t={:>6.2}s real+{:>4}ms] WORD  break", t_in_audio, lag_ms);
+                        println!("[t={t_in_audio:>6.2}s real+{lag_ms:>4}ms] WORD  break");
                     }
                 }
-                streaming::StreamEvent::Garbled { morse, pitch_hz, .. } => {
+                streaming::StreamEvent::Garbled {
+                    morse, pitch_hz, ..
+                } => {
                     transcript.push('?');
                     if !quiet {
                         let pitch_suffix = pitch_hz
-                            .map(|hz| format!("  @{:>6.1} Hz", hz))
+                            .map(|hz| format!("  @{hz:>6.1} Hz"))
                             .unwrap_or_default();
                         println!(
-                            "[t={:>6.2}s real+{:>4}ms] ???  garbled morse: {}{}",
-                            t_in_audio, lag_ms, morse, pitch_suffix
+                            "[t={t_in_audio:>6.2}s real+{lag_ms:>4}ms] ???  garbled morse: {morse}{pitch_suffix}"
                         );
                     }
                 }
@@ -1215,8 +1212,7 @@ fn run_stream_file_ditdah(
             audio.samples.len()
         );
         println!(
-            "Window {:.1}s / min {:.1}s / decode every {}ms / chunk {}ms",
-            window_seconds, min_window_seconds, decode_every_ms, chunk_ms
+            "Window {window_seconds:.1}s / min {min_window_seconds:.1}s / decode every {decode_every_ms}ms / chunk {chunk_ms}ms"
         );
     }
 
@@ -1842,10 +1838,15 @@ fn run_stream_live(
                         last_wpm = Some(wpm);
                     }
                 }
-                streaming::StreamEvent::Char { ch, morse, pitch_hz, .. } => {
+                streaming::StreamEvent::Char {
+                    ch,
+                    morse,
+                    pitch_hz,
+                    ..
+                } => {
                     transcript.push(ch);
                     let pitch_suffix = pitch_hz
-                        .map(|hz| format!("  @{:>6.1} Hz", hz))
+                        .map(|hz| format!("  @{hz:>6.1} Hz"))
                         .unwrap_or_default();
                     println!(
                         "[t={t:>6.2}s] CHAR  '{ch}' ({morse}){pitch_suffix}  transcript: {transcript}"
@@ -1855,10 +1856,12 @@ fn run_stream_live(
                     transcript.push(' ');
                     println!("[t={t:>6.2}s] WORD  break");
                 }
-                streaming::StreamEvent::Garbled { morse, pitch_hz, .. } => {
+                streaming::StreamEvent::Garbled {
+                    morse, pitch_hz, ..
+                } => {
                     transcript.push('?');
                     let pitch_suffix = pitch_hz
-                        .map(|hz| format!("  @{:>6.1} Hz", hz))
+                        .map(|hz| format!("  @{hz:>6.1} Hz"))
                         .unwrap_or_default();
                     println!("[t={t:>6.2}s] ???  garbled morse: {morse}{pitch_suffix}");
                 }
@@ -1960,7 +1963,11 @@ fn spawn_stdin_config_channel(
             // force_pitch_hz: <number> sets a forced lock; 0/null clears it.
             if let Some(x) = v.get("force_pitch_hz").and_then(|x| x.as_f64()) {
                 state.force_pitch_hz = if x > 0.0 { Some(x as f32) } else { None };
-            } else if v.get("force_pitch_hz").map(|x| x.is_null()).unwrap_or(false) {
+            } else if v
+                .get("force_pitch_hz")
+                .map(|x| x.is_null())
+                .unwrap_or(false)
+            {
                 state.force_pitch_hz = None;
             }
             if let Some(x) = v.get("wide_bin_count").and_then(|x| x.as_i64()) {

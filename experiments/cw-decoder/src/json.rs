@@ -25,6 +25,12 @@ pub struct JsonEmitter {
     out: io::Stdout,
 }
 
+impl Default for JsonEmitter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl JsonEmitter {
     pub fn new() -> Self {
         Self { out: io::stdout() }
@@ -56,7 +62,12 @@ impl JsonEmitter {
                 "type": "wpm",
                 "wpm": round2(*wpm),
             }),
-            StreamEvent::Char { ch, morse, pitch_hz, tone_purity } => json!({
+            StreamEvent::Char {
+                ch,
+                morse,
+                pitch_hz,
+                tone_purity,
+            } => json!({
                 "type": "char",
                 "ch": ch.to_string(),
                 "morse": morse,
@@ -66,7 +77,11 @@ impl JsonEmitter {
             StreamEvent::Word => json!({
                 "type": "word",
             }),
-            StreamEvent::Garbled { morse, pitch_hz, tone_purity } => json!({
+            StreamEvent::Garbled {
+                morse,
+                pitch_hz,
+                tone_purity,
+            } => json!({
                 "type": "garbled",
                 "morse": morse,
                 "hz": pitch_hz.map(round1),

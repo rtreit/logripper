@@ -200,8 +200,14 @@ impl DecoderConfig {
             return None;
         }
 
-        let lo = self.range_lock_min_hz.min(self.range_lock_max_hz).max(FREQ_MIN_HZ);
-        let hi = self.range_lock_min_hz.max(self.range_lock_max_hz).min(FREQ_MAX_HZ);
+        let lo = self
+            .range_lock_min_hz
+            .min(self.range_lock_max_hz)
+            .max(FREQ_MIN_HZ);
+        let hi = self
+            .range_lock_min_hz
+            .max(self.range_lock_max_hz)
+            .min(FREQ_MAX_HZ);
         (lo < hi).then_some((lo, hi))
     }
 }
@@ -454,8 +460,8 @@ fn detect_pitch(
         let lo = i.saturating_sub(2);
         let hi = (i + 2).min(half - 1);
         let mut is_peak = true;
-        for j in lo..=hi {
-            if j != i && sum[j] > p {
+        for (j, &val) in sum.iter().enumerate().take(hi + 1).skip(lo) {
+            if j != i && val > p {
                 is_peak = false;
                 break;
             }
@@ -582,22 +588,18 @@ fn detect_pitch(
     if max_fisher < MIN_LOCK_FISHER {
         if debug {
             eprintln!(
-                "[cw-decoder pitch trial] no candidate cleared MIN_LOCK_FISHER={:.1} (best={:.2})",
-                MIN_LOCK_FISHER, max_fisher
+                "[cw-decoder pitch trial] no candidate cleared MIN_LOCK_FISHER={MIN_LOCK_FISHER:.1} (best={max_fisher:.2})"
             );
         }
         return Err(anyhow!(
-            "no candidate produced clean dit/dah clusters (best Fisher={:.2}, need >={:.1})",
-            max_fisher,
-            MIN_LOCK_FISHER
+            "no candidate produced clean dit/dah clusters (best Fisher={max_fisher:.2}, need >={MIN_LOCK_FISHER:.1})"
         ));
     }
     // Pick the leader by Fisher; require it to clearly beat the
     // prelim FFT/keying leader before ousting it (avoids flapping).
     let prelim_leader = scored[0]; // shortlist already sorted by prelim
     let mut sorted_by_fisher = scored.clone();
-    sorted_by_fisher
-        .sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
+    sorted_by_fisher.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
     let fisher_leader = sorted_by_fisher[0];
     let chosen = if fisher_leader.0 == prelim_leader.0 {
         prelim_leader.0
@@ -1224,9 +1226,7 @@ impl Decoder {
         // produces "E"/"I" runs in silent stretches. We deliberately
         // do NOT touch off-runs here: short gaps inside a letter are
         // already handled by `LETTER_SPACE_BOUNDARY`.
-        if ivl.is_on
-            && self.min_pulse_dot_fraction > 0.0
-            && len_norm < self.min_pulse_dot_fraction
+        if ivl.is_on && self.min_pulse_dot_fraction > 0.0 && len_norm < self.min_pulse_dot_fraction
         {
             return;
         }
@@ -1321,7 +1321,7 @@ impl Decoder {
         self.power_history.push_back(p);
 
         self.threshold_dirty_count += 1;
-        if self.threshold_dirty_count >= (self.power_rate * 0.25) as usize + 1 {
+        if self.threshold_dirty_count > (self.power_rate * 0.25) as usize {
             self.threshold_dirty_count = 0;
             self.update_threshold();
         }
@@ -1637,8 +1637,7 @@ impl StreamingDecoder {
                             "quality watchdog: Fisher {:.2} < {:.1} for {} consecutive checks",
                             fisher, MIN_HOLD_FISHER, self.quality_failed_consecutive
                         );
-                        let preserve_pre_lock_buf =
-                            self.seed_fast_relock_from_recent_audio(&buf);
+                        let preserve_pre_lock_buf = self.seed_fast_relock_from_recent_audio(&buf);
                         self.drop_pitch_lock(preserve_pre_lock_buf);
                         events.push(StreamEvent::PitchLost { reason });
                     }
@@ -1707,7 +1706,8 @@ impl StreamingDecoder {
             self.pre_lock_buf.clear();
         }
         self.unlock_power_history.clear();
-        let power_rate = TARGET_RATE as f32 / ((TARGET_RATE as f32 * GOERTZEL_WIN_MS / 1000.0) as usize / 4).max(1) as f32;
+        let power_rate = TARGET_RATE as f32
+            / ((TARGET_RATE as f32 * GOERTZEL_WIN_MS / 1000.0) as usize / 4).max(1) as f32;
         self.decoder = Decoder::new(power_rate);
         self.decoder.threshold_scale = self.config.threshold_scale;
         self.decoder.auto_threshold = self.config.auto_threshold;
@@ -1777,8 +1777,7 @@ impl StreamingDecoder {
         let keep = self.pitch_lock_samples_needed().max(4096);
         let start = recent_audio.len().saturating_sub(keep);
         self.pre_lock_buf.clear();
-        self.pre_lock_buf
-            .extend_from_slice(&recent_audio[start..]);
+        self.pre_lock_buf.extend_from_slice(&recent_audio[start..]);
         true
     }
 
@@ -1923,8 +1922,7 @@ impl StreamingDecoder {
             if self.power_emit_accum >= self.power_emit_step {
                 self.power_emit_accum -= self.power_emit_step;
                 let threshold = self.decoder.threshold;
-                let signal =
-                    threshold > 0.0 && smoothed > threshold && snr_ok && purity_ok;
+                let signal = threshold > 0.0 && smoothed > threshold && snr_ok && purity_ok;
                 let snr_clean = if snr.is_finite() { snr } else { 0.0 };
                 events.push(StreamEvent::Power {
                     power: smoothed,
@@ -2122,13 +2120,11 @@ mod trial_decode_tests {
         let off_pitch = trial_decode_score(&silence, sr, 700.0);
         assert!(
             on_pitch > 5.0,
-            "on-pitch score should be substantial, got {}",
-            on_pitch
+            "on-pitch score should be substantial, got {on_pitch}"
         );
         assert!(
             off_pitch < 0.5,
-            "silence score should be ~0, got {}",
-            off_pitch
+            "silence score should be ~0, got {off_pitch}"
         );
     }
 
@@ -2159,56 +2155,59 @@ mod trial_decode_tests {
         let pure_noise = trial_decode_score(&noise, sr, 700.0);
         assert!(
             on_pitch > pure_noise * 2.0,
-            "on-pitch CW ({}) should beat pure-noise ({}) by a wide margin",
-            on_pitch,
-            pure_noise
+            "on-pitch CW ({on_pitch}) should beat pure-noise ({pure_noise}) by a wide margin"
         );
     }
 }
 
 #[cfg(test)]
 mod measure_fisher {
-    use super::*;
     use super::trial_decode_tests::synth_paris;
-#[test]
-fn measure_fisher_noise_vs_cw() {
-    let sr = 16000u32;
-    let mut s: u32 = 0xDEAD_BEEF;
-    let mut rng = || { s = s.wrapping_mul(1664525).wrapping_add(1013904223); ((s >> 8) as f32 / (1u32<<24) as f32 - 0.5) * 2.0 };
-    // 1) Pure white noise (no signal)
-    let noise: Vec<f32> = (0..sr as usize * 6).map(|_| rng() * 0.1).collect();
-    // Probe many candidate pitches
-    let mut max_noise_fisher: f32 = 0.0;
-    for f in (350..1500).step_by(15) {
-        let s = trial_decode_score(&noise, sr, f as f32);
-        if s > max_noise_fisher { max_noise_fisher = s; }
+    use super::*;
+    #[test]
+    fn measure_fisher_noise_vs_cw() {
+        let sr = 16000u32;
+        let mut s: u32 = 0xDEAD_BEEF;
+        let mut rng = || {
+            s = s.wrapping_mul(1664525).wrapping_add(1013904223);
+            ((s >> 8) as f32 / (1u32 << 24) as f32 - 0.5) * 2.0
+        };
+        // 1) Pure white noise (no signal)
+        let noise: Vec<f32> = (0..sr as usize * 6).map(|_| rng() * 0.1).collect();
+        // Probe many candidate pitches
+        let mut max_noise_fisher: f32 = 0.0;
+        for f in (350..1500).step_by(15) {
+            let s = trial_decode_score(&noise, sr, f as f32);
+            if s > max_noise_fisher {
+                max_noise_fisher = s;
+            }
+        }
+        // 2) Faint CW at 700 Hz
+        let cw_clean = synth_paris(sr, 700.0, 18.0, 6.0);
+        for &snr_db in &[20.0_f32, 10.0, 6.0, 3.0, 0.0, -3.0, -6.0] {
+            let cw_amp = 10f32.powf(snr_db / 20.0) * 0.1;
+            let mixed: Vec<f32> = cw_clean.iter().map(|&x| x * cw_amp + rng() * 0.1).collect();
+            let on = trial_decode_score(&mixed, sr, 700.0);
+            let off = trial_decode_score(&mixed, sr, 1200.0);
+            eprintln!("SNR={snr_db:>5.1}dB  Fisher@700={on:>8.2}  Fisher@1200={off:>8.2}");
+        }
+        eprintln!("PURE NOISE max-Fisher across all candidate pitches = {max_noise_fisher:.2}");
     }
-    // 2) Faint CW at 700 Hz
-    let cw_clean = synth_paris(sr, 700.0, 18.0, 6.0);
-    for &snr_db in &[20.0_f32, 10.0, 6.0, 3.0, 0.0, -3.0, -6.0] {
-        let cw_amp = 10f32.powf(snr_db / 20.0) * 0.1;
-        let mixed: Vec<f32> = cw_clean.iter().map(|&x| {
-            x * cw_amp + rng() * 0.1
-        }).collect();
-        let on = trial_decode_score(&mixed, sr, 700.0);
-        let off = trial_decode_score(&mixed, sr, 1200.0);
-        eprintln!("SNR={:>5.1}dB  Fisher@700={:>8.2}  Fisher@1200={:>8.2}", snr_db, on, off);
-    }
-    eprintln!("PURE NOISE max-Fisher across all candidate pitches = {:.2}", max_noise_fisher);
-}
 }
 
 #[cfg(test)]
 mod lock_behavior_tests {
-    use super::*;
     use super::trial_decode_tests::synth_paris;
+    use super::*;
 
     fn lcg_noise(n: usize, amp: f32, seed: u32) -> Vec<f32> {
         let mut s = seed;
-        (0..n).map(|_| {
-            s = s.wrapping_mul(1664525).wrapping_add(1013904223);
-            ((s >> 8) as f32 / (1u32 << 24) as f32 - 0.5) * 2.0 * amp
-        }).collect()
+        (0..n)
+            .map(|_| {
+                s = s.wrapping_mul(1664525).wrapping_add(1013904223);
+                ((s >> 8) as f32 / (1u32 << 24) as f32 - 0.5) * 2.0 * amp
+            })
+            .collect()
     }
 
     fn run_decoder(audio: &[f32], sample_rate: u32) -> (bool, bool, usize) {
@@ -2223,14 +2222,20 @@ mod lock_behavior_tests {
             for ev in events {
                 match ev {
                     StreamEvent::PitchUpdate { .. } => locked = true,
-                    StreamEvent::PitchLost { .. } => { if locked { lost = true; } }
+                    StreamEvent::PitchLost { .. } => {
+                        if locked {
+                            lost = true;
+                        }
+                    }
                     StreamEvent::Char { .. } => chars += 1,
                     _ => {}
                 }
             }
         }
         for ev in dec.flush() {
-            if let StreamEvent::Char { .. } = ev { chars += 1; }
+            if let StreamEvent::Char { .. } = ev {
+                chars += 1;
+            }
         }
         (locked, lost, chars)
     }
@@ -2250,7 +2255,10 @@ mod lock_behavior_tests {
         let audio = synth_paris(sr, 700.0, 20.0, 12.0);
         let (locked, _lost, chars) = run_decoder(&audio, sr);
         assert!(locked, "decoder should lock on clean CW");
-        assert!(chars >= 5, "expected several decoded chars from PARIS, got {}", chars);
+        assert!(
+            chars >= 5,
+            "expected several decoded chars from PARIS, got {chars}"
+        );
     }
 
     #[test]
@@ -2269,8 +2277,14 @@ mod lock_behavior_tests {
                 }
             }
         }
-        assert!(saw_power, "decoder should emit live power events before pitch lock");
-        assert!(!saw_pitch, "1 second of audio should be below the pitch-lock buffer");
+        assert!(
+            saw_power,
+            "decoder should emit live power events before pitch lock"
+        );
+        assert!(
+            !saw_pitch,
+            "1 second of audio should be below the pitch-lock buffer"
+        );
     }
 
     #[test]
@@ -2281,7 +2295,10 @@ mod lock_behavior_tests {
         audio.extend(lcg_noise(sr as usize * 20, 0.05, 0xCAFE_F00D));
         let (locked, lost, _chars) = run_decoder(&audio, sr);
         assert!(locked, "decoder should lock during the CW segment");
-        assert!(lost, "decoder should drop lock after sustained noise-only input");
+        assert!(
+            lost,
+            "decoder should drop lock after sustained noise-only input"
+        );
     }
 
     #[test]
@@ -2306,7 +2323,10 @@ mod lock_behavior_tests {
                 break;
             }
         }
-        assert!(lost, "decoder should eventually lose lock on sustained noise");
+        assert!(
+            lost,
+            "decoder should eventually lose lock on sustained noise"
+        );
         assert!(
             power_after_loss,
             "decoder should keep emitting power events while hunting for a new lock"
@@ -2318,14 +2338,22 @@ mod lock_behavior_tests {
         let sr = 16000u32;
         let recent_audio = synth_paris(sr, 700.0, 20.0, 2.0);
         let mut dec = StreamingDecoder::new(sr).expect("decoder");
-        let mut cfg = DecoderConfig::default();
-        cfg.experimental_range_lock = true;
+        let cfg = DecoderConfig {
+            experimental_range_lock: true,
+            ..Default::default()
+        };
         dec.set_config(cfg);
 
         let preserved = dec.seed_fast_relock_from_recent_audio(&recent_audio);
         let before = dec.pre_lock_buf.len();
-        assert!(preserved, "range-lock mode should preserve a seeded relock buffer");
-        assert!(before > 0, "seeded relock buffer should contain recent audio");
+        assert!(
+            preserved,
+            "range-lock mode should preserve a seeded relock buffer"
+        );
+        assert!(
+            before > 0,
+            "seeded relock buffer should contain recent audio"
+        );
 
         dec.drop_pitch_lock(preserved);
 
@@ -2347,7 +2375,9 @@ mod lock_behavior_tests {
         // Tiny LCG so we don't pull in `rand` for one test.
         let mut state: u64 = 0xDEAD_BEEF_C0FF_EE42;
         let mut next_noise = || -> f32 {
-            state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             let u = ((state >> 33) as u32) as f32 / u32::MAX as f32;
             (u - 0.5) * 2.0
         };
@@ -2446,11 +2476,26 @@ mod wide_bin_sniff_tests {
         let mut audio = vec![0.0f32; (sr as f32 * seconds) as usize];
         // Simple PARIS-style key sequence: ".- -... -.-." (ABC) repeated.
         let pattern: &[(f32, bool)] = &[
-            (1.0, true), (1.0, false), (3.0, true), (1.0, false),  // A
+            (1.0, true),
+            (1.0, false),
+            (3.0, true),
+            (1.0, false), // A
             (3.0, false),
-            (3.0, true), (1.0, false), (1.0, true), (1.0, false), (1.0, true), (1.0, false), (1.0, true), // B
+            (3.0, true),
+            (1.0, false),
+            (1.0, true),
+            (1.0, false),
+            (1.0, true),
+            (1.0, false),
+            (1.0, true), // B
             (3.0, false),
-            (3.0, true), (1.0, false), (1.0, true), (1.0, false), (3.0, true), (1.0, false), (1.0, true), // C
+            (3.0, true),
+            (1.0, false),
+            (1.0, true),
+            (1.0, false),
+            (3.0, true),
+            (1.0, false),
+            (1.0, true), // C
             (7.0, false),
         ];
         let mut t_samples: usize = 0;
@@ -2524,8 +2569,8 @@ mod wide_bin_sniff_tests {
 
 #[cfg(test)]
 mod min_pulse_filter_tests {
-    use super::*;
     use super::trial_decode_tests::synth_paris;
+    use super::*;
 
     fn lcg(seed: u32, n: usize, amp: f32) -> Vec<f32> {
         let mut s = seed;
@@ -2567,7 +2612,10 @@ mod min_pulse_filter_tests {
         let audio = synth_paris(sr, 700.0, 18.0, 6.0);
         let baseline = count_chars(&audio, sr, 0.0);
         let gated = count_chars(&audio, sr, 0.3);
-        assert!(baseline >= 5, "baseline should decode PARIS (got {baseline})");
+        assert!(
+            baseline >= 5,
+            "baseline should decode PARIS (got {baseline})"
+        );
         assert!(
             gated as i32 >= baseline as i32 - 1,
             "min-pulse gate must not drop more than one clean character \

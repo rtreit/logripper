@@ -1146,10 +1146,10 @@ mod tests {
         let tone_hz = 600.0f32;
         let tone_start_s = 0.4f32;
         let tone_end_s = 2.35f32;
-        for index in 0..total_samples {
+        for (index, sample) in samples.iter_mut().enumerate().take(total_samples) {
             let t = index as f32 / sample_rate as f32;
             if (tone_start_s..tone_end_s).contains(&t) {
-                samples[index] = (2.0 * std::f32::consts::PI * tone_hz * t).sin() * 0.8;
+                *sample = (2.0 * std::f32::consts::PI * tone_hz * t).sin() * 0.8;
             }
         }
 
@@ -1185,16 +1185,16 @@ mod tests {
         let total_samples = (total_secs * sample_rate as f32) as usize;
         let mut samples = vec![0.0f32; total_samples];
         let tone_hz = 620.0f32;
-        for index in 0..total_samples {
+        for (index, sample) in samples.iter_mut().enumerate().take(total_samples) {
             let t = index as f32 / sample_rate as f32;
             if (0.8..2.6).contains(&t) {
-                samples[index] = (2.0 * std::f32::consts::PI * tone_hz * t).sin() * 0.7;
+                *sample = (2.0 * std::f32::consts::PI * tone_hz * t).sin() * 0.7;
             }
         }
 
         let profile =
             build_signal_profile(&samples, sample_rate, 1.1, 1.8, Some(tone_hz), Some(20.0))
-            .expect("profile");
+                .expect("profile");
 
         assert!(profile.display_start_s < 1.1);
         assert!(profile.display_end_s > 1.8);
@@ -1208,8 +1208,10 @@ mod tests {
         let total_secs = 3.0f32;
         let total_samples = (total_secs * sample_rate as f32) as usize;
         let mut samples = vec![0.0f32; total_samples];
-        for index in (sample_rate / 2) as usize..(sample_rate as usize + sample_rate as usize / 2) {
-            samples[index] = 0.35;
+        let lo = (sample_rate / 2) as usize;
+        let hi = sample_rate as usize + sample_rate as usize / 2;
+        for sample in samples.iter_mut().take(hi).skip(lo) {
+            *sample = 0.35;
         }
 
         let profile = build_signal_profile(&samples, sample_rate, 0.4, 2.2, None, None)
@@ -1223,9 +1225,18 @@ mod tests {
     #[test]
     fn harvest_uses_stream_warmup_for_short_windows() {
         let sample_rate = 11_025u32;
-        assert_eq!(harvest_stream_warmup_samples(sample_rate, 1.0), sample_rate as usize * 2);
-        assert_eq!(harvest_stream_warmup_samples(sample_rate, 4.0), sample_rate as usize * 4);
-        assert_eq!(harvest_stream_warmup_samples(sample_rate, 12.0), sample_rate as usize * 6);
+        assert_eq!(
+            harvest_stream_warmup_samples(sample_rate, 1.0),
+            sample_rate as usize * 2
+        );
+        assert_eq!(
+            harvest_stream_warmup_samples(sample_rate, 4.0),
+            sample_rate as usize * 4
+        );
+        assert_eq!(
+            harvest_stream_warmup_samples(sample_rate, 12.0),
+            sample_rate as usize * 6
+        );
     }
 
     #[test]
@@ -1236,7 +1247,11 @@ mod tests {
             .join("data")
             .join("cw-samples")
             .join("W1AW_de_W5WZ_DX_CW_20180623_000422Z_14MHz.mp3");
-        assert!(path.exists(), "expected regression sample at {}", path.display());
+        assert!(
+            path.exists(),
+            "expected regression sample at {}",
+            path.display()
+        );
 
         let decoded = audio::decode_file(&path).expect("decode W1AW sample");
         let candidates = harvest_candidates(

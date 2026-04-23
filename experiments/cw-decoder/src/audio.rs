@@ -31,7 +31,10 @@ pub struct FilePlayback {
 
 impl FilePlayback {
     pub fn position_s(&self) -> f32 {
-        let frames = self.position_frames.load(Ordering::Relaxed).min(self.total_frames);
+        let frames = self
+            .position_frames
+            .load(Ordering::Relaxed)
+            .min(self.total_frames);
         frames as f32 / self.sample_rate as f32
     }
 
@@ -162,9 +165,14 @@ pub fn play_output_file(path: &Path) -> Result<FilePlayback> {
             device.build_output_stream(
                 &stream_config,
                 move |data: &mut [f32], _| {
-                    fill_output(data, channels, &samples, &position_frames, &finished, |sample| {
-                        sample
-                    });
+                    fill_output(
+                        data,
+                        channels,
+                        &samples,
+                        &position_frames,
+                        &finished,
+                        |sample| sample,
+                    );
                 },
                 err_fn,
                 None,
@@ -177,9 +185,14 @@ pub fn play_output_file(path: &Path) -> Result<FilePlayback> {
             device.build_output_stream(
                 &stream_config,
                 move |data: &mut [i16], _| {
-                    fill_output(data, channels, &samples, &position_frames, &finished, |sample| {
-                        (sample.clamp(-1.0, 1.0) * i16::MAX as f32) as i16
-                    });
+                    fill_output(
+                        data,
+                        channels,
+                        &samples,
+                        &position_frames,
+                        &finished,
+                        |sample| (sample.clamp(-1.0, 1.0) * i16::MAX as f32) as i16,
+                    );
                 },
                 err_fn,
                 None,
@@ -192,9 +205,14 @@ pub fn play_output_file(path: &Path) -> Result<FilePlayback> {
             device.build_output_stream(
                 &stream_config,
                 move |data: &mut [u16], _| {
-                    fill_output(data, channels, &samples, &position_frames, &finished, |sample| {
-                        ((sample.clamp(-1.0, 1.0) * 0.5 + 0.5) * u16::MAX as f32) as u16
-                    });
+                    fill_output(
+                        data,
+                        channels,
+                        &samples,
+                        &position_frames,
+                        &finished,
+                        |sample| ((sample.clamp(-1.0, 1.0) * 0.5 + 0.5) * u16::MAX as f32) as u16,
+                    );
                 },
                 err_fn,
                 None,
@@ -254,7 +272,8 @@ fn resample_linear(samples: &[f32], input_rate: u32, output_rate: u32) -> Vec<f3
         return samples.to_vec();
     }
 
-    let out_len = ((samples.len() as f64) * output_rate as f64 / input_rate as f64).round()
+    let out_len = ((samples.len() as f64) * output_rate as f64 / input_rate as f64)
+        .round()
         .max(1.0) as usize;
     let mut out = Vec::with_capacity(out_len);
     let last = samples.len() - 1;
@@ -284,9 +303,14 @@ pub struct LiveCapture {
     /// Rolling ring buffer of the most recent N seconds of mono f32 samples.
     pub buffer: Arc<Mutex<RingBuffer>>,
     _stream: cpal::Stream,
-    recorder: Option<Arc<StdMutex<Option<hound::WavWriter<std::io::BufWriter<File>>>>>>,
+    recorder: Option<RecorderHandle>,
     record_path: Option<PathBuf>,
 }
+
+/// Shared, lockable WAV recorder handle. Wrapped in an alias so we don't
+/// drag the full `Option<Arc<Mutex<Option<WavWriter<BufWriter<File>>>>>>`
+/// soup through every signature.
+pub(crate) type RecorderHandle = Arc<StdMutex<Option<hound::WavWriter<std::io::BufWriter<File>>>>>;
 
 impl LiveCapture {
     /// Path the recording is being written to (if any).
@@ -350,6 +374,10 @@ impl RingBuffer {
 
     pub fn len(&self) -> usize {
         self.data.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.data.is_empty()
     }
 }
 
@@ -465,7 +493,7 @@ fn push_mono(
     buf: &Arc<Mutex<RingBuffer>>,
     data: &[f32],
     channels: usize,
-    recorder: Option<&Arc<StdMutex<Option<hound::WavWriter<std::io::BufWriter<File>>>>>>,
+    recorder: Option<&RecorderHandle>,
 ) {
     // Compute the mono buffer once; share it with both the ring and the WAV.
     let mono: Vec<f32> = if channels == 1 {
@@ -549,7 +577,10 @@ pub fn open_loopback_with_recording(
     // what's actually playing. WASAPI then hands us those frames as an
     // input stream.
     let config = device.default_output_config().context("output config")?;
-    let device_name = format!("{} (loopback)", device.name().unwrap_or_else(|_| "<unknown>".to_string()));
+    let device_name = format!(
+        "{} (loopback)",
+        device.name().unwrap_or_else(|_| "<unknown>".to_string())
+    );
     let sample_rate = config.sample_rate().0;
     let channels = config.channels() as usize;
     let capacity = ((sample_rate as f32 * window_seconds) as usize).max(1);
