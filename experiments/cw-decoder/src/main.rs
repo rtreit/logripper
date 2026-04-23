@@ -1087,25 +1087,23 @@ fn run_stream_live_ditdah(
             stop.store(true, Ordering::Relaxed);
         });
     }
-    // Watch stdin for EOF — the GUI closes our stdin to signal a graceful
-    // shutdown so that Drop runs on LiveCapture and the WAV writer flushes
-    // the data chunk + RIFF header. Without this, killing the process
-    // truncates the recording mid-write.
+    // Watch stdin for EOF or any byte — the GUI signals a graceful
+    // shutdown by writing "stop\n" and then closing our stdin. Either a
+    // successful read or EOF triggers the shutdown path so Drop runs on
+    // LiveCapture and the WAV writer flushes the data chunk + RIFF header.
+    // Without this, Kill leaves a header-only WAV that Replay can't read.
+    //
+    // NOTE: on Windows, std::io::stdin() with an anonymous pipe can fail
+    // to surface EOF reliably — writing a sentinel byte from the parent
+    // is the robust signal. We accept either path.
     {
         let stop = Arc::clone(&stop);
         std::thread::spawn(move || {
             use std::io::Read;
             let mut buf = [0u8; 256];
             let mut stdin = std::io::stdin();
-            loop {
-                match stdin.read(&mut buf) {
-                    Ok(0) | Err(_) => {
-                        stop.store(true, Ordering::Relaxed);
-                        break;
-                    }
-                    Ok(_) => {} // discard incoming bytes (no protocol on this path)
-                }
-            }
+            let _ = stdin.read(&mut buf);
+            stop.store(true, Ordering::Relaxed);
         });
     }
 
@@ -1124,6 +1122,14 @@ fn run_stream_live_ditdah(
 
     loop {
         if stop.load(Ordering::Relaxed) {
+            break;
+        }
+        if seconds > 0.0 && started.elapsed().as_secs_f32() >= seconds {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(chunk_ms.max(10) as u64));
+        if stop.load(Ordering::Relaxed) {
+            eprintln!("[cw-decoder] main-loop: stop detected, breaking");
             break;
         }
         if seconds > 0.0 && started.elapsed().as_secs_f32() >= seconds {
@@ -1210,24 +1216,36 @@ fn run_stream_live_ditdah(
         }
     }
 
-    let final_snapshots = streamer.flush();
-    for snapshot in &final_snapshots {
-        handle_baseline_snapshot(
-            snapshot,
-            snapshot.end_sample as f32 / capture.sample_rate as f32,
-            started.elapsed().as_secs_f32(),
-            decode_count,
-            false,
-            emitter.as_mut(),
-            last_stats.unwrap_or_default(),
-            &mut last_emitted_pitch,
-            &mut last_emitted_wpm,
-        );
+    // Finalize the recording as early as possible on shutdown so the WAV
+    // header is valid even if the GUI falls back to Kill before we reach
+    // the end of this function.
+    let recording_path = capture.record_path().map(|p| p.display().to_string());
+    let recording_saved = capture.finalize_recording().map(|p| p.display().to_string());
+
+    // A final flush() runs one more whole-buffer decode. That's expensive
+    // on a 20s buffer and rarely produces new committed text (the prefix
+    // stabilizer has already emitted everything stable). Skip it when the
+    // user stopped us — prioritize exiting quickly over squeezing out one
+    // more snapshot.
+    let user_initiated_stop = stop.load(Ordering::Relaxed);
+    if !user_initiated_stop {
+        let final_snapshots = streamer.flush();
+        for snapshot in &final_snapshots {
+            handle_baseline_snapshot(
+                snapshot,
+                snapshot.end_sample as f32 / capture.sample_rate as f32,
+                started.elapsed().as_secs_f32(),
+                decode_count,
+                false,
+                emitter.as_mut(),
+                last_stats.unwrap_or_default(),
+                &mut last_emitted_pitch,
+                &mut last_emitted_wpm,
+            );
+        }
     }
 
     let transcript = streamer.transcript().to_string();
-    let recording_path = capture.record_path().map(|p| p.display().to_string());
-    let recording_saved = capture.finalize_recording().map(|p| p.display().to_string());
     if let Some(em) = emitter.as_mut() {
         em.emit(
             started.elapsed().as_secs_f32(),

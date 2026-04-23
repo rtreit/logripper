@@ -312,13 +312,25 @@ internal sealed class CwDecoderProcess : IDisposable
             _cts?.Cancel();
             if (_proc is { HasExited: false } proc)
             {
-                // Close stdin first so the Rust child sees EOF and exits its
-                // main loop normally — that lets Drop run on LiveCapture and
-                // hound finalize the WAV header. Without this, Kill leaves
-                // the recording with a header-only / "missing data chunk"
-                // file that Replay & Score can't read.
+                // Signal the Rust child to shut down gracefully:
+                //   1) Write "stop\n" — the watcher thread's blocking read
+                //      returns immediately and flips the stop atomic.
+                //   2) Close stdin for EOF as a fallback.
+                //   3) WaitForExit up to 3s so Drop runs on LiveCapture and
+                //      hound finalizes the WAV header. Without this the
+                //      recording has RIFF size=0 / missing data chunk and
+                //      Replay & Score gets "(empty)".
+                // The Rust path finalizes the WAV BEFORE emitting the end
+                // event, so even if we fall through to Kill the header is
+                // already valid.
+                try
+                {
+                    proc.StandardInput.WriteLine("stop");
+                    proc.StandardInput.Flush();
+                }
+                catch { /* best effort */ }
                 try { proc.StandardInput.Close(); } catch { /* best effort */ }
-                if (!proc.WaitForExit(1500))
+                if (!proc.WaitForExit(3000))
                 {
                     try { proc.Kill(entireProcessTree: true); } catch { /* best effort */ }
                 }
