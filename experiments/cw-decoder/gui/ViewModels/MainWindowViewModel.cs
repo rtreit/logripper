@@ -1165,10 +1165,11 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
                 {
                     WpmHistory.Add(wpm);
                     while (WpmHistory.Count > MaxWpmHistory) WpmHistory.RemoveAt(0);
-                    // Big number = rolling average of last N samples so it
-                    // doesn't bounce wildly on every snapshot. Sparkline
-                    // still shows the per-snapshot raw history.
-                    int avgWindow = Math.Min(WpmHistory.Count, 12);
+                    // Big number = short rolling average (3 snapshots ≈ 1.5s
+                    // at decode_every_ms=500) so it doesn't bounce wildly on
+                    // every snapshot but still tracks real WPM changes
+                    // promptly. Sparkline still shows raw history.
+                    int avgWindow = Math.Min(WpmHistory.Count, 3);
                     if (avgWindow > 0)
                     {
                         double sum = 0;

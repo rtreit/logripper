@@ -69,7 +69,14 @@ pub fn harvest_candidates(
     stream_cfg: DecoderConfig,
     cfg: &HarvestConfig,
 ) -> Result<Vec<WindowCandidate>> {
-    harvest_candidates_with_progress(samples, sample_rate, log_capture, stream_cfg, cfg, |_completed, _total, _start_s, _end_s| {})
+    harvest_candidates_with_progress(
+        samples,
+        sample_rate,
+        log_capture,
+        stream_cfg,
+        cfg,
+        |_completed, _total, _start_s, _end_s| {},
+    )
 }
 
 pub fn harvest_candidates_with_progress<F>(

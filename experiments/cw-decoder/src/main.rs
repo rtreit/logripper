@@ -2,7 +2,9 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use cw_decoder_poc::{audio, decoder, ditdah_streaming, harvest, json, log_capture, preview, streaming, tui};
+use cw_decoder_poc::{
+    audio, decoder, ditdah_streaming, harvest, json, log_capture, preview, streaming, tui,
+};
 
 #[derive(Parser, Debug)]
 #[command(
@@ -404,7 +406,14 @@ fn main() -> Result<()> {
                 pitch_min_snr_db,
                 threshold_scale,
             };
-            run_stream_live(device.as_deref(), seconds, json, cfg, record.as_deref(), stdin_control)
+            run_stream_live(
+                device.as_deref(),
+                seconds,
+                json,
+                cfg,
+                record.as_deref(),
+                stdin_control,
+            )
         }
     }
 }
@@ -886,7 +895,8 @@ fn run_stream_file_ditdah(
         decode_every_ms,
         required_confirmations,
     };
-    let mut streamer = ditdah_streaming::CausalBaselineStreamer::new(audio.sample_rate, baseline_cfg);
+    let mut streamer =
+        ditdah_streaming::CausalBaselineStreamer::new(audio.sample_rate, baseline_cfg);
     let mut emitter = if json {
         Some(json::JsonEmitter::new())
     } else {
@@ -1052,7 +1062,8 @@ fn run_stream_live_ditdah(
         decode_every_ms,
         required_confirmations,
     };
-    let mut streamer = ditdah_streaming::CausalBaselineStreamer::new(capture.sample_rate, baseline_cfg);
+    let mut streamer =
+        ditdah_streaming::CausalBaselineStreamer::new(capture.sample_rate, baseline_cfg);
     let mut emitter = if json {
         Some(json::JsonEmitter::new())
     } else {
@@ -1117,7 +1128,8 @@ fn run_stream_live_ditdah(
     // mode. We don't have a Goertzel running here (the ditdah library does
     // its own decoding internally), so approximate with chunk RMS-squared
     // as `power` and a rolling 25th-percentile as the noise/threshold.
-    let mut power_history: std::collections::VecDeque<f32> = std::collections::VecDeque::with_capacity(128);
+    let mut power_history: std::collections::VecDeque<f32> =
+        std::collections::VecDeque::with_capacity(128);
     let mut last_power_emit = Instant::now();
 
     loop {
@@ -1127,6 +1139,9 @@ fn run_stream_live_ditdah(
         if seconds > 0.0 && started.elapsed().as_secs_f32() >= seconds {
             break;
         }
+        // Single sleep per iteration — a previous shutdown-fix accidentally
+        // left two back-to-back sleeps here, doubling per-loop latency from
+        // chunk_ms to 2 × chunk_ms and halving the effective drain rate.
         std::thread::sleep(Duration::from_millis(chunk_ms.max(10) as u64));
         if stop.load(Ordering::Relaxed) {
             eprintln!("[cw-decoder] main-loop: stop detected, breaking");
@@ -1135,7 +1150,6 @@ fn run_stream_live_ditdah(
         if seconds > 0.0 && started.elapsed().as_secs_f32() >= seconds {
             break;
         }
-        std::thread::sleep(Duration::from_millis(chunk_ms.max(10) as u64));
 
         let chunk = {
             let lock = capture.buffer.lock();
@@ -1173,8 +1187,13 @@ fn run_stream_live_ditdah(
                 last_power_emit = Instant::now();
                 let mut sorted: Vec<f32> = power_history.iter().copied().collect();
                 sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-                let q25 = sorted[sorted.len() / 4];
-                let noise = q25.max(1e-10);
+                // Use the 10th percentile (not Q25) so the noise floor stays
+                // representative even when CW is continuously active and ~50%
+                // of the history is "key down". With Q25 plus a 4× threshold
+                // the keying meter would never light up on a strong signal
+                // because Q25 itself sits inside the on-state distribution.
+                let q10 = sorted[sorted.len() / 10];
+                let noise = q10.max(1e-10);
                 let threshold = noise * 4.0; // ~6 dB above noise floor
                 let snr = power / noise;
                 let signal = power > threshold;
@@ -1220,7 +1239,9 @@ fn run_stream_live_ditdah(
     // header is valid even if the GUI falls back to Kill before we reach
     // the end of this function.
     let recording_path = capture.record_path().map(|p| p.display().to_string());
-    let recording_saved = capture.finalize_recording().map(|p| p.display().to_string());
+    let recording_saved = capture
+        .finalize_recording()
+        .map(|p| p.display().to_string());
 
     // A final flush() runs one more whole-buffer decode. That's expensive
     // on a 20s buffer and rarely produces new committed text (the prefix
@@ -1326,7 +1347,10 @@ fn emit_baseline_stats(
             .map(|prev| (prev - pitch_hz).abs() >= 0.5)
             .unwrap_or(true);
         if changed {
-            emitter.emit(t_in_audio, serde_json::json!({ "type": "pitch", "hz": pitch_hz }));
+            emitter.emit(
+                t_in_audio,
+                serde_json::json!({ "type": "pitch", "hz": pitch_hz }),
+            );
             *last_emitted_pitch = Some(pitch_hz);
         }
     }
@@ -1400,8 +1424,7 @@ fn run_stream_live(
     // Drop runs on LiveCapture and hound flushes the WAV header. The
     // stdin-control config thread will set `stop` on EOF; otherwise spawn
     // a dedicated EOF watcher.
-    let cfg_channel =
-        stdin_control.then(|| spawn_stdin_config_channel(Some(Arc::clone(&stop))));
+    let cfg_channel = stdin_control.then(|| spawn_stdin_config_channel(Some(Arc::clone(&stop))));
     if !stdin_control {
         let stop = Arc::clone(&stop);
         std::thread::spawn(move || {
@@ -1550,7 +1573,9 @@ fn run_stream_live(
     }
 
     let recording_path = capture.record_path().map(|p| p.display().to_string());
-    let recording_saved = capture.finalize_recording().map(|p| p.display().to_string());
+    let recording_saved = capture
+        .finalize_recording()
+        .map(|p| p.display().to_string());
     if let Some(em) = emitter.as_mut() {
         em.emit(
             started.elapsed().as_secs_f32(),

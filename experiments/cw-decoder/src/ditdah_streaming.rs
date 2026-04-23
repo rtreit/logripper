@@ -96,7 +96,9 @@ impl CausalBaselineStreamer {
     pub fn new(sample_rate: u32, cfg: CausalBaselineConfig) -> Self {
         let window_samples =
             ((cfg.window_seconds.max(0.5) * sample_rate as f32).round() as usize).max(1);
-        let min_window_samples = ((cfg.min_window_seconds.clamp(0.1, cfg.window_seconds.max(0.5))
+        let min_window_samples = ((cfg
+            .min_window_seconds
+            .clamp(0.1, cfg.window_seconds.max(0.5))
             * sample_rate as f32)
             .round() as usize)
             .min(window_samples)
@@ -149,10 +151,10 @@ impl CausalBaselineStreamer {
         }
 
         let appended = self.stabilizer.finalize_latest();
-        let needs_final = !snapshots
-            .last()
-            .is_some_and(|snapshot| snapshot.end_sample == self.processed_samples
-                && snapshot.transcript == self.stabilizer.transcript());
+        let needs_final = !snapshots.last().is_some_and(|snapshot| {
+            snapshot.end_sample == self.processed_samples
+                && snapshot.transcript == self.stabilizer.transcript()
+        });
         if needs_final || !appended.is_empty() {
             snapshots.push(CausalBaselineSnapshot {
                 end_sample: self.processed_samples,
@@ -244,7 +246,9 @@ pub fn append_snapshot_text(transcript: &mut String, snapshot_text: &str) -> Str
         return snapshot;
     }
 
-    if transcript.as_str() == snapshot || transcript.ends_with(&snapshot) || transcript.contains(&snapshot)
+    if transcript.as_str() == snapshot
+        || transcript.ends_with(&snapshot)
+        || transcript.contains(&snapshot)
     {
         return String::new();
     }
@@ -298,15 +302,19 @@ pub fn append_snapshot_text(transcript: &mut String, snapshot_text: &str) -> Str
 }
 
 /// Returns true if `appended` should NOT be added to `transcript` because
-/// it would re-introduce a recognizable repeat. Heuristics:
-///   * any token of length >= 4 in `appended` already exists in the
-///     recent tail of `transcript` (last 32 tokens) — a multi-char token
-///     is almost always a real word/callsign and shouldn't legitimately
-///     repeat back-to-back due to decoder re-segmentation
-///   * any 3-token contiguous run in `appended` matches a 3-token
-///     contiguous run in the recent tail of `transcript`
-/// Short tokens like "K", "DE", "ES", "R" really do repeat in CW
-/// exchanges, so they're allowed.
+/// it would re-introduce a recognizable repeat *at the join point*.
+///
+/// Heuristic: the LAST few tokens of `transcript` already form a contiguous
+/// sequence at the START of `appended`. That's the exact failure mode
+/// re-segmentation produces — same audio decoded slightly differently so
+/// `longest_token_suffix_prefix_overlap` (which requires byte-identical
+/// tokens) misses the overlap.
+///
+/// We deliberately do NOT scan the entire 32-token tail for any repeat of
+/// any 4+ char token: callsigns, the operator's name, "TU", "73", etc.
+/// legitimately repeat throughout a CW QSO ("CQ CQ CQ DE W7LXN W7LXN K"
+/// is one snapshot's worth of new content) and a global dedup drops it
+/// all on the floor.
 fn dedup_blocks(transcript: &str, appended: &str) -> bool {
     let cand_tokens: Vec<&str> = appended.split_whitespace().collect();
     if cand_tokens.is_empty() {
@@ -316,23 +324,24 @@ fn dedup_blocks(transcript: &str, appended: &str) -> bool {
     if trans_tokens.is_empty() {
         return false;
     }
-    // Look at the last 32 committed tokens — recent tail only, so we
-    // don't suppress a callsign that legitimately recurs minutes later.
-    let tail_start = trans_tokens.len().saturating_sub(32);
-    let tail = &trans_tokens[tail_start..];
-
-    for t in &cand_tokens {
-        if t.len() >= 4 && tail.contains(t) {
+    // Look for a contiguous run of 3+ tokens that appears as both the
+    // suffix of `transcript` and the prefix of `appended`. This catches
+    // re-segmentation duplicates without flagging legitimate within-QSO
+    // repetition that happens further down the appended text.
+    let max_run = trans_tokens.len().min(cand_tokens.len()).min(8);
+    for n in (3..=max_run).rev() {
+        let trans_tail = &trans_tokens[trans_tokens.len() - n..];
+        let cand_head = &cand_tokens[..n];
+        // Allow fuzzy match: ≥80% of token positions must match by
+        // case-insensitive equality. Pure-equality would already have
+        // been caught by `longest_token_suffix_prefix_overlap`.
+        let matches = trans_tail
+            .iter()
+            .zip(cand_head.iter())
+            .filter(|(a, b)| a.eq_ignore_ascii_case(b))
+            .count();
+        if matches as f32 / n as f32 >= 0.8 {
             return true;
-        }
-    }
-    if cand_tokens.len() >= 3 && tail.len() >= 3 {
-        for window in cand_tokens.windows(3) {
-            for tail_window in tail.windows(3) {
-                if window == tail_window {
-                    return true;
-                }
-            }
         }
     }
     false
@@ -399,8 +408,8 @@ fn common_token_prefix(values: &VecDeque<String>) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        append_snapshot_text, normalize_snapshot_text, run_causal_baseline_trace, CausalBaselineConfig,
-        PrefixStabilizer,
+        append_snapshot_text, normalize_snapshot_text, run_causal_baseline_trace,
+        CausalBaselineConfig, PrefixStabilizer,
     };
 
     #[test]
@@ -465,9 +474,15 @@ mod tests {
                 required_confirmations: 1,
             },
         );
-        assert_eq!(trace.snapshots.last().map(|snapshot| snapshot.end_sample), Some(64));
         assert_eq!(
-            trace.snapshots.last().map(|snapshot| snapshot.transcript.as_str()),
+            trace.snapshots.last().map(|snapshot| snapshot.end_sample),
+            Some(64)
+        );
+        assert_eq!(
+            trace
+                .snapshots
+                .last()
+                .map(|snapshot| snapshot.transcript.as_str()),
             Some(trace.transcript.as_str())
         );
     }

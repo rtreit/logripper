@@ -1233,8 +1233,8 @@ fn morse_to_char(s: &str) -> Option<char> {
         ".-..." => Some('&'),
         "---..." => Some(':'),
         "-.-.-." => Some(';'),
-        "-...-" => Some('='),  // also BT prosign
-        ".-.-." => Some('+'),  // also AR prosign
+        "-...-" => Some('='), // also BT prosign
+        ".-.-." => Some('+'), // also AR prosign
         "-....-" => Some('-'),
         "..--.-" => Some('_'),
         ".-..-." => Some('"'),

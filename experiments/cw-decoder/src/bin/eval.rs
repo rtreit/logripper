@@ -14,11 +14,13 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use anyhow::Result;
+use cw_decoder_poc::audio;
+use cw_decoder_poc::ditdah_streaming::{
+    run_causal_baseline, run_causal_baseline_trace, CausalBaselineConfig, CausalBaselineTrace,
+};
+use cw_decoder_poc::streaming::{DecoderConfig, StreamEvent, StreamingDecoder};
 use rayon::prelude::*;
 use serde::Deserialize;
-use cw_decoder_poc::audio;
-use cw_decoder_poc::ditdah_streaming::{run_causal_baseline, run_causal_baseline_trace, CausalBaselineConfig, CausalBaselineTrace};
-use cw_decoder_poc::streaming::{DecoderConfig, StreamEvent, StreamingDecoder};
 
 const SYNTH_RATE: u32 = 12_000;
 const SYNTH_TONE_HZ: f32 = 700.0;
@@ -246,7 +248,11 @@ impl LabelScoreMode {
     }
 }
 
-fn run_label_score(label_files: &[PathBuf], score_cfg: LabelScoreConfig, json_mode: bool) -> Result<()> {
+fn run_label_score(
+    label_files: &[PathBuf],
+    score_cfg: LabelScoreConfig,
+    json_mode: bool,
+) -> Result<()> {
     let labels = load_label_examples(label_files)?;
     let audio_cache = load_audio_cache(&labels)?;
     let scores = score_labels(&labels, &audio_cache, score_cfg);
@@ -386,7 +392,11 @@ fn run_label_sweep(
         b.exact
             .cmp(&a.exact)
             .then_with(|| a.total_distance.cmp(&b.total_distance))
-            .then_with(|| a.total_cer.partial_cmp(&b.total_cer).unwrap_or(std::cmp::Ordering::Equal))
+            .then_with(|| {
+                a.total_cer
+                    .partial_cmp(&b.total_cer)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
             .then_with(|| {
                 a.cfg
                     .window_seconds
@@ -400,7 +410,11 @@ fn run_label_sweep(
                     .unwrap_or(std::cmp::Ordering::Equal)
             })
             .then_with(|| a.cfg.decode_every_ms.cmp(&b.cfg.decode_every_ms))
-            .then_with(|| a.cfg.required_confirmations.cmp(&b.cfg.required_confirmations))
+            .then_with(|| {
+                a.cfg
+                    .required_confirmations
+                    .cmp(&b.cfg.required_confirmations)
+            })
     });
 
     if json_mode {
@@ -483,7 +497,8 @@ fn load_label_examples(label_files: &[PathBuf]) -> Result<Vec<LabelExample>> {
 fn load_audio_cache(labels: &[LabelExample]) -> Result<HashMap<PathBuf, audio::DecodedAudio>> {
     let mut cache = HashMap::new();
     for source in labels.iter().map(|label| label.source.clone()) {
-        cache.entry(source.clone())
+        cache
+            .entry(source.clone())
             .or_insert(audio::decode_file(&source)?);
     }
     Ok(cache)
@@ -508,9 +523,15 @@ fn score_labels_exact_window(
     labels
         .iter()
         .map(|example| {
-            let audio = audio_cache.get(&example.source).expect("audio cache missing source");
+            let audio = audio_cache
+                .get(&example.source)
+                .expect("audio cache missing source");
             let (start, end) = expanded_sample_bounds(audio, example, score_cfg);
-            let samples = if end > start { &audio.samples[start..end] } else { &[] };
+            let samples = if end > start {
+                &audio.samples[start..end]
+            } else {
+                &[]
+            };
             let outcome = run_causal_baseline(samples, audio.sample_rate, score_cfg.baseline);
             build_label_score(example, &normalize_copy(&outcome.transcript))
         })
@@ -525,7 +546,9 @@ fn score_labels_full_stream(
     let mut traces = HashMap::new();
     for source in labels.iter().map(|label| label.source.clone()) {
         traces.entry(source.clone()).or_insert_with(|| {
-            let audio = audio_cache.get(&source).expect("audio cache missing source");
+            let audio = audio_cache
+                .get(&source)
+                .expect("audio cache missing source");
             run_causal_baseline_trace(&audio.samples, audio.sample_rate, score_cfg.baseline)
         });
     }
@@ -533,7 +556,9 @@ fn score_labels_full_stream(
     labels
         .iter()
         .map(|example| {
-            let audio = audio_cache.get(&example.source).expect("audio cache missing source");
+            let audio = audio_cache
+                .get(&example.source)
+                .expect("audio cache missing source");
             let trace = traces.get(&example.source).expect("trace missing source");
             let (start, end) = expanded_sample_bounds(audio, example, score_cfg);
             let before = transcript_at_or_before(trace, start);
@@ -617,7 +642,9 @@ fn extract_transcript_delta(before: &str, after: &str) -> String {
     if after_tokens.is_empty() {
         return String::new();
     }
-    if before_tokens.len() <= after_tokens.len() && before_tokens == after_tokens[..before_tokens.len()] {
+    if before_tokens.len() <= after_tokens.len()
+        && before_tokens == after_tokens[..before_tokens.len()]
+    {
         return after_tokens[before_tokens.len()..].join(" ");
     }
 
