@@ -738,6 +738,7 @@ fn append_stream_events(transcript: &mut String, events: Vec<StreamEvent>) {
             StreamEvent::Word => transcript.push(' '),
             StreamEvent::Garbled { .. } => transcript.push('?'),
             StreamEvent::PitchUpdate { .. }
+            | StreamEvent::PitchLost { .. }
             | StreamEvent::WpmUpdate { .. }
             | StreamEvent::Power { .. } => {}
         }

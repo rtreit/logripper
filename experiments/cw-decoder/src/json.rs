@@ -48,6 +48,10 @@ impl JsonEmitter {
                 "type": "pitch",
                 "hz": round1(*pitch_hz),
             }),
+            StreamEvent::PitchLost { reason } => json!({
+                "type": "pitch_lost",
+                "reason": reason,
+            }),
             StreamEvent::WpmUpdate { wpm } => json!({
                 "type": "wpm",
                 "wpm": round2(*wpm),

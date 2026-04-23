@@ -263,6 +263,25 @@ enum Cmd {
         #[arg(long)]
         stdin_control: bool,
     },
+    /// Diagnostic: scan candidate pitches across an audio file and print
+    /// the trial-decode Fisher score per pitch. Use this to compare
+    /// faint signals vs noise and tune lock thresholds.
+    ProbeFisher {
+        /// Path to audio file (mp3/wav/m4a/...).
+        path: PathBuf,
+        /// Lowest candidate pitch (Hz).
+        #[arg(long, default_value_t = 350.0)]
+        min_hz: f32,
+        /// Highest candidate pitch (Hz).
+        #[arg(long, default_value_t = 1500.0)]
+        max_hz: f32,
+        /// Step between candidate pitches (Hz).
+        #[arg(long, default_value_t = 10.0)]
+        step_hz: f32,
+        /// Only emit the top-N pitches by Fisher score.
+        #[arg(long, default_value_t = 8)]
+        top: usize,
+    },
 }
 
 fn main() -> Result<()> {
@@ -433,7 +452,53 @@ fn main() -> Result<()> {
                 stdin_control,
             )
         }
+        Cmd::ProbeFisher {
+            path,
+            min_hz,
+            max_hz,
+            step_hz,
+            top,
+        } => run_probe_fisher(&path, min_hz, max_hz, step_hz, top),
     }
+}
+
+fn run_probe_fisher(
+    path: &std::path::Path,
+    min_hz: f32,
+    max_hz: f32,
+    step_hz: f32,
+    top: usize,
+) -> Result<()> {
+    let audio = audio::decode_file(path).context("decoding audio")?;
+    println!(
+        "Probing: {} ({} Hz, {:.2} s)",
+        path.display(),
+        audio.sample_rate,
+        audio.samples.len() as f32 / audio.sample_rate as f32
+    );
+    let mut scored: Vec<(f32, f32)> = Vec::new();
+    let mut f = min_hz;
+    while f <= max_hz {
+        let s = streaming::trial_decode_score(&audio.samples, audio.sample_rate, f);
+        scored.push((f, s));
+        f += step_hz;
+    }
+    scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    println!("Top {top} pitches by trial-decode Fisher:");
+    for (i, (p, s)) in scored.iter().take(top).enumerate() {
+        println!("  {:>2}. pitch={:>7.1} Hz  fisher={:>9.3}", i + 1, p, s);
+    }
+    let max_fisher = scored.first().map(|(_, s)| *s).unwrap_or(0.0);
+    let mean: f32 = scored.iter().map(|(_, s)| *s).sum::<f32>() / scored.len() as f32;
+    let mut s2: Vec<f32> = scored.iter().map(|(_, s)| *s).collect();
+    s2.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let p50 = s2[s2.len() / 2];
+    let p90 = s2[s2.len() * 9 / 10];
+    println!(
+        "Distribution: max={:.3} p90={:.3} p50={:.3} mean={:.3}",
+        max_fisher, p90, p50, mean
+    );
+    Ok(())
 }
 
 fn run_file(
@@ -790,6 +855,14 @@ fn run_stream_file(
                         println!(
                             "[t={:>6.2}s real+{:>4}ms] PITCH lock: {:.1} Hz",
                             t_in_audio, lag_ms, pitch_hz
+                        );
+                    }
+                }
+                streaming::StreamEvent::PitchLost { reason } => {
+                    if !quiet {
+                        println!(
+                            "[t={:>6.2}s real+{:>4}ms] PITCH lost ({})",
+                            t_in_audio, lag_ms, reason
                         );
                     }
                 }
@@ -1560,6 +1633,9 @@ fn run_stream_live(
             match ev {
                 streaming::StreamEvent::PitchUpdate { pitch_hz } => {
                     println!("[t={t:>6.2}s] PITCH lock: {pitch_hz:.1} Hz");
+                }
+                streaming::StreamEvent::PitchLost { reason } => {
+                    println!("[t={t:>6.2}s] PITCH lost ({reason})");
                 }
                 streaming::StreamEvent::WpmUpdate { wpm } => {
                     let changed = last_wpm.map(|w| (w - wpm).abs() >= 1.0).unwrap_or(true);

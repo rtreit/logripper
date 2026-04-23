@@ -33,6 +33,20 @@ const GOERTZEL_WIN_MS: f32 = 25.0;
 const POWER_SMOOTH_MS: f32 = 20.0;
 const PITCH_LOCK_SECONDS: f32 = 6.0;
 const PITCH_REEVAL_SECONDS: f32 = 8.0;
+/// Quality watchdog: rolling Fisher check on this many seconds of recent
+/// post-lock audio. Long enough to span character/word gaps, short
+/// enough to react when conditions go bad.
+const QUALITY_WINDOW_SECONDS: f32 = 8.0;
+/// Run the post-lock quality check this often.
+const QUALITY_CHECK_SECONDS: f32 = 4.0;
+/// Minimum trial-decode Fisher to keep the lock once acquired. Set
+/// lower than `MIN_LOCK_FISHER` so a brief signal dip doesn't
+/// immediately drop the lock — that's what `QUALITY_DROP_CONSECUTIVE`
+/// is for.
+const MIN_HOLD_FISHER: f32 = 3.5;
+/// Number of consecutive failed quality checks required before we
+/// drop the lock (hysteresis against QSB / brief pauses).
+const QUALITY_DROP_CONSECUTIVE: u32 = 2;
 const POWER_HISTORY_SECONDS: f32 = 4.0;
 const DIT_HISTORY: usize = 32;
 const DIT_DAH_BOUNDARY: f32 = 2.0;
@@ -124,6 +138,10 @@ impl Default for DecoderConfig {
 pub enum StreamEvent {
     /// Pitch lock acquired or refreshed.
     PitchUpdate { pitch_hz: f32 },
+    /// Pitch lock dropped because the trial-decode quality watchdog
+    /// concluded the signal is no longer coherent CW. The decoder
+    /// resets and starts hunting for a new lock from scratch.
+    PitchLost { reason: String },
     /// New WPM estimate (smoothed).
     WpmUpdate { wpm: f32 },
     /// A decoded character emitted in real time.
@@ -360,7 +378,11 @@ fn detect_pitch(samples: &[f32], sample_rate: u32, min_snr_linear: f32) -> Resul
     // weighting so absolute loudness can't completely dominate.
     //
     // First pass: build a shortlist of candidates that clear the SNR
-    // gate and have at least mild bimodality.
+    // gate and have at least some bimodality. We use a permissive
+    // keying threshold (3.0 instead of 5.0) so faint signals — where
+    // background noise raises the floor and shrinks q90/q10 — still
+    // make the list. The trial-decode Fisher score below is what
+    // ultimately separates real CW from noise.
     let mut shortlist: Vec<(usize, f32)> = Vec::new();
     for &i in &candidates {
         let p = sum[i];
@@ -376,7 +398,7 @@ fn detect_pitch(samples: &[f32], sample_rate: u32, min_snr_linear: f32) -> Resul
         let q10 = series[series.len() / 10].max(1e-30);
         let q90 = series[series.len() * 9 / 10].max(1e-30);
         let keying = (q90 / q10).clamp(1.0, 5000.0);
-        if keying < 5.0 {
+        if keying < 3.0 {
             continue;
         }
         let prelim = snr.sqrt() * keying;
@@ -390,59 +412,96 @@ fn detect_pitch(samples: &[f32], sample_rate: u32, min_snr_linear: f32) -> Resul
     }
     shortlist.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 
-    // If we have only one viable candidate, accept it without trial decode.
-    if shortlist.len() == 1 {
-        return Ok(shortlist[0].0 as f32 * df);
-    }
-
-    // Trial-decode the top N candidates and re-rank by dit/dah cluster
-    // separation (Fisher discriminant on on-pulse durations). This catches
-    // cases like two stations chorusing within one Goertzel passband, where
-    // the FFT/keying score still favours the loud blur but the actual
-    // morse timing is mush.
-    const TRIAL_TOP_N: usize = 4;
-    // Multiplier on the prelim score that the best trial-winner must beat
-    // to oust the prelim leader. Keeps single-signal cases (where the
-    // prelim leader is clearly correct) stable while still letting trial
-    // scoring rescue the chorus case.
-    const TRIAL_OUST_MARGIN: f32 = 1.5;
+    // Trial-decode the top N candidates and rank by dit/dah cluster
+    // separation (Fisher discriminant on on-pulse durations). For
+    // very faint signals the FFT-based prelim score is dominated by
+    // noise statistics, so we lean heavily on the trial Fisher score
+    // for the actual lock decision and apply a hard minimum so we
+    // never lock onto pure noise.
+    //
+    // Also evaluate adjacent-bin Fisher (±1 bin) and take the max so
+    // we don't reject a real signal just because the FFT bin centre
+    // lies a few Hz off the actual tone.
+    const TRIAL_TOP_N: usize = 8;
+    const MIN_LOCK_FISHER: f32 = 5.0;
+    // Multiplier on prelim leader's Fisher that a challenger must
+    // beat to oust it. Keeps stable single-signal cases from
+    // flapping on near-ties.
+    const TRIAL_OUST_MARGIN: f32 = 1.25;
     let n = shortlist.len().min(TRIAL_TOP_N);
-    let mut best_trial = (shortlist[0].0, 0.0_f32);
     let debug = std::env::var("CW_PITCH_DEBUG").is_ok();
+    let eval_fisher = |idx: usize| -> f32 {
+        let mut best = 0.0_f32;
+        for di in -1i32..=1 {
+            let bin = idx as i32 + di;
+            if bin <= 0 {
+                continue;
+            }
+            let p = bin as f32 * df;
+            if !(FREQ_MIN_HZ..=FREQ_MAX_HZ).contains(&p) {
+                continue;
+            }
+            let s = trial_decode_score(samples, sample_rate, p);
+            if s > best {
+                best = s;
+            }
+        }
+        best
+    };
+    let mut scored: Vec<(usize, f32, f32)> = Vec::with_capacity(n); // (idx, prelim, fisher)
     for &(idx, prelim) in &shortlist[..n] {
-        let pitch = idx as f32 * df;
-        let trial = trial_decode_score(samples, sample_rate, pitch);
+        let fisher = eval_fisher(idx);
         if debug {
             eprintln!(
-                "[cw-decoder pitch trial] cand {:.1} Hz prelim={:.2} trial={:.3}",
-                pitch, prelim, trial
+                "[cw-decoder pitch trial] cand {:.1} Hz prelim={:.2} fisher={:.3}",
+                idx as f32 * df,
+                prelim,
+                fisher
             );
         }
-        if trial > best_trial.1 {
-            best_trial = (idx, trial);
-        }
+        scored.push((idx, prelim, fisher));
     }
+    // Hard quality gate: refuse to lock unless at least one candidate
+    // produces dit/dah clusters cleanly separated enough to be
+    // distinguishable from background noise.
+    let max_fisher = scored.iter().map(|(_, _, f)| *f).fold(0.0_f32, f32::max);
+    if max_fisher < MIN_LOCK_FISHER {
+        if debug {
+            eprintln!(
+                "[cw-decoder pitch trial] no candidate cleared MIN_LOCK_FISHER={:.1} (best={:.2})",
+                MIN_LOCK_FISHER, max_fisher
+            );
+        }
+        return Err(anyhow!(
+            "no candidate produced clean dit/dah clusters (best Fisher={:.2}, need >={:.1})",
+            max_fisher,
+            MIN_LOCK_FISHER
+        ));
+    }
+    // Pick the leader by Fisher; require it to clearly beat the
+    // prelim FFT/keying leader before ousting it (avoids flapping).
+    let prelim_leader = scored[0]; // shortlist already sorted by prelim
+    let mut sorted_by_fisher = scored.clone();
+    sorted_by_fisher
+        .sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
+    let fisher_leader = sorted_by_fisher[0];
+    let chosen = if fisher_leader.0 == prelim_leader.0 {
+        prelim_leader.0
+    } else if fisher_leader.2 > prelim_leader.2 * TRIAL_OUST_MARGIN {
+        fisher_leader.0
+    } else {
+        prelim_leader.0
+    };
     if debug {
         eprintln!(
-            "[cw-decoder pitch trial] prelim_leader={:.1} Hz, best_trial={:.1} Hz score={:.3}",
-            shortlist[0].0 as f32 * df,
-            best_trial.0 as f32 * df,
-            best_trial.1
+            "[cw-decoder pitch trial] prelim_leader={:.1} Hz fisher={:.3}, fisher_leader={:.1} Hz fisher={:.3} -> chose {:.1} Hz",
+            prelim_leader.0 as f32 * df,
+            prelim_leader.2,
+            fisher_leader.0 as f32 * df,
+            fisher_leader.2,
+            chosen as f32 * df
         );
     }
-    // If the best trial winner is the same as the prelim leader, just
-    // return it. Otherwise, only oust the prelim leader if its trial
-    // score is meaningfully worse — avoids flapping on near-ties.
-    let prelim_leader = shortlist[0].0;
-    if best_trial.0 == prelim_leader {
-        return Ok(prelim_leader as f32 * df);
-    }
-    let leader_trial = trial_decode_score(samples, sample_rate, prelim_leader as f32 * df);
-    let chosen = if best_trial.1 > leader_trial * TRIAL_OUST_MARGIN {
-        best_trial.0
-    } else {
-        prelim_leader
-    };
     Ok(chosen as f32 * df)
 }
 
@@ -462,7 +521,7 @@ fn detect_pitch(samples: &[f32], sample_rate: u32, min_snr_linear: f32) -> Resul
 /// outside [2.0, 4.5] (real CW is exactly 3 by spec; we tolerate
 /// reasonable slop) and when there are too few intervals to be
 /// statistically meaningful.
-fn trial_decode_score(samples: &[f32], sample_rate: u32, pitch_hz: f32) -> f32 {
+pub fn trial_decode_score(samples: &[f32], sample_rate: u32, pitch_hz: f32) -> f32 {
     let win_size = (sample_rate as f32 * GOERTZEL_WIN_MS / 1000.0) as usize;
     let win_size = win_size.max(32);
     let step = (win_size / 4).max(1);
@@ -1163,6 +1222,18 @@ pub struct StreamingDecoder {
     samples_since_pitch_eval: usize,
     pitch_reeval_threshold: usize,
 
+    /// Rolling buffer of recent post-lock audio used by the quality
+    /// watchdog. Capped at QUALITY_WINDOW_SECONDS worth of samples.
+    quality_buf: VecDeque<f32>,
+    quality_buf_capacity: usize,
+    /// Samples accumulated since the last quality check fired.
+    samples_since_quality_check: usize,
+    quality_check_threshold: usize,
+    /// Number of consecutive quality checks that scored below
+    /// MIN_HOLD_FISHER. Lock is dropped when this hits
+    /// QUALITY_DROP_CONSECUTIVE.
+    quality_failed_consecutive: u32,
+
     goertzel: Option<Goertzel>,
     /// Off-band noise references at multiple offsets around the locked
     /// pitch. We take the *median* per power sample to estimate noise,
@@ -1222,6 +1293,13 @@ impl StreamingDecoder {
             pitch_locked: None,
             samples_since_pitch_eval: 0,
             pitch_reeval_threshold: (TARGET_RATE as f32 * PITCH_REEVAL_SECONDS) as usize,
+            quality_buf: VecDeque::with_capacity(
+                (TARGET_RATE as f32 * QUALITY_WINDOW_SECONDS) as usize + 1,
+            ),
+            quality_buf_capacity: (TARGET_RATE as f32 * QUALITY_WINDOW_SECONDS) as usize,
+            samples_since_quality_check: 0,
+            quality_check_threshold: (TARGET_RATE as f32 * QUALITY_CHECK_SECONDS) as usize,
+            quality_failed_consecutive: 0,
             goertzel: None,
             noise_bins: Vec::new(),
             smooth_window,
@@ -1315,6 +1393,48 @@ impl StreamingDecoder {
 
         self.feed_goertzel(&filtered, &mut events);
 
+        // --- Quality watchdog: roll a window of recent audio and
+        // periodically re-check the trial-decode Fisher score at the
+        // currently locked pitch. If the signal degrades to noise we
+        // drop the lock so the next caller doesn't keep emitting
+        // letters from random spikes.
+        for &s in &filtered {
+            self.quality_buf.push_back(s);
+            if self.quality_buf.len() > self.quality_buf_capacity {
+                self.quality_buf.pop_front();
+            }
+        }
+        self.samples_since_quality_check += filtered.len();
+        if self.samples_since_quality_check >= self.quality_check_threshold
+            && self.quality_buf.len() >= self.quality_buf_capacity
+        {
+            self.samples_since_quality_check = 0;
+            if let Some(pitch) = self.pitch_locked {
+                let buf: Vec<f32> = self.quality_buf.iter().copied().collect();
+                let fisher = trial_decode_score(&buf, TARGET_RATE, pitch);
+                let debug = std::env::var("CW_PITCH_DEBUG").is_ok();
+                if debug {
+                    eprintln!(
+                        "[cw-decoder quality] pitch={:.1} Hz fisher={:.3} (hold>={:.1}, fails={})",
+                        pitch, fisher, MIN_HOLD_FISHER, self.quality_failed_consecutive
+                    );
+                }
+                if fisher < MIN_HOLD_FISHER {
+                    self.quality_failed_consecutive += 1;
+                    if self.quality_failed_consecutive >= QUALITY_DROP_CONSECUTIVE {
+                        let reason = format!(
+                            "quality watchdog: Fisher {:.2} < {:.1} for {} consecutive checks",
+                            fisher, MIN_HOLD_FISHER, self.quality_failed_consecutive
+                        );
+                        self.drop_pitch_lock();
+                        events.push(StreamEvent::PitchLost { reason });
+                    }
+                } else {
+                    self.quality_failed_consecutive = 0;
+                }
+            }
+        }
+
         // --- Periodic pitch re-eval (with hysteresis) ------------------
         self.samples_since_pitch_eval += filtered.len();
         if self.samples_since_pitch_eval >= self.pitch_reeval_threshold {
@@ -1327,6 +1447,29 @@ impl StreamingDecoder {
         }
 
         Ok(events)
+    }
+
+    /// Tear down all per-lock state so the next pitch search starts
+    /// fresh. Called by the quality watchdog when the locked signal
+    /// degrades to noise.
+    fn drop_pitch_lock(&mut self) {
+        self.pitch_locked = None;
+        self.goertzel = None;
+        self.noise_bins.clear();
+        self.smooth_buf.clear();
+        self.smooth_sum = 0.0;
+        self.noise_smooth_buf.clear();
+        self.noise_smooth_sum = 0.0;
+        self.power_emit_accum = 0.0;
+        self.samples_since_pitch_eval = 0;
+        self.samples_since_quality_check = 0;
+        self.quality_failed_consecutive = 0;
+        self.quality_buf.clear();
+        self.pre_lock_buf.clear();
+        let power_rate = TARGET_RATE as f32 / ((TARGET_RATE as f32 * GOERTZEL_WIN_MS / 1000.0) as usize / 4).max(1) as f32;
+        self.decoder = Decoder::new(power_rate);
+        self.decoder.threshold_scale = self.config.threshold_scale;
+        self.decoder.auto_threshold = self.config.auto_threshold;
     }
 
     fn feed_goertzel(&mut self, audio: &[f32], events: &mut Vec<StreamEvent>) {
@@ -1507,7 +1650,7 @@ mod trial_decode_tests {
     use super::*;
     use std::f32::consts::TAU;
 
-    fn synth_paris(sample_rate: u32, pitch_hz: f32, wpm: f32, secs: f32) -> Vec<f32> {
+    pub(super) fn synth_paris(sample_rate: u32, pitch_hz: f32, wpm: f32, secs: f32) -> Vec<f32> {
         // PARIS = .--.  .-  .-.  ..  ...   plus inter-word gap = 50 dot units total.
         let dot_secs = 1.2 / wpm;
         let dot_n = (dot_secs * sample_rate as f32) as usize;
@@ -1624,5 +1767,104 @@ mod trial_decode_tests {
             on_pitch,
             pure_noise
         );
+    }
+}
+
+#[cfg(test)]
+mod measure_fisher {
+    use super::*;
+    use super::trial_decode_tests::synth_paris;
+#[test]
+fn measure_fisher_noise_vs_cw() {
+    let sr = 16000u32;
+    let mut s: u32 = 0xDEAD_BEEF;
+    let mut rng = || { s = s.wrapping_mul(1664525).wrapping_add(1013904223); ((s >> 8) as f32 / (1u32<<24) as f32 - 0.5) * 2.0 };
+    // 1) Pure white noise (no signal)
+    let noise: Vec<f32> = (0..sr as usize * 6).map(|_| rng() * 0.1).collect();
+    // Probe many candidate pitches
+    let mut max_noise_fisher: f32 = 0.0;
+    for f in (350..1500).step_by(15) {
+        let s = trial_decode_score(&noise, sr, f as f32);
+        if s > max_noise_fisher { max_noise_fisher = s; }
+    }
+    // 2) Faint CW at 700 Hz
+    let cw_clean = synth_paris(sr, 700.0, 18.0, 6.0);
+    for &snr_db in &[20.0_f32, 10.0, 6.0, 3.0, 0.0, -3.0, -6.0] {
+        let cw_amp = 10f32.powf(snr_db / 20.0) * 0.1;
+        let mixed: Vec<f32> = cw_clean.iter().map(|&x| {
+            x * cw_amp + rng() * 0.1
+        }).collect();
+        let on = trial_decode_score(&mixed, sr, 700.0);
+        let off = trial_decode_score(&mixed, sr, 1200.0);
+        eprintln!("SNR={:>5.1}dB  Fisher@700={:>8.2}  Fisher@1200={:>8.2}", snr_db, on, off);
+    }
+    eprintln!("PURE NOISE max-Fisher across all candidate pitches = {:.2}", max_noise_fisher);
+}
+}
+
+#[cfg(test)]
+mod lock_behavior_tests {
+    use super::*;
+    use super::trial_decode_tests::synth_paris;
+
+    fn lcg_noise(n: usize, amp: f32, seed: u32) -> Vec<f32> {
+        let mut s = seed;
+        (0..n).map(|_| {
+            s = s.wrapping_mul(1664525).wrapping_add(1013904223);
+            ((s >> 8) as f32 / (1u32 << 24) as f32 - 0.5) * 2.0 * amp
+        }).collect()
+    }
+
+    fn run_decoder(audio: &[f32], sample_rate: u32) -> (bool, bool, usize) {
+        // Returns (locked_at_least_once, lost_after_lock, char_count).
+        let mut dec = StreamingDecoder::new(sample_rate).expect("decoder");
+        let chunk = (sample_rate / 10) as usize; // 100 ms
+        let mut locked = false;
+        let mut lost = false;
+        let mut chars = 0usize;
+        for c in audio.chunks(chunk) {
+            let events = dec.feed(c).expect("feed");
+            for ev in events {
+                match ev {
+                    StreamEvent::PitchUpdate { .. } => locked = true,
+                    StreamEvent::PitchLost { .. } => { if locked { lost = true; } }
+                    StreamEvent::Char { .. } => chars += 1,
+                    _ => {}
+                }
+            }
+        }
+        for ev in dec.flush() {
+            if let StreamEvent::Char { .. } = ev { chars += 1; }
+        }
+        (locked, lost, chars)
+    }
+
+    #[test]
+    fn pure_noise_does_not_lock() {
+        let sr = 16000u32;
+        let audio = lcg_noise(sr as usize * 20, 0.1, 0xDEAD_BEEF);
+        let (locked, _lost, chars) = run_decoder(&audio, sr);
+        assert!(!locked, "decoder should not lock on pure white noise");
+        assert_eq!(chars, 0, "decoder should not emit characters on pure noise");
+    }
+
+    #[test]
+    fn clean_cw_locks_and_decodes() {
+        let sr = 16000u32;
+        let audio = synth_paris(sr, 700.0, 20.0, 12.0);
+        let (locked, _lost, chars) = run_decoder(&audio, sr);
+        assert!(locked, "decoder should lock on clean CW");
+        assert!(chars >= 5, "expected several decoded chars from PARIS, got {}", chars);
+    }
+
+    #[test]
+    fn signal_loss_drops_lock() {
+        let sr = 16000u32;
+        // 12s of CW followed by 20s of pure noise — watchdog should drop within ~8s.
+        let mut audio = synth_paris(sr, 700.0, 20.0, 12.0);
+        audio.extend(lcg_noise(sr as usize * 20, 0.05, 0xCAFE_F00D));
+        let (locked, lost, _chars) = run_decoder(&audio, sr);
+        assert!(locked, "decoder should lock during the CW segment");
+        assert!(lost, "decoder should drop lock after sustained noise-only input");
     }
 }
