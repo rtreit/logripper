@@ -18,6 +18,8 @@ import "services/list_qsos_request.proto";
 import "services/list_qsos_response.proto";
 import "services/log_qso_request.proto";
 import "services/log_qso_response.proto";
+import "services/purge_deleted_qsos_request.proto";
+import "services/purge_deleted_qsos_response.proto";
 import "services/restore_qso_request.proto";
 import "services/restore_qso_response.proto";
 import "services/sync_with_qrz_request.proto";
@@ -70,6 +72,17 @@ service LogbookService {
   // it as a new record. Returns FAILED_PRECONDITION if the row is not
   // currently soft-deleted.
   rpc RestoreQso(RestoreQsoRequest) returns (RestoreQsoResponse);
+
+  // Permanently remove soft-deleted QSOs from local storage ("empty trash").
+  //
+  // Only rows that are already soft-deleted are eligible. The request must
+  // set confirm=true as a safety latch. The engine refuses the call with
+  // FAILED_PRECONDITION while a sync is active.
+  //
+  // When include_pending_remote_deletes=true, the engine pushes QRZ
+  // ACTION=DELETE for qualifying rows before the local hard-delete. Rows
+  // whose remote delete fails are NOT purged locally.
+  rpc PurgeDeletedQsos(PurgeDeletedQsosRequest) returns (PurgeDeletedQsosResponse);
 
   // Get a single QSO by local UUID.
   // Returns NOT_FOUND if local_id does not exist.

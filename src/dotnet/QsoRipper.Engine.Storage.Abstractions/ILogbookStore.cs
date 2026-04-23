@@ -46,6 +46,14 @@ public interface ILogbookStore
     /// <summary>Returns aggregate counts for the logbook.</summary>
     ValueTask<LogbookCounts> GetCountsAsync();
 
+    /// <summary>
+    /// Permanently removes soft-deleted QSO records from storage.
+    /// </summary>
+    /// <param name="localIds">When non-null, restricts purging to these local IDs only.</param>
+    /// <param name="olderThan">When set, only purges rows whose <c>DeletedAt</c> is at or before this time.</param>
+    /// <returns>The number of records permanently removed.</returns>
+    ValueTask<int> PurgeDeletedQsosAsync(IReadOnlyList<string>? localIds, DateTimeOffset? olderThan);
+
     /// <summary>Retrieves the current sync metadata.</summary>
     ValueTask<SyncMetadata> GetSyncMetadataAsync();
 

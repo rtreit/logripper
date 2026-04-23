@@ -60,6 +60,18 @@ pub trait LogbookStore: Send + Sync {
 
     /// Replace the persisted remote sync metadata snapshot.
     async fn upsert_sync_metadata(&self, metadata: &SyncMetadata) -> Result<(), StorageError>;
+
+    /// Permanently remove soft-deleted QSOs matching the provided filters.
+    ///
+    /// Only rows with `deleted_at IS NOT NULL` are eligible. When `local_ids`
+    /// is non-empty, only those IDs are considered. When `older_than_ms` is
+    /// `Some(cutoff)`, only rows with `deleted_at <= cutoff` are eligible.
+    /// Returns the number of rows removed.
+    async fn purge_deleted_qsos(
+        &self,
+        local_ids: &[String],
+        older_than_ms: Option<i64>,
+    ) -> Result<u32, StorageError>;
 }
 
 /// Persistence operations for callsign lookup snapshots stored below the hot cache.

@@ -1,0 +1,23 @@
+syntax = "proto3";
+
+package qsoripper.services;
+
+option csharp_namespace = "QsoRipper.Services";
+
+// Response from PurgeDeletedQsos with counts of rows affected.
+message PurgeDeletedQsosResponse {
+  // Number of soft-deleted rows permanently removed from local storage.
+  uint32 purged_count = 1;
+
+  // Number of QRZ remote deletes successfully pushed before the local purge.
+  // Only non-zero when include_pending_remote_deletes was true.
+  uint32 remote_deletes_pushed = 2;
+
+  // Number of QRZ remote deletes that failed. Those rows were NOT purged
+  // locally; the operator can retry.
+  uint32 remote_deletes_failed = 3;
+
+  // Human-readable summary of any errors encountered during the purge.
+  // Empty on a clean purge.
+  string error_summary = 4;
+}

@@ -194,6 +194,43 @@ public sealed class MemoryStorage : IEngineStorage, ILogbookStore, ILookupSnapsh
     }
 
     /// <inheritdoc />
+    public ValueTask<int> PurgeDeletedQsosAsync(IReadOnlyList<string>? localIds, DateTimeOffset? olderThan)
+    {
+        lock (_lock)
+        {
+            var idFilter = localIds is not null ? new HashSet<string>(localIds, StringComparer.Ordinal) : null;
+            var toRemove = new List<string>();
+
+            foreach (var (key, qso) in _qsos)
+            {
+                if (qso.DeletedAt is null)
+                {
+                    continue;
+                }
+
+                if (idFilter is not null && !idFilter.Contains(key))
+                {
+                    continue;
+                }
+
+                if (olderThan is { } cutoff && ToOffset(qso.DeletedAt) > cutoff)
+                {
+                    continue;
+                }
+
+                toRemove.Add(key);
+            }
+
+            foreach (var key in toRemove)
+            {
+                _qsos.Remove(key);
+            }
+
+            return new ValueTask<int>(toRemove.Count);
+        }
+    }
+
+    /// <inheritdoc />
     public ValueTask<LogbookCounts> GetCountsAsync()
     {
         lock (_lock)

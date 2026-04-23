@@ -977,6 +977,13 @@ mod tests {
         async fn upsert_sync_metadata(&self, _metadata: &SyncMetadata) -> Result<(), StorageError> {
             unimplemented!()
         }
+        async fn purge_deleted_qsos(
+            &self,
+            _local_ids: &[String],
+            _older_than_ms: Option<i64>,
+        ) -> Result<u32, StorageError> {
+            unimplemented!()
+        }
     }
 
     #[tonic::async_trait]

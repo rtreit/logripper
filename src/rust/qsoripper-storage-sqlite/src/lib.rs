@@ -340,6 +340,47 @@ impl LogbookStore for SqliteStorage {
 
         Ok(())
     }
+
+    async fn purge_deleted_qsos(
+        &self,
+        local_ids: &[String],
+        older_than_ms: Option<i64>,
+    ) -> Result<u32, StorageError> {
+        let connection = self.connection()?;
+        let mut total_purged: u32 = 0;
+
+        if local_ids.is_empty() {
+            // Purge all soft-deleted rows, optionally filtered by age.
+            let mut sql = String::from("DELETE FROM qsos WHERE deleted_at_ms IS NOT NULL");
+            let mut values: Vec<Value> = Vec::new();
+            if let Some(cutoff) = older_than_ms {
+                sql.push_str(" AND deleted_at_ms <= ?");
+                values.push(Value::Integer(cutoff));
+            }
+            let rows = execute_statement(&connection, &sql, &values).map_err(map_sqlite_error)?;
+            total_purged = u32::try_from(rows).unwrap_or(u32::MAX);
+        } else {
+            // Chunk the IN list to avoid hitting SQLite parameter limits.
+            const CHUNK_SIZE: usize = 500;
+            for chunk in local_ids.chunks(CHUNK_SIZE) {
+                let placeholders: String = chunk.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+                let mut sql = format!(
+                    "DELETE FROM qsos WHERE deleted_at_ms IS NOT NULL AND local_id IN ({placeholders})"
+                );
+                let mut values: Vec<Value> =
+                    chunk.iter().map(|id| Value::from(id.as_str())).collect();
+                if let Some(cutoff) = older_than_ms {
+                    sql.push_str(" AND deleted_at_ms <= ?");
+                    values.push(Value::Integer(cutoff));
+                }
+                let rows =
+                    execute_statement(&connection, &sql, &values).map_err(map_sqlite_error)?;
+                total_purged = total_purged.saturating_add(u32::try_from(rows).unwrap_or(u32::MAX));
+            }
+        }
+
+        Ok(total_purged)
+    }
 }
 
 #[tonic::async_trait]
@@ -686,5 +727,172 @@ mod tests {
         let _ = fs::remove_file(path);
         let _ = fs::remove_file(path.with_extension("db-shm"));
         let _ = fs::remove_file(path.with_extension("db-wal"));
+    }
+
+    #[tokio::test]
+    async fn sqlite_purge_removes_only_soft_deleted_rows() {
+        let storage: Arc<dyn EngineStorage> =
+            Arc::new(SqliteStorageBuilder::new().in_memory().build().unwrap());
+        let engine = LogbookEngine::new(storage.clone());
+
+        let active = engine
+            .log_qso(
+                QsoRecordBuilder::new("W1AW", "K7ACT")
+                    .band(Band::Band20m)
+                    .mode(Mode::Ft8)
+                    .timestamp(Timestamp {
+                        seconds: 1_700_000_000,
+                        nanos: 0,
+                    })
+                    .build(),
+            )
+            .await
+            .unwrap();
+        let deleted = engine
+            .log_qso(
+                QsoRecordBuilder::new("W1AW", "K7DEL")
+                    .band(Band::Band40m)
+                    .mode(Mode::Cw)
+                    .timestamp(Timestamp {
+                        seconds: 1_700_001_000,
+                        nanos: 0,
+                    })
+                    .build(),
+            )
+            .await
+            .unwrap();
+        engine.delete_qso(&deleted.local_id, false).await.unwrap();
+
+        let purged = storage
+            .logbook()
+            .purge_deleted_qsos(&[], None)
+            .await
+            .unwrap();
+        assert_eq!(purged, 1);
+
+        assert!(storage
+            .logbook()
+            .get_qso(&active.local_id)
+            .await
+            .unwrap()
+            .is_some());
+        assert!(storage
+            .logbook()
+            .get_qso(&deleted.local_id)
+            .await
+            .unwrap()
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn sqlite_purge_filters_by_local_ids() {
+        let storage: Arc<dyn EngineStorage> =
+            Arc::new(SqliteStorageBuilder::new().in_memory().build().unwrap());
+        let engine = LogbookEngine::new(storage.clone());
+
+        let d1 = engine
+            .log_qso(
+                QsoRecordBuilder::new("W1AW", "K7D1")
+                    .band(Band::Band20m)
+                    .mode(Mode::Ft8)
+                    .timestamp(Timestamp {
+                        seconds: 1_700_000_000,
+                        nanos: 0,
+                    })
+                    .build(),
+            )
+            .await
+            .unwrap();
+        let d2 = engine
+            .log_qso(
+                QsoRecordBuilder::new("W1AW", "K7D2")
+                    .band(Band::Band40m)
+                    .mode(Mode::Cw)
+                    .timestamp(Timestamp {
+                        seconds: 1_700_001_000,
+                        nanos: 0,
+                    })
+                    .build(),
+            )
+            .await
+            .unwrap();
+        engine.delete_qso(&d1.local_id, false).await.unwrap();
+        engine.delete_qso(&d2.local_id, false).await.unwrap();
+
+        let purged = storage
+            .logbook()
+            .purge_deleted_qsos(&[d1.local_id.clone()], None)
+            .await
+            .unwrap();
+        assert_eq!(purged, 1);
+
+        assert!(storage
+            .logbook()
+            .get_qso(&d2.local_id)
+            .await
+            .unwrap()
+            .is_some());
+    }
+
+    #[tokio::test]
+    async fn sqlite_purge_filters_by_older_than() {
+        let storage: Arc<dyn EngineStorage> =
+            Arc::new(SqliteStorageBuilder::new().in_memory().build().unwrap());
+        let engine = LogbookEngine::new(storage.clone());
+        let logbook = storage.logbook();
+
+        let q1 = engine
+            .log_qso(
+                QsoRecordBuilder::new("W1AW", "K7OLD")
+                    .band(Band::Band20m)
+                    .mode(Mode::Ft8)
+                    .timestamp(Timestamp {
+                        seconds: 1_700_000_000,
+                        nanos: 0,
+                    })
+                    .build(),
+            )
+            .await
+            .unwrap();
+        let q2 = engine
+            .log_qso(
+                QsoRecordBuilder::new("W1AW", "K7NEW")
+                    .band(Band::Band40m)
+                    .mode(Mode::Cw)
+                    .timestamp(Timestamp {
+                        seconds: 1_700_001_000,
+                        nanos: 0,
+                    })
+                    .build(),
+            )
+            .await
+            .unwrap();
+
+        logbook
+            .soft_delete_qso(&q1.local_id, 1000, false)
+            .await
+            .unwrap();
+        logbook
+            .soft_delete_qso(&q2.local_id, 5000, false)
+            .await
+            .unwrap();
+
+        let purged = logbook.purge_deleted_qsos(&[], Some(3000)).await.unwrap();
+        assert_eq!(purged, 1);
+
+        assert!(logbook.get_qso(&q1.local_id).await.unwrap().is_none());
+        assert!(logbook.get_qso(&q2.local_id).await.unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn sqlite_purge_no_match_returns_zero() {
+        let storage: Arc<dyn EngineStorage> =
+            Arc::new(SqliteStorageBuilder::new().in_memory().build().unwrap());
+        let purged = storage
+            .logbook()
+            .purge_deleted_qsos(&[], None)
+            .await
+            .unwrap();
+        assert_eq!(purged, 0);
     }
 }
