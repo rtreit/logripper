@@ -1,3 +1,4 @@
+using Google.Protobuf.WellKnownTypes;
 using Grpc.Core;
 using QsoRipper.Domain;
 using QsoRipper.EngineSelection;
@@ -126,6 +127,9 @@ public sealed class SwitchableEngineClientTests
             string localId,
             bool deleteFromQrz = false,
             CancellationToken ct = default) =>
+            throw new NotImplementedException();
+
+        public Task<PurgeDeletedQsosResponse> PurgeDeletedQsosAsync(IReadOnlyList<string>? localIds = null, Google.Protobuf.WellKnownTypes.Timestamp? olderThan = null, bool includePendingRemoteDeletes = false, CancellationToken ct = default) =>
             throw new NotImplementedException();
 
         public Task<LogQsoResponse> LogQsoAsync(QsoRecord qso, bool syncToQrz = false, CancellationToken ct = default) =>

@@ -60,6 +60,47 @@ pub(super) fn render(app: &App, frame: &mut Frame) {
     frame.render_widget(paragraph, popup_area);
 }
 
+/// Render a purge confirmation popup over whatever is already drawn.
+pub(super) fn render_purge(frame: &mut Frame) {
+    let popup_area = centered_rect(50, 9, frame.area());
+
+    let block = Block::bordered()
+        .title(" Purge Deleted QSOs ")
+        .title_style(Style::default().fg(Color::Red).add_modifier(Modifier::BOLD))
+        .border_style(Style::default().fg(Color::Red));
+
+    let lines = vec![
+        Line::from(""),
+        Line::from(Span::styled(
+            "  Permanently delete ALL trashed QSOs?",
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(Span::styled(
+            "  This cannot be undone.",
+            Style::default().fg(Color::Red),
+        )),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled(
+                "  [ Y / Enter: Confirm ]",
+                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+            ),
+            Span::raw("   "),
+            Span::styled("[ N / Esc: Cancel ]", Style::default().fg(Color::Green)),
+        ]),
+        Line::from(""),
+    ];
+
+    let paragraph = Paragraph::new(lines)
+        .block(block)
+        .alignment(Alignment::Left);
+
+    frame.render_widget(Clear, popup_area);
+    frame.render_widget(paragraph, popup_area);
+}
+
 /// Return a [`Rect`] centered within `area` with the given percentage width and fixed height.
 fn centered_rect(percent_x: u16, height: u16, area: Rect) -> Rect {
     let vertical = Layout::vertical([

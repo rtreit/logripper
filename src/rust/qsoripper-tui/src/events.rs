@@ -36,6 +36,10 @@ pub(crate) enum AppEvent {
     QsoDeleted(String),
     /// A QSO deletion attempt failed; value is the human-readable error message.
     QsoDeleteFailed(String),
+    /// All soft-deleted QSOs were permanently purged; value is the purged count.
+    PurgeComplete(u32),
+    /// A purge attempt failed; value is the human-readable error message.
+    PurgeFailed(String),
     /// Refreshed snapshot of recent QSOs.
     RecentQsos(Vec<RecentQso>),
     /// Background name enrichment result for one QSO in the recent list.

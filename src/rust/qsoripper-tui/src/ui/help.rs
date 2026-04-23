@@ -87,6 +87,8 @@ pub(super) fn render(frame: &mut Frame, area: Rect) {
         "Navigate QSO entries",
     ));
     lines.push(binding("Enter            ", "Load selected QSO into form"));
+    lines.push(binding("D / Delete       ", "Delete selected QSO"));
+    lines.push(binding("P                ", "Purge all trashed QSOs"));
     lines.push(binding("Esc / F3         ", "Return focus to form"));
     lines.push(Line::raw(""));
 

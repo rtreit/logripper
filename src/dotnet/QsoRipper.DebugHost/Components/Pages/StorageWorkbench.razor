@@ -1,4 +1,5 @@
 @page "/storage-workbench"
+@using QsoRipper.Services
 @inject DebugWorkbenchState WorkbenchState
 @inject RuntimeConfigWorkbenchService RuntimeConfigWorkbenchService
 @inject StorageWorkbenchService StorageWorkbenchService
@@ -87,6 +88,48 @@
         {
             <div><code>@variable.Key=@variable.Value</code></div>
         }
+    </div>
+</div>
+
+<div class="card shadow-sm mt-4">
+    <div class="card-body">
+        <div class="d-flex justify-content-between align-items-center mb-2">
+            <h2 class="h5 mb-0">Purge deleted QSOs</h2>
+            @if (purgeResponse is not null)
+            {
+                <span class="badge text-bg-info">
+                    Purged @purgeResponse.PurgedCount
+                </span>
+            }
+        </div>
+        <p class="text-muted">
+            Permanently remove all soft-deleted (trashed) QSOs from local storage. This action cannot be undone.
+        </p>
+        @if (!string.IsNullOrWhiteSpace(purgeError))
+        {
+            <div class="alert alert-danger">@purgeError</div>
+        }
+        @if (purgeResponse is not null && string.IsNullOrWhiteSpace(purgeError))
+        {
+            <div class="alert alert-success">
+                Purged @purgeResponse.PurgedCount QSO(s).
+                @if (purgeResponse.RemoteDeletesPushed > 0)
+                {
+                    <span> Remote deletes pushed: @purgeResponse.RemoteDeletesPushed.</span>
+                }
+                @if (purgeResponse.RemoteDeletesFailed > 0)
+                {
+                    <span class="text-warning"> Remote deletes failed: @purgeResponse.RemoteDeletesFailed.</span>
+                }
+                @if (!string.IsNullOrWhiteSpace(purgeResponse.ErrorSummary))
+                {
+                    <div class="mt-1 text-warning">@purgeResponse.ErrorSummary</div>
+                }
+            </div>
+        }
+        <button class="btn btn-outline-danger" @onclick="RunPurgeAsync" disabled="@isPurging">
+            @(isPurging ? "Purging…" : "Purge All Deleted")
+        </button>
     </div>
 </div>
 
@@ -195,6 +238,9 @@
     private ProtoPayloadView? syncStatusPayload;
     private ProtoPayloadView? deleteResponsePayload;
     private List<ProtoPayloadView> listedPayloads = [];
+    private PurgeDeletedQsosResponse? purgeResponse;
+    private string? purgeError;
+    private bool isPurging;
 
     protected override async Task OnInitializedAsync()
     {
@@ -233,6 +279,32 @@
         syncStatusPayload = result.SyncStatus is null ? null : ProtoJsonService.Describe(result.SyncStatus);
         deleteResponsePayload = result.DeleteResponse is null ? null : ProtoJsonService.Describe(result.DeleteResponse);
         listedPayloads = result.ListedQsos.Select(ProtoJsonService.Describe).ToList();
+    }
+
+    private async Task RunPurgeAsync()
+    {
+        isPurging = true;
+        purgeError = null;
+        purgeResponse = null;
+
+        try
+        {
+            purgeResponse = await StorageWorkbenchService.PurgeDeletedQsosAsync();
+        }
+        catch (Grpc.Core.RpcException ex)
+        {
+            purgeError = string.IsNullOrWhiteSpace(ex.Status.Detail)
+                ? $"Purge failed ({ex.StatusCode})."
+                : ex.Status.Detail;
+        }
+        catch (OperationCanceledException ex)
+        {
+            purgeError = ex.Message;
+        }
+        finally
+        {
+            isPurging = false;
+        }
     }
 
     private static string DescribeActiveStation(StationProfile profile)

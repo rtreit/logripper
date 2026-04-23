@@ -1083,6 +1083,51 @@
         </Border>
       </Border>
 
+      <!-- Purge confirmation overlay -->
+      <Border x:Name="PurgeConfirmOverlay"
+              AutomationProperties.AutomationId="PurgeConfirmOverlay"
+              IsVisible="{Binding RecentQsos.IsPurgePending}"
+              Background="#80000000">
+        <Border Background="{DynamicResource SystemControlBackgroundAltHighBrush}"
+                CornerRadius="8"
+                Padding="24"
+                HorizontalAlignment="Center"
+                VerticalAlignment="Center"
+                BoxShadow="0 8 24 0 #40000000"
+                MinWidth="360">
+          <StackPanel Spacing="16">
+            <TextBlock Text="Purge All Deleted QSOs?"
+                       FontSize="16"
+                       FontWeight="SemiBold" />
+            <TextBlock FontSize="13"
+                       TextWrapping="Wrap"
+                       Text="This will permanently remove all trashed QSOs from local storage. This action cannot be undone." />
+            <StackPanel Spacing="6">
+              <TextBlock FontSize="12"
+                         Opacity="0.72"
+                         Text="Type YES to confirm:" />
+              <TextBox Text="{Binding RecentQsos.PurgeConfirmText, Mode=TwoWay}"
+                       PlaceholderText="YES"
+                       MaxWidth="200"
+                       HorizontalAlignment="Left" />
+            </StackPanel>
+            <StackPanel Orientation="Horizontal"
+                        Spacing="10"
+                        HorizontalAlignment="Right">
+              <Button Content="Cancel"
+                      MinWidth="80"
+                      Foreground="{DynamicResource SystemControlForegroundBaseHighBrush}"
+                      Command="{Binding RecentQsos.CancelPurgeCommand}" />
+              <Button Content="Purge"
+                      MinWidth="80"
+                      Foreground="White"
+                      Classes="accent"
+                      Command="{Binding RecentQsos.ConfirmPurgeCommand}" />
+            </StackPanel>
+          </StackPanel>
+        </Border>
+      </Border>
+
       <!-- Full QSO Card overlay -->
       <ContentControl Content="{Binding FullQsoCard}">
         <ContentControl.DataTemplates>

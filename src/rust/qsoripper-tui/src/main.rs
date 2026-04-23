@@ -180,6 +180,10 @@ async fn run<B: ratatui::backend::Backend>(
 }
 
 /// Dispatch a single [`AppEvent`] to the appropriate handler.
+#[expect(
+    clippy::too_many_lines,
+    reason = "top-level event dispatch; splitting would obscure the routing logic"
+)]
 fn handle_event_with_channel(
     app: &mut App,
     event: AppEvent,
@@ -247,6 +251,17 @@ fn handle_event_with_channel(
         AppEvent::QsoDeleteFailed(err) => {
             app.set_error(format!("Delete failed: {err}"));
             app.delete_candidate_id = None;
+            app.view = app::View::LogEntry;
+        }
+        AppEvent::PurgeComplete(count) => {
+            app.set_status(format!("Purged {count} QSOs"));
+            app.view = app::View::LogEntry;
+            app.qso_list_focused = false;
+            app.qso_selected = None;
+            refresh_recent_qsos(event_tx, channel);
+        }
+        AppEvent::PurgeFailed(err) => {
+            app.set_error(format!("Purge failed: {err}"));
             app.view = app::View::LogEntry;
         }
         AppEvent::RecentQsos(qsos) => {
@@ -376,6 +391,11 @@ fn handle_key_with_channel(
         return;
     }
 
+    if matches!(app.view, app::View::ConfirmPurge) {
+        handle_confirm_purge_key(app, key, event_tx, channel);
+        return;
+    }
+
     if app.search_focused {
         handle_search_key(app, key);
         return;
@@ -408,7 +428,7 @@ fn handle_key_with_channel(
                 app.form.focused = Field::Callsign;
                 app.form.field_selected = true;
             }
-            app::View::Help | app::View::ConfirmDeleteQso => {}
+            app::View::Help | app::View::ConfirmDeleteQso | app::View::ConfirmPurge => {}
         },
         KeyCode::F(3) => {
             if !app.filtered_qsos().is_empty() {
@@ -449,7 +469,7 @@ fn handle_key_with_channel(
                 app.editing_local_id = None;
                 app.reset_timer();
             }
-            app::View::Help | app::View::ConfirmDeleteQso => {}
+            app::View::Help | app::View::ConfirmDeleteQso | app::View::ConfirmPurge => {}
         },
         KeyCode::Left if app.form.is_cycle_field() => cycle_left(app),
         KeyCode::Right if app.form.is_cycle_field() => cycle_right(app),
@@ -590,6 +610,9 @@ fn handle_qso_list_key(
                 app.view = app::View::ConfirmDeleteQso;
             }
         }
+        KeyCode::Char('p' | 'P') => {
+            app.view = app::View::ConfirmPurge;
+        }
         KeyCode::Esc | KeyCode::F(3) => {
             app.qso_list_focused = false;
             app.qso_selected = None;
@@ -636,6 +659,44 @@ fn spawn_delete_qso(
             }
             Err(e) => {
                 let _ = tx.send(AppEvent::QsoDeleteFailed(e.to_string()));
+            }
+        }
+    });
+}
+
+/// Handle key input while the purge-confirmation dialog is showing.
+fn handle_confirm_purge_key(
+    app: &mut App,
+    key: crossterm::event::KeyEvent,
+    event_tx: &mpsc::UnboundedSender<AppEvent>,
+    channel: &tonic::transport::Channel,
+) {
+    use crossterm::event::KeyCode;
+    match key.code {
+        KeyCode::Char('y' | 'Y') | KeyCode::Enter => {
+            spawn_purge_deleted_qsos(event_tx, channel);
+        }
+        KeyCode::Char('n' | 'N') | KeyCode::Esc => {
+            app.view = app::View::LogEntry;
+        }
+        _ => {}
+    }
+}
+
+/// Spawn a task to purge all soft-deleted QSOs and forward the result to the event channel.
+fn spawn_purge_deleted_qsos(
+    event_tx: &mpsc::UnboundedSender<AppEvent>,
+    channel: &tonic::transport::Channel,
+) {
+    let tx = event_tx.clone();
+    let channel = channel.clone();
+    tokio::spawn(async move {
+        match grpc::purge_deleted_qsos(channel).await {
+            Ok(count) => {
+                let _ = tx.send(AppEvent::PurgeComplete(count));
+            }
+            Err(e) => {
+                let _ = tx.send(AppEvent::PurgeFailed(e.to_string()));
             }
         }
     });
@@ -2715,5 +2776,105 @@ mod tests {
         });
         apply_rig_snapshot(&mut app, rig);
         assert_eq!(app.form.frequency_mhz, original_freq); // unchanged
+    }
+
+    #[test]
+    fn handle_qso_list_key_p_sets_confirm_purge_view() {
+        let (lookup_tx, _rx) = make_watch();
+        let mut app = make_app();
+        app.recent_qsos.push(make_qso("1", "K7ABC"));
+        app.qso_list_focused = true;
+        app.qso_selected = Some(0);
+        handle_qso_list_key(&mut app, make_key(KeyCode::Char('p')), &lookup_tx);
+        assert!(matches!(app.view, View::ConfirmPurge));
+    }
+
+    #[test]
+    fn handle_qso_list_key_upper_p_sets_confirm_purge_view() {
+        let (lookup_tx, _rx) = make_watch();
+        let mut app = make_app();
+        app.recent_qsos.push(make_qso("1", "K7ABC"));
+        app.qso_list_focused = true;
+        app.qso_selected = Some(0);
+        handle_qso_list_key(&mut app, make_key(KeyCode::Char('P')), &lookup_tx);
+        assert!(matches!(app.view, View::ConfirmPurge));
+    }
+
+    #[tokio::test]
+    async fn handle_key_confirm_purge_n_cancels() {
+        let (tx, _rx) = mpsc::unbounded_channel::<AppEvent>();
+        let (lookup_tx, _lookup_rx) = make_watch();
+        let (rig_tx, _rig_rx) = make_rig_watch();
+        let mut app = make_app();
+        app.view = View::ConfirmPurge;
+        handle_key(
+            &mut app,
+            make_key(KeyCode::Char('n')),
+            &tx,
+            &lookup_tx,
+            &rig_tx,
+            "",
+        );
+        assert!(matches!(app.view, View::LogEntry));
+    }
+
+    #[tokio::test]
+    async fn handle_key_confirm_purge_esc_cancels() {
+        let (tx, _rx) = mpsc::unbounded_channel::<AppEvent>();
+        let (lookup_tx, _lookup_rx) = make_watch();
+        let (rig_tx, _rig_rx) = make_rig_watch();
+        let mut app = make_app();
+        app.view = View::ConfirmPurge;
+        handle_key(
+            &mut app,
+            make_key(KeyCode::Esc),
+            &tx,
+            &lookup_tx,
+            &rig_tx,
+            "",
+        );
+        assert!(matches!(app.view, View::LogEntry));
+    }
+
+    #[tokio::test]
+    async fn handle_event_purge_complete_sets_status() {
+        let (tx, _rx) = mpsc::unbounded_channel::<AppEvent>();
+        let (lookup_tx, _lookup_rx) = make_watch();
+        let (rig_tx, _rig_rx) = make_rig_watch();
+        let mut app = make_app();
+        app.view = View::ConfirmPurge;
+        handle_event(
+            &mut app,
+            AppEvent::PurgeComplete(5),
+            &tx,
+            &lookup_tx,
+            &rig_tx,
+            "",
+        );
+        assert!(matches!(app.view, View::LogEntry));
+        let msg = app.status_message.as_ref().unwrap();
+        assert!(!msg.is_error);
+        assert!(msg.text.contains('5'));
+    }
+
+    #[tokio::test]
+    async fn handle_event_purge_failed_sets_error() {
+        let (tx, _rx) = mpsc::unbounded_channel::<AppEvent>();
+        let (lookup_tx, _lookup_rx) = make_watch();
+        let (rig_tx, _rig_rx) = make_rig_watch();
+        let mut app = make_app();
+        app.view = View::ConfirmPurge;
+        handle_event(
+            &mut app,
+            AppEvent::PurgeFailed("connection refused".to_string()),
+            &tx,
+            &lookup_tx,
+            &rig_tx,
+            "",
+        );
+        assert!(matches!(app.view, View::LogEntry));
+        let msg = app.status_message.as_ref().unwrap();
+        assert!(msg.is_error);
+        assert!(msg.text.contains("connection refused"));
     }
 }

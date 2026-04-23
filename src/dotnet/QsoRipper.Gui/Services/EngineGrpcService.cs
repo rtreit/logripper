@@ -169,6 +169,31 @@ internal sealed class EngineGrpcService : IEngineClient, IDisposable
             cancellationToken: ct);
     }
 
+    public async Task<PurgeDeletedQsosResponse> PurgeDeletedQsosAsync(
+        IReadOnlyList<string>? localIds = null,
+        Google.Protobuf.WellKnownTypes.Timestamp? olderThan = null,
+        bool includePendingRemoteDeletes = false,
+        CancellationToken ct = default)
+    {
+        var request = new PurgeDeletedQsosRequest
+        {
+            Confirm = true,
+            IncludePendingRemoteDeletes = includePendingRemoteDeletes
+        };
+
+        if (localIds is not null)
+        {
+            request.LocalIds.AddRange(localIds);
+        }
+
+        if (olderThan is not null)
+        {
+            request.OlderThan = olderThan;
+        }
+
+        return await _logbookClient.PurgeDeletedQsosAsync(request, cancellationToken: ct);
+    }
+
     public async Task<LogQsoResponse> LogQsoAsync(
         QsoRecord qso,
         bool syncToQrz = false,

@@ -43,6 +43,8 @@ pub(crate) enum View {
     Help,
     /// Confirmation dialog before deleting a QSO.
     ConfirmDeleteQso,
+    /// Confirmation dialog before purging all soft-deleted QSOs.
+    ConfirmPurge,
 }
 
 /// Resolved callsign information from a QRZ lookup (used for field auto-population).
