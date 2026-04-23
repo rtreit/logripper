@@ -10,7 +10,7 @@
 //!     cargo run --release --bin eval -- --json        # machine-readable
 //!     cargo run --release --bin eval -- --only real   # filter by name
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use anyhow::Result;
@@ -223,6 +223,8 @@ struct SweepSummary {
     exact: usize,
     total_distance: usize,
     total_cer: f32,
+    average_cer: f32,
+    worst_cer: f32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -335,6 +337,149 @@ fn run_label_sweep(
 ) -> Result<()> {
     let labels = load_label_examples(label_files)?;
     let audio_cache = load_audio_cache(&labels)?;
+    let mut seen = HashSet::new();
+    let coarse_configs = build_initial_sweep_configs(wide, &mut seen);
+    let coarse_count = coarse_configs.len();
+    let mut summaries = summarize_sweep_configs(&coarse_configs, &labels, &audio_cache, score_cfg);
+    sort_sweep_summaries(&mut summaries);
+
+    let refined_configs = build_refined_sweep_configs(&summaries, wide, &mut seen);
+    let refined_count = refined_configs.len();
+    summaries.extend(summarize_sweep_configs(
+        &refined_configs,
+        &labels,
+        &audio_cache,
+        score_cfg,
+    ));
+    sort_sweep_summaries(&mut summaries);
+
+    if json_mode {
+        let summary = serde_json::json!({
+            "kind": "label-sweep",
+            "labels": labels.len(),
+            "mode": score_cfg.mode.as_str(),
+            "pre_roll_ms": (score_cfg.pre_roll_s * 1000.0).round() as u32,
+            "post_roll_ms": (score_cfg.post_roll_s * 1000.0).round() as u32,
+            "sweep_mode": if wide { "wide" } else { "interactive" },
+            "coarse_configs": coarse_count,
+            "refined_configs": refined_count,
+            "results": summaries.iter().map(|summary| serde_json::json!({
+                "exact": summary.exact,
+                "total_distance": summary.total_distance,
+                "total_cer": summary.total_cer,
+                "average_cer": summary.average_cer,
+                "worst_cer": summary.worst_cer,
+                "window_seconds": summary.cfg.window_seconds,
+                "min_window_seconds": summary.cfg.min_window_seconds,
+                "decode_every_ms": summary.cfg.decode_every_ms,
+                "required_confirmations": summary.cfg.required_confirmations,
+            })).collect::<Vec<_>>(),
+        });
+        println!("{}", serde_json::to_string_pretty(&summary)?);
+        return Ok(());
+    }
+
+    println!(
+        "LABEL SWEEP  labels={}  configs={} (coarse={} refined={})  sweep={}  score={}  pre={}ms  post={}ms",
+        labels.len(),
+        summaries.len(),
+        coarse_count,
+        refined_count,
+        if wide { "wide" } else { "interactive" },
+        score_cfg.mode.as_str(),
+        (score_cfg.pre_roll_s * 1000.0).round() as u32,
+        (score_cfg.post_roll_s * 1000.0).round() as u32
+    );
+    println!(
+        "{:<6} {:<8} {:<10} {:<10} {:<8} {:<6} {:<6} {:<12}",
+        "exact", "dist", "avg_cer", "worst", "window", "min", "every", "confirmations"
+    );
+    println!("{}", "-".repeat(80));
+    for summary in summaries.iter().take(top) {
+        println!(
+            "{:<6} {:<8} {:<10.3} {:<10.3} {:<8.1} {:<6.1} {:<6} {:<12}",
+            format!("{}/{}", summary.exact, labels.len()),
+            summary.total_distance,
+            summary.average_cer,
+            summary.worst_cer,
+            summary.cfg.window_seconds,
+            summary.cfg.min_window_seconds,
+            summary.cfg.decode_every_ms,
+            summary.cfg.required_confirmations
+        );
+    }
+    Ok(())
+}
+
+fn summarize_sweep_configs(
+    configs: &[CausalBaselineConfig],
+    labels: &[LabelExample],
+    audio_cache: &HashMap<PathBuf, audio::DecodedAudio>,
+    score_cfg: LabelScoreConfig,
+) -> Vec<SweepSummary> {
+    configs
+        .par_iter()
+        .copied()
+        .map(|cfg| {
+            let scores = score_labels(
+                labels,
+                audio_cache,
+                LabelScoreConfig {
+                    baseline: cfg,
+                    ..score_cfg
+                },
+            );
+            let total_cer = scores.iter().map(|s| s.cer).sum::<f32>();
+            let average_cer = total_cer / scores.len().max(1) as f32;
+            let worst_cer = scores.iter().map(|s| s.cer).fold(0.0_f32, f32::max);
+            SweepSummary {
+                cfg,
+                exact: scores.iter().filter(|s| s.exact).count(),
+                total_distance: scores.iter().map(|s| s.distance).sum(),
+                total_cer,
+                average_cer,
+                worst_cer,
+            }
+        })
+        .collect()
+}
+
+fn sort_sweep_summaries(summaries: &mut [SweepSummary]) {
+    summaries.sort_by(|a, b| {
+        b.exact
+            .cmp(&a.exact)
+            .then_with(|| a.total_distance.cmp(&b.total_distance))
+            .then_with(|| {
+                a.average_cer
+                    .partial_cmp(&b.average_cer)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .then_with(|| {
+                a.worst_cer
+                    .partial_cmp(&b.worst_cer)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .then_with(|| {
+                a.cfg
+                    .window_seconds
+                    .partial_cmp(&b.cfg.window_seconds)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .then_with(|| {
+                a.cfg
+                    .min_window_seconds
+                    .partial_cmp(&b.cfg.min_window_seconds)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .then_with(|| a.cfg.decode_every_ms.cmp(&b.cfg.decode_every_ms))
+            .then_with(|| a.cfg.required_confirmations.cmp(&b.cfg.required_confirmations))
+    });
+}
+
+fn build_initial_sweep_configs(
+    wide: bool,
+    seen: &mut HashSet<(i32, i32, u32, usize)>,
+) -> Vec<CausalBaselineConfig> {
     let window_values: &[f32] = if wide {
         &[12.0, 16.0, 20.0, 24.0, 30.0]
     } else {
@@ -358,114 +503,143 @@ fn run_label_sweep(
             }
             for decode_every_ms in decode_every_values {
                 for required_confirmations in [1usize, 2, 3] {
-                    configs.push(CausalBaselineConfig {
-                        window_seconds: *window_seconds,
-                        min_window_seconds: *min_window_seconds,
-                        decode_every_ms: *decode_every_ms,
-                        required_confirmations,
-                    });
+                    push_sweep_config(
+                        &mut configs,
+                        seen,
+                        CausalBaselineConfig {
+                            window_seconds: *window_seconds,
+                            min_window_seconds: *min_window_seconds,
+                            decode_every_ms: *decode_every_ms,
+                            required_confirmations,
+                        },
+                    );
                 }
             }
         }
     }
+    configs
+}
 
-    let mut summaries: Vec<SweepSummary> = configs
-        .into_par_iter()
-        .map(|cfg| {
-            let scores = score_labels(
-                &labels,
-                &audio_cache,
-                LabelScoreConfig {
-                    baseline: cfg,
-                    ..score_cfg
-                },
+fn build_refined_sweep_configs(
+    seeds: &[SweepSummary],
+    wide: bool,
+    seen: &mut HashSet<(i32, i32, u32, usize)>,
+) -> Vec<CausalBaselineConfig> {
+    let seed_limit = if wide { 2 } else { 1 };
+    let window_deltas: &[f32] = if wide { &[-2.0, -1.0, 1.0, 2.0] } else { &[-1.0, 1.0] };
+    let min_deltas: &[f32] = if wide {
+        &[-0.5, -0.25, 0.25, 0.5]
+    } else {
+        &[-0.25, 0.25]
+    };
+    let every_deltas: &[i32] = if wide {
+        &[-250, -100, 100, 250]
+    } else {
+        &[-100, 100]
+    };
+
+    let mut configs = Vec::new();
+    for seed in seeds.iter().take(seed_limit) {
+        let base = seed.cfg;
+        push_sweep_config(&mut configs, seen, base);
+
+        for window_delta in window_deltas {
+            push_sweep_config(
+                &mut configs,
+                seen,
+                refined_sweep_cfg(base, *window_delta, 0.0, 0, base.required_confirmations),
             );
-            SweepSummary {
-                cfg,
-                exact: scores.iter().filter(|s| s.exact).count(),
-                total_distance: scores.iter().map(|s| s.distance).sum(),
-                total_cer: scores.iter().map(|s| s.cer).sum(),
-            }
-        })
-        .collect();
-    summaries.sort_by(|a, b| {
-        b.exact
-            .cmp(&a.exact)
-            .then_with(|| a.total_distance.cmp(&b.total_distance))
-            .then_with(|| {
-                a.total_cer
-                    .partial_cmp(&b.total_cer)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            })
-            .then_with(|| {
-                a.cfg
-                    .window_seconds
-                    .partial_cmp(&b.cfg.window_seconds)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            })
-            .then_with(|| {
-                a.cfg
-                    .min_window_seconds
-                    .partial_cmp(&b.cfg.min_window_seconds)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            })
-            .then_with(|| a.cfg.decode_every_ms.cmp(&b.cfg.decode_every_ms))
-            .then_with(|| {
-                a.cfg
-                    .required_confirmations
-                    .cmp(&b.cfg.required_confirmations)
-            })
-    });
+        }
+        for min_delta in min_deltas {
+            push_sweep_config(
+                &mut configs,
+                seen,
+                refined_sweep_cfg(base, 0.0, *min_delta, 0, base.required_confirmations),
+            );
+        }
+        for every_delta in every_deltas {
+            push_sweep_config(
+                &mut configs,
+                seen,
+                refined_sweep_cfg(base, 0.0, 0.0, *every_delta, base.required_confirmations),
+            );
+        }
 
-    if json_mode {
-        let summary = serde_json::json!({
-            "kind": "label-sweep",
-            "labels": labels.len(),
-            "mode": score_cfg.mode.as_str(),
-            "pre_roll_ms": (score_cfg.pre_roll_s * 1000.0).round() as u32,
-            "post_roll_ms": (score_cfg.post_roll_s * 1000.0).round() as u32,
-            "sweep_mode": if wide { "wide" } else { "interactive" },
-            "results": summaries.iter().map(|summary| serde_json::json!({
-                "exact": summary.exact,
-                "total_distance": summary.total_distance,
-                "total_cer": summary.total_cer,
-                "window_seconds": summary.cfg.window_seconds,
-                "min_window_seconds": summary.cfg.min_window_seconds,
-                "decode_every_ms": summary.cfg.decode_every_ms,
-                "required_confirmations": summary.cfg.required_confirmations,
-            })).collect::<Vec<_>>(),
-        });
-        println!("{}", serde_json::to_string_pretty(&summary)?);
-        return Ok(());
+        for confirmations in [
+            base.required_confirmations.saturating_sub(1),
+            base.required_confirmations + 1,
+        ] {
+            push_sweep_config(
+                &mut configs,
+                seen,
+                refined_sweep_cfg(base, 0.0, 0.0, 0, confirmations),
+            );
+        }
+
+        for &(window_delta, min_delta) in &[(-1.0, -0.25), (-1.0, 0.25), (1.0, -0.25), (1.0, 0.25)] {
+            let scaled_window_delta = if wide { window_delta * 2.0 } else { window_delta };
+            let scaled_min_delta = if wide { min_delta * 2.0 } else { min_delta };
+            push_sweep_config(
+                &mut configs,
+                seen,
+                refined_sweep_cfg(
+                    base,
+                    scaled_window_delta,
+                    scaled_min_delta,
+                    0,
+                    base.required_confirmations,
+                ),
+            );
+        }
+
+        for &(every_delta, confirmation_delta) in &[(-1, -1), (-1, 1), (1, -1), (1, 1)] {
+            let scaled_every_delta = if wide { every_delta * 250 } else { every_delta * 100 };
+            let confirmations = (base.required_confirmations as isize + confirmation_delta)
+                .clamp(1, 6) as usize;
+            push_sweep_config(
+                &mut configs,
+                seen,
+                refined_sweep_cfg(base, 0.0, 0.0, scaled_every_delta, confirmations),
+            );
+        }
     }
 
-    println!(
-        "LABEL SWEEP  labels={}  configs={}  sweep={}  score={}  pre={}ms  post={}ms",
-        labels.len(),
-        summaries.len(),
-        if wide { "wide" } else { "interactive" },
-        score_cfg.mode.as_str(),
-        (score_cfg.pre_roll_s * 1000.0).round() as u32,
-        (score_cfg.post_roll_s * 1000.0).round() as u32
-    );
-    println!(
-        "{:<6} {:<8} {:<8} {:<8} {:<6} {:<6} {:<12}",
-        "exact", "dist", "cer", "window", "min", "every", "confirmations"
-    );
-    println!("{}", "-".repeat(64));
-    for summary in summaries.iter().take(top) {
-        println!(
-            "{:<6} {:<8} {:<8.2} {:<8.1} {:<6.1} {:<6} {:<12}",
-            format!("{}/{}", summary.exact, labels.len()),
-            summary.total_distance,
-            summary.total_cer,
-            summary.cfg.window_seconds,
-            summary.cfg.min_window_seconds,
-            summary.cfg.decode_every_ms,
-            summary.cfg.required_confirmations
-        );
+    configs
+}
+
+fn refined_sweep_cfg(
+    base: CausalBaselineConfig,
+    window_delta: f32,
+    min_delta: f32,
+    every_delta: i32,
+    confirmations: usize,
+) -> CausalBaselineConfig {
+    CausalBaselineConfig {
+        window_seconds: (base.window_seconds + window_delta).clamp(8.0, 40.0),
+        min_window_seconds: (base.min_window_seconds + min_delta).clamp(0.25, 8.0),
+        decode_every_ms: (base.decode_every_ms as i32 + every_delta).clamp(100, 3000) as u32,
+        required_confirmations: confirmations.clamp(1, 6),
     }
-    Ok(())
+}
+
+fn push_sweep_config(
+    configs: &mut Vec<CausalBaselineConfig>,
+    seen: &mut HashSet<(i32, i32, u32, usize)>,
+    cfg: CausalBaselineConfig,
+) {
+    if cfg.min_window_seconds > cfg.window_seconds {
+        return;
+    }
+
+    let key = (
+        (cfg.window_seconds * 100.0).round() as i32,
+        (cfg.min_window_seconds * 100.0).round() as i32,
+        cfg.decode_every_ms,
+        cfg.required_confirmations,
+    );
+    if seen.insert(key) {
+        configs.push(cfg);
+    }
 }
 
 fn load_label_examples(label_files: &[PathBuf]) -> Result<Vec<LabelExample>> {

@@ -98,15 +98,21 @@
           <ComboBox Width="180" ItemsSource="{Binding DecoderModes}" SelectedItem="{Binding SelectedDecoderMode}"
                     Background="{StaticResource BgPanel}" Foreground="{StaticResource TextHi}" />
         </StackPanel>
+        <StackPanel Grid.Column="2" Margin="0,16,0,0" Spacing="2" VerticalAlignment="Center">
+          <TextBlock Text="OPEN FILE decodes that file immediately. START LIVE captures from the selected input device." Classes="label" TextWrapping="Wrap" MaxWidth="360" />
+          <TextBlock Text="{Binding SourceLabel}" Classes="label" Foreground="{StaticResource AccentCyan}" TextWrapping="Wrap" />
+        </StackPanel>
         <Button Grid.Column="3" x:Name="RefreshButton" Margin="0,16,0,0" Classes="primary" Content="REFRESH" Click="OnRefreshClick" />
-        <Button Grid.Column="4" x:Name="OpenFileButton" Margin="0,16,0,0" Classes="primary" Content="OPEN FILE…" Click="OnOpenFileClick" />
+        <Button Grid.Column="4" x:Name="OpenFileButton" Margin="0,16,0,0" Classes="primary" Content="DECODE FILE…" Click="OnOpenFileClick"
+                ToolTip.Tip="Choose an audio file and start decoding that file." />
         <ToggleButton Grid.Column="5" Margin="0,16,0,0" Classes="primary" IsChecked="{Binding HideDecoded, Mode=TwoWay}" Content="HIDE DECODING" />
         <Button Grid.Column="6" x:Name="ReplayButton" Margin="0,16,0,0" Classes="primary"
                 Content="REPLAY &amp; SCORE" Click="OnReplayClick" MinWidth="140"
                 IsEnabled="{Binding HasLastRecording}"
-                ToolTip.Tip="Re-decode the last live recording offline and compare to the live transcript." />
+                ToolTip.Tip="Re-decode the last opened file or live recording offline and compare it to the transcript." />
         <Button Grid.Column="7" x:Name="StartStopButton" Margin="0,16,0,0" Classes="primary"
-                Content="{Binding StartStopLabel}" Click="OnStartStopClick" MinWidth="120" />
+                Content="{Binding StartStopLabel}" Click="OnStartStopClick" MinWidth="120"
+                ToolTip.Tip="Start or stop live decoding from the selected input device." />
       </Grid>
     </Border>
 
@@ -550,7 +556,8 @@
                   </Border>
                   <StackPanel Grid.Row="4" Spacing="6">
                     <TextBlock Text="VERIFIED COPY" Classes="label" />
-                    <TextBox Text="{Binding CorrectCopy, Mode=TwoWay}" AcceptsReturn="True" MinHeight="120"
+                    <TextBox Text="{Binding CorrectCopy, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" AcceptsReturn="True" MinHeight="120"
+                              TextChanged="OnCorrectCopyTextChanged"
                               Background="#0C1A28" Foreground="{StaticResource TextHi}" />
                     <TextBlock Text="Type exactly what you hear in this selected window. If a symbol is cut at the edge, mark it below." Classes="label" TextWrapping="Wrap" />
                     <Grid ColumnDefinitions="Auto,Auto,*" ColumnSpacing="14">
@@ -574,20 +581,36 @@
       </TabItem>
       <TabItem Header="TUNING">
         <Border Classes="panel">
-          <Grid RowDefinitions="Auto,Auto,Auto,*" RowSpacing="10">
-            <Grid ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,*,Auto,Auto" ColumnSpacing="10">
+          <Grid RowDefinitions="Auto,Auto,Auto,Auto,*" RowSpacing="10">
+            <Grid ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto" ColumnSpacing="10">
               <TextBlock Text="LABEL EVAL / SWEEP" Classes="label" VerticalAlignment="Center" />
               <CheckBox Grid.Column="1" Content="ALL LABELS" IsChecked="{Binding EvaluateAllLabels, Mode=TwoWay}" VerticalAlignment="Center" />
               <CheckBox Grid.Column="2" Content="FULL STREAM" IsChecked="{Binding UseFullStreamScorer, Mode=TwoWay}" VerticalAlignment="Center" />
               <CheckBox Grid.Column="3" Content="WIDE SWEEP" IsChecked="{Binding UseWideSweep, Mode=TwoWay}" VerticalAlignment="Center" />
-              <TextBlock Grid.Column="5" Text="{Binding LabelEvaluationTargetLabel}" Classes="label" TextWrapping="Wrap" VerticalAlignment="Center" />
-              <Button Grid.Column="6" Classes="primary" Content="SCORE LABELS" Click="OnRunLabelScoreClick"
+              <CheckBox Grid.Column="4" Content="USE CHECKED LABELS" IsChecked="{Binding UseSelectedLabelFiles, Mode=TwoWay}" VerticalAlignment="Center" />
+              <Button Grid.Column="5" Classes="primary" Content="SCORE LABELS" Click="OnRunLabelScoreClick"
                       IsEnabled="{Binding CanRunLabelScore}" FontSize="11" Padding="14,4" />
-              <Button Grid.Column="7" Classes="primary" Content="SWEEP BASELINE" Click="OnRunLabelSweepClick"
+              <Button Grid.Column="6" Classes="primary" Content="SWEEP BASELINE" Click="OnRunLabelSweepClick"
                       IsEnabled="{Binding CanRunLabelSweep}" FontSize="11" Padding="14,4" />
             </Grid>
 
-            <Grid Grid.Row="1" ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,*" ColumnSpacing="10">
+            <Border Grid.Row="1" BorderBrush="{StaticResource GridLine}" BorderThickness="1" CornerRadius="2" Padding="8"
+                    IsVisible="{Binding ShowSelectedLabelPicker}">
+              <Grid RowDefinitions="Auto,*" RowSpacing="6">
+                <TextBlock Text="{Binding SelectedLabelFilesSummary}" Classes="label" TextWrapping="Wrap" />
+                <ScrollViewer Grid.Row="1" MaxHeight="120" HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+                   <ItemsControl ItemsSource="{Binding AvailableLabelFiles}">
+                     <ItemsControl.ItemTemplate>
+                       <DataTemplate x:DataType="m:SelectableLabelFile">
+                         <CheckBox Content="{Binding DisplayName}" IsChecked="{Binding IsSelected, Mode=TwoWay}" Margin="0,0,0,4" />
+                       </DataTemplate>
+                     </ItemsControl.ItemTemplate>
+                   </ItemsControl>
+                </ScrollViewer>
+              </Grid>
+            </Border>
+
+            <Grid Grid.Row="2" ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,*" ColumnSpacing="10">
               <StackPanel Spacing="2">
                 <TextBlock Text="WINDOW (s)" Classes="label" />
                 <NumericUpDown Minimum="8" Maximum="40" Increment="1" Value="{Binding LabelEvalWindowSeconds, Mode=TwoWay}" />
@@ -615,31 +638,132 @@
                 </Grid>
               </StackPanel>
               <StackPanel Grid.Column="5" Spacing="4" VerticalAlignment="Bottom">
+                <TextBlock Text="{Binding LabelEvaluationTargetLabel}" Classes="label" TextWrapping="Wrap" />
                 <TextBlock Text="{Binding TopSweepSummary}" Classes="label" TextWrapping="Wrap" />
                 <Button Classes="primary" Content="APPLY TOP RESULT" Click="OnApplyTopSweepClick"
                         IsEnabled="{Binding CanApplyTopSweep}" FontSize="11" Padding="14,4" HorizontalAlignment="Left" />
               </StackPanel>
             </Grid>
 
-            <Grid Grid.Row="2" ColumnDefinitions="Auto,*" ColumnSpacing="10">
+            <Grid Grid.Row="3" ColumnDefinitions="Auto,*" ColumnSpacing="10">
               <TextBlock Text="{Binding LabelEvaluationStatusText}" Classes="label" VerticalAlignment="Center" />
               <ProgressBar Grid.Column="1" IsIndeterminate="True" Height="16" VerticalAlignment="Center"
                            IsVisible="{Binding IsEvaluationBusy}" />
             </Grid>
 
-            <Grid Grid.Row="3" RowDefinitions="Auto,*" RowSpacing="8">
-              <TextBlock Text="The Decoder tab’s Baseline ditdah mode uses these shared tuning settings directly. Sweep, apply the top result here, then switch back to Decoder for file or live A/B testing." Classes="label" TextWrapping="Wrap" />
-              <TextBox Grid.Row="1"
-                       Text="{Binding LabelEvaluationOutputText}"
-                       IsReadOnly="True"
-                       AcceptsReturn="True"
-                       TextWrapping="NoWrap"
-                       MinHeight="240"
-                       FontFamily="Consolas"
-                       FontSize="12"
-                       Background="#0C1A28"
-                       Foreground="{StaticResource TextHi}" />
-            </Grid>
+            <ScrollViewer Grid.Row="4" HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+              <StackPanel Spacing="10">
+                <TextBlock Text="The Decoder tab’s Baseline ditdah mode uses these shared tuning settings directly. Sweep, apply the top result here, then switch back to Decoder for file or live A/B testing." Classes="label" TextWrapping="Wrap" />
+
+                <Border BorderBrush="{StaticResource GridLine}" BorderThickness="1" CornerRadius="2" Padding="8"
+                        IsVisible="{Binding HasLabelScoreResult}">
+                  <StackPanel Spacing="10">
+                    <Grid ColumnDefinitions="*,*,*" ColumnSpacing="10">
+                      <Border Background="#0C1A28" BorderBrush="{StaticResource GridLine}" BorderThickness="1" Padding="10">
+                        <StackPanel>
+                          <TextBlock Text="EXACT" Classes="label" />
+                          <TextBlock Text="{Binding LabelScoreExactDisplay}" FontFamily="Consolas" FontSize="24" Foreground="{StaticResource AccentCyan}" />
+                        </StackPanel>
+                      </Border>
+                      <Border Grid.Column="1" Background="#0C1A28" BorderBrush="{StaticResource GridLine}" BorderThickness="1" Padding="10">
+                        <StackPanel>
+                          <TextBlock Text="AVG CER" Classes="label" />
+                          <TextBlock Text="{Binding LabelScoreAverageCerDisplay}" FontFamily="Consolas" FontSize="24" Foreground="{StaticResource AccentAmber}" />
+                        </StackPanel>
+                      </Border>
+                      <Border Grid.Column="2" Background="#0C1A28" BorderBrush="{StaticResource GridLine}" BorderThickness="1" Padding="10">
+                        <StackPanel>
+                          <TextBlock Text="EDIT DISTANCE" Classes="label" />
+                          <TextBlock Text="{Binding LabelScoreDistanceDisplay}" FontFamily="Consolas" FontSize="24" Foreground="{StaticResource AccentLime}" />
+                        </StackPanel>
+                      </Border>
+                    </Grid>
+                    <TextBlock Text="{Binding LabelScoreBaselineDisplay}" Classes="label" TextWrapping="Wrap" />
+                    <Grid ColumnDefinitions="280,*" ColumnSpacing="12">
+                      <Border BorderBrush="{StaticResource GridLine}" BorderThickness="1" CornerRadius="2" Padding="8">
+                        <StackPanel Spacing="6">
+                          <TextBlock Text="FAILURE BREAKDOWN" Classes="label" />
+                          <ItemsControl ItemsSource="{Binding LabelScoreBreakdown}">
+                            <ItemsControl.ItemTemplate>
+                              <DataTemplate x:DataType="vm:MainWindowViewModel+FailureBucketView">
+                                <Grid ColumnDefinitions="Auto,Auto,*" ColumnSpacing="8" Margin="0,0,0,4">
+                                  <TextBlock Text="{Binding DisplayName}" FontFamily="Consolas" Foreground="{StaticResource TextHi}" />
+                                  <TextBlock Grid.Column="1" Text="{Binding Count}" FontFamily="Consolas" Foreground="{StaticResource AccentCyan}" />
+                                  <ProgressBar Grid.Column="2" Minimum="0" Maximum="1" Value="{Binding Ratio}" Height="12" VerticalAlignment="Center" />
+                                </Grid>
+                              </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                          </ItemsControl>
+                        </StackPanel>
+                      </Border>
+                      <Border Grid.Column="1" BorderBrush="{StaticResource GridLine}" BorderThickness="1" CornerRadius="2" Padding="8">
+                        <StackPanel Spacing="6">
+                          <TextBlock Text="PER-LABEL DETAIL" Classes="label" />
+                          <ItemsControl ItemsSource="{Binding CurrentLabelScoreResult.Rows}">
+                            <ItemsControl.ItemTemplate>
+                              <DataTemplate x:DataType="m:LabelScoreRowResult">
+                                <Border BorderBrush="{StaticResource GridLine}" BorderThickness="1" CornerRadius="2" Padding="6" Margin="0,0,0,6" Background="#0C1A28">
+                                  <Grid RowDefinitions="Auto,Auto,Auto" RowSpacing="4">
+                                    <Grid ColumnDefinitions="*,Auto,Auto,Auto" ColumnSpacing="10">
+                                      <TextBlock Text="{Binding Name}" FontFamily="Consolas" Foreground="{StaticResource AccentCyan}" />
+                                      <TextBlock Grid.Column="1" Text="{Binding MatchStatus}" FontFamily="Consolas" Foreground="{StaticResource AccentLime}" />
+                                      <TextBlock Grid.Column="2" Text="{Binding Cer, StringFormat=cer {0:P1}}" FontFamily="Consolas" Foreground="{StaticResource AccentAmber}" />
+                                      <TextBlock Grid.Column="3" Text="{Binding FailureClass}" FontFamily="Consolas" Foreground="{StaticResource TextDim}" />
+                                    </Grid>
+                                    <TextBlock Grid.Row="1" Text="{Binding Truth, StringFormat=truth: {0}}" TextWrapping="Wrap" Foreground="{StaticResource TextHi}" />
+                                    <TextBlock Grid.Row="2" Text="{Binding Decoded, StringFormat=decoded: {0}}" TextWrapping="Wrap" Foreground="{StaticResource TextDim}" />
+                                  </Grid>
+                                </Border>
+                              </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                          </ItemsControl>
+                        </StackPanel>
+                      </Border>
+                    </Grid>
+                  </StackPanel>
+                </Border>
+
+                <Border BorderBrush="{StaticResource GridLine}" BorderThickness="1" CornerRadius="2" Padding="8"
+                        IsVisible="{Binding HasLabelSweepResult}">
+                  <StackPanel Spacing="8">
+                    <TextBlock Text="{Binding LabelSweepSummaryDisplay}" Foreground="{StaticResource AccentCyan}" TextWrapping="Wrap" />
+                    <ItemsControl ItemsSource="{Binding LabelSweepResults}">
+                      <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="vm:MainWindowViewModel+SweepResultView">
+                          <Border BorderBrush="{StaticResource GridLine}" BorderThickness="1" CornerRadius="2" Padding="6" Margin="0,0,0,6" Background="#0C1A28">
+                            <Grid ColumnDefinitions="Auto,Auto,*,Auto,Auto,Auto,Auto,Auto,Auto,Auto" ColumnSpacing="10">
+                              <TextBlock Text="{Binding Rank, StringFormat=#{0}}" FontFamily="Consolas" Foreground="{StaticResource TextDim}" />
+                              <TextBlock Grid.Column="1" Text="{Binding ExactDisplay}" FontFamily="Consolas" Foreground="{StaticResource AccentCyan}" />
+                              <ProgressBar Grid.Column="2" Minimum="0" Maximum="1" Value="{Binding ExactRatio}" Height="12" VerticalAlignment="Center" />
+                              <TextBlock Grid.Column="3" Text="{Binding AverageCer, StringFormat=avg CER {0:P1}}" FontFamily="Consolas" Foreground="{StaticResource AccentAmber}" />
+                              <TextBlock Grid.Column="4" Text="{Binding WorstCer, StringFormat=worst {0:P1}}" FontFamily="Consolas" Foreground="{StaticResource AccentAmber}" />
+                              <TextBlock Grid.Column="5" Text="{Binding TotalDistance, StringFormat=dist {0}}" FontFamily="Consolas" Foreground="{StaticResource AccentLime}" />
+                              <TextBlock Grid.Column="6" Text="{Binding WindowSeconds, StringFormat=win {0:F1}s}" FontFamily="Consolas" Foreground="{StaticResource TextHi}" />
+                              <TextBlock Grid.Column="7" Text="{Binding MinWindowSeconds, StringFormat=min {0:F1}s}" FontFamily="Consolas" Foreground="{StaticResource TextHi}" />
+                              <TextBlock Grid.Column="8" Text="{Binding DecodeEveryMs, StringFormat={}{0}ms}" FontFamily="Consolas" Foreground="{StaticResource TextHi}" />
+                              <TextBlock Grid.Column="9" Text="{Binding RequiredConfirmations, StringFormat=conf {0}}" FontFamily="Consolas" Foreground="{StaticResource TextHi}" />
+                            </Grid>
+                          </Border>
+                        </DataTemplate>
+                      </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                  </StackPanel>
+                </Border>
+
+                <Expander Header="RAW RESULT JSON"
+                          IsVisible="{Binding LabelEvaluationOutputText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                  <TextBox Text="{Binding LabelEvaluationOutputText}"
+                           IsReadOnly="True"
+                           AcceptsReturn="True"
+                           TextWrapping="NoWrap"
+                           MinHeight="180"
+                           FontFamily="Consolas"
+                           FontSize="12"
+                           Background="#0C1A28"
+                           Foreground="{StaticResource TextHi}" />
+                </Expander>
+              </StackPanel>
+            </ScrollViewer>
           </Grid>
         </Border>
       </TabItem>

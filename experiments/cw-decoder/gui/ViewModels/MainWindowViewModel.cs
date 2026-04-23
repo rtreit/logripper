@@ -41,6 +41,23 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
         Cells = new ObservableCollection<TranscriptCell>();
         WpmHistory = new ObservableCollection<double>();
         HarvestCandidates = new ObservableCollection<HarvestCandidate>();
+        AvailableLabelFiles = new ObservableCollection<SelectableLabelFile>(
+            CwDecoderProcess.ListAvailableLabelFiles().Select(path =>
+            {
+                var file = new SelectableLabelFile(path);
+                file.PropertyChanged += (_, args) =>
+                {
+                    if (string.Equals(args.PropertyName, nameof(SelectableLabelFile.IsSelected), StringComparison.Ordinal))
+                    {
+                        OnPropertyChanged(nameof(SelectedLabelFilesSummary));
+                        OnPropertyChanged(nameof(ShowSelectedLabelPicker));
+                        OnPropertyChanged(nameof(LabelEvaluationTargetLabel));
+                        OnPropertyChanged(nameof(CanRunLabelScore));
+                        OnPropertyChanged(nameof(CanRunLabelSweep));
+                    }
+                };
+                return file;
+            }));
 
         _process.EventReceived += OnEvent;
         _process.StderrLine += line => Dispatcher.UIThread.Post(() => StatusText = line);
@@ -59,6 +76,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
     public ObservableCollection<TranscriptCell> Cells { get; }
     public ObservableCollection<double> WpmHistory { get; }
     public ObservableCollection<HarvestCandidate> HarvestCandidates { get; }
+    public ObservableCollection<SelectableLabelFile> AvailableLabelFiles { get; }
 
     private string? _selectedDevice;
     public string? SelectedDevice { get => _selectedDevice; set => Set(ref _selectedDevice, value); }
@@ -89,7 +107,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
         }
     }
 
-    public string StartStopLabel => IsRunning ? "STOP" : "START";
+    public string StartStopLabel => IsRunning ? "STOP" : "START LIVE";
 
     private bool _hideDecoded;
     public bool HideDecoded { get => _hideDecoded; set => Set(ref _hideDecoded, value); }
@@ -354,6 +372,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
             if (Set(ref _evaluateAllLabels, value))
             {
                 OnPropertyChanged(nameof(LabelEvaluationTargetLabel));
+                OnPropertyChanged(nameof(ShowSelectedLabelPicker));
+                OnPropertyChanged(nameof(SelectedLabelFilesSummary));
                 OnPropertyChanged(nameof(CanRunLabelScore));
                 OnPropertyChanged(nameof(CanRunLabelSweep));
             }
@@ -365,6 +385,35 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
 
     private bool _useFullStreamScorer;
     public bool UseFullStreamScorer { get => _useFullStreamScorer; set => Set(ref _useFullStreamScorer, value); }
+
+    private bool _useSelectedLabelFiles;
+    public bool UseSelectedLabelFiles
+    {
+        get => _useSelectedLabelFiles;
+        set
+        {
+            if (Set(ref _useSelectedLabelFiles, value))
+            {
+                OnPropertyChanged(nameof(ShowSelectedLabelPicker));
+                OnPropertyChanged(nameof(SelectedLabelFilesSummary));
+                OnPropertyChanged(nameof(LabelEvaluationTargetLabel));
+                OnPropertyChanged(nameof(CanRunLabelScore));
+                OnPropertyChanged(nameof(CanRunLabelSweep));
+            }
+        }
+    }
+
+    public bool ShowSelectedLabelPicker => !EvaluateAllLabels && UseSelectedLabelFiles && AvailableLabelFiles.Count > 0;
+    public string SelectedLabelFilesSummary
+    {
+        get
+        {
+            var selected = SelectedLabelPaths();
+            return selected.Count == 0
+                ? "No checked label files."
+                : $"{selected.Count} checked: {string.Join(", ", selected.Select(Path.GetFileName))}";
+        }
+    }
 
     private double _labelEvalWindowSeconds = 20.0;
     public double LabelEvalWindowSeconds
@@ -447,6 +496,60 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
 
     private string _labelEvaluationOutputText = "No label evaluation run yet.";
     public string LabelEvaluationOutputText { get => _labelEvaluationOutputText; set => Set(ref _labelEvaluationOutputText, value); }
+
+    private LabelScoreRunResult? _currentLabelScoreResult;
+    public LabelScoreRunResult? CurrentLabelScoreResult
+    {
+        get => _currentLabelScoreResult;
+        private set
+        {
+            if (Set(ref _currentLabelScoreResult, value))
+            {
+                OnPropertyChanged(nameof(HasLabelScoreResult));
+                OnPropertyChanged(nameof(LabelScoreExactDisplay));
+                OnPropertyChanged(nameof(LabelScoreAverageCerDisplay));
+                OnPropertyChanged(nameof(LabelScoreDistanceDisplay));
+                OnPropertyChanged(nameof(LabelScoreBaselineDisplay));
+                RefreshScoreBreakdown();
+            }
+        }
+    }
+
+    public bool HasLabelScoreResult => _currentLabelScoreResult is not null;
+
+    private LabelSweepRunResult? _currentLabelSweepResult;
+    public LabelSweepRunResult? CurrentLabelSweepResult
+    {
+        get => _currentLabelSweepResult;
+        private set
+        {
+            if (Set(ref _currentLabelSweepResult, value))
+            {
+                OnPropertyChanged(nameof(HasLabelSweepResult));
+                OnPropertyChanged(nameof(LabelSweepSummaryDisplay));
+                RefreshSweepResults();
+            }
+        }
+    }
+
+    public bool HasLabelSweepResult => _currentLabelSweepResult is not null;
+    public ObservableCollection<FailureBucketView> LabelScoreBreakdown { get; } = new();
+    public ObservableCollection<SweepResultView> LabelSweepResults { get; } = new();
+    public string LabelScoreExactDisplay => CurrentLabelScoreResult is null
+        ? "—"
+        : $"{CurrentLabelScoreResult.Summary.Exact}/{CurrentLabelScoreResult.Labels}";
+    public string LabelScoreAverageCerDisplay => CurrentLabelScoreResult is null
+        ? "—"
+        : $"{CurrentLabelScoreResult.Summary.AverageCer:P1}";
+    public string LabelScoreDistanceDisplay => CurrentLabelScoreResult is null
+        ? "—"
+        : CurrentLabelScoreResult.Summary.TotalDistance.ToString(CultureInfo.InvariantCulture);
+    public string LabelScoreBaselineDisplay => CurrentLabelScoreResult is null
+        ? string.Empty
+        : $"{CurrentLabelScoreResult.Mode} · {CurrentLabelScoreResult.Baseline.WindowSeconds:F1}s / {CurrentLabelScoreResult.Baseline.MinWindowSeconds:F1}s / {CurrentLabelScoreResult.Baseline.DecodeEveryMs}ms / {CurrentLabelScoreResult.Baseline.RequiredConfirmations} conf";
+    public string LabelSweepSummaryDisplay => CurrentLabelSweepResult is null
+        ? string.Empty
+        : $"{CurrentLabelSweepResult.SweepMode} sweep · {CurrentLabelSweepResult.CoarseConfigs} coarse + {CurrentLabelSweepResult.RefinedConfigs} refined configs · best exact={CurrentLabelSweepResult.Results.FirstOrDefault()?.Exact ?? 0}/{CurrentLabelSweepResult.Labels}";
 
     public bool IsCustomDecoderMode => string.Equals(SelectedDecoderMode, CustomDecoderModeLabel, StringComparison.Ordinal);
     public bool IsBaselineDecoderMode => string.Equals(SelectedDecoderMode, BaselineDecoderModeLabel, StringComparison.Ordinal);
@@ -655,7 +758,9 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
             || Math.Abs(AdjustedEndSeconds - CurrentSignalProfile.SuggestedEndSeconds) > 0.0005);
     public string LabelEvaluationTargetLabel => EvaluateAllLabels
         ? @"Corpus: all labels under data\cw-samples"
-        : $"Corpus: {LabelFilePath}";
+        : UseSelectedLabelFiles
+            ? $"Corpus: {SelectedLabelFilesSummary}"
+            : $"Corpus: {LabelFilePath}";
     public bool CanRunLabelScore => !IsAdvancedBusy
         && !IsProfileBusy
         && !IsEvaluationBusy
@@ -725,6 +830,9 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
         }
         ResetDecoderSurface();
         StatusText = "Starting…";
+        SourceLabel = string.IsNullOrWhiteSpace(SelectedDevice)
+            ? "LIVE · starting…"
+            : $"LIVE · {SelectedDevice} · starting…";
 
         // Generate timestamped recording path under <repo>/data/cw-recordings/
         string? recordPath = null;
@@ -1046,6 +1154,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
         SetHarvestFile(path);
         LastRecordingPath = path;
         StatusText = $"Decoding {path}";
+        SourceLabel = $"FILE · {Path.GetFileName(path)} · starting…";
         _process.StartFile(path, realtime: true, CurrentConfig(), CurrentBaselineConfig(), IsBaselineDecoderMode);
         IsRunning = true;
         await PreparePlaybackSourceAsync(path, "DECODE FILE", autoPlay: true).ConfigureAwait(true);
@@ -1219,7 +1328,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
 
     public async Task RunLabelScoreAsync()
     {
-        if (!TryResolveLabelEvaluationTarget(out var labelPath))
+        if (!TryResolveLabelEvaluationTarget(out var labelPaths))
         {
             return;
         }
@@ -1234,11 +1343,14 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
             IsEvaluationBusy = true;
             LabelEvaluationStatusText = EvaluateAllLabels
                 ? "Scoring the full label corpus…"
-                : $"Scoring {Path.GetFileName(labelPath)}…";
+                : UseSelectedLabelFiles
+                    ? $"Scoring {labelPaths.Count} selected label files…"
+                    : $"Scoring {Path.GetFileName(labelPaths[0])}…";
             LabelEvaluationOutputText = string.Empty;
-            var output = await _process.RunLabelScoreAsync(
+            CurrentLabelSweepResult = null;
+            var result = await _process.RunLabelScoreAsync(
                 EvaluateAllLabels,
-                labelPath,
+                labelPaths,
                 UseFullStreamScorer,
                 Math.Max(0, (int)Math.Round(LabelEvalPreRollMs)),
                 Math.Max(0, (int)Math.Round(LabelEvalPostRollMs)),
@@ -1247,10 +1359,13 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
                 Math.Max(100, (int)Math.Round(LabelEvalDecodeEveryMs)),
                 Math.Max(1, (int)Math.Round(LabelEvalConfirmations)),
                 cts.Token).ConfigureAwait(true);
-            LabelEvaluationOutputText = output.Trim();
+            CurrentLabelScoreResult = result;
+            LabelEvaluationOutputText = JsonSerializer.Serialize(result, new JsonSerializerOptions { WriteIndented = true });
             LabelEvaluationStatusText = EvaluateAllLabels
                 ? "Finished scoring the full label corpus."
-                : $"Finished scoring {Path.GetFileName(labelPath)}.";
+                : UseSelectedLabelFiles
+                    ? $"Finished scoring {labelPaths.Count} selected label files."
+                    : $"Finished scoring {Path.GetFileName(labelPaths[0])}.";
         }
         catch (OperationCanceledException)
         {
@@ -1273,7 +1388,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
 
     public async Task RunLabelSweepAsync()
     {
-        if (!TryResolveLabelEvaluationTarget(out var labelPath))
+        if (!TryResolveLabelEvaluationTarget(out var labelPaths))
         {
             return;
         }
@@ -1290,20 +1405,28 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
                 ? "Running wide parameter sweep…"
                 : "Running interactive parameter sweep…";
             LabelEvaluationOutputText = string.Empty;
+            CurrentLabelScoreResult = null;
             _topSweepResult = null;
             OnPropertyChanged(nameof(CanApplyTopSweep));
             OnPropertyChanged(nameof(TopSweepSummary));
-            var output = await _process.RunLabelSweepAsync(
+            var result = await _process.RunLabelSweepAsync(
                 EvaluateAllLabels,
-                labelPath,
+                labelPaths,
                 UseFullStreamScorer,
                 Math.Max(0, (int)Math.Round(LabelEvalPreRollMs)),
                 Math.Max(0, (int)Math.Round(LabelEvalPostRollMs)),
                 UseWideSweep,
                 Math.Max(1, (int)Math.Round(LabelEvalTopResults)),
                 cts.Token).ConfigureAwait(true);
-            LabelEvaluationOutputText = output.Trim();
-            _topSweepResult = TryParseTopSweepResult(LabelEvaluationOutputText);
+            CurrentLabelSweepResult = result;
+            LabelEvaluationOutputText = JsonSerializer.Serialize(result, new JsonSerializerOptions { WriteIndented = true });
+            _topSweepResult = result.Results.Length == 0
+                ? null
+                : new SweepTopResult(
+                    result.Results[0].WindowSeconds,
+                    result.Results[0].MinWindowSeconds,
+                    result.Results[0].DecodeEveryMs,
+                    result.Results[0].RequiredConfirmations);
             OnPropertyChanged(nameof(CanApplyTopSweep));
             OnPropertyChanged(nameof(TopSweepSummary));
             LabelEvaluationStatusText = UseWideSweep
@@ -1909,14 +2032,32 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
             return true;
         }
 
+        if (UseSelectedLabelFiles)
+        {
+            return SelectedLabelPaths().Count > 0;
+        }
+
         return !string.IsNullOrWhiteSpace(HarvestFilePath) && File.Exists(LabelFilePath);
     }
 
-    private bool TryResolveLabelEvaluationTarget(out string? labelPath)
+    private bool TryResolveLabelEvaluationTarget(out IReadOnlyList<string> labelPaths)
     {
-        labelPath = null;
+        labelPaths = Array.Empty<string>();
         if (EvaluateAllLabels)
         {
+            return true;
+        }
+
+        if (UseSelectedLabelFiles)
+        {
+            var selected = SelectedLabelPaths();
+            if (selected.Count == 0)
+            {
+                LabelEvaluationStatusText = "Check one or more label files, or enable ALL LABELS.";
+                return false;
+            }
+
+            labelPaths = selected;
             return true;
         }
 
@@ -1926,14 +2067,64 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
             return false;
         }
 
-        labelPath = LabelFilePath;
+        var labelPath = LabelFilePath;
         if (!File.Exists(labelPath))
         {
             LabelEvaluationStatusText = $"No saved labels yet at {Path.GetFileName(labelPath)}.";
             return false;
         }
 
+        labelPaths = new[] { labelPath };
         return true;
+    }
+
+    private List<string> SelectedLabelPaths()
+        => AvailableLabelFiles
+            .Where(file => file.IsSelected)
+            .Select(file => file.Path)
+            .ToList();
+
+    private void RefreshScoreBreakdown()
+    {
+        LabelScoreBreakdown.Clear();
+        if (CurrentLabelScoreResult is null)
+        {
+            return;
+        }
+
+        var total = Math.Max(1, CurrentLabelScoreResult.Rows.Length);
+        foreach (var group in CurrentLabelScoreResult.Rows
+                     .GroupBy(row => row.Exact ? "exact" : row.FailureClass)
+                     .OrderByDescending(group => group.Count())
+                     .ThenBy(group => group.Key, StringComparer.OrdinalIgnoreCase))
+        {
+            LabelScoreBreakdown.Add(new FailureBucketView(group.Key, group.Count(), total));
+        }
+    }
+
+    private void RefreshSweepResults()
+    {
+        LabelSweepResults.Clear();
+        if (CurrentLabelSweepResult is null)
+        {
+            return;
+        }
+
+        for (int index = 0; index < CurrentLabelSweepResult.Results.Length; index++)
+        {
+            var result = CurrentLabelSweepResult.Results[index];
+            LabelSweepResults.Add(new SweepResultView(
+                index + 1,
+                result.Exact,
+                CurrentLabelSweepResult.Labels,
+                result.TotalDistance,
+                result.AverageCer,
+                result.WorstCer,
+                result.WindowSeconds,
+                result.MinWindowSeconds,
+                result.DecodeEveryMs,
+                result.RequiredConfirmations));
+        }
     }
 
     private static string ProfileCacheKey(HarvestCandidate candidate)
@@ -2110,6 +2301,28 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
         long LastWriteTicks,
         HarvestCandidate[] Candidates,
         string? SelectedCandidateKey);
+
+    public sealed record FailureBucketView(string Name, int Count, int Total)
+    {
+        public double Ratio => Total <= 0 ? 0 : (double)Count / Total;
+        public string DisplayName => Name.Replace('_', ' ').ToUpperInvariant();
+    }
+
+    public sealed record SweepResultView(
+        int Rank,
+        int Exact,
+        int TotalLabels,
+        int TotalDistance,
+        double AverageCer,
+        double WorstCer,
+        double WindowSeconds,
+        double MinWindowSeconds,
+        int DecodeEveryMs,
+        int RequiredConfirmations)
+    {
+        public string ExactDisplay => $"{Exact}/{TotalLabels}";
+        public double ExactRatio => TotalLabels <= 0 ? 0 : (double)Exact / TotalLabels;
+    }
 
     private sealed record SweepTopResult(
         double WindowSeconds,

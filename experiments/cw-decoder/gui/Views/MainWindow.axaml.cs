@@ -87,6 +87,24 @@ public partial class MainWindow : Window
     private void OnStopPlaybackClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
         => Vm?.StopPlayback();
 
+    private void OnCorrectCopyTextChanged(object? sender, TextChangedEventArgs e)
+    {
+        if (sender is not TextBox textBox || string.IsNullOrEmpty(textBox.Text))
+        {
+            return;
+        }
+
+        var upper = textBox.Text.ToUpperInvariant();
+        if (string.Equals(upper, textBox.Text, System.StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        var caret = textBox.CaretIndex;
+        textBox.Text = upper;
+        textBox.CaretIndex = System.Math.Min(caret, upper.Length);
+    }
+
     private void OnSaveLabelClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
         => Vm?.SaveSelectedLabel();
 

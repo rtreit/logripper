@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Globalization;
 using System.Diagnostics;
 using System.IO;
@@ -238,9 +239,9 @@ internal sealed class CwDecoderProcess : IDisposable
             ?? throw new InvalidOperationException("Failed to parse profile-window output.");
     }
 
-    public async Task<string> RunLabelScoreAsync(
+    public async Task<LabelScoreRunResult> RunLabelScoreAsync(
         bool allLabels,
-        string? labelPath,
+        IReadOnlyList<string>? labelPaths,
         bool fullStreamMode,
         int preRollMs,
         int postRollMs,
@@ -251,8 +252,9 @@ internal sealed class CwDecoderProcess : IDisposable
         CancellationToken ct = default)
     {
         var psi = CreateEvalStartInfo();
-        AddLabelSelectionArguments(psi, allLabels, labelPath);
+        AddLabelSelectionArguments(psi, allLabels, labelPaths);
         AddLabelScoreModeArguments(psi, fullStreamMode, preRollMs, postRollMs);
+        psi.ArgumentList.Add("--json");
         psi.ArgumentList.Add("--window");
         psi.ArgumentList.Add(F(windowSeconds));
         psi.ArgumentList.Add("--min-window");
@@ -261,12 +263,14 @@ internal sealed class CwDecoderProcess : IDisposable
         psi.ArgumentList.Add(decodeEveryMs.ToString(CultureInfo.InvariantCulture));
         psi.ArgumentList.Add("--confirmations");
         psi.ArgumentList.Add(confirmations.ToString(CultureInfo.InvariantCulture));
-        return await RunOneShotAsync(psi, ct).ConfigureAwait(false);
+        var stdout = await RunOneShotAsync(psi, ct).ConfigureAwait(false);
+        return JsonSerializer.Deserialize<LabelScoreRunResult>(stdout)
+            ?? throw new InvalidOperationException("Failed to parse label score output.");
     }
 
-    public async Task<string> RunLabelSweepAsync(
+    public async Task<LabelSweepRunResult> RunLabelSweepAsync(
         bool allLabels,
-        string? labelPath,
+        IReadOnlyList<string>? labelPaths,
         bool fullStreamMode,
         int preRollMs,
         int postRollMs,
@@ -275,8 +279,9 @@ internal sealed class CwDecoderProcess : IDisposable
         CancellationToken ct = default)
     {
         var psi = CreateEvalStartInfo();
-        AddLabelSelectionArguments(psi, allLabels, labelPath);
+        AddLabelSelectionArguments(psi, allLabels, labelPaths);
         AddLabelScoreModeArguments(psi, fullStreamMode, preRollMs, postRollMs);
+        psi.ArgumentList.Add("--json");
         psi.ArgumentList.Add("--sweep-ditdah");
         psi.ArgumentList.Add("--top");
         psi.ArgumentList.Add(top.ToString(CultureInfo.InvariantCulture));
@@ -285,7 +290,23 @@ internal sealed class CwDecoderProcess : IDisposable
             psi.ArgumentList.Add("--wide-sweep");
         }
 
-        return await RunOneShotAsync(psi, ct).ConfigureAwait(false);
+        var stdout = await RunOneShotAsync(psi, ct).ConfigureAwait(false);
+        return JsonSerializer.Deserialize<LabelSweepRunResult>(stdout)
+            ?? throw new InvalidOperationException("Failed to parse label sweep output.");
+    }
+
+    public static string[] ListAvailableLabelFiles()
+    {
+        try
+        {
+            return Directory.EnumerateFiles(LocateLabelCorpusDirectory(), "*.labels.jsonl")
+                .OrderBy(Path.GetFileName, StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+        }
+        catch
+        {
+            return [];
+        }
     }
 
     public static void OpenPreview(string path)
@@ -466,7 +487,10 @@ internal sealed class CwDecoderProcess : IDisposable
         return psi;
     }
 
-    private static void AddLabelSelectionArguments(ProcessStartInfo psi, bool allLabels, string? labelPath)
+    private static void AddLabelSelectionArguments(
+        ProcessStartInfo psi,
+        bool allLabels,
+        IReadOnlyList<string>? labelPaths)
     {
         if (allLabels)
         {
@@ -475,13 +499,16 @@ internal sealed class CwDecoderProcess : IDisposable
             return;
         }
 
-        if (string.IsNullOrWhiteSpace(labelPath))
+        if (labelPaths is null || labelPaths.Count == 0)
         {
-            throw new InvalidOperationException("Pick an audio file with saved labels first, or enable all-labels.");
+            throw new InvalidOperationException("Pick at least one label file, or enable all-labels.");
         }
 
-        psi.ArgumentList.Add("--labels");
-        psi.ArgumentList.Add(labelPath);
+        foreach (var labelPath in labelPaths)
+        {
+            psi.ArgumentList.Add("--labels");
+            psi.ArgumentList.Add(labelPath);
+        }
     }
 
     private static string LocateLabelCorpusDirectory()

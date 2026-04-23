@@ -110,6 +110,9 @@ The GUI now supports two decoder modes:
 
 Current decode-tab workflow also includes:
 
+- explicit source control semantics:
+  - **DECODE FILE...** opens and immediately decodes a chosen file
+  - **START LIVE** captures from the selected input device
 - live capture
 - optional recording of live audio to `data\cw-recordings\`
 - offline replay of the last opened source (live recording or file decode)
@@ -151,9 +154,10 @@ The strong-signal W1AW path also now uses warmup-aware harvest windows for the s
 
 The tuning workflow is now first-class in the GUI:
 
-- score one label file or the full corpus
-- run parameter sweeps
-- inspect textual results
+- score the current label file, the full corpus, or any checked subset of available `*.labels.jsonl` files
+- run parameter sweeps with a coarse pass plus a local refinement pass around the best baseline candidate
+- inspect score cards, failure-breakdown bars, and per-label truth-vs-decoded detail instead of raw console text
+- inspect sweep rankings with exact-match progress bars plus average / worst CER
 - **Apply Top Result**
 
 When Decode mode = **Baseline ditdah**, the Decode tab uses the same shared tuning settings as the Tuning tab.
@@ -236,9 +240,11 @@ This baseline became the reference scorer target.
 `eval` now supports:
 
 - label discovery via `--labels-dir` / `--all-labels`
+- repeated `--labels <file>` arguments so scoring/sweeping can target an arbitrary subset of label files
 - exact-window scoring
 - full-stream scoring
 - wide and interactive sweeps
+- sweep ranking by exact matches, total edit distance, average CER, and worst-case CER
 - failure classification such as:
   - `exact`
   - `leading_edge_error`
@@ -443,7 +449,15 @@ Run a baseline `ditdah` parameter sweep against the corpus:
 cargo run --release --manifest-path experiments\cw-decoder\Cargo.toml --bin eval -- --labels-dir data\cw-samples --sweep-ditdah --wide-sweep --top 10
 ```
 
+Run scoring or sweeping against a hand-picked subset of labels:
+
+```powershell
+cargo run --release --manifest-path experiments\cw-decoder\Cargo.toml --bin eval -- --labels data\cw-samples\W1AW_de_W5WZ_DX_CW_20180623_000422Z_14MHz.labels.jsonl --labels data\cw-samples\k5zd-zs4tx-80m-qso.labels.jsonl --sweep-ditdah --top 5
+```
+
 Without any `--labels` / `--labels-dir` / `--all-labels` flag, `eval` falls back to its built-in synthetic suite (silence, noise, clean/noisy synthesized CW) instead of label scoring.
+
+On the debug binary, label sweeps can still take a few minutes because each config replays the selected corpus. For practical tuning loops, prefer `cargo build --release --bins` so CW SCOPE launches the faster release `eval.exe` / `cw-decoder.exe`.
 
 Probe likely target tones by Fisher score:
 
