@@ -705,7 +705,7 @@ fn run_stream_file(
 
     let mut decoder = streaming::StreamingDecoder::new(audio.sample_rate)?;
     decoder.set_config(cfg);
-    let cfg_channel = stdin_control.then(spawn_stdin_config_channel);
+    let cfg_channel = stdin_control.then(|| spawn_stdin_config_channel(None));
     let chunk_samples = ((audio.sample_rate as u64 * chunk_ms as u64) / 1000) as usize;
     let chunk_samples = chunk_samples.max(64);
 
@@ -1087,6 +1087,27 @@ fn run_stream_live_ditdah(
             stop.store(true, Ordering::Relaxed);
         });
     }
+    // Watch stdin for EOF — the GUI closes our stdin to signal a graceful
+    // shutdown so that Drop runs on LiveCapture and the WAV writer flushes
+    // the data chunk + RIFF header. Without this, killing the process
+    // truncates the recording mid-write.
+    {
+        let stop = Arc::clone(&stop);
+        std::thread::spawn(move || {
+            use std::io::Read;
+            let mut buf = [0u8; 256];
+            let mut stdin = std::io::stdin();
+            loop {
+                match stdin.read(&mut buf) {
+                    Ok(0) | Err(_) => {
+                        stop.store(true, Ordering::Relaxed);
+                        break;
+                    }
+                    Ok(_) => {} // discard incoming bytes (no protocol on this path)
+                }
+            }
+        });
+    }
 
     let started = Instant::now();
     let mut last_drain_at: u64 = 0;
@@ -1306,7 +1327,38 @@ fn run_stream_live(
     let capture = audio::open_input_with_recording(device, 1.0, record_path)?;
     let mut decoder = streaming::StreamingDecoder::new(capture.sample_rate)?;
     decoder.set_config(cfg);
-    let cfg_channel = stdin_control.then(spawn_stdin_config_channel);
+
+    let stop = Arc::new(AtomicBool::new(false));
+    {
+        let stop = Arc::clone(&stop);
+        ctrlc_setup(move || {
+            stop.store(true, Ordering::Relaxed);
+        });
+    }
+    // GUI signals graceful shutdown by closing our stdin. We need that so
+    // Drop runs on LiveCapture and hound flushes the WAV header. The
+    // stdin-control config thread will set `stop` on EOF; otherwise spawn
+    // a dedicated EOF watcher.
+    let cfg_channel =
+        stdin_control.then(|| spawn_stdin_config_channel(Some(Arc::clone(&stop))));
+    if !stdin_control {
+        let stop = Arc::clone(&stop);
+        std::thread::spawn(move || {
+            use std::io::Read;
+            let mut buf = [0u8; 256];
+            let mut stdin = std::io::stdin();
+            loop {
+                match stdin.read(&mut buf) {
+                    Ok(0) | Err(_) => {
+                        stop.store(true, Ordering::Relaxed);
+                        break;
+                    }
+                    Ok(_) => {}
+                }
+            }
+        });
+    }
+
     let mut emitter = if json {
         Some(json::JsonEmitter::new())
     } else {
@@ -1330,14 +1382,6 @@ fn run_stream_live(
         );
     } else {
         println!("Live streaming from: {}", capture.device_name);
-    }
-
-    let stop = Arc::new(AtomicBool::new(false));
-    {
-        let stop = Arc::clone(&stop);
-        ctrlc_setup(move || {
-            stop.store(true, Ordering::Relaxed);
-        });
     }
 
     let started = Instant::now();
@@ -1479,7 +1523,9 @@ fn ctrlc_setup<F: FnMut() + Send + 'static>(_f: F) {
 ///   {"type":"config","min_snr_db":6.0,"pitch_min_snr_db":8.0,"threshold_scale":1.0}
 ///
 /// Any field may be omitted; omitted fields keep their previous value.
-fn spawn_stdin_config_channel() -> std::sync::mpsc::Receiver<streaming::DecoderConfig> {
+fn spawn_stdin_config_channel(
+    stop_on_eof: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+) -> std::sync::mpsc::Receiver<streaming::DecoderConfig> {
     use std::io::BufRead;
     let (tx, rx) = std::sync::mpsc::channel::<streaming::DecoderConfig>();
     std::thread::spawn(move || {
@@ -1509,6 +1555,11 @@ fn spawn_stdin_config_channel() -> std::sync::mpsc::Receiver<streaming::DecoderC
             if tx.send(state).is_err() {
                 break;
             }
+        }
+        // Stdin EOF — propagate as graceful stop so Drop runs and the WAV
+        // recording (if any) gets a valid header.
+        if let Some(stop) = stop_on_eof {
+            stop.store(true, std::sync::atomic::Ordering::Relaxed);
         }
     });
     rx

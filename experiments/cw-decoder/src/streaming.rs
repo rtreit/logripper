@@ -373,21 +373,25 @@ struct RhythmGate {
     /// which forces a brief noise-burst that *looks* like CW for a few
     /// intervals to still be suppressed.
     good_streak: usize,
+    /// Latched once `good_streak` reaches MATURITY; only cleared when the
+    /// gate fully closes via STICKY_BAD. This prevents transient QRM/fade
+    /// flickers from re-arming the maturity wait and eating real letters.
+    mature: bool,
 }
 
 impl RhythmGate {
     const WINDOW: usize = 24;
-    const OPEN_FRACTION: f32 = 0.80;
-    const MIN_INTERVALS: usize = 12;
-    const STICKY_BAD: usize = 6;
-    const DUTY_MIN: f32 = 0.25;
-    const DUTY_MAX: f32 = 0.65;
-    const TOL_FRAC: f32 = 0.30;
-    const TOL_FLOOR: f32 = 0.35;
+    const OPEN_FRACTION: f32 = 0.65;
+    const MIN_INTERVALS: usize = 8;
+    const STICKY_BAD: usize = 8;
+    const DUTY_MIN: f32 = 0.20;
+    const DUTY_MAX: f32 = 0.70;
+    const TOL_FRAC: f32 = 0.35;
+    const TOL_FLOOR: f32 = 0.40;
     const BIMODAL_MIN: usize = 2;
     /// Number of consecutive good intervals required after the gate first
     /// opens before character emission is allowed.
-    const MATURITY: usize = 6;
+    const MATURITY: usize = 4;
 
     fn new() -> Self {
         Self {
@@ -395,6 +399,7 @@ impl RhythmGate {
             is_open: false,
             bad_streak: 0,
             good_streak: 0,
+            mature: false,
         }
     }
 
@@ -411,20 +416,27 @@ impl RhythmGate {
             if !self.is_open {
                 self.bad_streak = 0;
                 self.good_streak = 0;
+                self.mature = false;
             }
         } else {
             self.is_open = now_open;
             if now_open {
                 self.bad_streak = 0;
                 self.good_streak = self.good_streak.saturating_add(1);
-            } else {
-                self.good_streak = 0;
+                if self.good_streak >= Self::MATURITY {
+                    self.mature = true;
+                }
             }
+            // NOTE: do NOT zero good_streak/mature on a single bad interval.
+            // Real QSOs have constant micro-fading and QRM that would otherwise
+            // re-trigger the maturity wait every few seconds, eating whole
+            // letters at each flicker. Maturity is latched until the gate
+            // actually closes via STICKY_BAD above.
         }
     }
 
     fn is_open(&self) -> bool {
-        self.is_open && self.good_streak >= Self::MATURITY
+        self.is_open && self.mature
     }
 
     #[allow(dead_code)]
@@ -433,6 +445,7 @@ impl RhythmGate {
         self.is_open = false;
         self.bad_streak = 0;
         self.good_streak = 0;
+        self.mature = false;
     }
 
     fn compute_open(&self, dot: f32) -> bool {
@@ -758,18 +771,21 @@ impl Decoder {
             } else {
                 self.current_letter.push('-');
             }
-            // WPM events are cheap and informative even when the gate is
-            // closed (they help the operator see when the decoder has at
-            // least estimated a tempo from the noise).
-            if self.rhythm.is_open() {
-                if let Some(w) = self.current_wpm() {
-                    events.push(StreamEvent::WpmUpdate { wpm: w });
-                }
+            // WPM is a "decoder is alive" indicator. Always emit when we have
+            // a tempo estimate, so the operator can see the decoder is still
+            // tracking even when the rhythm gate is briefly closed.
+            if let Some(w) = self.current_wpm() {
+                events.push(StreamEvent::WpmUpdate { wpm: w });
             }
         } else if len_norm > LETTER_SPACE_BOUNDARY {
-            // Letter / word boundary. Only flush characters when the rhythm
-            // gate believes this is a real signal.
-            if self.rhythm.is_open() {
+            // Letter / word boundary. Emit when either the rhythm gate is
+            // currently open, OR the accumulated dot/dash pattern decodes to
+            // a real character (the latter rescues letters that span a
+            // transient gate flicker during normal QSB/QRM).
+            let gate_open = self.rhythm.is_open();
+            let pattern = self.current_letter.clone();
+            let valid_morse = !pattern.is_empty() && morse_to_char(&pattern).is_some();
+            if gate_open || valid_morse {
                 if let Some(ev) = self.classify_letter() {
                     events.push(ev);
                 }
@@ -777,9 +793,8 @@ impl Decoder {
                     events.push(StreamEvent::Word);
                 }
             } else {
-                // Drop the in-progress letter so we don't accumulate a long
-                // tail of dots/dashes from noise that suddenly emerges as
-                // garbage when the gate finally opens.
+                // Gate is closed AND the pattern is junk → drop it so we
+                // don't accumulate a long tail of dots/dashes from noise.
                 self.current_letter.clear();
             }
         }

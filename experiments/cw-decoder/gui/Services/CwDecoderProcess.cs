@@ -304,9 +304,18 @@ internal sealed class CwDecoderProcess : IDisposable
         try
         {
             _cts?.Cancel();
-            if (_proc is { HasExited: false })
+            if (_proc is { HasExited: false } proc)
             {
-                try { _proc.Kill(entireProcessTree: true); } catch { /* best effort */ }
+                // Close stdin first so the Rust child sees EOF and exits its
+                // main loop normally — that lets Drop run on LiveCapture and
+                // hound finalize the WAV header. Without this, Kill leaves
+                // the recording with a header-only / "missing data chunk"
+                // file that Replay & Score can't read.
+                try { proc.StandardInput.Close(); } catch { /* best effort */ }
+                if (!proc.WaitForExit(1500))
+                {
+                    try { proc.Kill(entireProcessTree: true); } catch { /* best effort */ }
+                }
             }
         }
         catch { /* ignored */ }
