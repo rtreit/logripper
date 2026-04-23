@@ -77,6 +77,7 @@ function Invoke-Build([string]$Step, [string]$Command, [string[]]$Arguments) {
 
 $Win32SourceDir = Join-Path $PSScriptRoot 'src' 'c' 'qsoripper-win32'
 $Win32Source = Join-Path $Win32SourceDir 'src' 'main.c'
+$Win32JsonParserSource = Join-Path $Win32SourceDir 'src' 'json_parser.c'
 $Win32FfiGateSource = Join-Path $Win32SourceDir 'src' 'backend_ffi_gate.c'
 $Win32ResourcesDir = Join-Path $Win32SourceDir 'resources'
 $Win32ResourceScript = Join-Path $Win32ResourcesDir 'app.rc'
@@ -247,6 +248,7 @@ function Build-Win32 {
                  --suppress=missingInclude `
                  --inline-suppr `
                  $Win32Source `
+                 $Win32JsonParserSource `
                  $Win32FfiGateSource
         if ($LASTEXITCODE -ne 0) {
             Write-Host 'FAILED: cppcheck found errors' -ForegroundColor Red
@@ -271,7 +273,7 @@ function Build-Win32 {
 call "$vcvars" $arch >nul 2>&1
 rc /nologo /I"$Win32ResourcesDir" /fo"$win32Res" "$Win32ResourceScript"
 if errorlevel 1 exit /b %errorlevel%
-cl /W4 /WX /analyze $optFlags /DUNICODE /D_UNICODE /I"$ffiInclude" /I"$Win32ResourcesDir" "$Win32Source" "$Win32FfiGateSource" /Fe:"$exe" /link "$win32Res" user32.lib gdi32.lib shell32.lib comctl32.lib
+cl /W4 /WX /analyze $optFlags /DUNICODE /D_UNICODE /I"$ffiInclude" /I"$Win32ResourcesDir" "$Win32Source" "$Win32JsonParserSource" "$Win32FfiGateSource" /Fe:"$exe" /link "$win32Res" user32.lib gdi32.lib shell32.lib comctl32.lib
 "@ | Set-Content -LiteralPath $buildScript -Encoding ASCII
 
     Push-Location $Win32PublishDir
