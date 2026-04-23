@@ -539,6 +539,26 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
         }
     }
 
+    private double _minGapDotFraction = DecoderConfig.DefaultMinGapDotFraction;
+    /// <summary>
+    /// Bridge off-runs shorter than this fraction of one estimated dot
+    /// length. 0 disables. 0.3 stops a real dah from being fragmented
+    /// into adjacent dits when the mic envelope chatters around
+    /// threshold inside a key-down.
+    /// </summary>
+    public double MinGapDotFraction
+    {
+        get => _minGapDotFraction;
+        set
+        {
+            var clamped = value < 0.0 ? 0.0 : (value > 1.0 ? 1.0 : value);
+            if (Set(ref _minGapDotFraction, clamped))
+            {
+                PushConfig();
+            }
+        }
+    }
+
     private string? _harvestFilePath;
     public string? HarvestFilePath { get => _harvestFilePath; set => Set(ref _harvestFilePath, value); }
 
@@ -1003,6 +1023,32 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
         ForcePitchHz = DecoderConfig.DefaultForcePitchHz;
         WideBinCount = DecoderConfig.DefaultWideBinCount;
         MinPulseDotFraction = DecoderConfig.DefaultMinPulseDotFraction;
+        MinGapDotFraction = DecoderConfig.DefaultMinGapDotFraction;
+    }
+
+    /// <summary>
+    /// Apply the operator-tuned "mic mode" preset: wide-bin sniff, lower
+    /// purity gate, plus min-pulse and min-gap filters. Bypasses the
+    /// labeled-corpus defaults so it never regresses radio decoding.
+    /// </summary>
+    public void ApplyMicModePreset()
+    {
+        WideBinCount = 3;
+        MinTonePurity = 1.5;
+        MinPulseDotFraction = 0.3;
+        MinGapDotFraction = 0.3;
+    }
+
+    /// <summary>
+    /// Restore the labeled-corpus defaults — narrow Goertzel, strict
+    /// purity gate, no pulse/gap filtering.
+    /// </summary>
+    public void ApplyRadioModePreset()
+    {
+        WideBinCount = DecoderConfig.DefaultWideBinCount;
+        MinTonePurity = DecoderConfig.DefaultMinTonePurity;
+        MinPulseDotFraction = DecoderConfig.DefaultMinPulseDotFraction;
+        MinGapDotFraction = DecoderConfig.DefaultMinGapDotFraction;
     }
 
     private DecoderConfig CurrentConfig() => new(
@@ -1016,7 +1062,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
         Math.Max(0.0, MinTonePurity),
         Math.Max(0.0, ForcePitchHz),
         Math.Max(0, WideBinCount),
-        Math.Max(0.0, MinPulseDotFraction));
+        Math.Max(0.0, MinPulseDotFraction),
+        Math.Max(0.0, MinGapDotFraction));
     private BaselineDecoderConfig CurrentBaselineConfig() => new(
         WindowSeconds: LabelEvalWindowSeconds,
         MinWindowSeconds: LabelEvalMinWindowSeconds,

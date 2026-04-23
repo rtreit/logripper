@@ -19,7 +19,8 @@ public readonly record struct DecoderConfig(
     double MinTonePurity,
     double ForcePitchHz,
     int WideBinCount,
-    double MinPulseDotFraction)
+    double MinPulseDotFraction,
+    double MinGapDotFraction)
 {
     public const double DefaultMinSnrDb = 3.0;
     public const double DefaultPitchMinSnrDb = 6.0;
@@ -54,6 +55,13 @@ public readonly record struct DecoderConfig(
     /// killing real fast-keyed dits.
     /// </summary>
     public const double DefaultMinPulseDotFraction = 0.0;
+    /// <summary>
+    /// Bridge off-runs shorter than this fraction of one estimated dot
+    /// length. 0 = disabled. Twin of <see cref="DefaultMinPulseDotFraction"/>.
+    /// 0.3 stops a real dah from being fragmented into adjacent dits
+    /// when the mic envelope chatters around threshold inside a key-down.
+    /// </summary>
+    public const double DefaultMinGapDotFraction = 0.0;
 
     public static DecoderConfig Defaults => new(
         DefaultMinSnrDb,
@@ -66,7 +74,8 @@ public readonly record struct DecoderConfig(
         DefaultMinTonePurity,
         DefaultForcePitchHz,
         DefaultWideBinCount,
-        DefaultMinPulseDotFraction);
+        DefaultMinPulseDotFraction,
+        DefaultMinGapDotFraction);
 
     /// <summary>
     /// Render as CLI arguments for spawning the decoder with these initial
@@ -98,6 +107,10 @@ public readonly record struct DecoderConfig(
         {
             args += $" --min-pulse-dot-fraction {MinPulseDotFraction.ToString(ic)}";
         }
+        if (MinGapDotFraction > 0.0)
+        {
+            args += $" --min-gap-dot-fraction {MinGapDotFraction.ToString(ic)}";
+        }
         return args;
     }
 
@@ -127,6 +140,8 @@ public readonly record struct DecoderConfig(
              + WideBinCount.ToString(ic)
              + ",\"min_pulse_dot_fraction\":"
              + MinPulseDotFraction.ToString(ic)
+             + ",\"min_gap_dot_fraction\":"
+             + MinGapDotFraction.ToString(ic)
              + "}";
     }
 }

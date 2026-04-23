@@ -169,6 +169,15 @@ pub struct DecoderConfig {
     /// without touching real keying. Mirrors the "min_pulse" advice
     /// from the field-mic review.
     pub min_pulse_dot_fraction: f32,
+    /// Bridge off-runs shorter than this fraction of the estimated dot
+    /// length (e.g. 0.3 → ignore gaps shorter than 30 % of one dit).
+    /// 0 = disabled. Twin of [`min_pulse_dot_fraction`]: re-captured
+    /// acoustic CW often chatters around threshold inside a real
+    /// key-down, producing tiny false gaps that fragment a single dah
+    /// into "T T" or break a dit run. Suppressing those gaps stabilises
+    /// the envelope without touching legitimate intra-letter spacing
+    /// (one dot ≈ 40 ms at 30 WPM, so 0.3 = ~12 ms ceiling).
+    pub min_gap_dot_fraction: f32,
 }
 
 impl DecoderConfig {
@@ -185,6 +194,7 @@ impl DecoderConfig {
             force_pitch_hz: None,
             wide_bin_count: 0,
             min_pulse_dot_fraction: 0.0,
+            min_gap_dot_fraction: 0.0,
         }
     }
     /// Convert min_snr_db → linear power ratio for the inner gate.
@@ -618,7 +628,84 @@ fn detect_pitch(
             chosen as f32 * df
         );
     }
-    Ok(chosen as f32 * df)
+    // Centroid refinement: the FFT bin with the largest *single-bin*
+    // power can sit on the edge of a broad ridge (classic failure mode
+    // on speaker→mic re-captures, where the tone is smeared across
+    // ~200 Hz). Expand outward from the chosen bin while neighbouring
+    // bins stay within −6 dB of the peak, then return the
+    // power-weighted frequency centroid of that span. This pulls the
+    // lock toward the *centre* of the ridge instead of an edge.
+    let centroid_hz = pitch_centroid_hz(&sum, chosen, df);
+    if debug {
+        let spread_hz = pitch_ridge_spread_hz(&sum, chosen, df);
+        eprintln!(
+            "[cw-decoder pitch trial] centroid refinement: peak={:.1} Hz centroid={:.1} Hz spread={:.1} Hz",
+            chosen as f32 * df,
+            centroid_hz,
+            spread_hz
+        );
+    }
+    Ok(centroid_hz)
+}
+
+/// Power-weighted frequency centroid of the ridge around `peak_bin`.
+///
+/// Expands left and right while neighbouring bin power stays within
+/// −6 dB (= 0.25×) of the peak, then returns Σ(p_i · f_i) / Σ p_i over
+/// the span. Falls back to the raw peak frequency if the span is just
+/// the peak alone.
+fn pitch_centroid_hz(sum: &[f32], peak_bin: usize, df: f32) -> f32 {
+    if sum.is_empty() || peak_bin >= sum.len() {
+        return peak_bin as f32 * df;
+    }
+    let peak_p = sum[peak_bin];
+    if peak_p <= 0.0 {
+        return peak_bin as f32 * df;
+    }
+    let floor = peak_p * 0.25;
+    let mut lo = peak_bin;
+    while lo > 0 && sum[lo - 1] >= floor {
+        lo -= 1;
+    }
+    let mut hi = peak_bin;
+    while hi + 1 < sum.len() && sum[hi + 1] >= floor {
+        hi += 1;
+    }
+    if hi == lo {
+        return peak_bin as f32 * df;
+    }
+    let mut num = 0.0_f32;
+    let mut den = 0.0_f32;
+    for (j, &val) in sum.iter().enumerate().take(hi + 1).skip(lo) {
+        num += val * j as f32 * df;
+        den += val;
+    }
+    if den > 0.0 {
+        num / den
+    } else {
+        peak_bin as f32 * df
+    }
+}
+
+/// Width (Hz) of the −6 dB ridge around `peak_bin`. Diagnostic only.
+fn pitch_ridge_spread_hz(sum: &[f32], peak_bin: usize, df: f32) -> f32 {
+    if sum.is_empty() || peak_bin >= sum.len() {
+        return 0.0;
+    }
+    let peak_p = sum[peak_bin];
+    if peak_p <= 0.0 {
+        return 0.0;
+    }
+    let floor = peak_p * 0.25;
+    let mut lo = peak_bin;
+    while lo > 0 && sum[lo - 1] >= floor {
+        lo -= 1;
+    }
+    let mut hi = peak_bin;
+    while hi + 1 < sum.len() && sum[hi + 1] >= floor {
+        hi += 1;
+    }
+    (hi - lo) as f32 * df
 }
 
 /// Quick "does this pitch decode to clean morse?" probe.
@@ -1016,6 +1103,9 @@ struct Decoder {
     /// Drop on-runs shorter than this fraction of the dot length. 0 disables.
     min_pulse_dot_fraction: f32,
 
+    /// Bridge off-runs shorter than this fraction of the dot length. 0 disables.
+    min_gap_dot_fraction: f32,
+
     is_on: bool,
     current_run: usize,
     have_first_sample: bool,
@@ -1058,6 +1148,7 @@ impl Decoder {
             threshold_scale: DEFAULT_THRESHOLD_SCALE,
             auto_threshold: true,
             min_pulse_dot_fraction: 0.0,
+            min_gap_dot_fraction: 0.0,
             is_on: false,
             current_run: 0,
             have_first_sample: false,
@@ -1228,6 +1319,17 @@ impl Decoder {
         // already handled by `LETTER_SPACE_BOUNDARY`.
         if ivl.is_on && self.min_pulse_dot_fraction > 0.0 && len_norm < self.min_pulse_dot_fraction
         {
+            return;
+        }
+        // Min-gap gate: drop an *off*-run that is shorter than the
+        // configured fraction of the dot length. Twin of the min-pulse
+        // gate above. Re-captured acoustic CW often chatters around
+        // threshold inside a real key-down, producing a tiny false gap
+        // that would otherwise either (a) trigger a letter-space break
+        // mid-character or (b) split a real dah into two adjacent dits.
+        // We drop the off-interval entirely so the surrounding on-runs
+        // continue to accumulate into one letter without interruption.
+        if !ivl.is_on && self.min_gap_dot_fraction > 0.0 && len_norm < self.min_gap_dot_fraction {
             return;
         }
         // Feed the rhythm gate first so it always sees every interval.
@@ -1531,6 +1633,7 @@ impl StreamingDecoder {
         self.decoder.threshold_scale = cfg.threshold_scale;
         self.decoder.auto_threshold = cfg.auto_threshold;
         self.decoder.min_pulse_dot_fraction = cfg.min_pulse_dot_fraction.max(0.0);
+        self.decoder.min_gap_dot_fraction = cfg.min_gap_dot_fraction.max(0.0);
         // If the operator changed (or cleared) the forced pitch, drop the
         // current lock so the next `feed` re-acquires under the new
         // policy. Otherwise we'd be stuck on a stale frequency.
@@ -1712,6 +1815,7 @@ impl StreamingDecoder {
         self.decoder.threshold_scale = self.config.threshold_scale;
         self.decoder.auto_threshold = self.config.auto_threshold;
         self.decoder.min_pulse_dot_fraction = self.config.min_pulse_dot_fraction.max(0.0);
+        self.decoder.min_gap_dot_fraction = self.config.min_gap_dot_fraction.max(0.0);
     }
 
     fn try_acquire_pitch_lock(&mut self, events: &mut Vec<StreamEvent>) {
@@ -2621,6 +2725,56 @@ mod min_pulse_filter_tests {
             "min-pulse gate must not drop more than one clean character \
              (baseline={baseline}, gated={gated})"
         );
+    }
+
+    #[test]
+    fn min_gap_filter_does_not_regress_clean_cw() {
+        // The inter-element gaps inside PARIS are ~1 dot (intra-letter)
+        // and ~3 dot (inter-letter). A 0.3 cutoff sits below both, so
+        // it must not collapse adjacent dits into one big on-run.
+        let sr = 12000u32;
+        let audio = synth_paris(sr, 700.0, 18.0, 6.0);
+        let baseline = count_chars_with_gap(&audio, sr, 0.0, 0.0);
+        let gated = count_chars_with_gap(&audio, sr, 0.0, 0.3);
+        assert!(
+            baseline >= 5,
+            "baseline should decode PARIS (got {baseline})"
+        );
+        assert!(
+            gated as i32 >= baseline as i32 - 1,
+            "min-gap gate must not collapse clean PARIS \
+             (baseline={baseline}, gated={gated})"
+        );
+    }
+
+    fn count_chars_with_gap(
+        audio: &[f32],
+        sr: u32,
+        min_pulse_dot_fraction: f32,
+        min_gap_dot_fraction: f32,
+    ) -> usize {
+        let mut dec = StreamingDecoder::new(sr).expect("decoder");
+        let cfg = DecoderConfig {
+            min_tone_purity: 0.0,
+            min_pulse_dot_fraction,
+            min_gap_dot_fraction,
+            ..DecoderConfig::defaults()
+        };
+        dec.set_config(cfg);
+        let mut chars = 0usize;
+        for c in audio.chunks((sr / 10) as usize) {
+            for ev in dec.feed(c).unwrap_or_default() {
+                if matches!(ev, StreamEvent::Char { .. }) {
+                    chars += 1;
+                }
+            }
+        }
+        for ev in dec.flush() {
+            if matches!(ev, StreamEvent::Char { .. }) {
+                chars += 1;
+            }
+        }
+        chars
     }
 
     #[test]

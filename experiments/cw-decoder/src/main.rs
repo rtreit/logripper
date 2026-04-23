@@ -125,6 +125,12 @@ enum Cmd {
         /// stretches (constant low-level noise crossing threshold).
         #[arg(long, default_value_t = 0.0)]
         min_pulse_dot_fraction: f32,
+        /// Bridge off-runs shorter than this fraction of one dot length.
+        /// 0 = disabled. Twin of --min-pulse-dot-fraction. 0.3 stops a
+        /// dah from being fragmented into adjacent dits when the mic
+        /// envelope chatters around threshold inside a key-down.
+        #[arg(long, default_value_t = 0.0)]
+        min_gap_dot_fraction: f32,
         /// Read NDJSON config-update lines from stdin while streaming.
         /// Each line: {"type":"config","min_snr_db":...,"pitch_min_snr_db":...,"threshold_scale":...}
         #[arg(long)]
@@ -329,6 +335,10 @@ enum Cmd {
         /// constant-noise ghost characters in silent stretches.
         #[arg(long, default_value_t = 0.0)]
         min_pulse_dot_fraction: f32,
+        /// Bridge off-runs shorter than this fraction of one dot length.
+        /// 0 = disabled. Twin of --min-pulse-dot-fraction.
+        #[arg(long, default_value_t = 0.0)]
+        min_gap_dot_fraction: f32,
         /// Optional WAV path to mirror raw mono samples to (16-bit PCM at the
         /// device's native sample rate). Useful for post-stop offline analysis.
         #[arg(long)]
@@ -423,6 +433,7 @@ fn main() -> Result<()> {
             force_pitch_hz,
             wide_bin_count,
             min_pulse_dot_fraction,
+            min_gap_dot_fraction,
             stdin_control,
         } => {
             let cfg = streaming::DecoderConfig {
@@ -437,6 +448,7 @@ fn main() -> Result<()> {
                 force_pitch_hz: (force_pitch_hz > 0.0).then_some(force_pitch_hz),
                 wide_bin_count,
                 min_pulse_dot_fraction,
+                min_gap_dot_fraction,
             };
             run_stream_file(&path, chunk_ms, realtime, quiet, json, cfg, stdin_control)
         }
@@ -510,6 +522,7 @@ fn main() -> Result<()> {
                 force_pitch_hz: None,
                 wide_bin_count: 0,
                 min_pulse_dot_fraction: 0.0,
+                min_gap_dot_fraction: 0.0,
             };
             let harvest_cfg = harvest::HarvestConfig {
                 window_seconds: window,
@@ -552,6 +565,7 @@ fn main() -> Result<()> {
             force_pitch_hz,
             wide_bin_count,
             min_pulse_dot_fraction,
+            min_gap_dot_fraction,
             record,
             stdin_control,
             loopback,
@@ -568,6 +582,7 @@ fn main() -> Result<()> {
                 force_pitch_hz: (force_pitch_hz > 0.0).then_some(force_pitch_hz),
                 wide_bin_count,
                 min_pulse_dot_fraction,
+                min_gap_dot_fraction,
             };
             run_stream_live(
                 device.as_deref(),
@@ -1975,6 +1990,9 @@ fn spawn_stdin_config_channel(
             }
             if let Some(x) = v.get("min_pulse_dot_fraction").and_then(|x| x.as_f64()) {
                 state.min_pulse_dot_fraction = x.max(0.0) as f32;
+            }
+            if let Some(x) = v.get("min_gap_dot_fraction").and_then(|x| x.as_f64()) {
+                state.min_gap_dot_fraction = x.max(0.0) as f32;
             }
             if tx.send(state).is_err() {
                 break;

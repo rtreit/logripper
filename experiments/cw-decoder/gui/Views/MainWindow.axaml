@@ -203,7 +203,7 @@
             <TextBlock Grid.Column="6" Text="{Binding RangeLockSummary}" Classes="label" TextWrapping="Wrap" VerticalAlignment="Center" />
           </Grid>
 
-          <Grid ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,*" ColumnSpacing="10">
+          <Grid ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,*" ColumnSpacing="10">
             <TextBlock Text="ACQUISITION" Classes="label" VerticalAlignment="Center" />
             <StackPanel Grid.Column="1" Spacing="2"
                         ToolTip.Tip="Force the streaming decoder to lock to this exact pitch in Hz instead of running auto-acquisition. 0 = auto. Useful when you know the target tone or when speaker→mic round-trip distorts pitch acquisition.">
@@ -220,6 +220,17 @@
               <TextBlock Text="MIN PULSE (×dot)" Classes="label" />
               <NumericUpDown Minimum="0" Maximum="1" Increment="0.05" Value="{Binding MinPulseDotFraction, Mode=TwoWay}" FormatString="0.00" />
             </StackPanel>
+            <StackPanel Grid.Column="4" Spacing="2"
+                        ToolTip.Tip="Bridge off-runs shorter than this fraction of one estimated dot length. 0 disables. 0.3 stops a real dah from being fragmented when a noisy mic envelope chatters around threshold mid-key-down. Twin of MIN PULSE.">
+              <TextBlock Text="MIN GAP (×dot)" Classes="label" />
+              <NumericUpDown Minimum="0" Maximum="1" Increment="0.05" Value="{Binding MinGapDotFraction, Mode=TwoWay}" FormatString="0.00" />
+            </StackPanel>
+            <Button Grid.Column="5" Classes="primary" Content="MIC MODE" Click="OnMicModePresetClick"
+                    Margin="8,16,0,0" VerticalAlignment="Bottom"
+                    ToolTip.Tip="Apply the acoustic-capture preset: WIDE BINS=3, MIN PURITY=1.5, MIN PULSE=0.3, MIN GAP=0.3. Use when decoding speaker→mic re-captured CW." />
+            <Button Grid.Column="6" Classes="primary" Content="RADIO MODE" Click="OnRadioModePresetClick"
+                    Margin="8,16,0,0" VerticalAlignment="Bottom"
+                    ToolTip.Tip="Restore labeled-corpus defaults: narrow Goertzel, strict purity gate, no pulse/gap filtering." />
           </Grid>
         </StackPanel>
 

@@ -29,6 +29,12 @@ public partial class MainWindow : Window
     private void OnResetSensitivityClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
         => Vm?.ResetSensitivity();
 
+    private void OnMicModePresetClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+        => Vm?.ApplyMicModePreset();
+
+    private void OnRadioModePresetClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+        => Vm?.ApplyRadioModePreset();
+
     private async void OnOpenFileClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
         if (StorageProvider is null || Vm is null) return;

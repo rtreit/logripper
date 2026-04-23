@@ -1144,6 +1144,9 @@ fn parse_streaming_decoder_config(args: &[String]) -> DecoderConfig {
         min_pulse_dot_fraction: arg_value_f32(args, "--min-pulse-dot-fraction")
             .map(|x| x.max(0.0))
             .unwrap_or(0.0),
+        min_gap_dot_fraction: arg_value_f32(args, "--min-gap-dot-fraction")
+            .map(|x| x.max(0.0))
+            .unwrap_or(0.0),
     }
 }
 
