@@ -6,6 +6,8 @@ using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Runtime.CompilerServices;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -18,7 +20,9 @@ namespace CwDecoderGui.ViewModels;
 public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
 {
     private readonly CwDecoderProcess _process = new();
+    private readonly AudioPlaybackProcess _playback = new();
     private CancellationTokenSource? _profileLoadCts;
+    private CancellationTokenSource? _playbackProfileCts;
     private CancellationTokenSource? _evaluationCts;
     private readonly Dictionary<string, SignalProfile> _profileCache = new();
     private readonly Dictionary<string, CandidateDraftState> _candidateDrafts = new();
@@ -45,6 +49,9 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
             IsRunning = false;
             StatusText = code == 0 ? "Stopped." : $"Decoder exited (code {code}).";
         });
+        _playback.EventReceived += ev => Dispatcher.UIThread.Post(() => OnPlaybackEvent(ev));
+        _playback.StderrLine += line => Dispatcher.UIThread.Post(() => PlaybackStatusText = line);
+        _playback.Exited += code => Dispatcher.UIThread.Post(() => OnPlaybackExited(code));
     }
 
     public ObservableCollection<string> Devices { get; }
@@ -138,6 +145,89 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
 
     public bool HasLastRecording => !string.IsNullOrEmpty(_lastRecordingPath) && System.IO.File.Exists(_lastRecordingPath);
     public string LastRecordingDisplay => string.IsNullOrEmpty(_lastRecordingPath) ? "" : System.IO.Path.GetFileName(_lastRecordingPath);
+
+    private string? _playbackSourcePath;
+    public string? PlaybackSourcePath
+    {
+        get => _playbackSourcePath;
+        private set
+        {
+            if (Set(ref _playbackSourcePath, value))
+            {
+                OnPropertyChanged(nameof(HasPlaybackSource));
+                OnPropertyChanged(nameof(PlaybackSourceDisplay));
+                OnPropertyChanged(nameof(CanStartPlayback));
+            }
+        }
+    }
+
+    public bool HasPlaybackSource => !string.IsNullOrWhiteSpace(_playbackSourcePath) && System.IO.File.Exists(_playbackSourcePath);
+    public string PlaybackSourceDisplay => string.IsNullOrWhiteSpace(_playbackSourcePath) ? "" : System.IO.Path.GetFileName(_playbackSourcePath);
+
+    private string _playbackSourceLabel = "AUDIO";
+    public string PlaybackSourceLabel { get => _playbackSourceLabel; private set => Set(ref _playbackSourceLabel, value); }
+
+    private string _playbackStatusText = "Open a file or render a preview to play audio inline.";
+    public string PlaybackStatusText { get => _playbackStatusText; private set => Set(ref _playbackStatusText, value); }
+
+    private double _playbackDurationSeconds;
+    public double PlaybackDurationSeconds
+    {
+        get => _playbackDurationSeconds;
+        private set
+        {
+            if (Set(ref _playbackDurationSeconds, value))
+            {
+                OnPropertyChanged(nameof(PlaybackDurationDisplay));
+                OnPropertyChanged(nameof(PlaybackProgress));
+            }
+        }
+    }
+
+    private double _playbackPositionSeconds;
+    public double PlaybackPositionSeconds
+    {
+        get => _playbackPositionSeconds;
+        private set
+        {
+            if (Set(ref _playbackPositionSeconds, value))
+            {
+                OnPropertyChanged(nameof(PlaybackPositionDisplay));
+                OnPropertyChanged(nameof(PlaybackProgress));
+            }
+        }
+    }
+
+    public string PlaybackPositionDisplay => FormatClock(PlaybackPositionSeconds);
+    public string PlaybackDurationDisplay => FormatClock(PlaybackDurationSeconds);
+    public double PlaybackProgress => PlaybackDurationSeconds <= 0 ? 0 : Math.Clamp(PlaybackPositionSeconds / PlaybackDurationSeconds, 0, 1);
+
+    private bool _isPlaybackRunning;
+    public bool IsPlaybackRunning
+    {
+        get => _isPlaybackRunning;
+        private set
+        {
+            if (Set(ref _isPlaybackRunning, value))
+            {
+                OnPropertyChanged(nameof(CanStartPlayback));
+                OnPropertyChanged(nameof(CanStopPlayback));
+            }
+        }
+    }
+
+    public bool CanStartPlayback => HasPlaybackSource && !IsPlaybackRunning;
+    public bool CanStopPlayback => IsPlaybackRunning;
+
+    private SignalProfile _playbackProfile = SignalProfile.Empty;
+    public SignalProfile PlaybackProfile
+    {
+        get => _playbackProfile;
+        private set => Set(ref _playbackProfile, value);
+    }
+
+    private bool _isPlaybackProfileBusy;
+    public bool IsPlaybackProfileBusy { get => _isPlaybackProfileBusy; private set => Set(ref _isPlaybackProfileBusy, value); }
 
     private string? _liveTranscriptForReplay;
     private readonly System.Text.StringBuilder _liveTranscriptBuilder = new();
@@ -623,6 +713,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
             // killing the process — Stop won't reliably wait for the `end` JSON.
             _liveTranscriptForReplay = _liveTranscriptBuilder.ToString();
             _process.Stop();
+            StopPlayback();
             IsRunning = false;
             // Give the WAV writer a moment to flush via Drop, then refresh button.
             _ = Task.Run(async () =>
@@ -734,6 +825,110 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
         }
     }
 
+    public void StartPlayback()
+    {
+        if (!HasPlaybackSource || string.IsNullOrWhiteSpace(PlaybackSourcePath))
+        {
+            PlaybackStatusText = "Pick a file or render a preview first.";
+            return;
+        }
+
+        try
+        {
+            PlaybackPositionSeconds = 0;
+            _playback.Start(PlaybackSourcePath);
+            PlaybackStatusText = $"Playing {PlaybackSourceDisplay}…";
+        }
+        catch (Exception ex)
+        {
+            IsPlaybackRunning = false;
+            PlaybackStatusText = $"Audio playback failed: {ex.Message}";
+        }
+    }
+
+    public void StopPlayback()
+    {
+        _playback.Stop();
+        if (IsPlaybackRunning)
+        {
+            PlaybackStatusText = $"Stopped at {PlaybackPositionDisplay}.";
+        }
+        IsPlaybackRunning = false;
+    }
+
+    private async Task PreparePlaybackSourceAsync(string path, string label, bool autoPlay)
+    {
+        path = NormalizeFilePath(path);
+        var sourceChanged = !string.Equals(PlaybackSourcePath, path, StringComparison.OrdinalIgnoreCase);
+
+        PlaybackSourcePath = path;
+        PlaybackSourceLabel = label;
+        PlaybackStatusText = $"Ready: {Path.GetFileName(path)}";
+        if (sourceChanged)
+        {
+            PlaybackDurationSeconds = 0;
+            PlaybackPositionSeconds = 0;
+            PlaybackProfile = SignalProfile.Empty;
+        }
+
+        if (autoPlay)
+        {
+            StartPlayback();
+        }
+
+        await Task.CompletedTask;
+    }
+
+    private void OnPlaybackEvent(PlaybackEvent ev)
+    {
+        switch (ev.Type)
+        {
+            case "playback_ready":
+                if (!string.IsNullOrWhiteSpace(ev.Path))
+                {
+                    PlaybackSourcePath = NormalizeFilePath(ev.Path);
+                }
+                if (ev.Duration is double duration)
+                {
+                    PlaybackDurationSeconds = duration;
+                }
+                PlaybackPositionSeconds = 0;
+                IsPlaybackRunning = true;
+                PlaybackStatusText = string.IsNullOrWhiteSpace(ev.Device)
+                    ? $"Playing {PlaybackSourceDisplay}…"
+                    : $"Playing {PlaybackSourceDisplay} on {ev.Device}.";
+                if (!string.IsNullOrWhiteSpace(PlaybackSourcePath) && PlaybackDurationSeconds > 0)
+                {
+                    _ = LoadPlaybackProfileAsync(PlaybackSourcePath, PlaybackDurationSeconds);
+                }
+                break;
+            case "playback_progress":
+                if (ev.Duration is double playbackDuration)
+                {
+                    PlaybackDurationSeconds = playbackDuration;
+                }
+                if (ev.Position is double playbackPosition)
+                {
+                    PlaybackPositionSeconds = playbackPosition;
+                }
+                break;
+            case "playback_end":
+                PlaybackPositionSeconds = PlaybackDurationSeconds;
+                IsPlaybackRunning = false;
+                PlaybackStatusText = $"Finished {PlaybackSourceDisplay}.";
+                break;
+        }
+    }
+
+    private void OnPlaybackExited(int exitCode)
+    {
+        if (exitCode != 0)
+        {
+            PlaybackStatusText = $"Audio playback exited with code {exitCode}.";
+        }
+        IsPlaybackRunning = false;
+    }
+
     private static string RunOfflineReplay(string wavPath, bool useBaseline, DecoderConfig cfg)
     {
         var exeEnv = Environment.GetEnvironmentVariable("CW_DECODER_EXE");
@@ -843,18 +1038,22 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
         return (double)dp[reference.Length, hypothesis.Length] / reference.Length;
     }
 
-    public void OpenFile(string path)
+    public async Task OpenFileAsync(string path)
     {
+        path = NormalizeFilePath(path);
         if (IsRunning) { _process.Stop(); IsRunning = false; }
         ResetDecoderSurface();
         SetHarvestFile(path);
+        LastRecordingPath = path;
         StatusText = $"Decoding {path}";
         _process.StartFile(path, realtime: true, CurrentConfig(), CurrentBaselineConfig(), IsBaselineDecoderMode);
         IsRunning = true;
+        await PreparePlaybackSourceAsync(path, "DECODE FILE", autoPlay: true).ConfigureAwait(true);
     }
 
     public void SetHarvestFile(string path)
     {
+        path = NormalizeFilePath(path);
         if (string.Equals(HarvestFilePath, path, StringComparison.OrdinalIgnoreCase))
         {
             AdvancedStatusText = HarvestCandidates.Count > 0
@@ -954,8 +1153,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
                 AdjustedStartSeconds,
                 AdjustedEndSeconds - AdjustedStartSeconds,
                 PreviewSlowdown).ConfigureAwait(true);
-            CwDecoderProcess.OpenPreview(previewPath);
-            AdvancedStatusText = $"Opened preview: {Path.GetFileName(previewPath)}";
+            await PreparePlaybackSourceAsync(previewPath, "LABEL PREVIEW", autoPlay: true).ConfigureAwait(true);
+            AdvancedStatusText = $"Playing preview: {Path.GetFileName(previewPath)}";
         }
         catch (Exception ex)
         {
@@ -1277,8 +1476,30 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
     public void Dispose()
     {
         CancelAndDisposeProfileLoad();
+        CancelAndDisposePlaybackProfileLoad();
         CancelAndDisposeEvaluation();
+        _playback.Dispose();
         _process.Dispose();
+    }
+
+    private void CancelAndDisposePlaybackProfileLoad()
+    {
+        var previous = _playbackProfileCts;
+        _playbackProfileCts = null;
+        if (previous is null)
+        {
+            return;
+        }
+
+        try
+        {
+            previous.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+
+        previous.Dispose();
     }
 
     private static string[] ParseNeedles(string? text)
@@ -1287,6 +1508,68 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
             .Split([' ', ',', ';', '\r', '\n', '\t'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
+    }
+
+    private async Task LoadPlaybackProfileAsync(string path, double durationSeconds)
+    {
+        CancelAndDisposePlaybackProfileLoad();
+        if (durationSeconds <= 0 || string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+        {
+            return;
+        }
+
+        var cts = new CancellationTokenSource();
+        _playbackProfileCts = cts;
+        IsPlaybackProfileBusy = true;
+        try
+        {
+            var profile = await _process.LoadSignalProfileAsync(
+                path,
+                0,
+                durationSeconds,
+                pitchHz: null,
+                wpm: null,
+                cts.Token).ConfigureAwait(true);
+            if (!cts.IsCancellationRequested
+                && string.Equals(PlaybackSourcePath, path, StringComparison.OrdinalIgnoreCase))
+            {
+                PlaybackProfile = profile;
+            }
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception ex)
+        {
+            if (!cts.IsCancellationRequested)
+            {
+                PlaybackStatusText = ex.Message;
+            }
+        }
+        finally
+        {
+            if (ReferenceEquals(_playbackProfileCts, cts))
+            {
+                _playbackProfileCts = null;
+            }
+            IsPlaybackProfileBusy = false;
+            cts.Dispose();
+        }
+    }
+
+    private static string NormalizeFilePath(string path) => Path.GetFullPath(path);
+
+    private static string FormatClock(double seconds)
+    {
+        if (seconds <= 0)
+        {
+            return "00:00";
+        }
+
+        var span = TimeSpan.FromSeconds(seconds);
+        return span.TotalHours >= 1
+            ? span.ToString(@"hh\:mm\:ss", CultureInfo.InvariantCulture)
+            : span.ToString(@"mm\:ss", CultureInfo.InvariantCulture);
     }
 
     private async Task LoadSelectedProfileAsync(HarvestCandidate? candidate)
@@ -1493,6 +1776,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
             SelectedCandidate is null ? null : CandidateKey(SelectedCandidate),
             new Dictionary<string, SignalProfile>(_profileCache),
             new Dictionary<string, CandidateDraftState>(_candidateDrafts));
+        PersistHarvestCandidates(HarvestFilePath, HarvestCandidates.ToList(), SelectedCandidate is null ? null : CandidateKey(SelectedCandidate));
     }
 
     private void RestoreHarvestSession(string path)
@@ -1505,7 +1789,11 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
 
         if (!_harvestSessionCache.TryGetValue(path, out var session))
         {
-            return;
+            if (!TryRestorePersistedHarvestCandidates(path, out session))
+            {
+                return;
+            }
+            _harvestSessionCache[path] = session;
         }
 
         foreach (var candidate in session.Candidates)
@@ -1657,6 +1945,74 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
     private static string CandidateKey(HarvestCandidate candidate)
         => $"{candidate.StartSeconds:F6}|{candidate.EndSeconds:F6}";
 
+    private static string HarvestCacheDirectory
+        => Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "QsoRipper",
+            "CwDecoderGui",
+            "harvest-cache");
+
+    private static string HarvestCachePath(string sourcePath)
+    {
+        var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(NormalizeFilePath(sourcePath))));
+        return Path.Combine(HarvestCacheDirectory, $"{hash}.json");
+    }
+
+    private static long GetLastWriteTicks(string path)
+        => File.Exists(path) ? File.GetLastWriteTimeUtc(path).Ticks : 0;
+
+    private static void PersistHarvestCandidates(
+        string sourcePath,
+        IReadOnlyList<HarvestCandidate> candidates,
+        string? selectedCandidateKey)
+    {
+        try
+        {
+            Directory.CreateDirectory(HarvestCacheDirectory);
+            var payload = new HarvestCacheEntry(
+                NormalizeFilePath(sourcePath),
+                GetLastWriteTicks(sourcePath),
+                candidates.ToArray(),
+                selectedCandidateKey);
+            File.WriteAllText(HarvestCachePath(sourcePath), JsonSerializer.Serialize(payload));
+        }
+        catch
+        {
+        }
+    }
+
+    private static bool TryRestorePersistedHarvestCandidates(string sourcePath, out HarvestSessionState session)
+    {
+        session = new HarvestSessionState([], null, new Dictionary<string, SignalProfile>(), new Dictionary<string, CandidateDraftState>());
+        try
+        {
+            var cachePath = HarvestCachePath(sourcePath);
+            if (!File.Exists(cachePath))
+            {
+                return false;
+            }
+
+            var payload = JsonSerializer.Deserialize<HarvestCacheEntry>(File.ReadAllText(cachePath));
+            if (payload is null
+                || !string.Equals(payload.SourcePath, NormalizeFilePath(sourcePath), StringComparison.OrdinalIgnoreCase)
+                || payload.LastWriteTicks != GetLastWriteTicks(sourcePath))
+            {
+                return false;
+            }
+
+            session = new HarvestSessionState(
+                payload.Candidates ?? [],
+                payload.SelectedCandidateKey,
+                new Dictionary<string, SignalProfile>(),
+                new Dictionary<string, CandidateDraftState>());
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     private static bool IsSameCandidate(HarvestCandidate? left, HarvestCandidate? right)
     {
         if (left is null || right is null)
@@ -1748,6 +2104,12 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
         string? SelectedCandidateKey,
         Dictionary<string, SignalProfile> ProfileCache,
         Dictionary<string, CandidateDraftState> CandidateDrafts);
+
+    private sealed record HarvestCacheEntry(
+        string SourcePath,
+        long LastWriteTicks,
+        HarvestCandidate[] Candidates,
+        string? SelectedCandidateKey);
 
     private sealed record SweepTopResult(
         double WindowSeconds,

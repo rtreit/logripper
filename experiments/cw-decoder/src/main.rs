@@ -232,6 +232,14 @@ enum Cmd {
         wpm: Option<f32>,
     },
 
+    /// Play an audio file through the default output device and emit progress.
+    PlayFile {
+        path: PathBuf,
+        /// Emit newline-delimited JSON progress events for the GUI bridge.
+        #[arg(long)]
+        json: bool,
+    },
+
     /// Stream live audio through the streaming decoder, printing events to stdout.
     StreamLive {
         #[arg(long)]
@@ -426,6 +434,7 @@ fn main() -> Result<()> {
             pitch_hz,
             wpm,
         } => run_profile_window(&path, start, end, pitch_hz, wpm),
+        Cmd::PlayFile { path, json } => run_play_file(&path, json),
         Cmd::StreamLive {
             device,
             seconds,
@@ -751,6 +760,68 @@ fn run_profile_window(
         })).collect::<Vec<_>>(),
     });
     println!("{}", serde_json::to_string(&payload)?);
+    Ok(())
+}
+
+fn run_play_file(path: &std::path::Path, json: bool) -> Result<()> {
+    use std::time::Duration;
+
+    let playback = audio::play_output_file(path).context("starting audio playback")?;
+    let mut emitter = json.then(json::JsonEmitter::new);
+    if let Some(em) = emitter.as_mut() {
+        em.emit(
+            0.0,
+            serde_json::json!({
+                "type": "playback_ready",
+                "source": "playback",
+                "path": path.display().to_string(),
+                "device": playback.device_name,
+                "rate": playback.sample_rate,
+                "duration": playback.duration_s,
+            }),
+        );
+    } else {
+        println!(
+            "Playing {} on {} ({:.2}s)",
+            path.display(),
+            playback.device_name,
+            playback.duration_s
+        );
+    }
+
+    let mut last_position = -1.0_f32;
+    while !playback.is_finished() {
+        std::thread::sleep(Duration::from_millis(50));
+        let position = playback.position_s().min(playback.duration_s);
+        if (position - last_position).abs() < 0.04 {
+            continue;
+        }
+        last_position = position;
+
+        if let Some(em) = emitter.as_mut() {
+            em.emit(
+                position,
+                serde_json::json!({
+                    "type": "playback_progress",
+                    "position": position,
+                    "duration": playback.duration_s,
+                }),
+            );
+        }
+    }
+
+    let end_position = playback.position_s().min(playback.duration_s);
+    if let Some(em) = emitter.as_mut() {
+        em.emit(
+            end_position,
+            serde_json::json!({
+                "type": "playback_end",
+                "path": path.display().to_string(),
+                "duration": playback.duration_s,
+            }),
+        );
+    }
+
     Ok(())
 }
 

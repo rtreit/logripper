@@ -2,6 +2,7 @@
 
 use std::fs::File;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex as StdMutex;
 
 use anyhow::{anyhow, Context, Result};
@@ -16,6 +17,28 @@ use symphonia::core::probe::Hint;
 pub struct DecodedAudio {
     pub samples: Vec<f32>,
     pub sample_rate: u32,
+}
+
+pub struct FilePlayback {
+    pub sample_rate: u32,
+    pub device_name: String,
+    pub duration_s: f32,
+    position_frames: Arc<AtomicU64>,
+    total_frames: u64,
+    finished: Arc<AtomicBool>,
+    _stream: cpal::Stream,
+}
+
+impl FilePlayback {
+    pub fn position_s(&self) -> f32 {
+        let frames = self.position_frames.load(Ordering::Relaxed).min(self.total_frames);
+        frames as f32 / self.sample_rate as f32
+    }
+
+    pub fn is_finished(&self) -> bool {
+        self.finished.load(Ordering::Relaxed)
+            || self.position_frames.load(Ordering::Relaxed) >= self.total_frames
+    }
 }
 
 /// Decode an audio file (mp3/wav/aac/m4a/etc) into a mono f32 PCM buffer.
@@ -99,6 +122,154 @@ pub fn decode_file(path: &Path) -> Result<DecodedAudio> {
         samples,
         sample_rate,
     })
+}
+
+pub fn play_output_file(path: &Path) -> Result<FilePlayback> {
+    let audio = decode_file(path)?;
+    if audio.samples.is_empty() {
+        return Err(anyhow!("decoded audio was empty"));
+    }
+
+    let host = cpal::default_host();
+    let device = host
+        .default_output_device()
+        .ok_or_else(|| anyhow!("no default output device"))?;
+    let device_name = device.name().unwrap_or_else(|_| "<unknown>".to_string());
+    let supported = device.default_output_config().context("output config")?;
+    let sample_format = supported.sample_format();
+    let stream_config: cpal::StreamConfig = supported.into();
+    let output_rate = stream_config.sample_rate.0;
+    let channels = stream_config.channels as usize;
+
+    let mono = if audio.sample_rate == output_rate {
+        audio.samples
+    } else {
+        resample_linear(&audio.samples, audio.sample_rate, output_rate)
+    };
+
+    let total_frames = mono.len() as u64;
+    let duration_s = total_frames as f32 / output_rate as f32;
+    let samples = Arc::new(mono);
+    let position_frames = Arc::new(AtomicU64::new(0));
+    let finished = Arc::new(AtomicBool::new(false));
+
+    let err_fn = |e| eprintln!("cpal output stream error: {e}");
+    let stream = match sample_format {
+        cpal::SampleFormat::F32 => {
+            let samples = Arc::clone(&samples);
+            let position_frames = Arc::clone(&position_frames);
+            let finished = Arc::clone(&finished);
+            device.build_output_stream(
+                &stream_config,
+                move |data: &mut [f32], _| {
+                    fill_output(data, channels, &samples, &position_frames, &finished, |sample| {
+                        sample
+                    });
+                },
+                err_fn,
+                None,
+            )?
+        }
+        cpal::SampleFormat::I16 => {
+            let samples = Arc::clone(&samples);
+            let position_frames = Arc::clone(&position_frames);
+            let finished = Arc::clone(&finished);
+            device.build_output_stream(
+                &stream_config,
+                move |data: &mut [i16], _| {
+                    fill_output(data, channels, &samples, &position_frames, &finished, |sample| {
+                        (sample.clamp(-1.0, 1.0) * i16::MAX as f32) as i16
+                    });
+                },
+                err_fn,
+                None,
+            )?
+        }
+        cpal::SampleFormat::U16 => {
+            let samples = Arc::clone(&samples);
+            let position_frames = Arc::clone(&position_frames);
+            let finished = Arc::clone(&finished);
+            device.build_output_stream(
+                &stream_config,
+                move |data: &mut [u16], _| {
+                    fill_output(data, channels, &samples, &position_frames, &finished, |sample| {
+                        ((sample.clamp(-1.0, 1.0) * 0.5 + 0.5) * u16::MAX as f32) as u16
+                    });
+                },
+                err_fn,
+                None,
+            )?
+        }
+        other => return Err(anyhow!("unsupported output sample format: {other:?}")),
+    };
+    stream.play().context("starting output stream")?;
+
+    Ok(FilePlayback {
+        sample_rate: output_rate,
+        device_name,
+        duration_s,
+        position_frames,
+        total_frames,
+        finished,
+        _stream: stream,
+    })
+}
+
+fn fill_output<T, F>(
+    data: &mut [T],
+    channels: usize,
+    samples: &Arc<Vec<f32>>,
+    position_frames: &Arc<AtomicU64>,
+    finished: &Arc<AtomicBool>,
+    mut convert: F,
+) where
+    F: FnMut(f32) -> T,
+{
+    let mut frame_index = position_frames.load(Ordering::Relaxed) as usize;
+    let total_frames = samples.len();
+
+    for frame in data.chunks_mut(channels) {
+        let sample = if frame_index < total_frames {
+            let value = samples[frame_index];
+            frame_index += 1;
+            value
+        } else {
+            finished.store(true, Ordering::Relaxed);
+            0.0
+        };
+
+        for out in frame {
+            *out = convert(sample);
+        }
+    }
+
+    position_frames.store(frame_index.min(total_frames) as u64, Ordering::Relaxed);
+    if frame_index >= total_frames {
+        finished.store(true, Ordering::Relaxed);
+    }
+}
+
+fn resample_linear(samples: &[f32], input_rate: u32, output_rate: u32) -> Vec<f32> {
+    if samples.is_empty() || input_rate == output_rate {
+        return samples.to_vec();
+    }
+
+    let out_len = ((samples.len() as f64) * output_rate as f64 / input_rate as f64).round()
+        .max(1.0) as usize;
+    let mut out = Vec::with_capacity(out_len);
+    let last = samples.len() - 1;
+
+    for index in 0..out_len {
+        let source_pos = index as f64 * input_rate as f64 / output_rate as f64;
+        let left = source_pos.floor() as usize;
+        let right = (left + 1).min(last);
+        let frac = (source_pos - left as f64) as f32;
+        let left_sample = samples[left];
+        let right_sample = samples[right];
+        out.push(left_sample + (right_sample - left_sample) * frac);
+    }
+
+    out
 }
 
 // --- Live capture --------------------------------------------------------

@@ -93,6 +93,7 @@ where
 {
     let win_samples = ((cfg.window_seconds * sample_rate as f32) as usize).max(1);
     let hop_samples = ((cfg.hop_seconds * sample_rate as f32) as usize).max(1);
+    let warmup_samples = harvest_stream_warmup_samples(sample_rate, cfg.window_seconds);
     let total_windows = if samples.len() >= win_samples {
         ((samples.len() - win_samples) / hop_samples) + 1
     } else {
@@ -111,9 +112,12 @@ where
     while start + win_samples <= samples.len() {
         let end = start + win_samples;
         let slice = &samples[start..end];
+        let warmup_start = start.saturating_sub(warmup_samples);
+        let warmup_slice = &samples[warmup_start..start];
 
         let offline = decoder::decode_window(slice, sample_rate, log_capture)?;
-        let stream = stream_decode_window(slice, sample_rate, stream_cfg, cfg.chunk_ms)?;
+        let stream =
+            stream_decode_window(slice, warmup_slice, sample_rate, stream_cfg, cfg.chunk_ms)?;
 
         let offline_compact = compact_normalized(&offline.text);
         let stream_compact = compact_normalized(&stream.transcript);
@@ -320,7 +324,7 @@ fn build_full_file_fallback_candidate(
     chunk_ms: u32,
 ) -> Result<WindowCandidate> {
     let offline = decoder::decode_window(samples, sample_rate, log_capture)?;
-    let stream = stream_decode_window(samples, sample_rate, stream_cfg, chunk_ms)?;
+    let stream = stream_decode_window(samples, &[], sample_rate, stream_cfg, chunk_ms)?;
     let offline_compact = compact_normalized(&offline.text);
     let stream_compact = compact_normalized(&stream.transcript);
 
@@ -839,8 +843,14 @@ fn candidate_rank(candidate: &WindowCandidate) -> (usize, usize, usize) {
     )
 }
 
+fn harvest_stream_warmup_samples(sample_rate: u32, window_seconds: f32) -> usize {
+    let warmup_seconds = window_seconds.clamp(2.0, 6.0);
+    ((warmup_seconds * sample_rate as f32) as usize).max(1)
+}
+
 fn stream_decode_window(
     samples: &[f32],
+    warmup: &[f32],
     sample_rate: u32,
     cfg: DecoderConfig,
     chunk_ms: u32,
@@ -848,6 +858,10 @@ fn stream_decode_window(
     let mut decoder = StreamingDecoder::new(sample_rate)?;
     decoder.set_config(cfg);
     let chunk_samples = (((sample_rate as u64 * chunk_ms as u64) / 1000) as usize).max(64);
+
+    for chunk in warmup.chunks(chunk_samples) {
+        decoder.feed(chunk)?;
+    }
 
     let mut transcript = String::new();
     for chunk in samples.chunks(chunk_samples) {
@@ -953,12 +967,16 @@ fn longest_common_substring_len(a: &str, b: &str) -> usize {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use super::{
         adaptive_pause_frames, best_pause_bounded_span, build_signal_profile, compact_normalized,
-        longest_common_substring_len, matched_needles, merge_overlapping_candidates,
-        pause_bounded_span, should_keep_without_needles, tail_extension_budget_s, FrameSpan,
+        harvest_candidates, harvest_stream_warmup_samples, longest_common_substring_len,
+        matched_needles, merge_overlapping_candidates, pause_bounded_span,
+        should_keep_without_needles, tail_extension_budget_s, FrameSpan, HarvestConfig,
         WindowCandidate,
     };
+    use crate::{audio, log_capture::DitdahLogCapture, streaming::DecoderConfig};
 
     #[test]
     fn compact_normalized_keeps_only_ascii_alnum_uppercase() {
@@ -1200,5 +1218,46 @@ mod tests {
         assert!(profile.pitch_hz.abs() < f32::EPSILON);
         assert!(profile.display_end_s > profile.display_start_s);
         assert!(!profile.points.is_empty());
+    }
+
+    #[test]
+    fn harvest_uses_stream_warmup_for_short_windows() {
+        let sample_rate = 11_025u32;
+        assert_eq!(harvest_stream_warmup_samples(sample_rate, 1.0), sample_rate as usize * 2);
+        assert_eq!(harvest_stream_warmup_samples(sample_rate, 4.0), sample_rate as usize * 4);
+        assert_eq!(harvest_stream_warmup_samples(sample_rate, 12.0), sample_rate as usize * 6);
+    }
+
+    #[test]
+    fn w1aw_harvest_produces_real_candidates_without_needles() {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..")
+            .join("data")
+            .join("cw-samples")
+            .join("W1AW_de_W5WZ_DX_CW_20180623_000422Z_14MHz.mp3");
+        assert!(path.exists(), "expected regression sample at {}", path.display());
+
+        let decoded = audio::decode_file(&path).expect("decode W1AW sample");
+        let candidates = harvest_candidates(
+            &decoded.samples,
+            decoded.sample_rate,
+            &DitdahLogCapture::new(false),
+            DecoderConfig::default(),
+            &HarvestConfig {
+                window_seconds: 4.0,
+                hop_seconds: 1.0,
+                chunk_ms: 50,
+                top: 16,
+                min_shared_chars: 4,
+                needles: Vec::new(),
+            },
+        )
+        .expect("harvest W1AW sample");
+
+        assert!(
+            candidates.iter().any(|candidate| !candidate.is_fallback),
+            "expected at least one real harvested region, got {candidates:#?}"
+        );
     }
 }

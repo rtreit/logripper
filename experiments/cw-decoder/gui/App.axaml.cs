@@ -26,7 +26,7 @@ public partial class App : Application
                 {
                     var path = args[i + 1];
                     desktop.MainWindow.Opened += (_, _) =>
-                        Avalonia.Threading.Dispatcher.UIThread.Post(() => vm.OpenFile(path),
+                        Avalonia.Threading.Dispatcher.UIThread.Post(async () => await vm.OpenFileAsync(path),
                             Avalonia.Threading.DispatcherPriority.Background);
                     break;
                 }

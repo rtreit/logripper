@@ -69,7 +69,7 @@
     </Style>
   </Window.Styles>
 
-  <Grid RowDefinitions="Auto,Auto,Auto,Auto,*,Auto">
+  <Grid RowDefinitions="Auto,Auto,Auto,Auto,Auto,*,Auto">
     <!-- Header -->
     <Border Grid.Row="0" Padding="18,14" Background="{StaticResource BgPanel}" BorderBrush="{StaticResource EdgeGlow}" BorderThickness="0,0,0,1">
       <Grid ColumnDefinitions="Auto,*,Auto">
@@ -120,7 +120,7 @@
           <TextBlock Text="SENS" Classes="label" VerticalAlignment="Center" Margin="0,0,8,0" />
 
           <StackPanel Grid.Column="1" Spacing="2" Margin="4,0,16,0">
-            <Grid ColumnDefinitions="Auto,*,Auto">
+            <Grid ColumnDefinitions="Auto,*,Auto" MinHeight="22">
               <TextBlock Text="MIN SNR" Classes="label" />
               <TextBlock Grid.Column="2" Text="{Binding MinSnrDb, StringFormat={}{0:F1} dB}" Classes="label" Foreground="{StaticResource AccentLime}" />
             </Grid>
@@ -132,7 +132,7 @@
           <TextBlock Grid.Column="2" Text="·" Foreground="{StaticResource GridLine}" VerticalAlignment="Center" />
 
           <StackPanel Grid.Column="3" Spacing="2" Margin="4,0,16,0">
-            <Grid ColumnDefinitions="Auto,*,Auto">
+            <Grid ColumnDefinitions="Auto,*,Auto" MinHeight="22">
               <TextBlock Text="PITCH LOCK" Classes="label" />
               <TextBlock Grid.Column="2" Text="{Binding PitchMinSnrDb, StringFormat={}{0:F1} dB}" Classes="label" Foreground="{StaticResource AccentLime}" />
             </Grid>
@@ -143,13 +143,14 @@
           <TextBlock Grid.Column="4" Text="·" Foreground="{StaticResource GridLine}" VerticalAlignment="Center" />
 
           <StackPanel Grid.Column="5" Spacing="2" Margin="4,0,16,0">
-            <Grid ColumnDefinitions="Auto,*,Auto,Auto">
+            <Grid ColumnDefinitions="Auto,*,Auto,Auto" MinHeight="22">
               <TextBlock Text="THRESHOLD ×" Classes="label" />
               <CheckBox Grid.Column="2" Content="AUTO" Margin="0,0,8,0" Padding="2,0,0,0"
-                        FontFamily="Consolas" FontSize="10"
-                        Foreground="{StaticResource AccentLime}"
-                        IsChecked="{Binding AutoThreshold, Mode=TwoWay}"
-                        ToolTip.Tip="Auto-tune threshold from running SNR margin (follows QSB)" />
+                         FontFamily="Consolas" FontSize="10"
+                         Foreground="{StaticResource AccentLime}"
+                         VerticalAlignment="Center"
+                         IsChecked="{Binding AutoThreshold, Mode=TwoWay}"
+                         ToolTip.Tip="Auto-tune threshold from running SNR margin (follows QSB)" />
               <TextBlock Grid.Column="3" Text="{Binding ThresholdScale, StringFormat={}{0:F2}}" Classes="label" Foreground="{StaticResource AccentLime}" />
             </Grid>
             <Slider Minimum="0.3" Maximum="2.0" SmallChange="0.05" LargeChange="0.2"
@@ -267,7 +268,42 @@
     </Grid>
 
     <!-- Transcript + review surfaces -->
-    <TabControl Grid.Row="4" Margin="14,12,14,4">
+    <Border Grid.Row="4" Margin="14,12,14,0" Classes="panel"
+            IsVisible="{Binding HasPlaybackSource}">
+      <Grid RowDefinitions="Auto,Auto,Auto" RowSpacing="8">
+        <Grid ColumnDefinitions="Auto,Auto,*,Auto,Auto" ColumnSpacing="10">
+          <TextBlock Text="AUDIO" Classes="label" VerticalAlignment="Center" />
+          <TextBlock Grid.Column="1" Text="{Binding PlaybackSourceLabel}" FontFamily="Consolas"
+                     Foreground="{StaticResource AccentAmber}" VerticalAlignment="Center" />
+          <TextBlock Grid.Column="2" Text="{Binding PlaybackSourceDisplay}" FontFamily="Consolas"
+                     Foreground="{StaticResource AccentCyan}" VerticalAlignment="Center" />
+          <Button Grid.Column="3" Classes="primary" Content="PLAY AUDIO" Click="OnStartPlaybackClick"
+                  IsEnabled="{Binding CanStartPlayback}" FontSize="11" Padding="14,4" />
+          <Button Grid.Column="4" Classes="primary" Content="STOP AUDIO" Click="OnStopPlaybackClick"
+                  IsEnabled="{Binding CanStopPlayback}" FontSize="11" Padding="14,4" />
+        </Grid>
+        <Grid Grid.Row="1" ColumnDefinitions="Auto,*,Auto" ColumnSpacing="10">
+          <TextBlock Text="{Binding PlaybackPositionDisplay}" FontFamily="Consolas"
+                     Foreground="{StaticResource AccentLime}" VerticalAlignment="Center" />
+          <ProgressBar Grid.Column="1" Minimum="0" Maximum="1" Value="{Binding PlaybackProgress}"
+                       Height="14" VerticalAlignment="Center" />
+          <TextBlock Grid.Column="2" Text="{Binding PlaybackDurationDisplay}" FontFamily="Consolas"
+                     Foreground="{StaticResource AccentLime}" VerticalAlignment="Center" />
+        </Grid>
+        <Grid Grid.Row="2" RowDefinitions="Auto,*" RowSpacing="6">
+          <TextBlock Text="{Binding PlaybackStatusText}" Classes="label" TextWrapping="Wrap" />
+          <v:PlaybackSignalView Grid.Row="1"
+                                Height="128"
+                                Points="{Binding PlaybackProfile.Points}"
+                                DisplayStartSeconds="{Binding PlaybackProfile.DisplayStartSeconds}"
+                                DisplayEndSeconds="{Binding PlaybackProfile.DisplayEndSeconds}"
+                                Threshold="{Binding PlaybackProfile.Threshold}"
+                                PlayheadSeconds="{Binding PlaybackPositionSeconds}" />
+        </Grid>
+      </Grid>
+    </Border>
+
+    <TabControl Grid.Row="5" Margin="14,12,14,4">
       <TabItem Header="DECODE">
         <Border Classes="panel">
           <Grid RowDefinitions="Auto,*,Auto">
@@ -319,7 +355,7 @@
                     IsVisible="{Binding HasLastRecording}">
               <Grid RowDefinitions="Auto,Auto,Auto" RowSpacing="6">
                 <Grid ColumnDefinitions="Auto,*" ColumnSpacing="12">
-                  <TextBlock Text="LAST RECORDING:" Classes="label" VerticalAlignment="Center" />
+                  <TextBlock Text="LAST SOURCE:" Classes="label" VerticalAlignment="Center" />
                   <TextBlock Grid.Column="1" Text="{Binding LastRecordingDisplay}"
                              FontFamily="Consolas" FontSize="12"
                              Foreground="{StaticResource AccentCyan}" VerticalAlignment="Center" />
@@ -610,7 +646,7 @@
     </TabControl>
 
     <!-- Status -->
-    <Border Grid.Row="5" Padding="18,8" Background="{StaticResource BgPanel}" BorderBrush="{StaticResource EdgeGlow}" BorderThickness="0,1,0,0">
+    <Border Grid.Row="6" Padding="18,8" Background="{StaticResource BgPanel}" BorderBrush="{StaticResource EdgeGlow}" BorderThickness="0,1,0,0">
       <TextBlock Text="{Binding StatusText}" FontFamily="Consolas" FontSize="11" Foreground="{StaticResource TextDim}" LetterSpacing="2" />
     </Border>
   </Grid>

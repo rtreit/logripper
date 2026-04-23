@@ -11,36 +11,44 @@ Today, the reference path is the causal `ditdah` baseline. The custom streaming 
 
 ## Current architecture
 
-## Core binaries
+### Core binaries
 
-### `cw-decoder`
+#### `cw-decoder`
 
 Main experiment executable. It currently exposes several surfaces:
 
 - **Offline decode**
-  - `file`
+  - `file` — single-pass or sliding-window whole-file decode through `ditdah`
+- **Live capture**
+  - `devices` — list available CPAL input devices
+  - `live` — TUI-driven capture + rolling-window `ditdah` decode (legacy interactive surface)
 - **Custom streaming decoder**
-  - `stream-file`
-  - `stream-live`
+  - `stream-file` — file-driven streaming decode with optional NDJSON event output and live `--stdin-control` config updates
+  - `stream-live` — live capture through the streaming decoder, with optional `--record` WAV mirror and `--stdin-control`
 - **Causal ditdah baseline**
-  - `stream-file-ditdah`
-  - `stream-live-ditdah`
+  - `stream-file-ditdah` — file-driven causal whole-window `ditdah` replay
+  - `stream-live-ditdah` — live capture through the causal baseline, with optional `--record` WAV mirror
 - **Labeling helpers**
-  - `harvest-file`
-  - `preview-window`
-  - `profile-window`
+  - `harvest-file` — find candidate "golden copy" windows by intersecting offline `ditdah` and the streaming decoder, optional `--needle` anchors
+  - `preview-window` — render a slowed WAV preview of a window for human verification
+  - `profile-window` — emit a tone-energy profile for the labeling UI's signal-profile editor
+- **Playback helper**
+  - `play-file` — play an audio file through the default output device and emit JSON progress for the GUI's inline transport
 - **Tone diagnostics**
-  - `probe-fisher`
+  - `probe-fisher` — sweep candidate pitches across an audio file and rank them by trial-decode Fisher score
+
+All `--json` and `--record` flags are what the Avalonia GUI uses to drive the engine over stdout/stderr NDJSON.
 
 ### `eval`
 
-Corpus scorer and sweep harness.
+Corpus scorer and sweep harness (`src\bin\eval.rs`).
 
 Current uses:
 
 - exact-window scoring against saved `*.labels.jsonl`
 - full-stream scoring by replaying whole recordings causally and intersecting transcript state at label boundaries
-- fast parameter sweeps for the causal `ditdah` baseline
+- fast parameter sweeps for the causal `ditdah` baseline (`--sweep-ditdah`, optionally `--wide-sweep`)
+- a built-in synthetic regression suite (silence, white/bursty/colored noise, clean and noisy synthesized CW at multiple SNRs) when no label flags are supplied
 
 ## Decoder families
 
@@ -87,7 +95,9 @@ It is the current reference path for label-driven tuning.
 
 ## GUI architecture
 
-The Avalonia app under `gui\` is the main operator surface.
+The Avalonia app under `gui\` (titled **CW SCOPE**) is the main operator surface. It launches the Rust `cw-decoder` and `eval` binaries from `experiments\cw-decoder\target\{release,debug}\`, walking up from `AppContext.BaseDirectory` to find them — either build flavor works, with release preferred when both are present. The key constraint is that the GUI does **not** rebuild the Rust engine on its own; if no binary is found it throws with a hint to run `cargo build` (typically `--release`) in `experiments\cw-decoder` first.
+
+The GUI is organized into three tabs: **Decode**, **Labeling**, and **Tuning**.
 
 ### Decode tab
 
@@ -102,8 +112,10 @@ Current decode-tab workflow also includes:
 
 - live capture
 - optional recording of live audio to `data\cw-recordings\`
-- offline replay of the last live recording
+- offline replay of the last opened source (live recording or file decode)
 - **Replay & Score** live-vs-offline comparison with a visible CER chip
+- inline audio playback with a shared transport / progress surface
+- a real-time playback signal view driven by the same broad-band profile pipeline used in labeling
 
 That replay path is useful for answering: _“what did the live path think happened, and what does an offline rerun on the same captured audio think happened?”_
 
@@ -113,7 +125,7 @@ The labeling workflow is now built around exact-window truth:
 
 - harvest candidate regions from recordings
 - if harvest finds no regions, fall back to a single whole-file candidate so faint recordings can still be labeled
-- preview slowed audio
+- preview slowed audio inline inside CW SCOPE instead of shelling out to an external player
 - view signal profile
 - drag exact start/end handles
 - save uppercase verified copy to JSONL
@@ -127,6 +139,13 @@ Saved labels retain:
 - decoder snapshots used during labeling
 
 Signal-profile rendering now also works without a usable pitch lock by falling back to a broadband activity profile. That keeps the editor usable on faint files where neither decoder can confidently lock a tone yet.
+
+Harvest caching is now both:
+
+- in-memory while you stay in the current GUI session, and
+- persisted under the local app-data cache so previously harvested files reopen with their cached candidate list after restarting the app, unless you explicitly click **HARVEST** again.
+
+The strong-signal W1AW path also now uses warmup-aware harvest windows for the streaming side, so short-window harvest is no longer forced into whole-file fallback just because the streaming decoder starts cold on every 4-second slice.
 
 ### Tuning tab
 
@@ -234,18 +253,26 @@ The experiment no longer depends on shell-only tuning:
 
 - Tuning tab exposes score/sweep
 - Apply Top Result connects sweeps to baseline decode
-- harvest results are cached per file during the session
+- harvest results are cached per file and persisted across app restarts
 - Decode tab can record live audio and replay it offline for CER comparison
+- Decode and Labeling now share inline audio playback instead of launching an external media player
+- CW SCOPE now shows a moving signal profile/playhead during playback
 
 ## Current labeled corpus
 
-Current corpus files:
+Label files live at the **repo root** under `data\cw-samples\`, not under `experiments\cw-decoder\`. `--all-labels` resolves `data\cw-samples\` relative to the current working directory, so it works fine when `eval` is invoked from the repo root and silently finds nothing when invoked from elsewhere. The examples below use `--labels-dir data\cw-samples` to make the path explicit, but `--all-labels` is equivalent when the cwd is the repo root.
 
-- `data\cw-samples\W1AW_de_W5WZ_DX_CW_20180623_000422Z_14MHz.labels.jsonl`
-- `data\cw-samples\k5zd-zs4tx-80m-qso.labels.jsonl`
-- `data\cw-samples\K1ZZ_de_DH8BQA_CQWWCW_CW_20151129_174710Z_14MHz.labels.jsonl`
+Current corpus files and label counts:
 
-Current size: **13 labels**
+| File | Labels |
+|---|---|
+| `data\cw-samples\W1AW_de_W5WZ_DX_CW_20180623_000422Z_14MHz.labels.jsonl` | 6 |
+| `data\cw-samples\k5zd-zs4tx-80m-qso.labels.jsonl` | 2 |
+| `data\cw-samples\K1ZZ_de_DH8BQA_CQWWCW_CW_20151129_174710Z_14MHz.labels.jsonl` | 1 |
+
+Current size: **9 labels**
+
+Companion `.mp3` recordings (including `K1ZZ_de_LA8OM_*`, `k5zd-ey8mm-40m-qso`, and ad-hoc `radio-*` captures) are present but not yet labeled.
 
 ## Current results
 
@@ -260,18 +287,15 @@ Using the current reference baseline settings:
 
 Current scorer result:
 
-- **8 / 13 exact**
-- **avg CER = 0.11**
-- **total edit distance = 16**
+- **6 / 9 exact**
+- **avg CER = 0.10**
+- **total edit distance = 12**
 
 Interpretation:
 
-- **K1ZZ** is exact
-- **W1AW** is mostly solved in exact-window mode, with the remaining notable miss looking like a **leading-edge / warmup** problem (`TUST...` vs `QST...`)
-- **80m contest** labels still show mixed failure classes such as:
-  - garbage decode
-  - near match
-  - spacing-only errors
+- **K1ZZ / DH8BQA** is now exact
+- **W1AW** is mostly solved in exact-window mode (5 / 6 exact); the remaining miss is a **leading-edge / warmup** problem (`TUST...` vs `QST...`)
+- **80m K5ZD / ZS4TX** labels still both miss, currently classified as one `garbage_decode` and one `near_match`
 
 ### Full-stream baseline score
 
@@ -282,8 +306,8 @@ Current scorer result with:
 
 is:
 
-- **1 / 13 exact**
-- **avg CER = 0.90**
+- **1 / 9 exact**
+- **avg CER = 0.85**
 - dominated by `empty_output` and `garbage_decode`
 
 Interpretation:
@@ -382,8 +406,10 @@ If the goal is custom-streaming research:
 
 ## Build and run
 
+The Avalonia GUI launches whichever Rust binaries it finds under `experiments\cw-decoder\target\{release,debug}\` (release preferred) but does **not** rebuild them. A debug build is enough to make the GUI run; release is recommended for realistic decode latency. Build the engine first, then the GUI:
+
 ```powershell
-cargo build --manifest-path experiments\cw-decoder\Cargo.toml
+cargo build --release --manifest-path experiments\cw-decoder\Cargo.toml
 dotnet build experiments\cw-decoder\gui\CwDecoderGui.csproj
 ```
 
@@ -393,20 +419,50 @@ Run the GUI:
 dotnet run --project experiments\cw-decoder\gui\CwDecoderGui.csproj
 ```
 
-Run the scorer on the full corpus:
+If you want to smoke-test inline playback directly from the CLI:
 
 ```powershell
-cargo run --manifest-path experiments\cw-decoder\Cargo.toml --bin eval -- --all-labels --window 20 --min-window 0.5 --decode-every-ms 1000 --confirmations 3
+cargo run --release --manifest-path experiments\cw-decoder\Cargo.toml -- play-file data\cw-samples\W1AW_de_W5WZ_DX_CW_20180623_000422Z_14MHz.mp3 --json
+```
+
+Run the scorer on the full corpus (from the repo root, since labels live under `data\cw-samples\`):
+
+```powershell
+cargo run --release --manifest-path experiments\cw-decoder\Cargo.toml --bin eval -- --labels-dir data\cw-samples --window 20 --min-window 0.5 --decode-every-ms 1000 --confirmations 3
 ```
 
 Run the full-stream scorer:
 
 ```powershell
-cargo run --manifest-path experiments\cw-decoder\Cargo.toml --bin eval -- --all-labels --mode full-stream --window 20 --min-window 0.5 --decode-every-ms 1000 --confirmations 3 --post-roll-ms 1500
+cargo run --release --manifest-path experiments\cw-decoder\Cargo.toml --bin eval -- --labels-dir data\cw-samples --mode full-stream --window 20 --min-window 0.5 --decode-every-ms 1000 --confirmations 3 --post-roll-ms 1500
 ```
+
+Run a baseline `ditdah` parameter sweep against the corpus:
+
+```powershell
+cargo run --release --manifest-path experiments\cw-decoder\Cargo.toml --bin eval -- --labels-dir data\cw-samples --sweep-ditdah --wide-sweep --top 10
+```
+
+Without any `--labels` / `--labels-dir` / `--all-labels` flag, `eval` falls back to its built-in synthetic suite (silence, noise, clean/noisy synthesized CW) instead of label scoring.
 
 Probe likely target tones by Fisher score:
 
 ```powershell
-cargo run --manifest-path experiments\cw-decoder\Cargo.toml -- probe-fisher data\cw-samples\k5zd-zs4tx-80m-qso.mp3 --min-hz 350 --max-hz 1500 --step-hz 10 --top 8
+cargo run --release --manifest-path experiments\cw-decoder\Cargo.toml -- probe-fisher data\cw-samples\k5zd-zs4tx-80m-qso.mp3 --min-hz 350 --max-hz 1500 --step-hz 10 --top 8
 ```
+
+List live audio devices and run the legacy TUI:
+
+```powershell
+cargo run --release --manifest-path experiments\cw-decoder\Cargo.toml -- devices
+cargo run --release --manifest-path experiments\cw-decoder\Cargo.toml -- live --device "USB Audio CODEC"
+```
+
+## Repo-local artifacts
+
+- `gui-screenshot*.png` — historical GUI screenshots tracking visual iteration on the Decode tab
+- `screenshots\sensitivity-panel.png` — close-up of the sensitivity / threshold panel
+- `target\` — local Cargo build output (debug + release) for `cw-decoder` and `eval`
+- `gui\bin\`, `gui\obj\` — local .NET build output for the Avalonia GUI
+
+These are not committed-meaningful build artifacts; they exist to make the GUI runnable without an extra build step on the developer machine.

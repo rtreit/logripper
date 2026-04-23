@@ -46,7 +46,7 @@ public partial class MainWindow : Window
         });
         var first = picked.FirstOrDefault();
         if (first?.TryGetLocalPath() is string path)
-            Vm.OpenFile(path);
+            await Vm.OpenFileAsync(path);
     }
 
     private async void OnOpenHarvestFileClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
@@ -80,6 +80,12 @@ public partial class MainWindow : Window
         if (Vm is null) return;
         await Vm.PlaySelectedCandidateAsync();
     }
+
+    private void OnStartPlaybackClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+        => Vm?.StartPlayback();
+
+    private void OnStopPlaybackClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+        => Vm?.StopPlayback();
 
     private void OnSaveLabelClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
         => Vm?.SaveSelectedLabel();
