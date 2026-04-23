@@ -60,10 +60,13 @@ internal sealed class CwDecoderProcess : IDisposable
     public void StartLive(string? device, DecoderConfig cfg, BaselineDecoderConfig baselineCfg, bool useBaseline, string? recordPath = null)
     {
         Stop();
-        // For live capture, override baseline cadence/confirmations to be far more
-        // responsive than the offline defaults (which are tuned for accuracy on
-        // recorded files, not real-time feedback).
-        var liveBaselineArgs = "--window 8 --min-window 0.5 --decode-every-ms 200 --confirmations 1";
+        // For live capture, balance latency vs accuracy: cadence stays fast
+        // (400ms) but require 2 confirmations on a stable rolling window so
+        // we don't commit garbage from partial sub-second windows. With
+        // confirmations=1 + tiny min-window, the prefix-stabilizer was
+        // appending every wildly-different rolling-decode to the transcript,
+        // producing massive duplicated output (CER >2000%).
+        var liveBaselineArgs = "--window 6 --min-window 1.5 --decode-every-ms 400 --confirmations 2";
         var args = useBaseline
             ? $"stream-live-ditdah --json --chunk-ms 50 {liveBaselineArgs}"
             : $"stream-live --json --stdin-control {cfg.ToCliArgs()}";
