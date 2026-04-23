@@ -358,8 +358,10 @@ fn detect_pitch(samples: &[f32], sample_rate: u32, min_snr_linear: f32) -> Resul
     // bimodality (keying-ratio) factor so a slightly quieter strongly
     // keyed bin can beat a louder near-flat one. SNR uses a sqrt
     // weighting so absolute loudness can't completely dominate.
-    let mut best_idx = candidates[0];
-    let mut best_score = -1.0_f32;
+    //
+    // First pass: build a shortlist of candidates that clear the SNR
+    // gate and have at least mild bimodality.
+    let mut shortlist: Vec<(usize, f32)> = Vec::new();
     for &i in &candidates {
         let p = sum[i];
         let snr = p / median;
@@ -374,26 +376,191 @@ fn detect_pitch(samples: &[f32], sample_rate: u32, min_snr_linear: f32) -> Resul
         let q10 = series[series.len() / 10].max(1e-30);
         let q90 = series[series.len() * 9 / 10].max(1e-30);
         let keying = (q90 / q10).clamp(1.0, 5000.0);
-        // Require at least mild bimodality so a pure carrier can't win.
         if keying < 5.0 {
             continue;
         }
-        // sqrt(SNR) × keying. The sqrt softens the power dominance so a
-        // bin that's a little quieter but much more strongly keyed can
-        // still win.
-        let score = snr.sqrt() * keying;
-        if score > best_score {
-            best_score = score;
-            best_idx = i;
-        }
+        let prelim = snr.sqrt() * keying;
+        shortlist.push((i, prelim));
     }
-    if best_score < 0.0 {
+    if shortlist.is_empty() {
         return Err(anyhow!(
             "no candidate cleared SNR gate of {:.1} dB",
             10.0 * min_snr_linear.log10()
         ));
     }
-    Ok(best_idx as f32 * df)
+    shortlist.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+    // If we have only one viable candidate, accept it without trial decode.
+    if shortlist.len() == 1 {
+        return Ok(shortlist[0].0 as f32 * df);
+    }
+
+    // Trial-decode the top N candidates and re-rank by dit/dah cluster
+    // separation (Fisher discriminant on on-pulse durations). This catches
+    // cases like two stations chorusing within one Goertzel passband, where
+    // the FFT/keying score still favours the loud blur but the actual
+    // morse timing is mush.
+    const TRIAL_TOP_N: usize = 4;
+    // Multiplier on the prelim score that the best trial-winner must beat
+    // to oust the prelim leader. Keeps single-signal cases (where the
+    // prelim leader is clearly correct) stable while still letting trial
+    // scoring rescue the chorus case.
+    const TRIAL_OUST_MARGIN: f32 = 1.5;
+    let n = shortlist.len().min(TRIAL_TOP_N);
+    let mut best_trial = (shortlist[0].0, 0.0_f32);
+    let debug = std::env::var("CW_PITCH_DEBUG").is_ok();
+    for &(idx, prelim) in &shortlist[..n] {
+        let pitch = idx as f32 * df;
+        let trial = trial_decode_score(samples, sample_rate, pitch);
+        if debug {
+            eprintln!(
+                "[cw-decoder pitch trial] cand {:.1} Hz prelim={:.2} trial={:.3}",
+                pitch, prelim, trial
+            );
+        }
+        if trial > best_trial.1 {
+            best_trial = (idx, trial);
+        }
+    }
+    if debug {
+        eprintln!(
+            "[cw-decoder pitch trial] prelim_leader={:.1} Hz, best_trial={:.1} Hz score={:.3}",
+            shortlist[0].0 as f32 * df,
+            best_trial.0 as f32 * df,
+            best_trial.1
+        );
+    }
+    // If the best trial winner is the same as the prelim leader, just
+    // return it. Otherwise, only oust the prelim leader if its trial
+    // score is meaningfully worse — avoids flapping on near-ties.
+    let prelim_leader = shortlist[0].0;
+    if best_trial.0 == prelim_leader {
+        return Ok(prelim_leader as f32 * df);
+    }
+    let leader_trial = trial_decode_score(samples, sample_rate, prelim_leader as f32 * df);
+    let chosen = if best_trial.1 > leader_trial * TRIAL_OUST_MARGIN {
+        best_trial.0
+    } else {
+        prelim_leader
+    };
+    Ok(chosen as f32 * df)
+}
+
+/// Quick "does this pitch decode to clean morse?" probe.
+///
+/// Runs a Goertzel at `pitch_hz` over the audio, extracts on-pulse
+/// durations, and returns Fisher's discriminant on the lengths after
+/// 1-D k-means into two groups (dits, dahs):
+///
+///   F = (mean_dah - mean_dit)² / (var_dit + var_dah + ε)
+///
+/// Real CW produces well-separated tight clusters at ~1 and ~3 dit
+/// units, giving a high F. Chorusing stations or spurious carriers
+/// produce overlapping or random-looking durations and score low.
+///
+/// The score is further attenuated when the dah/dit ratio falls
+/// outside [2.0, 4.5] (real CW is exactly 3 by spec; we tolerate
+/// reasonable slop) and when there are too few intervals to be
+/// statistically meaningful.
+fn trial_decode_score(samples: &[f32], sample_rate: u32, pitch_hz: f32) -> f32 {
+    let win_size = (sample_rate as f32 * GOERTZEL_WIN_MS / 1000.0) as usize;
+    let win_size = win_size.max(32);
+    let step = (win_size / 4).max(1);
+    let mut g = Goertzel::new(pitch_hz, sample_rate, win_size, step);
+    let mut power: Vec<f32> = Vec::with_capacity(samples.len() / step + 1);
+    g.push(samples, &mut power);
+    if power.len() < 16 {
+        return 0.0;
+    }
+    let mut sorted = power.clone();
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let q10 = sorted[sorted.len() / 10].max(1e-30);
+    let q90 = sorted[sorted.len() * 9 / 10].max(1e-30);
+    if q90 / q10 < 4.0 {
+        // Not bimodal enough to call it a keyed signal.
+        return 0.0;
+    }
+    // Threshold midway in log space (matches detect_pitch's prelim threshold).
+    let log_thr = 0.5 * (q10.ln() + q90.ln());
+    let thr = log_thr.exp();
+    // Walk power samples, collecting consecutive-on run lengths.
+    let mut on_runs: Vec<f32> = Vec::new();
+    let mut cur_on = 0usize;
+    for &p in &power {
+        if p > thr {
+            cur_on += 1;
+        } else if cur_on > 0 {
+            on_runs.push(cur_on as f32);
+            cur_on = 0;
+        }
+    }
+    if cur_on > 0 {
+        on_runs.push(cur_on as f32);
+    }
+    if on_runs.len() < 6 {
+        return 0.0;
+    }
+    // K-means with k=2, init by min/max.
+    let init_min = on_runs.iter().cloned().fold(f32::INFINITY, f32::min);
+    let init_max = on_runs.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+    let mut c_low = init_min;
+    let mut c_high = init_max;
+    if (c_high - c_low) < 0.5 {
+        return 0.0;
+    }
+    for _ in 0..20 {
+        let (mut sum_lo, mut sum_hi, mut n_lo, mut n_hi) = (0.0_f32, 0.0_f32, 0usize, 0usize);
+        for &x in &on_runs {
+            if (x - c_low).abs() <= (x - c_high).abs() {
+                sum_lo += x;
+                n_lo += 1;
+            } else {
+                sum_hi += x;
+                n_hi += 1;
+            }
+        }
+        if n_lo == 0 || n_hi == 0 {
+            return 0.0;
+        }
+        let new_lo = sum_lo / n_lo as f32;
+        let new_hi = sum_hi / n_hi as f32;
+        if (new_lo - c_low).abs() < 1e-3 && (new_hi - c_high).abs() < 1e-3 {
+            c_low = new_lo;
+            c_high = new_hi;
+            break;
+        }
+        c_low = new_lo;
+        c_high = new_hi;
+    }
+    // Compute per-cluster variance.
+    let (mut var_lo, mut var_hi, mut n_lo, mut n_hi) = (0.0_f32, 0.0_f32, 0usize, 0usize);
+    for &x in &on_runs {
+        if (x - c_low).abs() <= (x - c_high).abs() {
+            var_lo += (x - c_low).powi(2);
+            n_lo += 1;
+        } else {
+            var_hi += (x - c_high).powi(2);
+            n_hi += 1;
+        }
+    }
+    if n_lo < 2 || n_hi < 2 {
+        return 0.0;
+    }
+    var_lo /= n_lo as f32;
+    var_hi /= n_hi as f32;
+    let fisher = (c_high - c_low).powi(2) / (var_lo + var_hi + 1e-6);
+    // Penalise clusters whose ratio doesn't look like dit/dah.
+    let ratio = c_high / c_low.max(1e-6);
+    let ratio_pen = if (2.0..=4.5).contains(&ratio) {
+        1.0
+    } else if (1.5..=6.0).contains(&ratio) {
+        0.4
+    } else {
+        0.1
+    };
+    // Penalise too few intervals — Fisher is unstable with small N.
+    let n_pen = ((on_runs.len() as f32) / 10.0).min(1.0);
+    fisher * ratio_pen * n_pen
 }
 
 // --- Decoder state machine ---------------------------------------------
@@ -1332,5 +1499,130 @@ fn morse_to_char(s: &str) -> Option<char> {
         "...-..-" => Some('$'),
         ".--.-." => Some('@'),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod trial_decode_tests {
+    use super::*;
+    use std::f32::consts::TAU;
+
+    fn synth_paris(sample_rate: u32, pitch_hz: f32, wpm: f32, secs: f32) -> Vec<f32> {
+        // PARIS = .--.  .-  .-.  ..  ...   plus inter-word gap = 50 dot units total.
+        let dot_secs = 1.2 / wpm;
+        let dot_n = (dot_secs * sample_rate as f32) as usize;
+        // Cosine raised-edge ramp ~5ms to suppress key clicks.
+        let ramp_n = ((sample_rate as f32) * 0.005) as usize;
+        // pattern: list of (on, units)
+        let pattern: Vec<(bool, usize)> = {
+            let mut p: Vec<(bool, usize)> = Vec::new();
+            let letters = ["P", "A", "R", "I", "S"];
+            let codes = [".--.", ".-", ".-.", "..", "..."];
+            for (li, code) in codes.iter().enumerate() {
+                let mut first = true;
+                for c in code.chars() {
+                    if !first {
+                        p.push((false, 1));
+                    }
+                    first = false;
+                    let on_units = if c == '.' { 1 } else { 3 };
+                    p.push((true, on_units));
+                }
+                if li + 1 < letters.len() {
+                    p.push((false, 3));
+                }
+            }
+            p.push((false, 7)); // inter-word
+            p
+        };
+        let mut out: Vec<f32> = Vec::new();
+        let mut t = 0usize;
+        let total_n = (secs * sample_rate as f32) as usize;
+        while out.len() < total_n {
+            for (on, units) in &pattern {
+                let n = dot_n * units;
+                for k in 0..n {
+                    let env = if *on {
+                        let rise = if k < ramp_n {
+                            0.5 * (1.0 - ((std::f32::consts::PI * k as f32) / ramp_n as f32).cos())
+                        } else {
+                            1.0
+                        };
+                        let fall = if k + ramp_n > n {
+                            let kk = (n - k) as f32;
+                            0.5 * (1.0 - ((std::f32::consts::PI * kk) / ramp_n as f32).cos())
+                        } else {
+                            1.0
+                        };
+                        rise.min(fall)
+                    } else {
+                        0.0
+                    };
+                    let s = (TAU * pitch_hz * (t as f32) / sample_rate as f32).sin() * 0.5 * env;
+                    out.push(s);
+                    t += 1;
+                    if out.len() >= total_n {
+                        break;
+                    }
+                }
+                if out.len() >= total_n {
+                    break;
+                }
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn trial_decode_score_is_high_for_clean_cw() {
+        let sr = 16000u32;
+        let audio = synth_paris(sr, 700.0, 20.0, 8.0);
+        let on_pitch = trial_decode_score(&audio, sr, 700.0);
+        // White noise / silence baseline.
+        let silence = vec![0.0_f32; audio.len()];
+        let off_pitch = trial_decode_score(&silence, sr, 700.0);
+        assert!(
+            on_pitch > 5.0,
+            "on-pitch score should be substantial, got {}",
+            on_pitch
+        );
+        assert!(
+            off_pitch < 0.5,
+            "silence score should be ~0, got {}",
+            off_pitch
+        );
+    }
+
+    #[test]
+    fn trial_decode_score_is_higher_at_signal_pitch_than_off_pitch() {
+        let sr = 16000u32;
+        // Mix CW at 700 Hz with broadband white noise at low amplitude.
+        let cw = synth_paris(sr, 700.0, 20.0, 8.0);
+        // Tiny LCG so the test is deterministic without depending on a crate.
+        let mut s: u32 = 0xDEAD_BEEF;
+        let mixed: Vec<f32> = cw
+            .iter()
+            .map(|&x| {
+                s = s.wrapping_mul(1664525).wrapping_add(1013904223);
+                let n = ((s >> 8) as f32 / (1u32 << 24) as f32 - 0.5) * 0.05;
+                x + n
+            })
+            .collect();
+        let on_pitch = trial_decode_score(&mixed, sr, 700.0);
+        // Compare against a pitch with no real signal (pure white noise).
+        let mut s2: u32 = 0xCAFE_F00D;
+        let noise: Vec<f32> = (0..mixed.len())
+            .map(|_| {
+                s2 = s2.wrapping_mul(1664525).wrapping_add(1013904223);
+                ((s2 >> 8) as f32 / (1u32 << 24) as f32 - 0.5) * 0.05
+            })
+            .collect();
+        let pure_noise = trial_decode_score(&noise, sr, 700.0);
+        assert!(
+            on_pitch > pure_noise * 2.0,
+            "on-pitch CW ({}) should beat pure-noise ({}) by a wide margin",
+            on_pitch,
+            pure_noise
+        );
     }
 }
