@@ -336,8 +336,8 @@
     <!-- Transcript + review surfaces -->
     <Border Grid.Row="4" Margin="14,12,14,0" Classes="panel"
             IsVisible="{Binding HasPlaybackSource}">
-      <Grid RowDefinitions="Auto,Auto,Auto" RowSpacing="8">
-        <Grid ColumnDefinitions="Auto,Auto,*,Auto,Auto,Auto,Auto" ColumnSpacing="10">
+      <Grid RowDefinitions="Auto,Auto,Auto,Auto" RowSpacing="8">
+        <Grid ColumnDefinitions="Auto,Auto,*,Auto,Auto,Auto,Auto,Auto" ColumnSpacing="10">
           <TextBlock Text="AUDIO" Classes="label" VerticalAlignment="Center" />
           <TextBlock Grid.Column="1" Text="{Binding PlaybackSourceLabel}" FontFamily="Consolas"
                      Foreground="{StaticResource AccentAmber}" VerticalAlignment="Center" />
@@ -348,14 +348,20 @@
                      Foreground="{StaticResource AccentLime}" VerticalAlignment="Center" />
           <Button Grid.Column="5" Classes="primary" Content="PLAY AUDIO" Click="OnStartPlaybackClick"
                   IsEnabled="{Binding CanStartPlayback}" FontSize="11" Padding="14,4" />
-          <Button Grid.Column="6" Classes="primary" Content="STOP AUDIO" Click="OnStopPlaybackClick"
+          <Button Grid.Column="6" Classes="primary" Content="{Binding PauseResumeLabel}" Click="OnPauseResumeClick"
+                  IsEnabled="{Binding CanStopPlayback}" FontSize="11" Padding="14,4" />
+          <Button Grid.Column="7" Classes="primary" Content="STOP AUDIO" Click="OnStopPlaybackClick"
                   IsEnabled="{Binding CanStopPlayback}" FontSize="11" Padding="14,4" />
         </Grid>
         <Grid Grid.Row="1" ColumnDefinitions="Auto,*,Auto" ColumnSpacing="10">
           <TextBlock Text="{Binding PlaybackPositionDisplay}" FontFamily="Consolas"
                      Foreground="{StaticResource AccentLime}" VerticalAlignment="Center" />
-          <ProgressBar Grid.Column="1" Minimum="0" Maximum="1" Value="{Binding PlaybackProgress}"
-                       Height="14" VerticalAlignment="Center" />
+          <Slider x:Name="PlaybackScrubSlider"
+                  Grid.Column="1" Minimum="0"
+                  Maximum="{Binding PlaybackDurationSeconds}"
+                  Value="{Binding PlaybackPositionSeconds, Mode=TwoWay}"
+                  IsEnabled="{Binding CanStopPlayback}"
+                  VerticalAlignment="Center" />
           <TextBlock Grid.Column="2" Text="{Binding PlaybackDurationDisplay}" FontFamily="Consolas"
                      Foreground="{StaticResource AccentLime}" VerticalAlignment="Center" />
         </Grid>
@@ -368,6 +374,28 @@
                                 DisplayEndSeconds="{Binding PlaybackProfile.DisplayEndSeconds}"
                                 Threshold="{Binding PlaybackProfile.Threshold}"
                                 PlayheadSeconds="{Binding PlaybackPositionSeconds}" />
+        </Grid>
+        <!-- Region trim (decode-and-play): skip leading talking, focus on a slice -->
+        <Grid Grid.Row="3" ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,*" ColumnSpacing="10">
+          <CheckBox Content="USE REGION" IsChecked="{Binding UseRegion, Mode=TwoWay}" VerticalAlignment="Center" />
+          <TextBlock Grid.Column="1" Text="START (s)" Classes="label" VerticalAlignment="Center" />
+          <NumericUpDown Grid.Column="2" Width="110"
+                         Minimum="0"
+                         Maximum="{Binding FileDurationSeconds}"
+                         Increment="0.5"
+                         Value="{Binding RegionStartSeconds, Mode=TwoWay}"
+                         FormatString="0.00" />
+          <TextBlock Grid.Column="3" Text="END (s)" Classes="label" VerticalAlignment="Center" />
+          <NumericUpDown Grid.Column="4" Width="110"
+                         Minimum="0"
+                         Maximum="{Binding FileDurationSeconds}"
+                         Increment="0.5"
+                         Value="{Binding RegionEndSeconds, Mode=TwoWay}"
+                         FormatString="0.00" />
+          <Button Grid.Column="5" Classes="primary" Content="APPLY REGION" Click="OnApplyRegionClick"
+                  IsEnabled="{Binding CanStopPlayback}" FontSize="11" Padding="14,4" />
+          <TextBlock Grid.Column="6" Text="{Binding EffectiveRegionLabel}" Classes="label"
+                     VerticalAlignment="Center" Margin="10,0,0,0" />
         </Grid>
       </Grid>
     </Border>

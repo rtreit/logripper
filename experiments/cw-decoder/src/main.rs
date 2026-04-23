@@ -284,6 +284,55 @@ enum Cmd {
         json: bool,
     },
 
+    /// Play an audio file through the default output device AND stream
+    /// the same samples through the CW decoder in lockstep. Audio output
+    /// is the master clock — the decoder feeds exactly what the operator
+    /// hears. Supports region trim, pause/resume, and seek over stdin.
+    DecodeAndPlay {
+        path: PathBuf,
+        /// Region start in seconds. 0 = beginning of file.
+        #[arg(long, default_value_t = 0.0)]
+        start: f32,
+        /// Region end in seconds. 0 (default) = end of file. Must be >
+        /// `--start`. The decoder runs only over [start, end] and is
+        /// reset at start so prior audio (e.g. talking before CW)
+        /// cannot contaminate pitch lock or threshold history.
+        #[arg(long, default_value_t = 0.0)]
+        end: f32,
+        /// Emit NDJSON events to stdout (decoder + playback).
+        #[arg(long)]
+        json: bool,
+        /// Read NDJSON control commands on stdin: pause, resume, seek
+        /// (position in seconds, region-relative), config (decoder).
+        #[arg(long)]
+        stdin_control: bool,
+        /// Initial minimum tone-vs-noise ratio in dB.
+        #[arg(long, default_value_t = streaming::DEFAULT_MIN_SNR_DB)]
+        min_snr_db: f32,
+        #[arg(long, default_value_t = streaming::DEFAULT_PITCH_MIN_SNR_DB)]
+        pitch_min_snr_db: f32,
+        #[arg(long, default_value_t = streaming::DEFAULT_THRESHOLD_SCALE)]
+        threshold_scale: f32,
+        #[arg(long)]
+        no_auto_threshold: bool,
+        #[arg(long)]
+        experimental_range_lock: bool,
+        #[arg(long, default_value_t = streaming::DEFAULT_RANGE_LOCK_MIN_HZ)]
+        range_lock_min_hz: f32,
+        #[arg(long, default_value_t = streaming::DEFAULT_RANGE_LOCK_MAX_HZ)]
+        range_lock_max_hz: f32,
+        #[arg(long, default_value_t = streaming::DEFAULT_MIN_TONE_PURITY)]
+        min_tone_purity: f32,
+        #[arg(long, default_value_t = 0.0)]
+        force_pitch_hz: f32,
+        #[arg(long, default_value_t = 0)]
+        wide_bin_count: u8,
+        #[arg(long, default_value_t = 0.0)]
+        min_pulse_dot_fraction: f32,
+        #[arg(long, default_value_t = 0.0)]
+        min_gap_dot_fraction: f32,
+    },
+
     /// Stream live audio through the streaming decoder, printing events to stdout.
     StreamLive {
         #[arg(long)]
@@ -550,6 +599,41 @@ fn main() -> Result<()> {
             wpm,
         } => run_profile_window(&path, start, end, pitch_hz, wpm),
         Cmd::PlayFile { path, json } => run_play_file(&path, json),
+        Cmd::DecodeAndPlay {
+            path,
+            start,
+            end,
+            json,
+            stdin_control,
+            min_snr_db,
+            pitch_min_snr_db,
+            threshold_scale,
+            no_auto_threshold,
+            experimental_range_lock,
+            range_lock_min_hz,
+            range_lock_max_hz,
+            min_tone_purity,
+            force_pitch_hz,
+            wide_bin_count,
+            min_pulse_dot_fraction,
+            min_gap_dot_fraction,
+        } => {
+            let cfg = streaming::DecoderConfig {
+                min_snr_db,
+                pitch_min_snr_db,
+                threshold_scale,
+                auto_threshold: !no_auto_threshold,
+                experimental_range_lock,
+                range_lock_min_hz,
+                range_lock_max_hz,
+                min_tone_purity,
+                force_pitch_hz: (force_pitch_hz > 0.0).then_some(force_pitch_hz),
+                wide_bin_count,
+                min_pulse_dot_fraction,
+                min_gap_dot_fraction,
+            };
+            run_decode_and_play(&path, start, end, json, stdin_control, cfg)
+        }
         Cmd::StreamLive {
             device,
             seconds,
@@ -949,6 +1033,408 @@ fn run_play_file(path: &std::path::Path, json: bool) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Stdin control commands accepted by `decode-and-play`. The GUI sends
+/// one NDJSON line per command; unrecognised lines are ignored.
+enum PlaybackControl {
+    Pause,
+    Resume,
+    /// Seek to a position in seconds, relative to the start of the
+    /// region being played (NOT relative to the original file).
+    Seek(f32),
+    Stop,
+    Config(streaming::DecoderConfig),
+}
+
+fn spawn_stdin_playback_control(
+    stop_on_eof: std::sync::Arc<std::sync::atomic::AtomicBool>,
+) -> std::sync::mpsc::Receiver<PlaybackControl> {
+    use std::io::BufRead;
+    let (tx, rx) = std::sync::mpsc::channel::<PlaybackControl>();
+    std::thread::spawn(move || {
+        let stdin = std::io::stdin();
+        let mut state = streaming::DecoderConfig::defaults();
+        for line in stdin.lock().lines().map_while(Result::ok) {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            let v: serde_json::Value = match serde_json::from_str(trimmed) {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+            // Two top-level shapes are accepted:
+            //   {"cmd": "pause"|"resume"|"seek"|"stop"}
+            //   {"type": "config", ...}
+            // The two shapes are distinguished by which key is present so a
+            // single stdin pipe can carry both transport and decoder updates.
+            if let Some(cmd) = v.get("cmd").and_then(|c| c.as_str()) {
+                let event = match cmd {
+                    "pause" => Some(PlaybackControl::Pause),
+                    "resume" | "play" => Some(PlaybackControl::Resume),
+                    "stop" => Some(PlaybackControl::Stop),
+                    "seek" => v
+                        .get("position")
+                        .and_then(|p| p.as_f64())
+                        .map(|p| PlaybackControl::Seek(p as f32)),
+                    _ => None,
+                };
+                if let Some(ev) = event {
+                    if tx.send(ev).is_err() {
+                        break;
+                    }
+                }
+                continue;
+            }
+
+            if v.get("type").and_then(|t| t.as_str()) != Some("config") {
+                continue;
+            }
+            // Reuse the same field set as `spawn_stdin_config_channel`.
+            if let Some(x) = v.get("min_snr_db").and_then(|x| x.as_f64()) {
+                state.min_snr_db = x as f32;
+            }
+            if let Some(x) = v.get("pitch_min_snr_db").and_then(|x| x.as_f64()) {
+                state.pitch_min_snr_db = x as f32;
+            }
+            if let Some(x) = v.get("threshold_scale").and_then(|x| x.as_f64()) {
+                state.threshold_scale = x as f32;
+            }
+            if let Some(b) = v.get("auto_threshold").and_then(|x| x.as_bool()) {
+                state.auto_threshold = b;
+            }
+            if let Some(b) = v.get("experimental_range_lock").and_then(|x| x.as_bool()) {
+                state.experimental_range_lock = b;
+            }
+            if let Some(x) = v.get("range_lock_min_hz").and_then(|x| x.as_f64()) {
+                state.range_lock_min_hz = x as f32;
+            }
+            if let Some(x) = v.get("range_lock_max_hz").and_then(|x| x.as_f64()) {
+                state.range_lock_max_hz = x as f32;
+            }
+            if let Some(x) = v.get("min_tone_purity").and_then(|x| x.as_f64()) {
+                state.min_tone_purity = x as f32;
+            }
+            if let Some(x) = v.get("force_pitch_hz").and_then(|x| x.as_f64()) {
+                state.force_pitch_hz = if x > 0.0 { Some(x as f32) } else { None };
+            } else if v
+                .get("force_pitch_hz")
+                .map(|x| x.is_null())
+                .unwrap_or(false)
+            {
+                state.force_pitch_hz = None;
+            }
+            if let Some(x) = v.get("wide_bin_count").and_then(|x| x.as_i64()) {
+                state.wide_bin_count = x.clamp(0, 16) as u8;
+            }
+            if let Some(x) = v.get("min_pulse_dot_fraction").and_then(|x| x.as_f64()) {
+                state.min_pulse_dot_fraction = x.max(0.0) as f32;
+            }
+            if let Some(x) = v.get("min_gap_dot_fraction").and_then(|x| x.as_f64()) {
+                state.min_gap_dot_fraction = x.max(0.0) as f32;
+            }
+            if tx.send(PlaybackControl::Config(state)).is_err() {
+                break;
+            }
+        }
+        // Stdin EOF — graceful stop so the WAV recorder Drop runs cleanly
+        // and the GUI sees the {"type":"end"} bookend.
+        stop_on_eof.store(true, std::sync::atomic::Ordering::Relaxed);
+    });
+    rx
+}
+
+fn run_decode_and_play(
+    path: &std::path::Path,
+    start_s: f32,
+    end_s: f32,
+    json: bool,
+    stdin_control: bool,
+    cfg: streaming::DecoderConfig,
+) -> Result<()> {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
+
+    let audio = audio::decode_file(path).context("decoding audio file")?;
+    if audio.samples.is_empty() {
+        return Err(anyhow::anyhow!("decoded audio was empty"));
+    }
+    let sr = audio.sample_rate;
+    let total_samples = audio.samples.len();
+    let total_dur = total_samples as f32 / sr as f32;
+
+    // Region trim. `end_s <= 0` means "to end of file". Start is clamped
+    // to [0, total_dur); end is clamped to (start, total_dur]. If the
+    // region is degenerate the function returns early with an error so
+    // the GUI doesn't sit on a stuck process.
+    let region_start = start_s.clamp(0.0, total_dur).max(0.0);
+    let region_end_raw = if end_s <= 0.0 { total_dur } else { end_s };
+    let region_end = region_end_raw
+        .clamp(region_start, total_dur)
+        .max(region_start);
+    if region_end - region_start < 0.05 {
+        return Err(anyhow::anyhow!(
+            "region [{region_start:.3}s, {region_end:.3}s] is too short to decode"
+        ));
+    }
+    let start_idx = ((region_start * sr as f32) as usize).min(total_samples);
+    let end_idx = ((region_end * sr as f32) as usize)
+        .min(total_samples)
+        .max(start_idx);
+    let region_samples = audio.samples[start_idx..end_idx].to_vec();
+    let region_len = region_samples.len();
+    let region_dur = region_len as f32 / sr as f32;
+
+    let stop = Arc::new(AtomicBool::new(false));
+    let control_rx = stdin_control.then(|| spawn_stdin_playback_control(Arc::clone(&stop)));
+
+    let playback = audio::play_samples_with_control(region_samples.clone(), sr)
+        .context("starting decode-and-play playback")?;
+
+    let mut emitter = json.then(json::JsonEmitter::new);
+    if let Some(em) = emitter.as_mut() {
+        em.emit(
+            0.0,
+            serde_json::json!({
+                "type": "ready",
+                "source": "decode-and-play",
+                "path": path.display().to_string(),
+                "input_rate": sr,
+                "output_rate": playback.output_rate,
+                "device": playback.device_name,
+                "file_duration": total_dur,
+                "region_start": region_start,
+                "region_end": region_end,
+                "duration": region_dur,
+                "config": serde_json::json!({
+                    "min_snr_db": cfg.min_snr_db,
+                    "pitch_min_snr_db": cfg.pitch_min_snr_db,
+                    "threshold_scale": cfg.threshold_scale,
+                    "auto_threshold": cfg.auto_threshold,
+                    "min_tone_purity": cfg.min_tone_purity,
+                    "wide_bin_count": cfg.wide_bin_count,
+                    "min_pulse_dot_fraction": cfg.min_pulse_dot_fraction,
+                    "min_gap_dot_fraction": cfg.min_gap_dot_fraction,
+                }),
+            }),
+        );
+    } else {
+        println!(
+            "Decode-and-play: {} [{:.2}s..{:.2}s] on {} ({} Hz input -> {} Hz output)",
+            path.display(),
+            region_start,
+            region_end,
+            playback.device_name,
+            sr,
+            playback.output_rate
+        );
+    }
+
+    let mut decoder = streaming::StreamingDecoder::new(sr)?;
+    decoder.set_config(cfg);
+    let mut current_cfg = cfg;
+    let mut transcript = String::new();
+    let mut consumed_input_frames: u64 = 0;
+    let mut last_position_emit = Instant::now();
+    let mut last_seek_epoch = playback.seek_epoch();
+
+    // Pump tight enough for low decoder latency but loose enough not to
+    // burn CPU. The decoder feed itself happens in larger chunks below.
+    let pump_sleep = Duration::from_millis(8);
+
+    loop {
+        if stop.load(Ordering::Relaxed) {
+            break;
+        }
+
+        // Drain any pending stdin commands.
+        if let Some(rx) = control_rx.as_ref() {
+            let mut latest_cfg: Option<streaming::DecoderConfig> = None;
+            let mut latest_seek: Option<f32> = None;
+            let mut want_pause = false;
+            let mut want_resume = false;
+            let mut want_stop = false;
+            while let Ok(cmd) = rx.try_recv() {
+                match cmd {
+                    PlaybackControl::Pause => want_pause = true,
+                    PlaybackControl::Resume => {
+                        want_resume = true;
+                        want_pause = false;
+                    }
+                    PlaybackControl::Seek(pos) => latest_seek = Some(pos),
+                    PlaybackControl::Stop => want_stop = true,
+                    PlaybackControl::Config(c) => latest_cfg = Some(c),
+                }
+            }
+            if want_pause {
+                playback.pause();
+                if let Some(em) = emitter.as_mut() {
+                    em.emit(
+                        playback.position_seconds(),
+                        serde_json::json!({
+                            "type": "paused",
+                            "position": playback.position_seconds(),
+                        }),
+                    );
+                }
+            }
+            if want_resume {
+                playback.resume();
+                if let Some(em) = emitter.as_mut() {
+                    em.emit(
+                        playback.position_seconds(),
+                        serde_json::json!({
+                            "type": "resumed",
+                            "position": playback.position_seconds(),
+                        }),
+                    );
+                }
+            }
+            if let Some(target) = latest_seek {
+                let clamped = target.clamp(0.0, region_dur);
+                playback.seek_to_seconds(clamped);
+                // Wait briefly for the audio callback to ack the seek.
+                let deadline = Instant::now() + Duration::from_millis(150);
+                while playback.seek_epoch() == last_seek_epoch && Instant::now() < deadline {
+                    std::thread::sleep(Duration::from_millis(2));
+                }
+                last_seek_epoch = playback.seek_epoch();
+                // Reset decoder so threshold/pitch state from before the
+                // seek can't bleed into post-seek decoding.
+                decoder = streaming::StreamingDecoder::new(sr)?;
+                decoder.set_config(current_cfg);
+                consumed_input_frames = playback.position_input_frames();
+                if let Some(em) = emitter.as_mut() {
+                    em.emit(
+                        playback.position_seconds(),
+                        serde_json::json!({
+                            "type": "seeked",
+                            "position": playback.position_seconds(),
+                            "epoch": last_seek_epoch,
+                        }),
+                    );
+                }
+            }
+            if let Some(c) = latest_cfg {
+                current_cfg = c;
+                decoder.set_config(c);
+                if let Some(em) = emitter.as_mut() {
+                    em.emit(
+                        playback.position_seconds(),
+                        serde_json::json!({
+                            "type": "config_ack",
+                            "min_snr_db": c.min_snr_db,
+                            "pitch_min_snr_db": c.pitch_min_snr_db,
+                            "threshold_scale": c.threshold_scale,
+                            "min_tone_purity": c.min_tone_purity,
+                            "wide_bin_count": c.wide_bin_count,
+                            "min_pulse_dot_fraction": c.min_pulse_dot_fraction,
+                            "min_gap_dot_fraction": c.min_gap_dot_fraction,
+                        }),
+                    );
+                }
+            }
+            if want_stop {
+                break;
+            }
+        }
+
+        // Detect a seek that may have happened from another path (defensive).
+        let observed_epoch = playback.seek_epoch();
+        if observed_epoch != last_seek_epoch {
+            last_seek_epoch = observed_epoch;
+            decoder = streaming::StreamingDecoder::new(sr)?;
+            decoder.set_config(current_cfg);
+            consumed_input_frames = playback.position_input_frames();
+        }
+
+        let played_input = playback.position_input_frames().min(region_len as u64);
+        if played_input > consumed_input_frames {
+            let start = consumed_input_frames as usize;
+            let end = (played_input as usize).min(region_len);
+            // Feed in modest chunks so very large catch-up gaps (e.g.
+            // after a long pause) don't block the loop with one giant
+            // decoder call.
+            let max_chunk = (sr as usize / 20).max(64); // ~50 ms.
+            let mut cursor = start;
+            while cursor < end {
+                let chunk_end = (cursor + max_chunk).min(end);
+                let chunk = &region_samples[cursor..chunk_end];
+                let events = decoder.feed(chunk)?;
+                consumed_input_frames = chunk_end as u64;
+                let t = consumed_input_frames as f32 / sr as f32;
+                emit_decoder_events(emitter.as_mut(), t, events, &mut transcript);
+                cursor = chunk_end;
+            }
+        }
+
+        // Periodic position tick (~25 Hz) so the GUI scrubber stays smooth.
+        if last_position_emit.elapsed() >= Duration::from_millis(40) {
+            last_position_emit = Instant::now();
+            if let Some(em) = emitter.as_mut() {
+                em.emit(
+                    playback.position_seconds(),
+                    serde_json::json!({
+                        "type": "position",
+                        "position": playback.position_seconds(),
+                        "duration": region_dur,
+                        "paused": playback.is_paused(),
+                    }),
+                );
+            }
+        }
+
+        if playback.is_finished() && consumed_input_frames as usize >= region_len {
+            break;
+        }
+
+        std::thread::sleep(pump_sleep);
+    }
+
+    // Flush the decoder — there may be a partial letter buffered.
+    let final_t = consumed_input_frames as f32 / sr as f32;
+    let flush_events = decoder.flush();
+    emit_decoder_events(emitter.as_mut(), final_t, flush_events, &mut transcript);
+
+    if let Some(em) = emitter.as_mut() {
+        em.emit(
+            final_t,
+            serde_json::json!({
+                "type": "end",
+                "position": final_t,
+                "transcript": transcript.trim(),
+                "wpm": decoder.current_wpm(),
+                "pitch": decoder.pitch(),
+            }),
+        );
+    } else {
+        println!();
+        println!("Transcript:");
+        println!("{}", transcript.trim());
+    }
+
+    Ok(())
+}
+
+fn emit_decoder_events(
+    mut emitter: Option<&mut json::JsonEmitter>,
+    t: f32,
+    events: Vec<streaming::StreamEvent>,
+    transcript: &mut String,
+) {
+    for ev in events {
+        match &ev {
+            streaming::StreamEvent::Char { ch, .. } => transcript.push(*ch),
+            streaming::StreamEvent::Word => transcript.push(' '),
+            streaming::StreamEvent::Garbled { .. } => transcript.push('?'),
+            _ => {}
+        }
+        if let Some(em) = emitter.as_deref_mut() {
+            em.emit_event(t, &ev);
+        }
+    }
 }
 
 fn run_stream_file(

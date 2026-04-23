@@ -263,17 +263,49 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
     }
 
     private double _playbackPositionSeconds;
+    /// <summary>
+    /// Current position within the playing region, in seconds. The
+    /// scrubber slider binds TwoWay; the setter detects user-driven
+    /// changes (vs engine `position` events arriving via
+    /// <see cref="SetPlaybackPositionFromEngine"/>) and forwards them
+    /// as seek commands so audio + decoder stay in lockstep with the UI.
+    /// </summary>
     public double PlaybackPositionSeconds
     {
         get => _playbackPositionSeconds;
-        private set
+        set
         {
-            if (Set(ref _playbackPositionSeconds, value))
+            var clamped = double.IsFinite(value) ? Math.Clamp(value, 0, Math.Max(0, _playbackDurationSeconds)) : 0;
+            if (Set(ref _playbackPositionSeconds, clamped))
             {
                 OnPropertyChanged(nameof(PlaybackPositionDisplay));
                 OnPropertyChanged(nameof(PlaybackProgress));
+                if (!_suppressSeekEcho && IsPlaybackRunning)
+                {
+                    // User-driven change. Mark scrubbing so engine position
+                    // updates don't fight the operator until the seek is
+                    // acknowledged.
+                    _userIsScrubbing = true;
+                    try { _process.Seek(clamped); } catch { /* best effort */ }
+                }
             }
         }
+    }
+
+    private bool _suppressSeekEcho;
+    private bool _userIsScrubbing;
+
+    /// <summary>
+    /// Update the playback position from an engine event without sending
+    /// a seek command back to the engine. The two-way slider binding
+    /// would otherwise cause every `position` event to ricochet as a
+    /// `seek` command.
+    /// </summary>
+    private void SetPlaybackPositionFromEngine(double seconds)
+    {
+        _suppressSeekEcho = true;
+        try { PlaybackPositionSeconds = seconds; }
+        finally { _suppressSeekEcho = false; }
     }
 
     public string PlaybackPositionDisplay => FormatClock(PlaybackPositionSeconds);
@@ -297,6 +329,99 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
 
     public bool CanStartPlayback => HasPlaybackSource && !IsPlaybackRunning;
     public bool CanStopPlayback => IsPlaybackRunning;
+
+    private bool _isPlaybackPaused;
+    /// <summary>True when the lockstep decode-and-play stream is paused.</summary>
+    public bool IsPlaybackPaused
+    {
+        get => _isPlaybackPaused;
+        private set
+        {
+            if (Set(ref _isPlaybackPaused, value))
+            {
+                OnPropertyChanged(nameof(PauseResumeLabel));
+            }
+        }
+    }
+    public string PauseResumeLabel => IsPlaybackPaused ? "RESUME" : "PAUSE";
+
+    private double _fileDurationSeconds;
+    /// <summary>Total duration of the underlying source file in seconds.
+    /// Used by the region-trim spinners to bound their max values.</summary>
+    public double FileDurationSeconds
+    {
+        get => _fileDurationSeconds;
+        private set
+        {
+            if (Set(ref _fileDurationSeconds, value))
+            {
+                OnPropertyChanged(nameof(HasRegionMax));
+                if (_regionEndSeconds <= 0 || _regionEndSeconds > value)
+                {
+                    _regionEndSeconds = value;
+                    OnPropertyChanged(nameof(RegionEndSeconds));
+                }
+            }
+        }
+    }
+    public bool HasRegionMax => _fileDurationSeconds > 0;
+
+    /// <summary>
+    /// Region-start/end as last reported by the running decode-and-play
+    /// process, used to map slider-relative positions back to file time
+    /// when needed (e.g. for diagnostics).
+    /// </summary>
+    private double _regionStartFromEngine;
+    private double _regionEndFromEngine;
+
+    private bool _useRegion;
+    /// <summary>When true, the next decode-and-play launch will trim
+    /// playback to [<see cref="RegionStartSeconds"/>,
+    /// <see cref="RegionEndSeconds"/>] rather than playing the whole
+    /// file. Useful to skip leading talking before real CW.</summary>
+    public bool UseRegion
+    {
+        get => _useRegion;
+        set { if (Set(ref _useRegion, value)) OnPropertyChanged(nameof(EffectiveRegionLabel)); }
+    }
+
+    private double _regionStartSeconds;
+    public double RegionStartSeconds
+    {
+        get => _regionStartSeconds;
+        set
+        {
+            var v = double.IsFinite(value) ? Math.Max(0, value) : 0;
+            if (Set(ref _regionStartSeconds, v))
+            {
+                OnPropertyChanged(nameof(EffectiveRegionLabel));
+            }
+        }
+    }
+
+    private double _regionEndSeconds;
+    public double RegionEndSeconds
+    {
+        get => _regionEndSeconds;
+        set
+        {
+            var v = double.IsFinite(value) ? Math.Max(0, value) : 0;
+            if (Set(ref _regionEndSeconds, v))
+            {
+                OnPropertyChanged(nameof(EffectiveRegionLabel));
+            }
+        }
+    }
+
+    public string EffectiveRegionLabel
+    {
+        get
+        {
+            if (!_useRegion) return "Region: full file";
+            var end = _regionEndSeconds > 0 ? _regionEndSeconds : _fileDurationSeconds;
+            return $"Region: {FormatClock(_regionStartSeconds)} → {FormatClock(end)}";
+        }
+    }
 
     private SignalProfile _playbackProfile = SignalProfile.Empty;
     public SignalProfile PlaybackProfile
@@ -1435,14 +1560,122 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
     {
         path = NormalizeFilePath(path);
         if (IsRunning) { _process.Stop(); IsRunning = false; }
+        // Old behaviour spawned a separate playback process here, which
+        // drifted out of sync with the decoder. The new lockstep
+        // decode-and-play subcommand owns audio output AND the decoder
+        // in one process, so make sure the legacy playback is shut down
+        // before we start the combined run.
+        try { _playback.Stop(); } catch { /* best effort */ }
+        IsPlaybackRunning = false;
+        IsPlaybackPaused = false;
         ResetDecoderSurface();
         SetHarvestFile(path);
         LastRecordingPath = path;
         StatusText = $"Decoding {path}";
         SourceLabel = $"FILE · {Path.GetFileName(path)} · starting…";
-        _process.StartFile(path, realtime: true, CurrentConfig(), CurrentBaselineConfig(), IsBaselineDecoderMode);
+
+        PlaybackSourcePath = path;
+        PlaybackSourceLabel = "DECODE FILE";
+        PlaybackPositionSeconds = 0;
+        var fileDur = TryProbeFileDurationSeconds(path);
+        if (fileDur > 0) FileDurationSeconds = fileDur;
+
+        if (IsBaselineDecoderMode)
+        {
+            // Baseline path doesn't yet have a decode-and-play variant; fall
+            // back to the legacy parallel playback so baseline file decode
+            // still works (with the known small drift caveat).
+            _process.StartFile(path, realtime: true, CurrentConfig(), CurrentBaselineConfig(), IsBaselineDecoderMode);
+            IsRunning = true;
+            await PreparePlaybackSourceAsync(path, "DECODE FILE", autoPlay: true).ConfigureAwait(true);
+            return;
+        }
+
+        var startSec = _useRegion ? _regionStartSeconds : 0.0;
+        var endSec = _useRegion ? _regionEndSeconds : 0.0;
+        _process.StartDecodeAndPlay(path, startSec, endSec, CurrentConfig());
         IsRunning = true;
-        await PreparePlaybackSourceAsync(path, "DECODE FILE", autoPlay: true).ConfigureAwait(true);
+        await Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// Restart the running decode-and-play process at the current
+    /// region settings. Used when the operator changes the trim while
+    /// playback is active.
+    /// </summary>
+    public async Task ApplyRegionAsync()
+    {
+        if (string.IsNullOrWhiteSpace(PlaybackSourcePath)) return;
+        await OpenFileAsync(PlaybackSourcePath).ConfigureAwait(true);
+    }
+
+    public void TogglePauseResume()
+    {
+        if (!IsPlaybackRunning) return;
+        if (IsPlaybackPaused) { _process.Resume(); IsPlaybackPaused = false; }
+        else { _process.Pause(); IsPlaybackPaused = true; }
+    }
+
+    /// <summary>
+    /// Best-effort file duration probe. Used to bound the region-trim
+    /// spinners before the engine emits its first `ready` event so the
+    /// operator can pick a region BEFORE pressing decode. Falls back to
+    /// 0 (caller treats as "unknown") on any error.
+    /// </summary>
+    private static double TryProbeFileDurationSeconds(string path)
+    {
+        try
+        {
+            using var fs = System.IO.File.OpenRead(path);
+            using var br = new System.IO.BinaryReader(fs);
+            // Quick WAV parser: only handles canonical PCM/Float WAV. For
+            // other formats (mp3/m4a) we skip — the engine will emit the
+            // duration after Symphonia decodes it.
+            if (fs.Length < 44) return 0;
+            var riff = new string(br.ReadChars(4));
+            if (riff != "RIFF") return 0;
+            br.ReadInt32(); // chunk size
+            var wave = new string(br.ReadChars(4));
+            if (wave != "WAVE") return 0;
+
+            int sampleRate = 0;
+            int byteRate = 0;
+            short blockAlign = 0;
+            int dataSize = 0;
+            while (fs.Position + 8 <= fs.Length)
+            {
+                var id = new string(br.ReadChars(4));
+                var size = br.ReadInt32();
+                if (id == "fmt ")
+                {
+                    var fmtStart = fs.Position;
+                    br.ReadInt16(); // audio format
+                    br.ReadInt16(); // channels
+                    sampleRate = br.ReadInt32();
+                    byteRate = br.ReadInt32();
+                    blockAlign = br.ReadInt16();
+                    fs.Position = fmtStart + size;
+                }
+                else if (id == "data")
+                {
+                    dataSize = size;
+                    break;
+                }
+                else
+                {
+                    fs.Position += size;
+                }
+            }
+
+            if (sampleRate <= 0 || dataSize <= 0) return 0;
+            if (byteRate > 0) return (double)dataSize / byteRate;
+            if (blockAlign > 0) return (double)(dataSize / blockAlign) / sampleRate;
+            return 0;
+        }
+        catch
+        {
+            return 0;
+        }
     }
 
     public void SetHarvestFile(string path)
@@ -1808,11 +2041,41 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
                     "live" => $"LIVE · {ev.Device} · {ev.Rate} Hz",
                     "live-baseline" => $"LIVE BASELINE · {ev.Device} · {ev.Rate} Hz",
                     "file-baseline" => $"FILE BASELINE · {System.IO.Path.GetFileName(ev.Path ?? "?")}",
+                    "decode-and-play" => $"DECODE+PLAY · {System.IO.Path.GetFileName(ev.Path ?? "?")} · {ev.Device}",
                     _ => $"FILE · {System.IO.Path.GetFileName(ev.Path ?? "?")}",
                 };
                 StatusText = ev.Source is "live-baseline" or "file-baseline"
                     ? "Running baseline decode snapshots…"
                     : "Listening for pitch lock…";
+                if (ev.Source == "decode-and-play")
+                {
+                    if (!string.IsNullOrWhiteSpace(ev.Path))
+                    {
+                        PlaybackSourcePath = NormalizeFilePath(ev.Path);
+                    }
+                    if (ev.FileDuration is double fileDur && fileDur > 0)
+                    {
+                        FileDurationSeconds = fileDur;
+                    }
+                    if (ev.RegionStart is double rs)
+                    {
+                        _regionStartFromEngine = rs;
+                    }
+                    if (ev.RegionEnd is double re)
+                    {
+                        _regionEndFromEngine = re;
+                    }
+                    if (ev.Duration is double regionDur && regionDur > 0)
+                    {
+                        PlaybackDurationSeconds = regionDur;
+                    }
+                    PlaybackPositionSeconds = 0;
+                    IsPlaybackRunning = true;
+                    IsPlaybackPaused = false;
+                    PlaybackStatusText = string.IsNullOrWhiteSpace(ev.Device)
+                        ? $"Playing {PlaybackSourceDisplay}…"
+                        : $"Playing {PlaybackSourceDisplay} on {ev.Device}.";
+                }
                 if (!string.IsNullOrEmpty(ev.Recording))
                 {
                     LastRecordingPath = ev.Recording;
@@ -1830,10 +2093,6 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
                 {
                     WpmHistory.Add(wpm);
                     while (WpmHistory.Count > MaxWpmHistory) WpmHistory.RemoveAt(0);
-                    // Big number = short rolling average (3 snapshots ≈ 1.5s
-                    // at decode_every_ms=500) so it doesn't bounce wildly on
-                    // every snapshot but still tracks real WPM changes
-                    // promptly. Sparkline still shows raw history.
                     int avgWindow = Math.Min(WpmHistory.Count, 3);
                     if (avgWindow > 0)
                     {
@@ -1876,6 +2135,33 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
                     NormalizedThreshold = LogNorm(th, _powerCeiling);
                 }
                 break;
+            case "position":
+                // Suppress slider feedback while the user is dragging so
+                // the engine's own position stream doesn't fight the
+                // operator's intent.
+                if (!_userIsScrubbing && ev.Position is double pos)
+                {
+                    SetPlaybackPositionFromEngine(pos);
+                }
+                if (ev.Paused is bool pausedNow)
+                {
+                    IsPlaybackPaused = pausedNow;
+                }
+                break;
+            case "paused":
+                IsPlaybackPaused = true;
+                break;
+            case "resumed":
+                IsPlaybackPaused = false;
+                break;
+            case "seeked":
+                if (ev.Position is double seekedPos)
+                {
+                    SetPlaybackPositionFromEngine(seekedPos);
+                }
+                _userIsScrubbing = false;
+                StatusText = $"Seeked to {FormatClock(PlaybackPositionSeconds)}.";
+                break;
             case "end":
                 StatusText = $"Done. {ev.Transcript ?? ""}";
                 _liveTranscriptForReplay = !string.IsNullOrWhiteSpace(ev.Transcript)
@@ -1890,6 +2176,12 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
                     OnPropertyChanged(nameof(HasLastRecording));
                 }
                 IsRunning = false;
+                IsPlaybackRunning = false;
+                IsPlaybackPaused = false;
+                if (PlaybackDurationSeconds > 0)
+                {
+                    PlaybackPositionSeconds = PlaybackDurationSeconds;
+                }
                 break;
         }
     }

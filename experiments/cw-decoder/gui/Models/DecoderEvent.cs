@@ -44,4 +44,12 @@ internal sealed class DecoderEvent
 
     // recording (ready / end)
     [JsonPropertyName("recording")] public string? Recording { get; set; }
+
+    // decode-and-play extensions
+    [JsonPropertyName("position")] public double? Position { get; set; }
+    [JsonPropertyName("paused")] public bool? Paused { get; set; }
+    [JsonPropertyName("epoch")] public long? Epoch { get; set; }
+    [JsonPropertyName("region_start")] public double? RegionStart { get; set; }
+    [JsonPropertyName("region_end")] public double? RegionEnd { get; set; }
+    [JsonPropertyName("file_duration")] public double? FileDuration { get; set; }
 }

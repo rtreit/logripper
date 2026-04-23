@@ -93,6 +93,15 @@ public partial class MainWindow : Window
     private void OnStopPlaybackClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
         => Vm?.StopPlayback();
 
+    private void OnPauseResumeClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+        => Vm?.TogglePauseResume();
+
+    private async void OnApplyRegionClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (Vm is null) return;
+        await Vm.ApplyRegionAsync();
+    }
+
     private void OnCorrectCopyTextChanged(object? sender, TextChangedEventArgs e)
     {
         if (sender is not TextBox textBox || string.IsNullOrEmpty(textBox.Text))

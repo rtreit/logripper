@@ -118,6 +118,54 @@ internal sealed class CwDecoderProcess : IDisposable
         Spawn(args);
     }
 
+    /// <summary>
+    /// Start the lockstep decode-and-play subcommand. Audio output and
+    /// the streaming decoder run in the same process from a single
+    /// monotonic clock, so the operator hears exactly what is being
+    /// decoded. Optional region trim and runtime control are applied
+    /// via stdin (Pause/Resume/Seek).
+    /// </summary>
+    public void StartDecodeAndPlay(string path, double startSeconds, double endSeconds, DecoderConfig cfg)
+    {
+        Stop();
+        var ic = CultureInfo.InvariantCulture;
+        var args = $"decode-and-play --json --stdin-control {cfg.ToCliArgs()}"
+            + $" --start {startSeconds.ToString(ic)}"
+            + $" --end {endSeconds.ToString(ic)}"
+            + $" \"{path}\"";
+        Spawn(args);
+    }
+
+    /// <summary>Pause the running decode-and-play process. No-op otherwise.</summary>
+    public void Pause() => SendCommand("{\"cmd\":\"pause\"}");
+
+    /// <summary>Resume the running decode-and-play process. No-op otherwise.</summary>
+    public void Resume() => SendCommand("{\"cmd\":\"resume\"}");
+
+    /// <summary>
+    /// Seek the running decode-and-play process to <paramref name="positionSeconds"/>
+    /// (region-relative). The Rust side resets the decoder state at the
+    /// new position so prior pitch lock / threshold history can't bleed
+    /// across the seek.
+    /// </summary>
+    public void Seek(double positionSeconds)
+    {
+        var ic = CultureInfo.InvariantCulture;
+        SendCommand($"{{\"cmd\":\"seek\",\"position\":{positionSeconds.ToString(ic)}}}");
+    }
+
+    private void SendCommand(string ndjsonLine)
+    {
+        var p = _proc;
+        if (p is null || p.HasExited) return;
+        try
+        {
+            p.StandardInput.WriteLine(ndjsonLine);
+            p.StandardInput.Flush();
+        }
+        catch { /* best effort: process may be in shutdown */ }
+    }
+
     public async Task<HarvestResult> HarvestFileAsync(
         string path,
         double windowSeconds,

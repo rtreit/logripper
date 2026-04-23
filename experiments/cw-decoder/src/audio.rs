@@ -233,6 +233,296 @@ pub fn play_output_file(path: &Path) -> Result<FilePlayback> {
     })
 }
 
+/// Controllable playback handle used by `decode-and-play`. The audio
+/// callback is the master clock; everything else (decoder pump, GUI
+/// scrubber, region trim) reads from this handle. Position is reported
+/// in *input-rate frames* even though the cpal stream may run at a
+/// different output rate, so a caller can map a played frame index 1:1
+/// onto the original input sample buffer.
+pub struct ControllablePlayback {
+    /// Sample rate of the original input buffer (the value the caller
+    /// passed to `play_samples_with_control`).
+    pub input_rate: u32,
+    /// Sample rate of the cpal output stream (may differ from input
+    /// when the device's mixer rate forces a resample).
+    pub output_rate: u32,
+    pub device_name: String,
+    /// Duration of the input buffer, in seconds.
+    pub duration_s: f32,
+
+    output_position_frames: Arc<AtomicU64>,
+    total_output_frames: u64,
+    paused: Arc<AtomicBool>,
+    finished: Arc<AtomicBool>,
+    /// `u64::MAX` = no pending seek. Otherwise the audio callback will
+    /// jump its read cursor to this output-rate frame on the next pull.
+    seek_target: Arc<AtomicU64>,
+    /// Bumped every time a seek is acknowledged by the callback so the
+    /// pump can detect "I need to reset the decoder" without racing.
+    seek_epoch: Arc<AtomicU64>,
+    _stream: cpal::Stream,
+}
+
+impl ControllablePlayback {
+    /// Current playback position expressed in *input-rate frames*.
+    pub fn position_input_frames(&self) -> u64 {
+        let out_pos = self
+            .output_position_frames
+            .load(Ordering::Relaxed)
+            .min(self.total_output_frames);
+        // out_pos / output_rate = seconds; * input_rate = input frames.
+        ((out_pos as u128 * self.input_rate as u128) / self.output_rate as u128) as u64
+    }
+
+    pub fn position_seconds(&self) -> f32 {
+        let out_pos = self
+            .output_position_frames
+            .load(Ordering::Relaxed)
+            .min(self.total_output_frames);
+        out_pos as f32 / self.output_rate as f32
+    }
+
+    pub fn is_finished(&self) -> bool {
+        self.finished.load(Ordering::Relaxed)
+            || self.output_position_frames.load(Ordering::Relaxed) >= self.total_output_frames
+    }
+
+    pub fn is_paused(&self) -> bool {
+        self.paused.load(Ordering::Relaxed)
+    }
+
+    pub fn pause(&self) {
+        self.paused.store(true, Ordering::Relaxed);
+    }
+
+    pub fn resume(&self) {
+        self.paused.store(false, Ordering::Relaxed);
+    }
+
+    /// Seek to a time in seconds, relative to the start of the input
+    /// buffer (which already accounts for any region trim applied by
+    /// the caller). Returns the seek epoch that the pump should wait
+    /// to observe before resuming decoder feeds.
+    pub fn seek_to_seconds(&self, seconds: f32) -> u64 {
+        let clamped = seconds.max(0.0);
+        let out_target = ((clamped * self.output_rate as f32) as u64).min(self.total_output_frames);
+        // Use SeqCst so the pump observes the target write before it
+        // observes the epoch bump that signals the seek landed.
+        self.seek_target.store(out_target, Ordering::SeqCst);
+        // Don't bump epoch here — the callback bumps it after applying.
+        self.seek_epoch.load(Ordering::Relaxed)
+    }
+
+    pub fn seek_epoch(&self) -> u64 {
+        self.seek_epoch.load(Ordering::Relaxed)
+    }
+}
+
+/// Open the default output device and start playing pre-decoded mono
+/// samples. The returned handle exposes pause/resume/seek and reports
+/// position in input-rate frames so callers can drive a streaming
+/// decoder in lockstep with what is audible.
+pub fn play_samples_with_control(
+    samples: Vec<f32>,
+    input_rate: u32,
+) -> Result<ControllablePlayback> {
+    if samples.is_empty() {
+        return Err(anyhow!("input sample buffer was empty"));
+    }
+    if input_rate == 0 {
+        return Err(anyhow!("input sample rate must be non-zero"));
+    }
+
+    let host = cpal::default_host();
+    let device = host
+        .default_output_device()
+        .ok_or_else(|| anyhow!("no default output device"))?;
+    let device_name = device.name().unwrap_or_else(|_| "<unknown>".to_string());
+    let supported = device.default_output_config().context("output config")?;
+    let sample_format = supported.sample_format();
+    let stream_config: cpal::StreamConfig = supported.into();
+    let output_rate = stream_config.sample_rate.0;
+    let channels = stream_config.channels as usize;
+
+    let mono_for_output: Vec<f32> = if input_rate == output_rate {
+        samples
+    } else {
+        resample_linear(&samples, input_rate, output_rate)
+    };
+
+    let total_output_frames = mono_for_output.len() as u64;
+    let duration_s = samples_duration(&mono_for_output, output_rate);
+    let buf = Arc::new(mono_for_output);
+    let output_position_frames = Arc::new(AtomicU64::new(0));
+    let paused = Arc::new(AtomicBool::new(false));
+    let finished = Arc::new(AtomicBool::new(false));
+    // u64::MAX sentinel = no pending seek.
+    let seek_target = Arc::new(AtomicU64::new(u64::MAX));
+    let seek_epoch = Arc::new(AtomicU64::new(0));
+
+    let err_fn = |e| eprintln!("cpal output stream error: {e}");
+    let stream = match sample_format {
+        cpal::SampleFormat::F32 => {
+            let buf = Arc::clone(&buf);
+            let pos = Arc::clone(&output_position_frames);
+            let paused = Arc::clone(&paused);
+            let finished = Arc::clone(&finished);
+            let seek_target = Arc::clone(&seek_target);
+            let seek_epoch = Arc::clone(&seek_epoch);
+            device.build_output_stream(
+                &stream_config,
+                move |data: &mut [f32], _| {
+                    fill_controlled(
+                        data,
+                        channels,
+                        &buf,
+                        &pos,
+                        &paused,
+                        &finished,
+                        &seek_target,
+                        &seek_epoch,
+                        |s| s,
+                    );
+                },
+                err_fn,
+                None,
+            )?
+        }
+        cpal::SampleFormat::I16 => {
+            let buf = Arc::clone(&buf);
+            let pos = Arc::clone(&output_position_frames);
+            let paused = Arc::clone(&paused);
+            let finished = Arc::clone(&finished);
+            let seek_target = Arc::clone(&seek_target);
+            let seek_epoch = Arc::clone(&seek_epoch);
+            device.build_output_stream(
+                &stream_config,
+                move |data: &mut [i16], _| {
+                    fill_controlled(
+                        data,
+                        channels,
+                        &buf,
+                        &pos,
+                        &paused,
+                        &finished,
+                        &seek_target,
+                        &seek_epoch,
+                        |s| (s.clamp(-1.0, 1.0) * i16::MAX as f32) as i16,
+                    );
+                },
+                err_fn,
+                None,
+            )?
+        }
+        cpal::SampleFormat::U16 => {
+            let buf = Arc::clone(&buf);
+            let pos = Arc::clone(&output_position_frames);
+            let paused = Arc::clone(&paused);
+            let finished = Arc::clone(&finished);
+            let seek_target = Arc::clone(&seek_target);
+            let seek_epoch = Arc::clone(&seek_epoch);
+            device.build_output_stream(
+                &stream_config,
+                move |data: &mut [u16], _| {
+                    fill_controlled(
+                        data,
+                        channels,
+                        &buf,
+                        &pos,
+                        &paused,
+                        &finished,
+                        &seek_target,
+                        &seek_epoch,
+                        |s| ((s.clamp(-1.0, 1.0) * 0.5 + 0.5) * u16::MAX as f32) as u16,
+                    );
+                },
+                err_fn,
+                None,
+            )?
+        }
+        other => return Err(anyhow!("unsupported output sample format: {other:?}")),
+    };
+    stream.play().context("starting output stream")?;
+
+    Ok(ControllablePlayback {
+        input_rate,
+        output_rate,
+        device_name,
+        duration_s,
+        output_position_frames,
+        total_output_frames,
+        paused,
+        finished,
+        seek_target,
+        seek_epoch,
+        _stream: stream,
+    })
+}
+
+fn samples_duration(buf: &[f32], rate: u32) -> f32 {
+    if rate == 0 {
+        0.0
+    } else {
+        buf.len() as f32 / rate as f32
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn fill_controlled<T, F>(
+    data: &mut [T],
+    channels: usize,
+    samples: &Arc<Vec<f32>>,
+    position_frames: &Arc<AtomicU64>,
+    paused: &Arc<AtomicBool>,
+    finished: &Arc<AtomicBool>,
+    seek_target: &Arc<AtomicU64>,
+    seek_epoch: &Arc<AtomicU64>,
+    mut convert: F,
+) where
+    T: cpal::Sample,
+    F: FnMut(f32) -> T,
+{
+    // Apply any pending seek before reading the position. This lets the
+    // pump observe the new position the next tick after the audio has
+    // physically jumped.
+    let pending = seek_target.swap(u64::MAX, Ordering::SeqCst);
+    if pending != u64::MAX {
+        position_frames.store(pending, Ordering::SeqCst);
+        seek_epoch.fetch_add(1, Ordering::SeqCst);
+        finished.store(false, Ordering::Relaxed);
+    }
+
+    let total = samples.len();
+    let mut frame_index = position_frames.load(Ordering::Relaxed) as usize;
+    let is_paused = paused.load(Ordering::Relaxed);
+
+    for frame in data.chunks_mut(channels) {
+        let sample = if is_paused {
+            // Hold position; emit silence so the device keeps streaming
+            // (which keeps `position_frames` stable for the pump).
+            0.0
+        } else if frame_index < total {
+            let v = samples[frame_index];
+            frame_index += 1;
+            v
+        } else {
+            finished.store(true, Ordering::Relaxed);
+            0.0
+        };
+
+        for out in frame {
+            *out = convert(sample);
+        }
+    }
+
+    if !is_paused {
+        position_frames.store(frame_index.min(total) as u64, Ordering::Relaxed);
+        if frame_index >= total {
+            finished.store(true, Ordering::Relaxed);
+        }
+    }
+}
+
 fn fill_output<T, F>(
     data: &mut [T],
     channels: usize,
