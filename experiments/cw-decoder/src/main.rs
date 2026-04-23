@@ -224,9 +224,9 @@ enum Cmd {
         /// Selected region end in seconds.
         #[arg(long)]
         end: f32,
-        /// Tone to inspect.
+        /// Tone to inspect. If omitted, build a broadband activity profile.
         #[arg(long)]
-        pitch_hz: f32,
+        pitch_hz: Option<f32>,
         /// Optional WPM estimate used for pause suggestions.
         #[arg(long)]
         wpm: Option<f32>,
@@ -621,6 +621,8 @@ fn run_harvest_file(
             "candidates": candidates.iter().map(|c| serde_json::json!({
                 "start_s": c.start_s,
                 "end_s": c.end_s,
+                "is_fallback": c.is_fallback,
+                "member_count": c.member_count,
                 "shared_chars": c.shared_chars,
                 "strongest_copy_len": c.strongest_copy_len,
                 "matched_needles": c.matched_needles,
@@ -661,11 +663,6 @@ fn run_harvest_file(
     }
     println!("{}", "=".repeat(96));
 
-    if candidates.is_empty() {
-        println!("No candidate windows matched.");
-        return Ok(());
-    }
-
     for c in candidates {
         let offline_pitch = c
             .offline_pitch_hz
@@ -690,8 +687,13 @@ fn run_harvest_file(
         };
 
         println!(
-            "[{:>6.2}-{:<6.2}] shared={} best={} needles={}",
-            c.start_s, c.end_s, c.shared_chars, c.strongest_copy_len, needles
+            "[{:>6.2}-{:<6.2}] {} shared={} best={} needles={}",
+            c.start_s,
+            c.end_s,
+            if c.is_fallback { "fallback" } else { "region" },
+            c.shared_chars,
+            c.strongest_copy_len,
+            needles
         );
         println!(
             "  offline  pitch={} wpm={}  {}",
@@ -722,7 +724,7 @@ fn run_profile_window(
     path: &std::path::Path,
     start: f32,
     end: f32,
-    pitch_hz: f32,
+    pitch_hz: Option<f32>,
     wpm: Option<f32>,
 ) -> Result<()> {
     let audio = audio::decode_file(path).context("decoding audio file")?;

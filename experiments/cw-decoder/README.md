@@ -112,6 +112,7 @@ That replay path is useful for answering: _“what did the live path think happe
 The labeling workflow is now built around exact-window truth:
 
 - harvest candidate regions from recordings
+- if harvest finds no regions, fall back to a single whole-file candidate so faint recordings can still be labeled
 - preview slowed audio
 - view signal profile
 - drag exact start/end handles
@@ -124,6 +125,8 @@ Saved labels retain:
 - `clip_start`
 - `clip_end`
 - decoder snapshots used during labeling
+
+Signal-profile rendering now also works without a usable pitch lock by falling back to a broadband activity profile. That keeps the editor usable on faint files where neither decoder can confidently lock a tone yet.
 
 ### Tuning tab
 

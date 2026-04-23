@@ -26,6 +26,7 @@ pub struct StreamSummary {
 pub struct WindowCandidate {
     pub start_s: f32,
     pub end_s: f32,
+    pub is_fallback: bool,
     pub member_count: usize,
     pub shared_chars: usize,
     pub strongest_copy_len: usize,
@@ -139,6 +140,7 @@ where
             out.push(WindowCandidate {
                 start_s: start as f32 / sample_rate as f32,
                 end_s: end as f32 / sample_rate as f32,
+                is_fallback: false,
                 member_count: 1,
                 shared_chars,
                 strongest_copy_len,
@@ -189,6 +191,15 @@ where
             })
     });
     out.truncate(cfg.top);
+    if out.is_empty() && !samples.is_empty() {
+        out.push(build_full_file_fallback_candidate(
+            samples,
+            sample_rate,
+            log_capture,
+            stream_cfg,
+            cfg.chunk_ms,
+        )?);
+    }
     Ok(out)
 }
 
@@ -197,7 +208,7 @@ pub fn build_signal_profile(
     sample_rate: u32,
     selection_start_s: f32,
     selection_end_s: f32,
-    pitch_hz: f32,
+    pitch_hz: Option<f32>,
     wpm: Option<f32>,
 ) -> Option<SignalProfile> {
     let total_duration_s = samples.len() as f32 / sample_rate as f32;
@@ -206,7 +217,7 @@ pub fn build_signal_profile(
     let context_after_s = (window_s * 1.0).clamp(1.0, 4.0);
     let display_start_s = (selection_start_s - context_before_s).max(0.0);
     let display_end_s = (selection_end_s + context_after_s).min(total_duration_s);
-    let profile = build_activity_profile(
+    let profile = build_display_profile(
         samples,
         sample_rate,
         pitch_hz,
@@ -258,7 +269,7 @@ pub fn build_signal_profile(
         selection_end_s,
         suggested_start_s,
         suggested_end_s,
-        pitch_hz,
+        pitch_hz: pitch_hz.unwrap_or_default(),
         threshold: profile.threshold,
         frame_step_s: profile.frame_step_s,
         frame_len_s: profile.frame_len_s,
@@ -299,6 +310,36 @@ fn merge_overlapping_candidates(
     }
 
     merged
+}
+
+fn build_full_file_fallback_candidate(
+    samples: &[f32],
+    sample_rate: u32,
+    log_capture: &DitdahLogCapture,
+    stream_cfg: DecoderConfig,
+    chunk_ms: u32,
+) -> Result<WindowCandidate> {
+    let offline = decoder::decode_window(samples, sample_rate, log_capture)?;
+    let stream = stream_decode_window(samples, sample_rate, stream_cfg, chunk_ms)?;
+    let offline_compact = compact_normalized(&offline.text);
+    let stream_compact = compact_normalized(&stream.transcript);
+
+    Ok(WindowCandidate {
+        start_s: 0.0,
+        end_s: samples.len() as f32 / sample_rate as f32,
+        is_fallback: true,
+        member_count: 1,
+        shared_chars: longest_common_substring_len(&offline_compact, &stream_compact),
+        strongest_copy_len: offline_compact.len().max(stream_compact.len()),
+        matched_needles: Vec::new(),
+        offline_text: offline.text.trim().to_string(),
+        offline_pitch_hz: offline.stats.pitch_hz,
+        offline_wpm: offline.stats.wpm,
+        stream_text: stream.transcript.trim().to_string(),
+        stream_pitch_hz: stream.pitch_hz,
+        stream_wpm: stream.wpm,
+        stream_threshold: stream.threshold,
+    })
 }
 
 fn snap_candidates_to_pauses(
@@ -438,6 +479,98 @@ fn build_activity_profile(
         threshold,
         active,
     })
+}
+
+fn build_display_profile(
+    samples: &[f32],
+    sample_rate: u32,
+    pitch_hz: Option<f32>,
+    search_start_s: f32,
+    search_end_s: f32,
+) -> Option<ActivityProfile> {
+    if let Some(pitch_hz) = pitch_hz.filter(|pitch| *pitch > 0.0) {
+        if let Some(profile) = build_permissive_profile(
+            samples,
+            sample_rate,
+            search_start_s,
+            search_end_s,
+            |frame| goertzel_power(frame, sample_rate, pitch_hz),
+        ) {
+            return Some(profile);
+        }
+    }
+
+    build_permissive_profile(
+        samples,
+        sample_rate,
+        search_start_s,
+        search_end_s,
+        broadband_frame_power,
+    )
+}
+
+fn build_permissive_profile<F>(
+    samples: &[f32],
+    sample_rate: u32,
+    search_start_s: f32,
+    search_end_s: f32,
+    mut power_fn: F,
+) -> Option<ActivityProfile>
+where
+    F: FnMut(&[f32]) -> f32,
+{
+    if search_end_s <= search_start_s {
+        return None;
+    }
+
+    let frame_len_s = 0.025;
+    let frame_step_s = 0.010;
+    let frame_len = ((frame_len_s * sample_rate as f32).round() as usize).max(16);
+    let frame_step = ((frame_step_s * sample_rate as f32).round() as usize).max(8);
+    let search_start = ((search_start_s * sample_rate as f32).floor() as usize).min(samples.len());
+    let search_end = ((search_end_s * sample_rate as f32).ceil() as usize).min(samples.len());
+    if search_end <= search_start + frame_len {
+        return None;
+    }
+
+    let search_slice = &samples[search_start..search_end];
+    let mut powers = Vec::new();
+    let mut offset = 0usize;
+    while offset + frame_len <= search_slice.len() {
+        powers.push(power_fn(&search_slice[offset..offset + frame_len]));
+        offset += frame_step;
+    }
+
+    if powers.len() < 4 {
+        return None;
+    }
+
+    let mut sorted_powers = powers.clone();
+    sorted_powers.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let noise_floor = percentile_sorted(&sorted_powers, 0.35);
+    let signal_floor = percentile_sorted(&sorted_powers, 0.85);
+    let threshold = if !noise_floor.is_finite() {
+        0.0
+    } else if !signal_floor.is_finite() || signal_floor <= noise_floor {
+        noise_floor
+    } else {
+        noise_floor + (signal_floor - noise_floor) * 0.30
+    };
+    let active: Vec<bool> = powers.iter().map(|&power| power >= threshold).collect();
+
+    Some(ActivityProfile {
+        start_s: search_start_s,
+        end_s: search_end_s,
+        frame_len_s,
+        frame_step_s,
+        powers,
+        threshold,
+        active,
+    })
+}
+
+fn broadband_frame_power(frame: &[f32]) -> f32 {
+    frame.iter().map(|sample| sample * sample).sum::<f32>() / frame.len() as f32
 }
 
 fn estimated_dot_s(wpm: Option<f32>) -> f32 {
@@ -886,6 +1019,7 @@ mod tests {
                 WindowCandidate {
                     start_s: 7.0,
                     end_s: 11.0,
+                    is_fallback: false,
                     member_count: 1,
                     shared_chars: 3,
                     strongest_copy_len: 5,
@@ -901,6 +1035,7 @@ mod tests {
                 WindowCandidate {
                     start_s: 10.0,
                     end_s: 14.0,
+                    is_fallback: false,
                     member_count: 1,
                     shared_chars: 2,
                     strongest_copy_len: 7,
@@ -951,6 +1086,7 @@ mod tests {
         let candidate = WindowCandidate {
             start_s: 10.0,
             end_s: 14.0,
+            is_fallback: false,
             member_count: 1,
             shared_chars: 0,
             strongest_copy_len: 0,
@@ -1002,6 +1138,7 @@ mod tests {
         let candidate = WindowCandidate {
             start_s: 0.75,
             end_s: 1.75,
+            is_fallback: false,
             member_count: 1,
             shared_chars: 0,
             strongest_copy_len: 0,
@@ -1037,12 +1174,31 @@ mod tests {
             }
         }
 
-        let profile = build_signal_profile(&samples, sample_rate, 1.1, 1.8, tone_hz, Some(20.0))
+        let profile =
+            build_signal_profile(&samples, sample_rate, 1.1, 1.8, Some(tone_hz), Some(20.0))
             .expect("profile");
 
         assert!(profile.display_start_s < 1.1);
         assert!(profile.display_end_s > 1.8);
         assert!(!profile.points.is_empty());
         assert!(profile.suggested_end_s > 2.2);
+    }
+
+    #[test]
+    fn build_signal_profile_falls_back_to_broadband_when_pitch_is_missing() {
+        let sample_rate = 8_000u32;
+        let total_secs = 3.0f32;
+        let total_samples = (total_secs * sample_rate as f32) as usize;
+        let mut samples = vec![0.0f32; total_samples];
+        for index in (sample_rate / 2) as usize..(sample_rate as usize + sample_rate as usize / 2) {
+            samples[index] = 0.35;
+        }
+
+        let profile = build_signal_profile(&samples, sample_rate, 0.4, 2.2, None, None)
+            .expect("broadband profile");
+
+        assert!(profile.pitch_hz.abs() < f32::EPSILON);
+        assert!(profile.display_end_s > profile.display_start_s);
+        assert!(!profile.points.is_empty());
     }
 }

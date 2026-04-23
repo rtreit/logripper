@@ -18,6 +18,7 @@ public sealed class HarvestCandidate
 {
     [JsonPropertyName("start_s")] public double StartSeconds { get; set; }
     [JsonPropertyName("end_s")] public double EndSeconds { get; set; }
+    [JsonPropertyName("is_fallback")] public bool IsFallback { get; set; }
     [JsonPropertyName("member_count")] public int MemberCount { get; set; }
     [JsonPropertyName("shared_chars")] public int SharedChars { get; set; }
     [JsonPropertyName("strongest_copy_len")] public int StrongestCopyLength { get; set; }
@@ -26,8 +27,12 @@ public sealed class HarvestCandidate
     [JsonPropertyName("stream")] public HarvestStreamSnapshot Stream { get; set; } = new();
 
     public string RangeLabel => $"{StartSeconds:F2}s - {EndSeconds:F2}s";
-    public string NeedlesLabel => MatchedNeedles.Length == 0 ? "agreement" : string.Join(", ", MatchedNeedles);
-    public string MemberLabel => MemberCount <= 1 ? "1 window" : $"{MemberCount} windows";
+    public string NeedlesLabel => IsFallback
+        ? "full-file fallback"
+        : MatchedNeedles.Length == 0 ? "agreement" : string.Join(", ", MatchedNeedles);
+    public string MemberLabel => IsFallback
+        ? "fallback"
+        : MemberCount <= 1 ? "1 window" : $"{MemberCount} windows";
 }
 
 public class HarvestDecodeSnapshot

@@ -211,7 +211,7 @@ internal sealed class CwDecoderProcess : IDisposable
         string path,
         double startSeconds,
         double endSeconds,
-        double pitchHz,
+        double? pitchHz,
         double? wpm,
         CancellationToken ct = default)
     {
@@ -222,8 +222,11 @@ internal sealed class CwDecoderProcess : IDisposable
         psi.ArgumentList.Add(F(startSeconds));
         psi.ArgumentList.Add("--end");
         psi.ArgumentList.Add(F(endSeconds));
-        psi.ArgumentList.Add("--pitch-hz");
-        psi.ArgumentList.Add(F(pitchHz));
+        if (pitchHz is double pitchValue && pitchValue > 0)
+        {
+            psi.ArgumentList.Add("--pitch-hz");
+            psi.ArgumentList.Add(F(pitchValue));
+        }
         if (wpm is double wpmValue && wpmValue > 0)
         {
             psi.ArgumentList.Add("--wpm");

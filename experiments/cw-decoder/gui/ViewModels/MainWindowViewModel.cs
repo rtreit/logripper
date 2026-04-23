@@ -913,12 +913,17 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
                 HarvestCandidates.Add(candidate);
             SelectedCandidate = HarvestCandidates.FirstOrDefault();
             SaveCurrentHarvestSession();
+            var usedFallback = HarvestCandidates.Any(candidate => candidate.IsFallback);
             HarvestProgressValue = HarvestProgressMaximum;
             HarvestProgressLabel = HarvestCandidates.Count == 0
                 ? "Harvest finished with no candidate matches."
+                : usedFallback
+                    ? "Harvest found no candidate regions; using whole-file fallback."
                 : $"Harvest finished: {HarvestCandidates.Count} candidate regions.";
             AdvancedStatusText = HarvestCandidates.Count == 0
                 ? "No candidate windows matched the current filters."
+                : usedFallback
+                    ? "No harvestable regions matched, so the entire file is available as a fallback candidate for labeling."
                 : $"Harvested {HarvestCandidates.Count} candidate windows.";
         }
         catch (Exception ex)
@@ -1294,11 +1299,6 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
         }
 
         var pitchHz = candidate.Stream.PitchHz ?? candidate.Offline.PitchHz;
-        if (pitchHz is null || pitchHz <= 0)
-        {
-            AdvancedStatusText = "Selected candidate has no usable pitch estimate for profile rendering.";
-            return;
-        }
 
         var cts = new CancellationTokenSource();
         _profileLoadCts = cts;
@@ -1311,7 +1311,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
                 HarvestFilePath,
                 candidate.StartSeconds,
                 candidate.EndSeconds,
-                pitchHz.Value,
+                pitchHz,
                 candidate.Stream.Wpm ?? candidate.Offline.Wpm,
                 cts.Token).ConfigureAwait(true);
             await Dispatcher.UIThread.InvokeAsync(() =>
@@ -1323,7 +1323,9 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
 
                 _profileCache[ProfileCacheKey(candidate)] = profile;
                 CurrentSignalProfile = profile;
-                AdvancedStatusText = "Drag the magenta handles to trim or extend the exact window, then preview or save.";
+                AdvancedStatusText = candidate.IsFallback
+                    ? "Using full-file fallback profile. Drag the magenta handles to isolate the exact window you want to label."
+                    : "Drag the magenta handles to trim or extend the exact window, then preview or save.";
             });
         }
         catch (OperationCanceledException)
