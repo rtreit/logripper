@@ -185,6 +185,7 @@ internal sealed class ManagedEngineState
                 "runtime-config",
                 "rig-control",
                 "space-weather",
+                "purge",
             }
         };
     }
@@ -616,6 +617,14 @@ internal sealed class ManagedEngineState
 
             var restored = Sync(_storage.Logbook.GetQsoAsync(trimmed));
             return new RestoreQsoOutcome(Found: true, Restored: restored);
+        }
+    }
+
+    public int PurgeDeletedQsos(IReadOnlyList<string>? localIds, DateTimeOffset? olderThan)
+    {
+        lock (_gate)
+        {
+            return Sync(_storage.Logbook.PurgeDeletedQsosAsync(localIds, olderThan));
         }
     }
 

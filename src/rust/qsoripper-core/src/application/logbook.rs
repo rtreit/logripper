@@ -310,6 +310,34 @@ impl LogbookEngine {
             .map_err(Into::into)
     }
 
+    /// Permanently remove soft-deleted QSOs from storage.
+    ///
+    /// Only rows with `deleted_at` set are eligible. When `local_ids` is
+    /// non-empty, only those IDs are considered (inclusion filter).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`LogbookError::Storage`] when the backend delete fails.
+    pub async fn purge_deleted_qsos(
+        &self,
+        local_ids: &[String],
+        older_than: Option<Timestamp>,
+    ) -> Result<u32, LogbookError> {
+        let older_than_ms = older_than.as_ref().map(|ts| {
+            ts.seconds
+                .saturating_mul(1_000)
+                .saturating_add(i64::from(ts.nanos) / 1_000_000)
+        });
+
+        let purged = self
+            .storage
+            .logbook()
+            .purge_deleted_qsos(local_ids, older_than_ms)
+            .await?;
+
+        Ok(purged)
+    }
+
     async fn import_single_adif_qso(
         &self,
         record_number: usize,

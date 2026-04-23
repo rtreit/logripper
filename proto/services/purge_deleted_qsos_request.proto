@@ -1,0 +1,39 @@
+syntax = "proto3";
+
+package qsoripper.services;
+
+option csharp_namespace = "QsoRipper.Services";
+
+import "google/protobuf/timestamp.proto";
+
+// Request to permanently remove soft-deleted QSOs from local storage.
+//
+// This is a destructive, non-recoverable operation. The confirm field must be
+// set to true or the engine returns INVALID_ARGUMENT.
+//
+// If local_ids is empty and older_than is unset, all soft-deleted rows are
+// purged. Filters narrow the scope:
+//   - local_ids: only purge the listed IDs (must already be soft-deleted).
+//   - older_than: only purge rows whose deleted_at <= this cutoff.
+//
+// The engine refuses the call with FAILED_PRECONDITION while a sync is active.
+message PurgeDeletedQsosRequest {
+  // If non-empty, purge only the listed local IDs (must already be soft-deleted).
+  repeated string local_ids = 1;
+
+  // If set, only purge rows whose deleted_at <= this timestamp.
+  google.protobuf.Timestamp older_than = 2;
+
+  // When true, rows that still have pending_remote_delete = true and a
+  // non-empty qrz_logid are submitted to QRZ ACTION=DELETE before the
+  // local hard-delete. Rows whose remote delete fails are NOT purged;
+  // the operator can retry later.
+  //
+  // When false, pending remote deletes are dropped silently — the remote
+  // QSO survives on QRZ (operator's call).
+  bool include_pending_remote_deletes = 3;
+
+  // Safety latch: must be true for the engine to proceed. Prevents
+  // accidental client-side dispatches.
+  bool confirm = 4;
+}

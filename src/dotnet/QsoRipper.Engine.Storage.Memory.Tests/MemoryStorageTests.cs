@@ -630,5 +630,71 @@ public sealed class MemoryStorageTests
     {
         Assert.False(await _storage.Logbook.RestoreQsoAsync("missing"));
     }
+
+    // ──────────────────────────────────────────────
+    //  Purge deleted QSOs
+    // ──────────────────────────────────────────────
+
+    [Fact]
+    public async Task Purge_removes_all_soft_deleted_rows()
+    {
+        await _storage.Logbook.InsertQsoAsync(MakeQso("p1", "W1AW", Band._20M, Mode.Ft8, "2026-04-01T00:00:00Z"));
+        await _storage.Logbook.InsertQsoAsync(MakeQso("p2", "W1NEW", Band._40M, Mode.Cw, "2026-04-02T00:00:00Z"));
+        await _storage.Logbook.InsertQsoAsync(MakeQso("p3", "K7RND", Band._10M, Mode.Ssb, "2026-04-03T00:00:00Z"));
+
+        await _storage.Logbook.SoftDeleteQsoAsync("p1", DateTimeOffset.UtcNow, pendingRemoteDelete: false);
+        await _storage.Logbook.SoftDeleteQsoAsync("p2", DateTimeOffset.UtcNow, pendingRemoteDelete: false);
+
+        var purged = await _storage.Logbook.PurgeDeletedQsosAsync(null, null);
+        Assert.Equal(2, purged);
+
+        Assert.Null(await _storage.Logbook.GetQsoAsync("p1"));
+        Assert.Null(await _storage.Logbook.GetQsoAsync("p2"));
+        Assert.NotNull(await _storage.Logbook.GetQsoAsync("p3"));
+    }
+
+    [Fact]
+    public async Task Purge_filters_by_local_ids()
+    {
+        await _storage.Logbook.InsertQsoAsync(MakeQso("f1", "W1AW", Band._20M, Mode.Ft8, "2026-04-01T00:00:00Z"));
+        await _storage.Logbook.InsertQsoAsync(MakeQso("f2", "W1NEW", Band._40M, Mode.Cw, "2026-04-02T00:00:00Z"));
+
+        await _storage.Logbook.SoftDeleteQsoAsync("f1", DateTimeOffset.UtcNow, pendingRemoteDelete: false);
+        await _storage.Logbook.SoftDeleteQsoAsync("f2", DateTimeOffset.UtcNow, pendingRemoteDelete: false);
+
+        var purged = await _storage.Logbook.PurgeDeletedQsosAsync(["f1"], null);
+        Assert.Equal(1, purged);
+
+        Assert.Null(await _storage.Logbook.GetQsoAsync("f1"));
+        Assert.NotNull(await _storage.Logbook.GetQsoAsync("f2"));
+    }
+
+    [Fact]
+    public async Task Purge_filters_by_older_than()
+    {
+        await _storage.Logbook.InsertQsoAsync(MakeQso("t1", "W1AW", Band._20M, Mode.Ft8, "2026-04-01T00:00:00Z"));
+        await _storage.Logbook.InsertQsoAsync(MakeQso("t2", "W1NEW", Band._40M, Mode.Cw, "2026-04-02T00:00:00Z"));
+
+        var earlyDelete = DateTimeOffset.Parse("2026-05-01T00:00:00Z", System.Globalization.CultureInfo.InvariantCulture);
+        var lateDelete = DateTimeOffset.Parse("2026-06-01T00:00:00Z", System.Globalization.CultureInfo.InvariantCulture);
+
+        await _storage.Logbook.SoftDeleteQsoAsync("t1", earlyDelete, pendingRemoteDelete: false);
+        await _storage.Logbook.SoftDeleteQsoAsync("t2", lateDelete, pendingRemoteDelete: false);
+
+        var cutoff = DateTimeOffset.Parse("2026-05-15T00:00:00Z", System.Globalization.CultureInfo.InvariantCulture);
+        var purged = await _storage.Logbook.PurgeDeletedQsosAsync(null, cutoff);
+        Assert.Equal(1, purged);
+
+        Assert.Null(await _storage.Logbook.GetQsoAsync("t1"));
+        Assert.NotNull(await _storage.Logbook.GetQsoAsync("t2"));
+    }
+
+    [Fact]
+    public async Task Purge_returns_zero_when_nothing_to_purge()
+    {
+        await _storage.Logbook.InsertQsoAsync(MakeQso("n1", "W1AW", Band._20M, Mode.Ft8, "2026-04-01T00:00:00Z"));
+        var purged = await _storage.Logbook.PurgeDeletedQsosAsync(null, null);
+        Assert.Equal(0, purged);
+    }
 }
 #pragma warning restore CA1707

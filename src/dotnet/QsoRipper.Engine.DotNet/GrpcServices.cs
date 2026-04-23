@@ -309,6 +309,34 @@ internal sealed class ManagedLogbookGrpcService(ManagedEngineState state)
         });
     }
 
+    public override Task<PurgeDeletedQsosResponse> PurgeDeletedQsos(
+        PurgeDeletedQsosRequest request,
+        ServerCallContext context)
+    {
+        if (!request.Confirm)
+        {
+            throw new RpcException(new Status(StatusCode.InvalidArgument, "PurgeDeletedQsos requires confirm = true."));
+        }
+
+        // TODO: IsSyncing is currently hardcoded false in ManagedEngineState.
+        // This guard will become effective when sync state tracking is implemented.
+        var syncStatus = state.GetSyncStatus();
+        if (syncStatus.IsSyncing)
+        {
+            throw new RpcException(new Status(StatusCode.FailedPrecondition, "Cannot purge while a sync is in progress."));
+        }
+
+        var localIds = request.LocalIds.Count > 0 ? (IReadOnlyList<string>)request.LocalIds : null;
+        var olderThan = request.OlderThan is not null ? request.OlderThan.ToDateTimeOffset() : (DateTimeOffset?)null;
+
+        var purgedCount = state.PurgeDeletedQsos(localIds, olderThan);
+
+        return Task.FromResult(new PurgeDeletedQsosResponse
+        {
+            PurgedCount = (uint)purgedCount,
+        });
+    }
+
     public override Task<GetQsoResponse> GetQso(GetQsoRequest request, ServerCallContext context)
     {
         var qso = state.GetQso(request.LocalId);
