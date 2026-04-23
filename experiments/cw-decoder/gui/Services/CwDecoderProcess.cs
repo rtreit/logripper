@@ -569,6 +569,9 @@ internal sealed class CwDecoderProcess : IDisposable
             psi.ArgumentList.Add("--no-auto-threshold");
         }
 
+        psi.ArgumentList.Add("--min-tone-purity");
+        psi.ArgumentList.Add(cfg.MinTonePurity.ToString(CultureInfo.InvariantCulture));
+
         if (!cfg.ExperimentalRangeLock)
         {
             return;

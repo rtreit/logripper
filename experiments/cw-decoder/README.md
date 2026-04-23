@@ -121,9 +121,10 @@ Current decode-tab workflow also includes:
 - a real-time playback signal view driven by the same broad-band profile pipeline used in labeling
 - an explicit **CURRENT TONE** readout during live decode and playback
 - an experimental **RANGE LOCK** mode for custom streaming, so live/file decode can prefer the strongest tone inside a chosen Hz window
-- an optional **SHOW CHAR HZ** overlay so each decoded character can display the tone the streaming decoder had locked when it emitted that symbol
+- an experimental **TONE PURITY** gate that gives each power sample an instantaneous adjacent-bin ratio test (`min_tone_purity`, default 3.0), so broadband impulses (finger snaps, key clicks, lightning, switching ground) stop being decoded as letters
+- an optional **SHOW CHAR HZ** overlay so each decoded character can display the tone the streaming decoder had locked when it emitted that symbol; a companion **SHOW PURITY** toggle adds the per-character peak adjacent-bin tone-purity ratio under the Hz line, so spurious characters from broadband impulses (typically `purity ~1`) are visually distinguishable from real CW (`purity 5-20+`)
 
-When **RANGE LOCK** is enabled, emitted characters now also pass a short recent-audio tone check near the locked pitch. That keeps broadband transients (for example a finger snap) from being accepted just because they briefly splashed energy into the locked bin.
+The tone-purity gate replaces an earlier "recent-audio re-detection" guard that ran at character emission time. That earlier guard could not catch transient impulses because by the time it re-ran pitch detection the impulse was already history; the new gate runs per Goertzel power sample and ANDs with the existing amplitude / smoothed-SNR gates so a sample only counts as key-down when the locked bin is meaningfully louder than its closely-spaced neighbors.
 
 That replay path is useful for answering: _“what did the live path think happened, and what does an offline rerun on the same captured audio think happened?”_
 
@@ -301,15 +302,16 @@ Using the current reference baseline settings:
 
 Current scorer result:
 
-- **6 / 9 exact**
-- **avg CER = 0.10**
+- **7 / 10 exact**
+- **avg CER = 0.09**
 - **total edit distance = 12**
 
 Interpretation:
 
 - **K1ZZ / DH8BQA** is now exact
-- **W1AW** is mostly solved in exact-window mode (5 / 6 exact); the remaining miss is a **leading-edge / warmup** problem (`TUST...` vs `QST...`)
+- **W1AW** is mostly solved in exact-window mode (6 / 7 exact); the remaining miss is a **leading-edge / warmup** problem (`TUST...` vs `QST...`)
 - **80m K5ZD / ZS4TX** labels still both miss, currently classified as one `garbage_decode` and one `near_match`
+- The new **TONE PURITY** gate is a no-op on this corpus — exact-window numbers are unchanged whether `--min-tone-purity 3.0` (default) or `--min-tone-purity 0` is used. The gate fires only on broadband impulses, which the labeled CW does not contain.
 
 ### Full-stream baseline score
 
@@ -320,8 +322,8 @@ Current scorer result with:
 
 is:
 
-- **1 / 9 exact**
-- **avg CER = 0.85**
+- **1 / 10 exact**
+- **avg CER = 0.92**
 - dominated by `empty_output` and `garbage_decode`
 
 Interpretation:

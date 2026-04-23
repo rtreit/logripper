@@ -176,7 +176,7 @@
                     FontSize="11" Padding="14,4" />
           </Grid>
 
-          <Grid ColumnDefinitions="Auto,Auto,Auto,Auto,*" ColumnSpacing="10">
+          <Grid ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,*" ColumnSpacing="10">
             <TextBlock Text="EXPERIMENT" Classes="label" VerticalAlignment="Center" />
             <CheckBox Grid.Column="1" Content="RANGE LOCK" IsChecked="{Binding ExperimentalRangeLock, Mode=TwoWay}"
                       VerticalAlignment="Center"
@@ -189,7 +189,15 @@
               <TextBlock Text="MAX Hz" Classes="label" />
               <NumericUpDown Minimum="200" Maximum="1200" Increment="10" Value="{Binding RangeLockMaxHz, Mode=TwoWay}" />
             </StackPanel>
-            <TextBlock Grid.Column="4" Text="{Binding RangeLockSummary}" Classes="label" TextWrapping="Wrap" VerticalAlignment="Center" />
+            <StackPanel Grid.Column="4" Spacing="2"
+                        ToolTip.Tip="Adjacent-bin tone purity (target / max(±60/120 Hz)). Real CW scores 5-20+; broadband impulses (finger snaps, key clicks) score ~1 and are rejected. Set to 0 to disable.">
+              <TextBlock Text="MIN PURITY" Classes="label" />
+              <NumericUpDown Minimum="0" Maximum="20" Increment="0.5" Value="{Binding MinTonePurity, Mode=TwoWay}" />
+            </StackPanel>
+            <CheckBox Grid.Column="5" Content="SHOW PURITY" IsChecked="{Binding ShowCharPurity, Mode=TwoWay}"
+                      VerticalAlignment="Center"
+                      ToolTip.Tip="Show the per-character tone-purity ratio in the transcript debug overlay." />
+            <TextBlock Grid.Column="6" Text="{Binding RangeLockSummary}" Classes="label" TextWrapping="Wrap" VerticalAlignment="Center" />
           </Grid>
         </StackPanel>
 
@@ -361,6 +369,11 @@
                                      Foreground="{StaticResource TextDim}"
                                      HorizontalAlignment="Center"
                                      IsVisible="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).ShowCharacterToneOverlay}" />
+                          <TextBlock Text="{Binding PurityDisplay}"
+                                     FontFamily="Consolas" FontSize="10"
+                                     Foreground="{StaticResource TextDim}"
+                                     HorizontalAlignment="Center"
+                                     IsVisible="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).ShowCharPurity}" />
                           <TextBlock Text="{Binding Letter}"
                                      FontFamily="Consolas" FontSize="32"
                                      FontWeight="Bold"

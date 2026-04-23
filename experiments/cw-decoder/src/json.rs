@@ -56,19 +56,21 @@ impl JsonEmitter {
                 "type": "wpm",
                 "wpm": round2(*wpm),
             }),
-            StreamEvent::Char { ch, morse, pitch_hz } => json!({
+            StreamEvent::Char { ch, morse, pitch_hz, tone_purity } => json!({
                 "type": "char",
                 "ch": ch.to_string(),
                 "morse": morse,
-                "hz": pitch_hz.map(|hz| round1(hz)),
+                "hz": pitch_hz.map(round1),
+                "purity": tone_purity.map(round2),
             }),
             StreamEvent::Word => json!({
                 "type": "word",
             }),
-            StreamEvent::Garbled { morse, pitch_hz } => json!({
+            StreamEvent::Garbled { morse, pitch_hz, tone_purity } => json!({
                 "type": "garbled",
                 "morse": morse,
-                "hz": pitch_hz.map(|hz| round1(hz)),
+                "hz": pitch_hz.map(round1),
+                "purity": tone_purity.map(round2),
             }),
             StreamEvent::Power {
                 power,

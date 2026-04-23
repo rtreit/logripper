@@ -68,6 +68,29 @@ const DIT_EMA_ALPHA: f32 = 0.15;
 ///   * mains hum / harmonics at one specific offset
 ///   * partial filter rolloff at the band edges
 const NOISE_OFFSETS_HZ: &[f32] = &[150.0, 300.0, 500.0, 700.0];
+/// Adjacent-bin offsets (Hz) used for the *tone purity* check. These sit
+/// just outside the Goertzel main lobe of a clean CW tone (bin width is
+/// ~40 Hz at the 25 ms / 12 kHz Goertzel window — main lobe ~80 Hz wide)
+/// but close enough that a broadband impulse energizes them as much as
+/// the target bin.
+///
+/// A narrowband CW tone at `f` produces:
+///   * large power at `f`
+///   * small power at `f ± 60 Hz` and `f ± 120 Hz` (sidelobes / noise)
+///
+/// → purity ratio (`target / max(adjacent)`) is large (typically 5–20+).
+///
+/// A broadband impulse (finger snap, key click, lightning, switching ground)
+/// dumps energy into *all* bins simultaneously:
+///   * comparable power at `f` and at every adjacent offset
+///
+/// → purity ratio is ~1.
+///
+/// This is the gate that distinguishes "actually a tone" from "broadband
+/// thump that happened to land in the locked bin," which the smoothed
+/// off-band SNR cannot do (the noise smoother is 200 ms, so a 5 ms snap
+/// fires through the SNR gate before the noise floor catches up).
+const PURITY_OFFSETS_HZ: &[f32] = &[60.0, 120.0];
 /// Default required signal-to-noise ratio (dB) for a power sample to be
 /// considered "tone present" by the keying state machine. Below this, the
 /// sample is treated as noise even if it crosses the adaptive amplitude
@@ -85,6 +108,16 @@ pub const DEFAULT_THRESHOLD_SCALE: f32 = 1.0;
 pub const DEFAULT_RANGE_LOCK_MIN_HZ: f32 = 550.0;
 /// Default upper bound for the experimental range-lock mode.
 pub const DEFAULT_RANGE_LOCK_MAX_HZ: f32 = 850.0;
+/// Default minimum tone-purity ratio required for a power sample to be
+/// treated as "narrowband tone present." Computed instantaneously per power
+/// sample as `target_bin / max(adjacent_bin)` using bins at
+/// `PURITY_OFFSETS_HZ` around the locked pitch. Real CW tones routinely
+/// score 5–20+; broadband impulses score ~1.
+///
+/// 3.0 is a conservative lower bound chosen to keep weak but real CW
+/// (Q5 copy) decoding while killing finger snaps and key clicks. Tunable
+/// per-operator via [`DecoderConfig::min_tone_purity`].
+pub const DEFAULT_MIN_TONE_PURITY: f32 = 3.0;
 /// Smoothing window for the noise reference (ms). Longer than the signal
 /// smoother so brief tone leakage into side bins doesn't lift the noise
 /// floor and disable the gate.
@@ -97,12 +130,6 @@ const UNLOCK_POWER_HISTORY_EVENTS: usize = 80;
 /// pitch hunt to a narrow user-specified band lets us react much faster than the
 /// conservative default whole-band lock path.
 const RANGE_LOCK_SECONDS: f32 = 1.0;
-/// Recent-audio window used to confirm that emitted letters still look like the
-/// locked tone instead of a broadband transient that happened to trip the bin.
-const CHAR_GUARD_SECONDS: f32 = 0.35;
-/// Allow a little pitch wobble around the locked tone when validating emitted
-/// letters, but reject events that no longer cluster near that tone.
-const CHAR_GUARD_DRIFT_HZ: f32 = 35.0;
 
 /// Runtime-tunable decoder parameters. Cloneable so the GUI/CLI can
 /// snapshot, mutate, and resend without locking. All fields use
@@ -132,6 +159,10 @@ pub struct DecoderConfig {
     pub range_lock_min_hz: f32,
     /// Upper bound for the experimental pitch-lock band.
     pub range_lock_max_hz: f32,
+    /// Minimum instantaneous tone-purity ratio (target / max adjacent bin)
+    /// required for a power sample to be treated as "tone present." Set to
+    /// 0.0 to disable the gate. See [`DEFAULT_MIN_TONE_PURITY`].
+    pub min_tone_purity: f32,
 }
 
 impl DecoderConfig {
@@ -144,6 +175,7 @@ impl DecoderConfig {
             experimental_range_lock: false,
             range_lock_min_hz: DEFAULT_RANGE_LOCK_MIN_HZ,
             range_lock_max_hz: DEFAULT_RANGE_LOCK_MAX_HZ,
+            min_tone_purity: DEFAULT_MIN_TONE_PURITY,
         }
     }
     /// Convert min_snr_db → linear power ratio for the inner gate.
@@ -187,6 +219,11 @@ pub enum StreamEvent {
         ch: char,
         morse: String,
         pitch_hz: Option<f32>,
+        /// Peak instantaneous tone-purity ratio observed during the on-runs
+        /// that produced this character. None until the purity gate has run
+        /// at least once. Useful as a per-character debug overlay so the
+        /// operator can see when emitted letters were marginal vs solid.
+        tone_purity: Option<f32>,
     },
     /// Word boundary detected.
     Word,
@@ -194,6 +231,7 @@ pub enum StreamEvent {
     Garbled {
         morse: String,
         pitch_hz: Option<f32>,
+        tone_purity: Option<f32>,
     },
     /// Periodic snapshot of the smoothed Goertzel power vs threshold.
     /// Emitted at roughly `POWER_EVENT_HZ` Hz, throttled in `feed_goertzel`.
@@ -987,6 +1025,11 @@ struct Decoder {
     rhythm: RhythmGate,
 
     current_letter: String,
+    /// Peak instantaneous tone-purity ratio observed during the on-runs that
+    /// have contributed to `current_letter`. Reset each time a letter is
+    /// emitted. None when the purity gate hasn't seen a value yet (e.g.
+    /// pre-lock or with the gate disabled).
+    current_letter_peak_purity: Option<f32>,
 }
 
 impl Decoder {
@@ -1010,6 +1053,7 @@ impl Decoder {
             primed: false,
             rhythm: RhythmGate::new(),
             current_letter: String::new(),
+            current_letter_peak_purity: None,
         }
     }
 
@@ -1129,14 +1173,20 @@ impl Decoder {
             return None;
         }
         let morse = std::mem::take(&mut self.current_letter);
+        let tone_purity = self.current_letter_peak_purity.take();
         if let Some(c) = morse_to_char(&morse) {
             Some(StreamEvent::Char {
                 ch: c,
                 morse,
                 pitch_hz,
+                tone_purity,
             })
         } else {
-            Some(StreamEvent::Garbled { morse, pitch_hz })
+            Some(StreamEvent::Garbled {
+                morse,
+                pitch_hz,
+                tone_purity,
+            })
         }
     }
 
@@ -1187,6 +1237,7 @@ impl Decoder {
                 // Gate is closed AND the pattern is junk → drop it so we
                 // don't accumulate a long tail of dots/dashes from noise.
                 self.current_letter.clear();
+                self.current_letter_peak_purity = None;
             }
         }
     }
@@ -1220,13 +1271,21 @@ impl Decoder {
         self.consume_interval(ivl, pitch_hz, events);
     }
 
-    /// Feed one power-signal sample. `snr_ok` indicates whether the off-band
-    /// noise reference says the bin actually contains a tone (gain-independent).
-    /// Emits zero or more events.
+    /// Feed one power-signal sample.
+    ///
+    /// `snr_ok` indicates whether the smoothed off-band noise reference says
+    /// the bin is meaningfully louder than the noise floor (gain-independent,
+    /// long-window). `purity_ok` indicates whether the *instantaneous*
+    /// adjacent-bin ratio says the energy in the locked bin actually looks
+    /// like a narrowband tone vs a broadband impulse. Both must be true to
+    /// treat the sample as key-down. `tone_purity` is the raw ratio at this
+    /// sample (used for per-character debug overlay); 0.0 when not measured.
     fn push_power(
         &mut self,
         p: f32,
         snr_ok: bool,
+        purity_ok: bool,
+        tone_purity: f32,
         pitch_hz: Option<f32>,
         events: &mut Vec<StreamEvent>,
     ) {
@@ -1244,10 +1303,24 @@ impl Decoder {
             return;
         }
 
-        // Both gates must agree: amplitude above adaptive threshold AND the
-        // tone bin is meaningfully louder than the off-band reference. The
-        // SNR gate is what keeps background hiss from being decoded as morse.
-        let above = p > self.threshold && snr_ok;
+        // Three gates must agree before we treat a sample as key-down:
+        //   1. amplitude above the adaptive threshold (kills the noise floor)
+        //   2. smoothed SNR vs off-band reference (gain-independent)
+        //   3. instantaneous adjacent-bin tone purity (kills broadband
+        //      impulses such as finger snaps and key clicks that briefly
+        //      light up the locked bin without being a tone)
+        let above = p > self.threshold && snr_ok && purity_ok;
+
+        // Track peak purity during on-runs so the emitted character carries
+        // a useful debug number. Only update while the gate already says we
+        // are on a real tone; otherwise the value is meaningless.
+        if above && tone_purity > 0.0 {
+            self.current_letter_peak_purity = Some(match self.current_letter_peak_purity {
+                Some(prev) => prev.max(tone_purity),
+                None => tone_purity,
+            });
+        }
+
         if !self.have_first_sample {
             self.is_on = above;
             self.current_run = 1;
@@ -1322,6 +1395,13 @@ pub struct StreamingDecoder {
     /// pitch. We take the *median* per power sample to estimate noise,
     /// which is robust to a single bin landing on adjacent CW or hum.
     noise_bins: Vec<Goertzel>,
+    /// Tightly-spaced adjacent bins (`PURITY_OFFSETS_HZ` Hz from the locked
+    /// pitch) used for the *instantaneous* tone-purity check. Distinct from
+    /// `noise_bins` (which sit hundreds of Hz away to estimate the noise
+    /// floor) — the purity bins live close enough to the carrier that a
+    /// real CW tone leaves them mostly empty while a broadband impulse
+    /// energizes them just as much as the target bin.
+    purity_bins: Vec<Goertzel>,
     smooth_window: usize,
     /// Recent power samples for moving average.
     smooth_buf: VecDeque<f32>,
@@ -1386,6 +1466,7 @@ impl StreamingDecoder {
             quality_failed_consecutive: 0,
             goertzel: None,
             noise_bins: Vec::new(),
+            purity_bins: Vec::new(),
             smooth_window,
             smooth_buf: VecDeque::with_capacity(smooth_window + 1),
             smooth_sum: 0.0,
@@ -1509,6 +1590,7 @@ impl StreamingDecoder {
         self.pitch_locked = None;
         self.goertzel = None;
         self.noise_bins.clear();
+        self.purity_bins.clear();
         self.smooth_buf.clear();
         self.smooth_sum = 0.0;
         self.noise_smooth_buf.clear();
@@ -1557,6 +1639,24 @@ impl StreamingDecoder {
                         .push(Goertzel::new(hi, TARGET_RATE, win_size, step));
                 }
             }
+            // Adjacent purity bins (closely spaced — see PURITY_OFFSETS_HZ
+            // doc comment). These are the gate that distinguishes a real
+            // narrowband CW tone from a broadband impulse: the impulse
+            // spreads its energy across all of these bins; a tone leaves
+            // them mostly empty.
+            self.purity_bins.clear();
+            for &off in PURITY_OFFSETS_HZ {
+                let lo = pitch - off;
+                let hi = pitch + off;
+                if lo >= FREQ_MIN_HZ {
+                    self.purity_bins
+                        .push(Goertzel::new(lo, TARGET_RATE, win_size, step));
+                }
+                if hi <= FREQ_MAX_HZ {
+                    self.purity_bins
+                        .push(Goertzel::new(hi, TARGET_RATE, win_size, step));
+                }
+            }
             self.unlock_power_history.clear();
             events.push(StreamEvent::PitchUpdate { pitch_hz: pitch });
             let drained = std::mem::take(&mut self.pre_lock_buf);
@@ -1590,88 +1690,6 @@ impl StreamingDecoder {
         self.pre_lock_buf
             .extend_from_slice(&recent_audio[start..]);
         true
-    }
-
-    fn range_lock_char_guard_passes(&self) -> bool {
-        if !self.config.experimental_range_lock {
-            return true;
-        }
-
-        let Some(locked_pitch) = self.pitch_locked else {
-            return false;
-        };
-
-        let samples = ((TARGET_RATE as f32 * CHAR_GUARD_SECONDS).round() as usize).max(1024);
-        if self.quality_buf.len() < samples / 2 {
-            return true;
-        }
-
-        let start = self.quality_buf.len().saturating_sub(samples);
-        let mut window: Vec<f32> = self.quality_buf.iter().skip(start).copied().collect();
-        if window.is_empty() {
-            return true;
-        }
-
-        let peak = window
-            .iter()
-            .map(|sample| sample.abs())
-            .fold(0.0_f32, f32::max);
-        if peak <= 1e-6 {
-            return false;
-        }
-        let trim_floor = peak * 0.15;
-        while window.len() > 64 {
-            let Some(last) = window.last() else {
-                break;
-            };
-            if last.abs() >= trim_floor {
-                break;
-            }
-            window.pop();
-        }
-        if window.len() < 256 {
-            return false;
-        }
-
-        let (mut lo, mut hi) = self
-            .config
-            .pitch_lock_bounds()
-            .unwrap_or((FREQ_MIN_HZ, FREQ_MAX_HZ));
-        lo = lo.max(locked_pitch - CHAR_GUARD_DRIFT_HZ).max(FREQ_MIN_HZ);
-        hi = hi.min(locked_pitch + CHAR_GUARD_DRIFT_HZ).min(FREQ_MAX_HZ);
-        if hi <= lo {
-            return false;
-        }
-
-        match detect_pitch(
-            &window,
-            TARGET_RATE,
-            self.config.pitch_min_snr_linear(),
-            Some((lo, hi)),
-        ) {
-            Ok(pitch) => (pitch - locked_pitch).abs() <= CHAR_GUARD_DRIFT_HZ,
-            Err(_) => false,
-        }
-    }
-
-    fn filter_recent_decode_events(&self, events: &mut Vec<StreamEvent>) {
-        if self.range_lock_char_guard_passes() {
-            return;
-        }
-
-        let dropped_letter = events
-            .iter()
-            .any(|ev| matches!(ev, StreamEvent::Char { .. } | StreamEvent::Garbled { .. }));
-        if !dropped_letter {
-            return;
-        }
-
-        events.retain(|ev| {
-            !matches!(
-                ev,
-                StreamEvent::Char { .. } | StreamEvent::Garbled { .. } | StreamEvent::Word
-            )
-        });
     }
 
     fn emit_unlock_power(&mut self, audio: &[f32], events: &mut Vec<StreamEvent>) {
@@ -1713,7 +1731,14 @@ impl StreamingDecoder {
         for (idx, nb) in self.noise_bins.iter_mut().enumerate() {
             nb.push(audio, &mut noise_outs[idx]);
         }
+        // Run the adjacent purity bins in lockstep too.
+        let mut purity_outs: Vec<Vec<f32>> =
+            (0..self.purity_bins.len()).map(|_| Vec::new()).collect();
+        for (idx, pb) in self.purity_bins.iter_mut().enumerate() {
+            pb.push(audio, &mut purity_outs[idx]);
+        }
         let snr_threshold = self.config.min_snr_linear();
+        let purity_threshold = self.config.min_tone_purity;
 
         for (i, p) in power_out.iter().copied().enumerate() {
             // Signal moving average.
@@ -1764,12 +1789,45 @@ impl StreamingDecoder {
             };
             let snr_ok = snr >= snr_threshold;
 
+            // Instantaneous tone-purity ratio: raw target-bin power divided
+            // by the *maximum* of the closely-spaced adjacent purity bins.
+            // No smoothing on either side — the entire point of this gate is
+            // to react in the same Goertzel step as the smoothed SNR gate
+            // would falsely fire on a broadband impulse. A real CW tone
+            // produces a target/adjacent ratio well above 1 (typically 5+);
+            // a broadband impulse spreads energy roughly equally across all
+            // close bins so the ratio collapses toward 1.
+            //
+            // When the gate is disabled (`min_tone_purity <= 0`) or no
+            // purity bins are configured, treat purity as always-OK so the
+            // decoder reverts to the pre-gate behavior.
+            let (tone_purity, purity_ok) = if purity_threshold <= 0.0 || purity_outs.is_empty() {
+                (0.0_f32, true)
+            } else {
+                let mut max_adjacent = 0.0_f32;
+                for v in &purity_outs {
+                    if let Some(&pp) = v.get(i) {
+                        if pp > max_adjacent {
+                            max_adjacent = pp;
+                        }
+                    }
+                }
+                if max_adjacent <= 1e-12 {
+                    // No measurable adjacent energy → trivially pure.
+                    (f32::INFINITY, true)
+                } else {
+                    let ratio = p / max_adjacent;
+                    (ratio, ratio >= purity_threshold)
+                }
+            };
+
             // Throttled Power event for UI meters (~POWER_EVENT_HZ).
             self.power_emit_accum += 1.0;
             if self.power_emit_accum >= self.power_emit_step {
                 self.power_emit_accum -= self.power_emit_step;
                 let threshold = self.decoder.threshold;
-                let signal = threshold > 0.0 && smoothed > threshold && snr_ok;
+                let signal =
+                    threshold > 0.0 && smoothed > threshold && snr_ok && purity_ok;
                 let snr_clean = if snr.is_finite() { snr } else { 0.0 };
                 events.push(StreamEvent::Power {
                     power: smoothed,
@@ -1780,15 +1838,21 @@ impl StreamingDecoder {
                 });
             }
 
-            let mut decode_events = Vec::new();
+            let purity_for_decoder = if tone_purity.is_finite() {
+                tone_purity
+            } else {
+                // Use a large finite number so the decoder can still record a
+                // peak without polluting later max() comparisons with NaN.
+                1.0e6
+            };
             self.decoder.push_power(
                 smoothed,
                 snr_ok,
+                purity_ok,
+                purity_for_decoder,
                 self.pitch_locked,
-                &mut decode_events,
+                events,
             );
-            self.filter_recent_decode_events(&mut decode_events);
-            events.extend(decode_events);
         }
     }
 
@@ -2176,31 +2240,92 @@ mod lock_behavior_tests {
     }
 
     #[test]
-    fn range_lock_char_guard_rejects_broadband_impulse_letters() {
-        let sr = 16000u32;
-        let mut dec = StreamingDecoder::new(sr).expect("decoder");
-        let mut cfg = DecoderConfig::default();
-        cfg.experimental_range_lock = true;
-        dec.set_config(cfg);
-        dec.pitch_locked = Some(800.0);
+    fn tone_purity_gate_suppresses_broadband_impulses() {
+        // Synthesize an audio stream consisting of a steady CW-like tone at
+        // 800 Hz with isolated broadband impulses (deterministic
+        // pseudo-noise bursts that briefly dump energy across all bins,
+        // the same shape as a finger snap or key click). With the purity
+        // gate enabled the impulses must not produce Char events.
 
-        dec.quality_buf = std::iter::repeat(0.0_f32)
-            .take((TARGET_RATE as usize / 2).max(1024))
-            .collect();
-        if let Some(last) = dec.quality_buf.back_mut() {
-            *last = 1.0;
+        // Tiny LCG so we don't pull in `rand` for one test.
+        let mut state: u64 = 0xDEAD_BEEF_C0FF_EE42;
+        let mut next_noise = || -> f32 {
+            state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            let u = ((state >> 33) as u32) as f32 / u32::MAX as f32;
+            (u - 0.5) * 2.0
+        };
+
+        let sr = TARGET_RATE;
+        let dur_sec = 2.0_f32;
+        let total = (sr as f32 * dur_sec) as usize;
+        let mut audio = vec![0.0_f32; total];
+        for (i, sample) in audio.iter_mut().enumerate() {
+            let t = i as f32 / sr as f32;
+            *sample = (2.0 * std::f32::consts::PI * 800.0 * t).sin() * 0.05;
+        }
+        let impulse_centers_ms = [200, 600, 1000, 1400, 1800];
+        let impulse_half_ms = 3.0_f32;
+        let half_n = (sr as f32 * impulse_half_ms / 1000.0) as usize;
+        for c_ms in impulse_centers_ms {
+            let center = (sr as f32 * c_ms as f32 / 1000.0) as usize;
+            let lo = center.saturating_sub(half_n);
+            let hi = (center + half_n).min(audio.len());
+            for sample in &mut audio[lo..hi] {
+                *sample += next_noise() * 0.8;
+            }
         }
 
-        let mut events = vec![StreamEvent::Char {
-            ch: 'E',
-            morse: ".".to_string(),
-            pitch_hz: Some(800.0),
-        }];
-        dec.filter_recent_decode_events(&mut events);
+        // Gate enabled: any emitted Char is impulse-driven (the steady tone
+        // has no dits/dahs).
+        let mut dec = StreamingDecoder::new(sr).expect("decoder");
+        let mut cfg = DecoderConfig::defaults();
+        cfg.experimental_range_lock = true;
+        cfg.range_lock_min_hz = 700.0;
+        cfg.range_lock_max_hz = 900.0;
+        cfg.min_tone_purity = DEFAULT_MIN_TONE_PURITY;
+        dec.set_config(cfg);
+
+        let chunk = sr as usize / 10; // 100 ms chunks
+        let mut all_events_gated = Vec::new();
+        for win in audio.chunks(chunk) {
+            let evs = dec.feed(win).expect("feed");
+            all_events_gated.extend(evs);
+        }
+        all_events_gated.extend(dec.flush());
+        let chars_gated = all_events_gated
+            .iter()
+            .filter(|ev| matches!(ev, StreamEvent::Char { .. }))
+            .count();
+
+        // Gate disabled: confirm impulses do trip the decoder. Self-validating.
+        let mut dec_off = StreamingDecoder::new(sr).expect("decoder");
+        let mut cfg_off = DecoderConfig::defaults();
+        cfg_off.experimental_range_lock = true;
+        cfg_off.range_lock_min_hz = 700.0;
+        cfg_off.range_lock_max_hz = 900.0;
+        cfg_off.min_tone_purity = 0.0;
+        dec_off.set_config(cfg_off);
+
+        let mut all_events_ungated = Vec::new();
+        for win in audio.chunks(chunk) {
+            let evs = dec_off.feed(win).expect("feed");
+            all_events_ungated.extend(evs);
+        }
+        all_events_ungated.extend(dec_off.flush());
+        let chars_ungated = all_events_ungated
+            .iter()
+            .filter(|ev| matches!(ev, StreamEvent::Char { .. }))
+            .count();
 
         assert!(
-            !events.iter().any(|ev| matches!(ev, StreamEvent::Char { .. })),
-            "range-lock guard should suppress transient letters that do not re-detect the locked tone"
+            chars_ungated >= chars_gated,
+            "ungated decoder should produce at least as many chars as gated one \
+             (ungated={chars_ungated}, gated={chars_gated})"
+        );
+        assert!(
+            chars_gated <= 1,
+            "tone-purity gate should suppress impulse-driven chars (gated={chars_gated}, \
+             ungated={chars_ungated})"
         );
     }
 }

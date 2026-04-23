@@ -1118,6 +1118,8 @@ fn parse_streaming_decoder_config(args: &[String]) -> DecoderConfig {
             .unwrap_or(cw_decoder_poc::streaming::DEFAULT_RANGE_LOCK_MIN_HZ),
         range_lock_max_hz: arg_value_f32(args, "--range-lock-max-hz")
             .unwrap_or(cw_decoder_poc::streaming::DEFAULT_RANGE_LOCK_MAX_HZ),
+        min_tone_purity: arg_value_f32(args, "--min-tone-purity")
+            .unwrap_or(cw_decoder_poc::streaming::DEFAULT_MIN_TONE_PURITY),
     }
 }
 

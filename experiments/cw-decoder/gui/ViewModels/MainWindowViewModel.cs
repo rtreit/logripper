@@ -122,6 +122,19 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
         set => Set(ref _showCharacterToneOverlay, value);
     }
 
+    private bool _showCharPurity;
+    /// <summary>
+    /// When true, per-character tone-purity is shown alongside the Hz overlay
+    /// (requires <see cref="ShowCharacterToneOverlay"/>). Useful for diagnosing
+    /// "humans hear it, decoder prints garbage" failures: a clean CW character
+    /// scores 5-20+; an impulse-driven false character scores ~1.
+    /// </summary>
+    public bool ShowCharPurity
+    {
+        get => _showCharPurity;
+        set => Set(ref _showCharPurity, value);
+    }
+
     private double _wpm;
     public double Wpm { get => _wpm; set => Set(ref _wpm, value); }
 
@@ -411,6 +424,26 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
             {
                 PushConfig();
                 OnPropertyChanged(nameof(RangeLockSummary));
+            }
+        }
+    }
+
+    private double _minTonePurity = DecoderConfig.DefaultMinTonePurity;
+    /// <summary>
+    /// Minimum instantaneous adjacent-bin tone-purity ratio (target /
+    /// max(adjacent purity bin)) required for a Goertzel sample to be
+    /// considered a real CW tone. Set to 0 to disable the gate. A real CW
+    /// tone scores 5–20+; broadband impulses (finger snaps, key clicks)
+    /// score ~1 and are rejected.
+    /// </summary>
+    public double MinTonePurity
+    {
+        get => _minTonePurity;
+        set
+        {
+            if (Set(ref _minTonePurity, value))
+            {
+                PushConfig();
             }
         }
     }
@@ -875,6 +908,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
         ExperimentalRangeLock = DecoderConfig.DefaultExperimentalRangeLock;
         RangeLockMinHz = DecoderConfig.DefaultRangeLockMinHz;
         RangeLockMaxHz = DecoderConfig.DefaultRangeLockMaxHz;
+        MinTonePurity = DecoderConfig.DefaultMinTonePurity;
     }
 
     private DecoderConfig CurrentConfig() => new(
@@ -884,7 +918,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
         AutoThreshold,
         ExperimentalRangeLock,
         Math.Min(RangeLockMinHz, RangeLockMaxHz),
-        Math.Max(RangeLockMinHz, RangeLockMaxHz));
+        Math.Max(RangeLockMinHz, RangeLockMaxHz),
+        Math.Max(0.0, MinTonePurity));
     private BaselineDecoderConfig CurrentBaselineConfig() => new(
         WindowSeconds: LabelEvalWindowSeconds,
         MinWindowSeconds: LabelEvalMinWindowSeconds,
@@ -1668,7 +1703,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
                     Cells.Add(TranscriptCell.Char(
                         ev.Ch!,
                         string.IsNullOrEmpty(ev.Morse) ? " " : ev.Morse!,
-                        ev.Hz));
+                        ev.Hz,
+                        ev.Purity));
                     _liveTranscriptBuilder.Append(ev.Ch);
                 }
                 break;

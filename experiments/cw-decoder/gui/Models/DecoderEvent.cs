@@ -29,6 +29,7 @@ internal sealed class DecoderEvent
     // char / garbled
     [JsonPropertyName("ch")] public string? Ch { get; set; }
     [JsonPropertyName("morse")] public string? Morse { get; set; }
+    [JsonPropertyName("purity")] public double? Purity { get; set; }
 
     // power
     [JsonPropertyName("power")] public double? Power { get; set; }

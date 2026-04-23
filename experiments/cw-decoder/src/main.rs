@@ -97,6 +97,12 @@ enum Cmd {
         /// Upper bound for the experimental pitch-lock band.
         #[arg(long, default_value_t = streaming::DEFAULT_RANGE_LOCK_MAX_HZ)]
         range_lock_max_hz: f32,
+        /// Minimum instantaneous adjacent-bin tone-purity ratio required
+        /// to treat a power sample as "tone present." 0 disables the gate.
+        /// Higher values reject impulses more aggressively at the cost of
+        /// rejecting weaker tones.
+        #[arg(long, default_value_t = streaming::DEFAULT_MIN_TONE_PURITY)]
+        min_tone_purity: f32,
         /// Read NDJSON config-update lines from stdin while streaming.
         /// Each line: {"type":"config","min_snr_db":...,"pitch_min_snr_db":...,"threshold_scale":...}
         #[arg(long)]
@@ -283,6 +289,9 @@ enum Cmd {
         /// Upper bound for the experimental pitch-lock band.
         #[arg(long, default_value_t = streaming::DEFAULT_RANGE_LOCK_MAX_HZ)]
         range_lock_max_hz: f32,
+        /// Minimum instantaneous adjacent-bin tone-purity ratio. 0 disables.
+        #[arg(long, default_value_t = streaming::DEFAULT_MIN_TONE_PURITY)]
+        min_tone_purity: f32,
         /// Optional WAV path to mirror raw mono samples to (16-bit PCM at the
         /// device's native sample rate). Useful for post-stop offline analysis.
         #[arg(long)]
@@ -358,6 +367,7 @@ fn main() -> Result<()> {
             experimental_range_lock,
             range_lock_min_hz,
             range_lock_max_hz,
+            min_tone_purity,
             stdin_control,
         } => {
             let cfg = streaming::DecoderConfig {
@@ -368,6 +378,7 @@ fn main() -> Result<()> {
                 experimental_range_lock,
                 range_lock_min_hz,
                 range_lock_max_hz,
+                min_tone_purity,
             };
             run_stream_file(&path, chunk_ms, realtime, quiet, json, cfg, stdin_control)
         }
@@ -437,6 +448,7 @@ fn main() -> Result<()> {
                 experimental_range_lock: false,
                 range_lock_min_hz: streaming::DEFAULT_RANGE_LOCK_MIN_HZ,
                 range_lock_max_hz: streaming::DEFAULT_RANGE_LOCK_MAX_HZ,
+                min_tone_purity: streaming::DEFAULT_MIN_TONE_PURITY,
             };
             let harvest_cfg = harvest::HarvestConfig {
                 window_seconds: window,
@@ -475,6 +487,7 @@ fn main() -> Result<()> {
             experimental_range_lock,
             range_lock_min_hz,
             range_lock_max_hz,
+            min_tone_purity,
             record,
             stdin_control,
         } => {
@@ -486,6 +499,7 @@ fn main() -> Result<()> {
                 experimental_range_lock,
                 range_lock_min_hz,
                 range_lock_max_hz,
+                min_tone_purity,
             };
             run_stream_live(
                 device.as_deref(),
@@ -986,7 +1000,7 @@ fn run_stream_file(
                         last_wpm = Some(wpm);
                     }
                 }
-                streaming::StreamEvent::Char { ch, morse, pitch_hz } => {
+                streaming::StreamEvent::Char { ch, morse, pitch_hz, .. } => {
                     transcript.push(ch);
                     if !quiet {
                         let pitch_suffix = pitch_hz
@@ -1004,7 +1018,7 @@ fn run_stream_file(
                         println!("[t={:>6.2}s real+{:>4}ms] WORD  break", t_in_audio, lag_ms);
                     }
                 }
-                streaming::StreamEvent::Garbled { morse, pitch_hz } => {
+                streaming::StreamEvent::Garbled { morse, pitch_hz, .. } => {
                     transcript.push('?');
                     if !quiet {
                         let pitch_suffix = pitch_hz
@@ -1758,7 +1772,7 @@ fn run_stream_live(
                         last_wpm = Some(wpm);
                     }
                 }
-                streaming::StreamEvent::Char { ch, morse, pitch_hz } => {
+                streaming::StreamEvent::Char { ch, morse, pitch_hz, .. } => {
                     transcript.push(ch);
                     let pitch_suffix = pitch_hz
                         .map(|hz| format!("  @{:>6.1} Hz", hz))
@@ -1771,7 +1785,7 @@ fn run_stream_live(
                     transcript.push(' ');
                     println!("[t={t:>6.2}s] WORD  break");
                 }
-                streaming::StreamEvent::Garbled { morse, pitch_hz } => {
+                streaming::StreamEvent::Garbled { morse, pitch_hz, .. } => {
                     transcript.push('?');
                     let pitch_suffix = pitch_hz
                         .map(|hz| format!("  @{:>6.1} Hz", hz))
@@ -1869,6 +1883,9 @@ fn spawn_stdin_config_channel(
             }
             if let Some(x) = v.get("range_lock_max_hz").and_then(|x| x.as_f64()) {
                 state.range_lock_max_hz = x as f32;
+            }
+            if let Some(x) = v.get("min_tone_purity").and_then(|x| x.as_f64()) {
+                state.min_tone_purity = x as f32;
             }
             if tx.send(state).is_err() {
                 break;
