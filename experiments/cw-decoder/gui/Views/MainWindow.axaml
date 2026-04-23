@@ -89,9 +89,12 @@
     <Border Grid.Row="1" Padding="18,12" Background="{StaticResource BgDeep}" BorderBrush="{StaticResource GridLine}" BorderThickness="0,0,0,1">
       <Grid ColumnDefinitions="Auto,Auto,*,Auto,Auto,Auto,Auto,Auto,Auto" ColumnSpacing="12">
         <StackPanel Orientation="Vertical" Spacing="2">
-          <TextBlock Text="INPUT DEVICE" Classes="label" />
+          <TextBlock Text="{Binding DeviceListLabel}" Classes="label" />
           <ComboBox Width="320" ItemsSource="{Binding Devices}" SelectedItem="{Binding SelectedDevice}"
                     Background="{StaticResource BgPanel}" Foreground="{StaticResource TextHi}" />
+          <CheckBox Content="LOOPBACK (capture from output)" IsChecked="{Binding UseLoopback, Mode=TwoWay}"
+                    Foreground="{StaticResource TextHi}"
+                    ToolTip.Tip="Capture from a system OUTPUT device in WASAPI loopback mode instead of a microphone. Bypasses speaker→room→mic — recommended for decoding files / YouTube being played on this machine." />
         </StackPanel>
         <StackPanel Grid.Column="1" Orientation="Vertical" Spacing="2">
           <TextBlock Text="DECODER MODE" Classes="label" />
@@ -200,7 +203,7 @@
             <TextBlock Grid.Column="6" Text="{Binding RangeLockSummary}" Classes="label" TextWrapping="Wrap" VerticalAlignment="Center" />
           </Grid>
 
-          <Grid ColumnDefinitions="Auto,Auto,Auto,Auto,*" ColumnSpacing="10">
+          <Grid ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,*" ColumnSpacing="10">
             <TextBlock Text="ACQUISITION" Classes="label" VerticalAlignment="Center" />
             <StackPanel Grid.Column="1" Spacing="2"
                         ToolTip.Tip="Force the streaming decoder to lock to this exact pitch in Hz instead of running auto-acquisition. 0 = auto. Useful when you know the target tone or when speaker→mic round-trip distorts pitch acquisition.">
@@ -211,6 +214,11 @@
                         ToolTip.Tip="Wide-bin sniff: side bins per side added to the target Goertzel. 0 = single 40 Hz bin. N=2 ≈ 200 Hz of bandwidth — recovers signals smeared across many bins (e.g. acoustically re-captured CW from speakers).">
               <TextBlock Text="WIDE BINS" Classes="label" />
               <NumericUpDown Minimum="0" Maximum="8" Increment="1" Value="{Binding WideBinCount, Mode=TwoWay}" />
+            </StackPanel>
+            <StackPanel Grid.Column="3" Spacing="2"
+                        ToolTip.Tip="Drop on-runs shorter than this fraction of one estimated dot length. 0 disables. 0.3 is a good mic-mode value to suppress constant-noise ghost characters in silent stretches without killing real fast-keyed dits.">
+              <TextBlock Text="MIN PULSE (×dot)" Classes="label" />
+              <NumericUpDown Minimum="0" Maximum="1" Increment="0.05" Value="{Binding MinPulseDotFraction, Mode=TwoWay}" FormatString="0.00" />
             </StackPanel>
           </Grid>
         </StackPanel>

@@ -33,8 +33,15 @@ internal sealed class CwDecoderProcess : IDisposable
     /// <summary>List input devices via the Rust binary.</summary>
     public static string[] ListDevices()
     {
+        var (inputs, _) = ListAllDevices();
+        return inputs;
+    }
+
+    /// Returns (inputs, outputs). Outputs are usable as --loopback targets.
+    public static (string[] Inputs, string[] Outputs) ListAllDevices()
+    {
         var exe = LocateBinary();
-        if (exe is null) return Array.Empty<string>();
+        if (exe is null) return (Array.Empty<string>(), Array.Empty<string>());
         try
         {
             var psi = new ProcessStartInfo(exe, "devices")
@@ -44,21 +51,40 @@ internal sealed class CwDecoderProcess : IDisposable
                 CreateNoWindow = true,
             };
             using var p = Process.Start(psi);
-            if (p is null) return Array.Empty<string>();
-            var lines = p.StandardOutput.ReadToEnd().Split('\n', StringSplitOptions.RemoveEmptyEntries);
+            if (p is null) return (Array.Empty<string>(), Array.Empty<string>());
+            var text = p.StandardOutput.ReadToEnd();
             p.WaitForExit(3000);
-            var result = new System.Collections.Generic.List<string>();
+            var lines = text.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+            var inputs = new System.Collections.Generic.List<string>();
+            var outputs = new System.Collections.Generic.List<string>();
+            int section = 0; // 0 = none, 1 = inputs, 2 = outputs
             foreach (var raw in lines)
             {
-                var line = raw.TrimEnd('\r').TrimStart();
-                if (line.StartsWith("- ")) result.Add(line[2..].Trim());
+                var line = raw.TrimEnd('\r');
+                var trimmed = line.TrimStart();
+                if (trimmed.StartsWith("Input devices", StringComparison.OrdinalIgnoreCase))
+                {
+                    section = 1;
+                    continue;
+                }
+                if (trimmed.StartsWith("Output devices", StringComparison.OrdinalIgnoreCase))
+                {
+                    section = 2;
+                    continue;
+                }
+                if (trimmed.StartsWith("- "))
+                {
+                    var name = trimmed[2..].Trim();
+                    if (section == 1) inputs.Add(name);
+                    else if (section == 2) outputs.Add(name);
+                }
             }
-            return result.ToArray();
+            return (inputs.ToArray(), outputs.ToArray());
         }
-        catch { return Array.Empty<string>(); }
+        catch { return (Array.Empty<string>(), Array.Empty<string>()); }
     }
 
-    public void StartLive(string? device, DecoderConfig cfg, BaselineDecoderConfig baselineCfg, bool useBaseline, string? recordPath = null)
+    public void StartLive(string? device, DecoderConfig cfg, BaselineDecoderConfig baselineCfg, bool useBaseline, string? recordPath = null, bool loopback = false)
     {
         Stop();
         // Live baseline mirrors the offline replay configuration: large
@@ -76,6 +102,9 @@ internal sealed class CwDecoderProcess : IDisposable
             : $"stream-live --json --stdin-control {cfg.ToCliArgs()}";
         if (!string.IsNullOrWhiteSpace(device)) args += $" --device \"{device}\"";
         if (!string.IsNullOrWhiteSpace(recordPath)) args += $" --record \"{recordPath}\"";
+        // Loopback only applies to the custom streaming decoder (the
+        // ditdah baseline path doesn't accept --loopback today).
+        if (loopback && !useBaseline) args += " --loopback";
         Spawn(args);
     }
 

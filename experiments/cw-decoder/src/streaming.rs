@@ -160,6 +160,15 @@ pub struct DecoderConfig {
     /// Each extra side bin also lifts the noise floor slightly, so this
     /// trades selectivity for keying stability.
     pub wide_bin_count: u8,
+    /// Drop on-runs shorter than this fraction of the estimated dot
+    /// length (e.g. 0.3 → ignore pulses shorter than 30 % of one dit).
+    /// 0 = disabled. Mic recordings have a constant low-level wiggle
+    /// that crosses threshold for ~1–5 ms at a time, producing ghost
+    /// "E"/"I" characters in silent stretches; legitimate dits are 40–
+    /// 100 ms even at 30 WPM, so a fractional gate kills the ghosts
+    /// without touching real keying. Mirrors the "min_pulse" advice
+    /// from the field-mic review.
+    pub min_pulse_dot_fraction: f32,
 }
 
 impl DecoderConfig {
@@ -175,6 +184,7 @@ impl DecoderConfig {
             min_tone_purity: DEFAULT_MIN_TONE_PURITY,
             force_pitch_hz: None,
             wide_bin_count: 0,
+            min_pulse_dot_fraction: 0.0,
         }
     }
     /// Convert min_snr_db → linear power ratio for the inner gate.
@@ -1001,6 +1011,9 @@ struct Decoder {
     /// operator intervention.
     auto_threshold: bool,
 
+    /// Drop on-runs shorter than this fraction of the dot length. 0 disables.
+    min_pulse_dot_fraction: f32,
+
     is_on: bool,
     current_run: usize,
     have_first_sample: bool,
@@ -1042,6 +1055,7 @@ impl Decoder {
             threshold_dirty_count: 0,
             threshold_scale: DEFAULT_THRESHOLD_SCALE,
             auto_threshold: true,
+            min_pulse_dot_fraction: 0.0,
             is_on: false,
             current_run: 0,
             have_first_sample: false,
@@ -1203,6 +1217,19 @@ impl Decoder {
             _ => return,
         };
         let len_norm = ivl.len as f32 / dot;
+        // Min-pulse gate: drop an *on*-run that is shorter than the
+        // configured fraction of the dot length. This is the field-mic
+        // ghost-character fix — a constant low-level wiggle that crosses
+        // threshold for a few ms otherwise gets classified as a dit and
+        // produces "E"/"I" runs in silent stretches. We deliberately
+        // do NOT touch off-runs here: short gaps inside a letter are
+        // already handled by `LETTER_SPACE_BOUNDARY`.
+        if ivl.is_on
+            && self.min_pulse_dot_fraction > 0.0
+            && len_norm < self.min_pulse_dot_fraction
+        {
+            return;
+        }
         // Feed the rhythm gate first so it always sees every interval.
         self.rhythm.push(ivl, dot);
         if ivl.is_on {
@@ -1503,6 +1530,7 @@ impl StreamingDecoder {
         self.config = cfg;
         self.decoder.threshold_scale = cfg.threshold_scale;
         self.decoder.auto_threshold = cfg.auto_threshold;
+        self.decoder.min_pulse_dot_fraction = cfg.min_pulse_dot_fraction.max(0.0);
         // If the operator changed (or cleared) the forced pitch, drop the
         // current lock so the next `feed` re-acquires under the new
         // policy. Otherwise we'd be stuck on a stale frequency.
@@ -1683,6 +1711,7 @@ impl StreamingDecoder {
         self.decoder = Decoder::new(power_rate);
         self.decoder.threshold_scale = self.config.threshold_scale;
         self.decoder.auto_threshold = self.config.auto_threshold;
+        self.decoder.min_pulse_dot_fraction = self.config.min_pulse_dot_fraction.max(0.0);
     }
 
     fn try_acquire_pitch_lock(&mut self, events: &mut Vec<StreamEvent>) {
@@ -2489,6 +2518,103 @@ mod wide_bin_sniff_tests {
         assert!(
             wide >= 3,
             "wide-bin sniff should recover at least a few drifting chars (got {wide})"
+        );
+    }
+}
+
+#[cfg(test)]
+mod min_pulse_filter_tests {
+    use super::*;
+    use super::trial_decode_tests::synth_paris;
+
+    fn lcg(seed: u32, n: usize, amp: f32) -> Vec<f32> {
+        let mut s = seed;
+        (0..n)
+            .map(|_| {
+                s = s.wrapping_mul(1664525).wrapping_add(1013904223);
+                ((s >> 8) as f32 / (1u32 << 24) as f32 - 0.5) * 2.0 * amp
+            })
+            .collect()
+    }
+
+    fn count_chars(audio: &[f32], sr: u32, min_pulse_dot_fraction: f32) -> usize {
+        let mut dec = StreamingDecoder::new(sr).expect("decoder");
+        let mut cfg = DecoderConfig::defaults();
+        cfg.min_tone_purity = 0.0;
+        cfg.min_pulse_dot_fraction = min_pulse_dot_fraction;
+        dec.set_config(cfg);
+        let mut chars = 0usize;
+        for c in audio.chunks((sr / 10) as usize) {
+            for ev in dec.feed(c).unwrap_or_default() {
+                if matches!(ev, StreamEvent::Char { .. }) {
+                    chars += 1;
+                }
+            }
+        }
+        for ev in dec.flush() {
+            if matches!(ev, StreamEvent::Char { .. }) {
+                chars += 1;
+            }
+        }
+        chars
+    }
+
+    #[test]
+    fn min_pulse_filter_does_not_regress_clean_cw() {
+        // Real CW dits should sit at len_norm ~= 1.0; a 0.3 cutoff
+        // must not drop them.
+        let sr = 12000u32;
+        let audio = synth_paris(sr, 700.0, 18.0, 6.0);
+        let baseline = count_chars(&audio, sr, 0.0);
+        let gated = count_chars(&audio, sr, 0.3);
+        assert!(baseline >= 5, "baseline should decode PARIS (got {baseline})");
+        assert!(
+            gated as i32 >= baseline as i32 - 1,
+            "min-pulse gate must not drop more than one clean character \
+             (baseline={baseline}, gated={gated})"
+        );
+    }
+
+    #[test]
+    fn min_pulse_filter_suppresses_short_blips_in_silence() {
+        // Construct: pure silence with a few sub-dot-length tone blips
+        // sprinkled in. Without the gate the streaming decoder would
+        // happily turn each one into an "E".
+        let sr = 12000u32;
+        let dot_s = 1.2 / 18.0_f32;
+        // 60% of dot length — well above the threshold/Goertzel detect
+        // floor, but should be filtered at fraction=0.85.
+        let blip_n = (sr as f32 * dot_s * 0.6) as usize;
+        let gap_n = (sr as f32 * dot_s * 8.0) as usize;
+        let mut audio: Vec<f32> = Vec::new();
+        // Lead-in noise so pitch lock can warm up on a real-ish backdrop.
+        audio.extend(lcg(0xCAFE, sr as usize * 2, 0.005));
+        // Add a stretch of clean CW first so the decoder has a real
+        // dot-length estimate to compare blips against.
+        audio.extend(synth_paris(sr, 700.0, 18.0, 4.0));
+        // Then silence punctuated by short blips.
+        for k in 0..6 {
+            audio.extend(lcg(0xBEEF + k, gap_n, 0.005));
+            let phase_step = std::f32::consts::TAU * 700.0 / sr as f32;
+            let mut phase = 0.0f32;
+            for _ in 0..blip_n {
+                phase += phase_step;
+                audio.push(0.4 * phase.sin());
+            }
+        }
+        let chars_ungated = count_chars(&audio, sr, 0.0);
+        let chars_gated = count_chars(&audio, sr, 0.85);
+        assert!(
+            chars_gated <= chars_ungated,
+            "min-pulse gate must not introduce new chars \
+             (ungated={chars_ungated}, gated={chars_gated})"
+        );
+        // At fraction=0.5, the 30% blips must be suppressed entirely
+        // relative to the ungated case.
+        assert!(
+            chars_ungated > chars_gated,
+            "expected at least one short blip to be filtered out \
+             (ungated={chars_ungated}, gated={chars_gated})"
         );
     }
 }

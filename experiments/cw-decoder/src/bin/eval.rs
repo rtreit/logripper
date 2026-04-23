@@ -1125,6 +1125,9 @@ fn parse_streaming_decoder_config(args: &[String]) -> DecoderConfig {
         wide_bin_count: arg_value_f32(args, "--wide-bin-count")
             .map(|x| x.clamp(0.0, 16.0) as u8)
             .unwrap_or(0),
+        min_pulse_dot_fraction: arg_value_f32(args, "--min-pulse-dot-fraction")
+            .map(|x| x.max(0.0))
+            .unwrap_or(0.0),
     }
 }
 

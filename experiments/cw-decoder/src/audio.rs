@@ -504,3 +504,123 @@ pub fn list_input_devices() -> Result<Vec<String>> {
     }
     Ok(names)
 }
+
+/// Enumerate output (playback) devices. On WASAPI (Windows), each of these
+/// can be opened in *loopback* mode via `open_loopback_with_recording` to
+/// capture whatever is currently playing without any third-party software.
+pub fn list_output_devices() -> Result<Vec<String>> {
+    let host = cpal::default_host();
+    let mut names = Vec::new();
+    for d in host.output_devices()? {
+        if let Ok(n) = d.name() {
+            names.push(n);
+        }
+    }
+    Ok(names)
+}
+
+/// WASAPI loopback capture: opens an *output* device but reads from it as
+/// an input stream. cpal handles the WASAPI loopback flag automatically
+/// when `build_input_stream` is called on a device returned from
+/// `output_devices()`. Mirrors the API of `open_input_with_recording` so
+/// callers can swap the two without any other changes.
+pub fn open_loopback_with_recording(
+    query: Option<&str>,
+    window_seconds: f32,
+    record_to: Option<&Path>,
+) -> Result<LiveCapture> {
+    let host = cpal::default_host();
+
+    let device = if let Some(q) = query {
+        let q_lower = q.to_lowercase();
+        host.output_devices()?
+            .find(|d| {
+                d.name()
+                    .map(|n| n.to_lowercase().contains(&q_lower))
+                    .unwrap_or(false)
+            })
+            .ok_or_else(|| anyhow!("no output (loopback) device matching {q:?}"))?
+    } else {
+        host.default_output_device()
+            .ok_or_else(|| anyhow!("no default output device for loopback"))?
+    };
+
+    // For loopback we must use the *output* config so the format matches
+    // what's actually playing. WASAPI then hands us those frames as an
+    // input stream.
+    let config = device.default_output_config().context("output config")?;
+    let device_name = format!("{} (loopback)", device.name().unwrap_or_else(|_| "<unknown>".to_string()));
+    let sample_rate = config.sample_rate().0;
+    let channels = config.channels() as usize;
+    let capacity = ((sample_rate as f32 * window_seconds) as usize).max(1);
+    let buffer = Arc::new(Mutex::new(RingBuffer::new(capacity)));
+
+    let (recorder, record_path) = if let Some(path) = record_to {
+        if let Some(parent) = path.parent() {
+            if !parent.as_os_str().is_empty() {
+                std::fs::create_dir_all(parent).ok();
+            }
+        }
+        let spec = hound::WavSpec {
+            channels: 1,
+            sample_rate,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let writer = hound::WavWriter::create(path, spec)
+            .with_context(|| format!("creating WAV file {}", path.display()))?;
+        (
+            Some(Arc::new(StdMutex::new(Some(writer)))),
+            Some(path.to_path_buf()),
+        )
+    } else {
+        (None, None)
+    };
+
+    let err_fn = |e| eprintln!("cpal loopback stream error: {e}");
+    let buffer_cb = Arc::clone(&buffer);
+    let recorder_cb = recorder.clone();
+
+    let stream = match config.sample_format() {
+        cpal::SampleFormat::F32 => device.build_input_stream(
+            &config.into(),
+            move |data: &[f32], _| {
+                push_mono(&buffer_cb, data, channels, recorder_cb.as_ref());
+            },
+            err_fn,
+            None,
+        )?,
+        cpal::SampleFormat::I16 => device.build_input_stream(
+            &config.into(),
+            move |data: &[i16], _| {
+                let f: Vec<f32> = data.iter().map(|s| *s as f32 / i16::MAX as f32).collect();
+                push_mono(&buffer_cb, &f, channels, recorder_cb.as_ref());
+            },
+            err_fn,
+            None,
+        )?,
+        cpal::SampleFormat::U16 => device.build_input_stream(
+            &config.into(),
+            move |data: &[u16], _| {
+                let f: Vec<f32> = data
+                    .iter()
+                    .map(|s| (*s as f32 - 32768.0) / 32768.0)
+                    .collect();
+                push_mono(&buffer_cb, &f, channels, recorder_cb.as_ref());
+            },
+            err_fn,
+            None,
+        )?,
+        other => return Err(anyhow!("unsupported loopback sample format: {other:?}")),
+    };
+    stream.play().context("starting loopback stream")?;
+
+    Ok(LiveCapture {
+        sample_rate,
+        device_name,
+        buffer,
+        _stream: stream,
+        recorder,
+        record_path,
+    })
+}

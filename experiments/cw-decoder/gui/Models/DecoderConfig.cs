@@ -18,7 +18,8 @@ public readonly record struct DecoderConfig(
     double RangeLockMaxHz,
     double MinTonePurity,
     double ForcePitchHz,
-    int WideBinCount)
+    int WideBinCount,
+    double MinPulseDotFraction)
 {
     public const double DefaultMinSnrDb = 3.0;
     public const double DefaultPitchMinSnrDb = 6.0;
@@ -46,6 +47,13 @@ public readonly record struct DecoderConfig(
     /// smeared across many bins.
     /// </summary>
     public const int DefaultWideBinCount = 0;
+    /// <summary>
+    /// Drop on-runs shorter than this fraction of one estimated dot
+    /// length. 0 = disabled. 0.3 is a good mic-mode value to suppress
+    /// constant-noise ghost characters in silent stretches without
+    /// killing real fast-keyed dits.
+    /// </summary>
+    public const double DefaultMinPulseDotFraction = 0.0;
 
     public static DecoderConfig Defaults => new(
         DefaultMinSnrDb,
@@ -57,7 +65,8 @@ public readonly record struct DecoderConfig(
         DefaultRangeLockMaxHz,
         DefaultMinTonePurity,
         DefaultForcePitchHz,
-        DefaultWideBinCount);
+        DefaultWideBinCount,
+        DefaultMinPulseDotFraction);
 
     /// <summary>
     /// Render as CLI arguments for spawning the decoder with these initial
@@ -84,6 +93,10 @@ public readonly record struct DecoderConfig(
         if (WideBinCount > 0)
         {
             args += $" --wide-bin-count {WideBinCount.ToString(ic)}";
+        }
+        if (MinPulseDotFraction > 0.0)
+        {
+            args += $" --min-pulse-dot-fraction {MinPulseDotFraction.ToString(ic)}";
         }
         return args;
     }
@@ -112,6 +125,8 @@ public readonly record struct DecoderConfig(
              + (ForcePitchHz > 0.0 ? ForcePitchHz.ToString(ic) : "null")
              + ",\"wide_bin_count\":"
              + WideBinCount.ToString(ic)
+             + ",\"min_pulse_dot_fraction\":"
+             + MinPulseDotFraction.ToString(ic)
              + "}";
     }
 }

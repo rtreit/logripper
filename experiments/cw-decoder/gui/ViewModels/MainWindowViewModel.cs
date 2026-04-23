@@ -34,7 +34,10 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
 
     public MainWindowViewModel()
     {
-        Devices = new ObservableCollection<string>(CwDecoderProcess.ListDevices());
+        var devs = CwDecoderProcess.ListAllDevices();
+        _inputDevices = devs.Inputs;
+        _outputDevices = devs.Outputs;
+        Devices = new ObservableCollection<string>(_inputDevices);
         DecoderModes = new ObservableCollection<string>(new[] { CustomDecoderModeLabel, BaselineDecoderModeLabel });
         SelectedDevice = Devices.Count > 0 ? Devices[0] : null;
         SelectedDecoderMode = DecoderModes[0];
@@ -80,6 +83,33 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
 
     private string? _selectedDevice;
     public string? SelectedDevice { get => _selectedDevice; set => Set(ref _selectedDevice, value); }
+
+    private string[] _inputDevices = Array.Empty<string>();
+    private string[] _outputDevices = Array.Empty<string>();
+
+    private bool _useLoopback;
+    /// <summary>
+    /// When true, the live capture button opens a system OUTPUT device in
+    /// WASAPI loopback mode and the device dropdown is repopulated with
+    /// playback devices. Bypasses the speaker→room→mic chain entirely
+    /// for decoding YouTube / file playback.
+    /// </summary>
+    public bool UseLoopback
+    {
+        get => _useLoopback;
+        set
+        {
+            if (Set(ref _useLoopback, value))
+            {
+                Devices.Clear();
+                foreach (var d in (value ? _outputDevices : _inputDevices)) Devices.Add(d);
+                SelectedDevice = Devices.Count > 0 ? Devices[0] : null;
+                OnPropertyChanged(nameof(DeviceListLabel));
+            }
+        }
+    }
+
+    public string DeviceListLabel => _useLoopback ? "OUTPUT (loopback)" : "INPUT (mic)";
 
     private string _selectedDecoderMode = CustomDecoderModeLabel;
     public string SelectedDecoderMode
@@ -484,6 +514,25 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
         {
             var clamped = value < 0 ? 0 : (value > 8 ? 8 : value);
             if (Set(ref _wideBinCount, clamped))
+            {
+                PushConfig();
+            }
+        }
+    }
+
+    private double _minPulseDotFraction = DecoderConfig.DefaultMinPulseDotFraction;
+    /// <summary>
+    /// Drop on-runs shorter than this fraction of one estimated dot
+    /// length. 0 disables. 0.3 is a good mic-mode value to suppress
+    /// constant-noise ghost characters in silent stretches.
+    /// </summary>
+    public double MinPulseDotFraction
+    {
+        get => _minPulseDotFraction;
+        set
+        {
+            var clamped = value < 0.0 ? 0.0 : (value > 1.0 ? 1.0 : value);
+            if (Set(ref _minPulseDotFraction, clamped))
             {
                 PushConfig();
             }
@@ -953,6 +1002,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
         MinTonePurity = DecoderConfig.DefaultMinTonePurity;
         ForcePitchHz = DecoderConfig.DefaultForcePitchHz;
         WideBinCount = DecoderConfig.DefaultWideBinCount;
+        MinPulseDotFraction = DecoderConfig.DefaultMinPulseDotFraction;
     }
 
     private DecoderConfig CurrentConfig() => new(
@@ -965,7 +1015,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
         Math.Max(RangeLockMinHz, RangeLockMaxHz),
         Math.Max(0.0, MinTonePurity),
         Math.Max(0.0, ForcePitchHz),
-        Math.Max(0, WideBinCount));
+        Math.Max(0, WideBinCount),
+        Math.Max(0.0, MinPulseDotFraction));
     private BaselineDecoderConfig CurrentBaselineConfig() => new(
         WindowSeconds: LabelEvalWindowSeconds,
         MinWindowSeconds: LabelEvalMinWindowSeconds,
@@ -1040,7 +1091,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
         ReplayStatus = null;
         ReplayCer = null;
 
-        _process.StartLive(SelectedDevice, CurrentConfig(), CurrentBaselineConfig(), IsBaselineDecoderMode, recordPath);
+        _process.StartLive(SelectedDevice, CurrentConfig(), CurrentBaselineConfig(), IsBaselineDecoderMode, recordPath, UseLoopback);
         IsRunning = true;
     }
 
@@ -1687,9 +1738,11 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
 
     public void RefreshDevices()
     {
-        var fresh = CwDecoderProcess.ListDevices();
+        var fresh = CwDecoderProcess.ListAllDevices();
+        _inputDevices = fresh.Inputs;
+        _outputDevices = fresh.Outputs;
         Devices.Clear();
-        foreach (var d in fresh) Devices.Add(d);
+        foreach (var d in (UseLoopback ? _outputDevices : _inputDevices)) Devices.Add(d);
         if (SelectedDevice is null && Devices.Count > 0) SelectedDevice = Devices[0];
     }
 

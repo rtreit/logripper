@@ -116,6 +116,11 @@ enum Cmd {
         /// frequency response smears the tone across many bins.
         #[arg(long, default_value_t = 0)]
         wide_bin_count: u8,
+        /// Drop on-runs shorter than this fraction of one dot length.
+        /// 0 = disabled. 0.3 suppresses ghost characters in silent
+        /// stretches (constant low-level noise crossing threshold).
+        #[arg(long, default_value_t = 0.0)]
+        min_pulse_dot_fraction: f32,
         /// Read NDJSON config-update lines from stdin while streaming.
         /// Each line: {"type":"config","min_snr_db":...,"pitch_min_snr_db":...,"threshold_scale":...}
         #[arg(long)]
@@ -315,6 +320,11 @@ enum Cmd {
         /// Wide-bin sniff side count (0=off). See StreamFile docs.
         #[arg(long, default_value_t = 0)]
         wide_bin_count: u8,
+        /// Drop on-runs shorter than this fraction of one dot length.
+        /// 0 = disabled. 0.3 is a good mic-mode default to suppress
+        /// constant-noise ghost characters in silent stretches.
+        #[arg(long, default_value_t = 0.0)]
+        min_pulse_dot_fraction: f32,
         /// Optional WAV path to mirror raw mono samples to (16-bit PCM at the
         /// device's native sample rate). Useful for post-stop offline analysis.
         #[arg(long)]
@@ -322,6 +332,13 @@ enum Cmd {
         /// Read NDJSON config-update lines from stdin while streaming.
         #[arg(long)]
         stdin_control: bool,
+        /// Capture from a system OUTPUT device in WASAPI loopback mode
+        /// instead of an input device. With this set, `--device` matches
+        /// against output-device names. Bypasses the speaker→room→mic
+        /// chain entirely — recommended for decoding YouTube / file
+        /// playback. Windows-only (WASAPI host).
+        #[arg(long)]
+        loopback: bool,
     },
     /// Diagnostic: scan candidate pitches across an audio file and print
     /// the trial-decode Fisher score per pitch. Use this to compare
@@ -370,6 +387,14 @@ fn main() -> Result<()> {
                     println!("  - {n}");
                 }
             }
+            let outs = audio::list_output_devices().context("listing output devices")?;
+            if !outs.is_empty() {
+                println!();
+                println!("Output devices (usable as --loopback for stream-live):");
+                for n in outs {
+                    println!("  - {n}");
+                }
+            }
             Ok(())
         }
         Cmd::Live { device, window } => {
@@ -393,6 +418,7 @@ fn main() -> Result<()> {
             min_tone_purity,
             force_pitch_hz,
             wide_bin_count,
+            min_pulse_dot_fraction,
             stdin_control,
         } => {
             let cfg = streaming::DecoderConfig {
@@ -406,6 +432,7 @@ fn main() -> Result<()> {
                 min_tone_purity,
                 force_pitch_hz: (force_pitch_hz > 0.0).then_some(force_pitch_hz),
                 wide_bin_count,
+                min_pulse_dot_fraction,
             };
             run_stream_file(&path, chunk_ms, realtime, quiet, json, cfg, stdin_control)
         }
@@ -478,6 +505,7 @@ fn main() -> Result<()> {
                 min_tone_purity: streaming::DEFAULT_MIN_TONE_PURITY,
                 force_pitch_hz: None,
                 wide_bin_count: 0,
+                min_pulse_dot_fraction: 0.0,
             };
             let harvest_cfg = harvest::HarvestConfig {
                 window_seconds: window,
@@ -519,8 +547,10 @@ fn main() -> Result<()> {
             min_tone_purity,
             force_pitch_hz,
             wide_bin_count,
+            min_pulse_dot_fraction,
             record,
             stdin_control,
+            loopback,
         } => {
             let cfg = streaming::DecoderConfig {
                 min_snr_db,
@@ -533,6 +563,7 @@ fn main() -> Result<()> {
                 min_tone_purity,
                 force_pitch_hz: (force_pitch_hz > 0.0).then_some(force_pitch_hz),
                 wide_bin_count,
+                min_pulse_dot_fraction,
             };
             run_stream_live(
                 device.as_deref(),
@@ -541,6 +572,7 @@ fn main() -> Result<()> {
                 cfg,
                 record.as_deref(),
                 stdin_control,
+                loopback,
             )
         }
         Cmd::ProbeFisher {
@@ -1658,12 +1690,17 @@ fn run_stream_live(
     cfg: streaming::DecoderConfig,
     record_path: Option<&std::path::Path>,
     stdin_control: bool,
+    loopback: bool,
 ) -> Result<()> {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
     use std::time::{Duration, Instant};
 
-    let capture = audio::open_input_with_recording(device, 1.0, record_path)?;
+    let capture = if loopback {
+        audio::open_loopback_with_recording(device, 1.0, record_path)?
+    } else {
+        audio::open_input_with_recording(device, 1.0, record_path)?
+    };
     let mut decoder = streaming::StreamingDecoder::new(capture.sample_rate)?;
     decoder.set_config(cfg);
 
@@ -1928,6 +1965,9 @@ fn spawn_stdin_config_channel(
             }
             if let Some(x) = v.get("wide_bin_count").and_then(|x| x.as_i64()) {
                 state.wide_bin_count = x.clamp(0, 16) as u8;
+            }
+            if let Some(x) = v.get("min_pulse_dot_fraction").and_then(|x| x.as_f64()) {
+                state.min_pulse_dot_fraction = x.max(0.0) as f32;
             }
             if tx.send(state).is_err() {
                 break;
