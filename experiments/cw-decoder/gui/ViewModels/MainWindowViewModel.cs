@@ -115,6 +115,13 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
     private bool _hideDecoded;
     public bool HideDecoded { get => _hideDecoded; set => Set(ref _hideDecoded, value); }
 
+    private bool _showCharacterToneOverlay;
+    public bool ShowCharacterToneOverlay
+    {
+        get => _showCharacterToneOverlay;
+        set => Set(ref _showCharacterToneOverlay, value);
+    }
+
     private double _wpm;
     public double Wpm { get => _wpm; set => Set(ref _wpm, value); }
 
@@ -1658,7 +1665,10 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
             case "char":
                 if (!string.IsNullOrEmpty(ev.Ch))
                 {
-                    Cells.Add(TranscriptCell.Char(ev.Ch!, string.IsNullOrEmpty(ev.Morse) ? " " : ev.Morse!));
+                    Cells.Add(TranscriptCell.Char(
+                        ev.Ch!,
+                        string.IsNullOrEmpty(ev.Morse) ? " " : ev.Morse!,
+                        ev.Hz));
                     _liveTranscriptBuilder.Append(ev.Ch);
                 }
                 break;

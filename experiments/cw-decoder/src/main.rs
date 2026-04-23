@@ -986,12 +986,15 @@ fn run_stream_file(
                         last_wpm = Some(wpm);
                     }
                 }
-                streaming::StreamEvent::Char { ch, morse } => {
+                streaming::StreamEvent::Char { ch, morse, pitch_hz } => {
                     transcript.push(ch);
                     if !quiet {
+                        let pitch_suffix = pitch_hz
+                            .map(|hz| format!("  @{:>6.1} Hz", hz))
+                            .unwrap_or_default();
                         println!(
-                            "[t={:>6.2}s real+{:>4}ms] CHAR  '{}' ({:>5})  transcript: {}",
-                            t_in_audio, lag_ms, ch, morse, transcript
+                            "[t={:>6.2}s real+{:>4}ms] CHAR  '{}' ({:>5}){}  transcript: {}",
+                            t_in_audio, lag_ms, ch, morse, pitch_suffix, transcript
                         );
                     }
                 }
@@ -1001,12 +1004,15 @@ fn run_stream_file(
                         println!("[t={:>6.2}s real+{:>4}ms] WORD  break", t_in_audio, lag_ms);
                     }
                 }
-                streaming::StreamEvent::Garbled { morse } => {
+                streaming::StreamEvent::Garbled { morse, pitch_hz } => {
                     transcript.push('?');
                     if !quiet {
+                        let pitch_suffix = pitch_hz
+                            .map(|hz| format!("  @{:>6.1} Hz", hz))
+                            .unwrap_or_default();
                         println!(
-                            "[t={:>6.2}s real+{:>4}ms] ???  garbled morse: {}",
-                            t_in_audio, lag_ms, morse
+                            "[t={:>6.2}s real+{:>4}ms] ???  garbled morse: {}{}",
+                            t_in_audio, lag_ms, morse, pitch_suffix
                         );
                     }
                 }
@@ -1752,17 +1758,25 @@ fn run_stream_live(
                         last_wpm = Some(wpm);
                     }
                 }
-                streaming::StreamEvent::Char { ch, morse } => {
+                streaming::StreamEvent::Char { ch, morse, pitch_hz } => {
                     transcript.push(ch);
-                    println!("[t={t:>6.2}s] CHAR  '{ch}' ({morse})  transcript: {transcript}");
+                    let pitch_suffix = pitch_hz
+                        .map(|hz| format!("  @{:>6.1} Hz", hz))
+                        .unwrap_or_default();
+                    println!(
+                        "[t={t:>6.2}s] CHAR  '{ch}' ({morse}){pitch_suffix}  transcript: {transcript}"
+                    );
                 }
                 streaming::StreamEvent::Word => {
                     transcript.push(' ');
                     println!("[t={t:>6.2}s] WORD  break");
                 }
-                streaming::StreamEvent::Garbled { morse } => {
+                streaming::StreamEvent::Garbled { morse, pitch_hz } => {
                     transcript.push('?');
-                    println!("[t={t:>6.2}s] ???  garbled morse: {morse}");
+                    let pitch_suffix = pitch_hz
+                        .map(|hz| format!("  @{:>6.1} Hz", hz))
+                        .unwrap_or_default();
+                    println!("[t={t:>6.2}s] ???  garbled morse: {morse}{pitch_suffix}");
                 }
                 streaming::StreamEvent::Power { .. } => {}
             }

@@ -97,6 +97,12 @@ const UNLOCK_POWER_HISTORY_EVENTS: usize = 80;
 /// pitch hunt to a narrow user-specified band lets us react much faster than the
 /// conservative default whole-band lock path.
 const RANGE_LOCK_SECONDS: f32 = 1.0;
+/// Recent-audio window used to confirm that emitted letters still look like the
+/// locked tone instead of a broadband transient that happened to trip the bin.
+const CHAR_GUARD_SECONDS: f32 = 0.35;
+/// Allow a little pitch wobble around the locked tone when validating emitted
+/// letters, but reject events that no longer cluster near that tone.
+const CHAR_GUARD_DRIFT_HZ: f32 = 35.0;
 
 /// Runtime-tunable decoder parameters. Cloneable so the GUI/CLI can
 /// snapshot, mutate, and resend without locking. All fields use
@@ -177,11 +183,18 @@ pub enum StreamEvent {
     /// New WPM estimate (smoothed).
     WpmUpdate { wpm: f32 },
     /// A decoded character emitted in real time.
-    Char { ch: char, morse: String },
+    Char {
+        ch: char,
+        morse: String,
+        pitch_hz: Option<f32>,
+    },
     /// Word boundary detected.
     Word,
     /// Letter could not be decoded (unknown morse pattern).
-    Garbled { morse: String },
+    Garbled {
+        morse: String,
+        pitch_hz: Option<f32>,
+    },
     /// Periodic snapshot of the smoothed Goertzel power vs threshold.
     /// Emitted at roughly `POWER_EVENT_HZ` Hz, throttled in `feed_goertzel`.
     /// `noise` is the smoothed off-band reference; `snr` is power/noise.
@@ -1111,22 +1124,31 @@ impl Decoder {
         Some(1200.0 / dot_ms)
     }
 
-    fn classify_letter(&mut self) -> Option<StreamEvent> {
+    fn classify_letter(&mut self, pitch_hz: Option<f32>) -> Option<StreamEvent> {
         if self.current_letter.is_empty() {
             return None;
         }
         let morse = std::mem::take(&mut self.current_letter);
         if let Some(c) = morse_to_char(&morse) {
-            Some(StreamEvent::Char { ch: c, morse })
+            Some(StreamEvent::Char {
+                ch: c,
+                morse,
+                pitch_hz,
+            })
         } else {
-            Some(StreamEvent::Garbled { morse })
+            Some(StreamEvent::Garbled { morse, pitch_hz })
         }
     }
 
     /// Consume a single interval and emit decode events. This is the logic
     /// that was previously inline in `push_power`, factored out so we can
     /// replay the bootstrap buffer once we've primed the dot length.
-    fn consume_interval(&mut self, ivl: Interval, events: &mut Vec<StreamEvent>) {
+    fn consume_interval(
+        &mut self,
+        ivl: Interval,
+        pitch_hz: Option<f32>,
+        events: &mut Vec<StreamEvent>,
+    ) {
         let dot = match self.dot_len {
             Some(d) if d > 0.0 => d,
             _ => return,
@@ -1155,7 +1177,7 @@ impl Decoder {
             let pattern = self.current_letter.clone();
             let valid_morse = !pattern.is_empty() && morse_to_char(&pattern).is_some();
             if gate_open || valid_morse {
-                if let Some(ev) = self.classify_letter() {
+                if let Some(ev) = self.classify_letter(pitch_hz) {
                     events.push(ev);
                 }
                 if len_norm > WORD_SPACE_BOUNDARY {
@@ -1171,7 +1193,7 @@ impl Decoder {
 
     /// Push one edge-terminated run into the decoder. During bootstrap we
     /// buffer; once primed, we emit events immediately.
-    fn push_edge(&mut self, ivl: Interval, events: &mut Vec<StreamEvent>) {
+    fn push_edge(&mut self, ivl: Interval, pitch_hz: Option<f32>, events: &mut Vec<StreamEvent>) {
         self.push_interval(ivl);
         self.recalibrate_from_history();
 
@@ -1188,20 +1210,26 @@ impl Decoder {
                 let buffered = std::mem::take(&mut self.bootstrap);
                 self.primed = true;
                 for b in buffered {
-                    self.consume_interval(b, events);
+                    self.consume_interval(b, pitch_hz, events);
                 }
             }
             // Still priming; hold off on emission.
             return;
         }
 
-        self.consume_interval(ivl, events);
+        self.consume_interval(ivl, pitch_hz, events);
     }
 
     /// Feed one power-signal sample. `snr_ok` indicates whether the off-band
     /// noise reference says the bin actually contains a tone (gain-independent).
     /// Emits zero or more events.
-    fn push_power(&mut self, p: f32, snr_ok: bool, events: &mut Vec<StreamEvent>) {
+    fn push_power(
+        &mut self,
+        p: f32,
+        snr_ok: bool,
+        pitch_hz: Option<f32>,
+        events: &mut Vec<StreamEvent>,
+    ) {
         if self.power_history.len() == self.power_capacity {
             self.power_history.pop_front();
         }
@@ -1251,6 +1279,7 @@ impl Decoder {
                     len: ended_len,
                     is_on: prev_was_on,
                 },
+                pitch_hz,
                 events,
             );
         }
@@ -1412,6 +1441,13 @@ impl StreamingDecoder {
             return Ok(events);
         }
 
+        for &s in &filtered {
+            self.quality_buf.push_back(s);
+            if self.quality_buf.len() > self.quality_buf_capacity {
+                self.quality_buf.pop_front();
+            }
+        }
+
         self.feed_goertzel(&filtered, &mut events);
 
         // --- Quality watchdog: roll a window of recent audio and
@@ -1419,12 +1455,6 @@ impl StreamingDecoder {
         // currently locked pitch. If the signal degrades to noise we
         // drop the lock so the next caller doesn't keep emitting
         // letters from random spikes.
-        for &s in &filtered {
-            self.quality_buf.push_back(s);
-            if self.quality_buf.len() > self.quality_buf_capacity {
-                self.quality_buf.pop_front();
-            }
-        }
         self.samples_since_quality_check += filtered.len();
         if self.samples_since_quality_check >= self.quality_check_threshold
             && self.quality_buf.len() >= self.quality_buf_capacity
@@ -1562,6 +1592,88 @@ impl StreamingDecoder {
         true
     }
 
+    fn range_lock_char_guard_passes(&self) -> bool {
+        if !self.config.experimental_range_lock {
+            return true;
+        }
+
+        let Some(locked_pitch) = self.pitch_locked else {
+            return false;
+        };
+
+        let samples = ((TARGET_RATE as f32 * CHAR_GUARD_SECONDS).round() as usize).max(1024);
+        if self.quality_buf.len() < samples / 2 {
+            return true;
+        }
+
+        let start = self.quality_buf.len().saturating_sub(samples);
+        let mut window: Vec<f32> = self.quality_buf.iter().skip(start).copied().collect();
+        if window.is_empty() {
+            return true;
+        }
+
+        let peak = window
+            .iter()
+            .map(|sample| sample.abs())
+            .fold(0.0_f32, f32::max);
+        if peak <= 1e-6 {
+            return false;
+        }
+        let trim_floor = peak * 0.15;
+        while window.len() > 64 {
+            let Some(last) = window.last() else {
+                break;
+            };
+            if last.abs() >= trim_floor {
+                break;
+            }
+            window.pop();
+        }
+        if window.len() < 256 {
+            return false;
+        }
+
+        let (mut lo, mut hi) = self
+            .config
+            .pitch_lock_bounds()
+            .unwrap_or((FREQ_MIN_HZ, FREQ_MAX_HZ));
+        lo = lo.max(locked_pitch - CHAR_GUARD_DRIFT_HZ).max(FREQ_MIN_HZ);
+        hi = hi.min(locked_pitch + CHAR_GUARD_DRIFT_HZ).min(FREQ_MAX_HZ);
+        if hi <= lo {
+            return false;
+        }
+
+        match detect_pitch(
+            &window,
+            TARGET_RATE,
+            self.config.pitch_min_snr_linear(),
+            Some((lo, hi)),
+        ) {
+            Ok(pitch) => (pitch - locked_pitch).abs() <= CHAR_GUARD_DRIFT_HZ,
+            Err(_) => false,
+        }
+    }
+
+    fn filter_recent_decode_events(&self, events: &mut Vec<StreamEvent>) {
+        if self.range_lock_char_guard_passes() {
+            return;
+        }
+
+        let dropped_letter = events
+            .iter()
+            .any(|ev| matches!(ev, StreamEvent::Char { .. } | StreamEvent::Garbled { .. }));
+        if !dropped_letter {
+            return;
+        }
+
+        events.retain(|ev| {
+            !matches!(
+                ev,
+                StreamEvent::Char { .. } | StreamEvent::Garbled { .. } | StreamEvent::Word
+            )
+        });
+    }
+
     fn emit_unlock_power(&mut self, audio: &[f32], events: &mut Vec<StreamEvent>) {
         if audio.is_empty() {
             return;
@@ -1668,7 +1780,15 @@ impl StreamingDecoder {
                 });
             }
 
-            self.decoder.push_power(smoothed, snr_ok, events);
+            let mut decode_events = Vec::new();
+            self.decoder.push_power(
+                smoothed,
+                snr_ok,
+                self.pitch_locked,
+                &mut decode_events,
+            );
+            self.filter_recent_decode_events(&mut decode_events);
+            events.extend(decode_events);
         }
     }
 
@@ -1691,7 +1811,7 @@ impl StreamingDecoder {
     /// input or when the user pauses.
     pub fn flush(&mut self) -> Vec<StreamEvent> {
         let mut events = Vec::new();
-        if let Some(ev) = self.decoder.classify_letter() {
+        if let Some(ev) = self.decoder.classify_letter(self.pitch_locked) {
             events.push(ev);
         }
         events
@@ -2052,6 +2172,35 @@ mod lock_behavior_tests {
             dec.pre_lock_buf.len(),
             before,
             "drop_pitch_lock should keep the seeded relock buffer intact"
+        );
+    }
+
+    #[test]
+    fn range_lock_char_guard_rejects_broadband_impulse_letters() {
+        let sr = 16000u32;
+        let mut dec = StreamingDecoder::new(sr).expect("decoder");
+        let mut cfg = DecoderConfig::default();
+        cfg.experimental_range_lock = true;
+        dec.set_config(cfg);
+        dec.pitch_locked = Some(800.0);
+
+        dec.quality_buf = std::iter::repeat(0.0_f32)
+            .take((TARGET_RATE as usize / 2).max(1024))
+            .collect();
+        if let Some(last) = dec.quality_buf.back_mut() {
+            *last = 1.0;
+        }
+
+        let mut events = vec![StreamEvent::Char {
+            ch: 'E',
+            morse: ".".to_string(),
+            pitch_hz: Some(800.0),
+        }];
+        dec.filter_recent_decode_events(&mut events);
+
+        assert!(
+            !events.iter().any(|ev| matches!(ev, StreamEvent::Char { .. })),
+            "range-lock guard should suppress transient letters that do not re-detect the locked tone"
         );
     }
 }

@@ -8,9 +8,9 @@
 //!   {"t": <secs since start>, "type": "ready",  "device": "...", "rate": 48000}
 //!   {"t": ..., "type": "pitch",   "hz": 700.5}
 //!   {"t": ..., "type": "wpm",     "wpm": 18.4}
-//!   {"t": ..., "type": "char",    "ch": "A", "morse": ".-"}
+//!   {"t": ..., "type": "char",    "ch": "A", "morse": ".-", "hz": 700.5}
 //!   {"t": ..., "type": "word"}
-//!   {"t": ..., "type": "garbled", "morse": "...-.."}
+//!   {"t": ..., "type": "garbled", "morse": "...-..", "hz": 700.5}
 //!   {"t": ..., "type": "power",   "power": 0.0123, "threshold": 0.005, "noise": 0.0008, "snr": 15.4, "signal": true}
 //!   {"t": ..., "type": "stats",   "wpm": 18.4, "pitch": 700.5, "threshold": 0.005}
 //!   {"t": ..., "type": "end"}
@@ -56,17 +56,19 @@ impl JsonEmitter {
                 "type": "wpm",
                 "wpm": round2(*wpm),
             }),
-            StreamEvent::Char { ch, morse } => json!({
+            StreamEvent::Char { ch, morse, pitch_hz } => json!({
                 "type": "char",
                 "ch": ch.to_string(),
                 "morse": morse,
+                "hz": pitch_hz.map(|hz| round1(hz)),
             }),
             StreamEvent::Word => json!({
                 "type": "word",
             }),
-            StreamEvent::Garbled { morse } => json!({
+            StreamEvent::Garbled { morse, pitch_hz } => json!({
                 "type": "garbled",
                 "morse": morse,
+                "hz": pitch_hz.map(|hz| round1(hz)),
             }),
             StreamEvent::Power {
                 power,

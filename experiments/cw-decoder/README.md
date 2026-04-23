@@ -121,6 +121,9 @@ Current decode-tab workflow also includes:
 - a real-time playback signal view driven by the same broad-band profile pipeline used in labeling
 - an explicit **CURRENT TONE** readout during live decode and playback
 - an experimental **RANGE LOCK** mode for custom streaming, so live/file decode can prefer the strongest tone inside a chosen Hz window
+- an optional **SHOW CHAR HZ** overlay so each decoded character can display the tone the streaming decoder had locked when it emitted that symbol
+
+When **RANGE LOCK** is enabled, emitted characters now also pass a short recent-audio tone check near the locked pitch. That keeps broadband transients (for example a finger snap) from being accepted just because they briefly splashed energy into the locked bin.
 
 That replay path is useful for answering: _“what did the live path think happened, and what does an offline rerun on the same captured audio think happened?”_
 

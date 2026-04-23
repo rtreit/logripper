@@ -87,7 +87,7 @@
 
     <!-- Controls -->
     <Border Grid.Row="1" Padding="18,12" Background="{StaticResource BgDeep}" BorderBrush="{StaticResource GridLine}" BorderThickness="0,0,0,1">
-      <Grid ColumnDefinitions="Auto,Auto,*,Auto,Auto,Auto,Auto,Auto" ColumnSpacing="12">
+      <Grid ColumnDefinitions="Auto,Auto,*,Auto,Auto,Auto,Auto,Auto,Auto" ColumnSpacing="12">
         <StackPanel Orientation="Vertical" Spacing="2">
           <TextBlock Text="INPUT DEVICE" Classes="label" />
           <ComboBox Width="320" ItemsSource="{Binding Devices}" SelectedItem="{Binding SelectedDevice}"
@@ -106,11 +106,12 @@
         <Button Grid.Column="4" x:Name="OpenFileButton" Margin="0,16,0,0" Classes="primary" Content="DECODE FILE…" Click="OnOpenFileClick"
                 ToolTip.Tip="Choose an audio file and start decoding that file." />
         <ToggleButton Grid.Column="5" Margin="0,16,0,0" Classes="primary" IsChecked="{Binding HideDecoded, Mode=TwoWay}" Content="HIDE DECODING" />
-        <Button Grid.Column="6" x:Name="ReplayButton" Margin="0,16,0,0" Classes="primary"
+        <ToggleButton Grid.Column="6" Margin="0,16,0,0" Classes="primary" IsChecked="{Binding ShowCharacterToneOverlay, Mode=TwoWay}" Content="SHOW CHAR HZ" />
+        <Button Grid.Column="7" x:Name="ReplayButton" Margin="0,16,0,0" Classes="primary"
                 Content="REPLAY &amp; SCORE" Click="OnReplayClick" MinWidth="140"
                 IsEnabled="{Binding HasLastRecording}"
                 ToolTip.Tip="Re-decode the last opened file or live recording offline and compare it to the transcript." />
-        <Button Grid.Column="7" x:Name="StartStopButton" Margin="0,16,0,0" Classes="primary"
+        <Button Grid.Column="8" x:Name="StartStopButton" Margin="0,16,0,0" Classes="primary"
                 Content="{Binding StartStopLabel}" Click="OnStartStopClick" MinWidth="120"
                 ToolTip.Tip="Start or stop live decoding from the selected input device." />
       </Grid>
@@ -355,6 +356,11 @@
                                      FontFamily="Consolas" FontSize="14"
                                      Foreground="{StaticResource AccentAmber}"
                                      HorizontalAlignment="Center" />
+                          <TextBlock Text="{Binding ToneDisplay}"
+                                     FontFamily="Consolas" FontSize="10"
+                                     Foreground="{StaticResource TextDim}"
+                                     HorizontalAlignment="Center"
+                                     IsVisible="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).ShowCharacterToneOverlay}" />
                           <TextBlock Text="{Binding Letter}"
                                      FontFamily="Consolas" FontSize="32"
                                      FontWeight="Bold"
