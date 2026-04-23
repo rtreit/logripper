@@ -12,14 +12,27 @@ public readonly record struct DecoderConfig(
     double MinSnrDb,
     double PitchMinSnrDb,
     double ThresholdScale,
-    bool AutoThreshold)
+    bool AutoThreshold,
+    bool ExperimentalRangeLock,
+    double RangeLockMinHz,
+    double RangeLockMaxHz)
 {
     public const double DefaultMinSnrDb = 3.0;
     public const double DefaultPitchMinSnrDb = 6.0;
     public const double DefaultThresholdScale = 1.0;
     public const bool DefaultAutoThreshold = true;
+    public const bool DefaultExperimentalRangeLock = false;
+    public const double DefaultRangeLockMinHz = 550.0;
+    public const double DefaultRangeLockMaxHz = 850.0;
 
-    public static DecoderConfig Defaults => new(DefaultMinSnrDb, DefaultPitchMinSnrDb, DefaultThresholdScale, DefaultAutoThreshold);
+    public static DecoderConfig Defaults => new(
+        DefaultMinSnrDb,
+        DefaultPitchMinSnrDb,
+        DefaultThresholdScale,
+        DefaultAutoThreshold,
+        DefaultExperimentalRangeLock,
+        DefaultRangeLockMinHz,
+        DefaultRangeLockMaxHz);
 
     /// <summary>
     /// Render as CLI arguments for spawning the decoder with these initial
@@ -33,6 +46,10 @@ public readonly record struct DecoderConfig(
         if (!AutoThreshold)
         {
             args += " --no-auto-threshold";
+        }
+        if (ExperimentalRangeLock)
+        {
+            args += $" --experimental-range-lock --range-lock-min-hz {RangeLockMinHz.ToString(ic)} --range-lock-max-hz {RangeLockMaxHz.ToString(ic)}";
         }
         return args;
     }
@@ -49,6 +66,12 @@ public readonly record struct DecoderConfig(
              + ThresholdScale.ToString(ic)
              + ",\"auto_threshold\":"
              + (AutoThreshold ? "true" : "false")
+             + ",\"experimental_range_lock\":"
+             + (ExperimentalRangeLock ? "true" : "false")
+             + ",\"range_lock_min_hz\":"
+             + RangeLockMinHz.ToString(ic)
+             + ",\"range_lock_max_hz\":"
+             + RangeLockMaxHz.ToString(ic)
              + "}";
     }
 }

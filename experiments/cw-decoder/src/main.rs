@@ -87,6 +87,16 @@ enum Cmd {
         /// QSB. Pass this to honour `--threshold-scale` verbatim instead.
         #[arg(long)]
         no_auto_threshold: bool,
+        /// Experimental: constrain pitch lock to a user-selected Hz band and
+        /// relock faster within that range.
+        #[arg(long)]
+        experimental_range_lock: bool,
+        /// Lower bound for the experimental pitch-lock band.
+        #[arg(long, default_value_t = streaming::DEFAULT_RANGE_LOCK_MIN_HZ)]
+        range_lock_min_hz: f32,
+        /// Upper bound for the experimental pitch-lock band.
+        #[arg(long, default_value_t = streaming::DEFAULT_RANGE_LOCK_MAX_HZ)]
+        range_lock_max_hz: f32,
         /// Read NDJSON config-update lines from stdin while streaming.
         /// Each line: {"type":"config","min_snr_db":...,"pitch_min_snr_db":...,"threshold_scale":...}
         #[arg(long)]
@@ -263,6 +273,16 @@ enum Cmd {
         /// QSB by adapting the scale to the running SNR margin.
         #[arg(long)]
         no_auto_threshold: bool,
+        /// Experimental: constrain pitch lock to a user-selected Hz band and
+        /// relock faster within that range.
+        #[arg(long)]
+        experimental_range_lock: bool,
+        /// Lower bound for the experimental pitch-lock band.
+        #[arg(long, default_value_t = streaming::DEFAULT_RANGE_LOCK_MIN_HZ)]
+        range_lock_min_hz: f32,
+        /// Upper bound for the experimental pitch-lock band.
+        #[arg(long, default_value_t = streaming::DEFAULT_RANGE_LOCK_MAX_HZ)]
+        range_lock_max_hz: f32,
         /// Optional WAV path to mirror raw mono samples to (16-bit PCM at the
         /// device's native sample rate). Useful for post-stop offline analysis.
         #[arg(long)]
@@ -335,6 +355,9 @@ fn main() -> Result<()> {
             pitch_min_snr_db,
             threshold_scale,
             no_auto_threshold,
+            experimental_range_lock,
+            range_lock_min_hz,
+            range_lock_max_hz,
             stdin_control,
         } => {
             let cfg = streaming::DecoderConfig {
@@ -342,6 +365,9 @@ fn main() -> Result<()> {
                 pitch_min_snr_db,
                 threshold_scale,
                 auto_threshold: !no_auto_threshold,
+                experimental_range_lock,
+                range_lock_min_hz,
+                range_lock_max_hz,
             };
             run_stream_file(&path, chunk_ms, realtime, quiet, json, cfg, stdin_control)
         }
@@ -408,6 +434,9 @@ fn main() -> Result<()> {
                 pitch_min_snr_db,
                 threshold_scale,
                 auto_threshold: !no_auto_threshold,
+                experimental_range_lock: false,
+                range_lock_min_hz: streaming::DEFAULT_RANGE_LOCK_MIN_HZ,
+                range_lock_max_hz: streaming::DEFAULT_RANGE_LOCK_MAX_HZ,
             };
             let harvest_cfg = harvest::HarvestConfig {
                 window_seconds: window,
@@ -443,6 +472,9 @@ fn main() -> Result<()> {
             pitch_min_snr_db,
             threshold_scale,
             no_auto_threshold,
+            experimental_range_lock,
+            range_lock_min_hz,
+            range_lock_max_hz,
             record,
             stdin_control,
         } => {
@@ -451,6 +483,9 @@ fn main() -> Result<()> {
                 pitch_min_snr_db,
                 threshold_scale,
                 auto_threshold: !no_auto_threshold,
+                experimental_range_lock,
+                range_lock_min_hz,
+                range_lock_max_hz,
             };
             run_stream_live(
                 device.as_deref(),
@@ -1811,6 +1846,15 @@ fn spawn_stdin_config_channel(
             }
             if let Some(b) = v.get("auto_threshold").and_then(|x| x.as_bool()) {
                 state.auto_threshold = b;
+            }
+            if let Some(b) = v.get("experimental_range_lock").and_then(|x| x.as_bool()) {
+                state.experimental_range_lock = b;
+            }
+            if let Some(x) = v.get("range_lock_min_hz").and_then(|x| x.as_f64()) {
+                state.range_lock_min_hz = x as f32;
+            }
+            if let Some(x) = v.get("range_lock_max_hz").and_then(|x| x.as_f64()) {
+                state.range_lock_max_hz = x as f32;
             }
             if tx.send(state).is_err() {
                 break;

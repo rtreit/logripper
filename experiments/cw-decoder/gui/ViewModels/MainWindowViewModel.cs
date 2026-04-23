@@ -103,7 +103,10 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
         set
         {
             if (Set(ref _isRunning, value))
+            {
                 OnPropertyChanged(nameof(StartStopLabel));
+                OnPropertyChanged(nameof(CurrentToneHzDisplay));
+            }
         }
     }
 
@@ -119,7 +122,14 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
     public double PitchHz
     {
         get => _pitchHz;
-        set { if (Set(ref _pitchHz, value)) OnPropertyChanged(nameof(SignalQualityLabel)); }
+        set
+        {
+            if (Set(ref _pitchHz, value))
+            {
+                OnPropertyChanged(nameof(SignalQualityLabel));
+                OnPropertyChanged(nameof(CurrentToneHzDisplay));
+            }
+        }
     }
 
     private double _power;
@@ -230,6 +240,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
             {
                 OnPropertyChanged(nameof(CanStartPlayback));
                 OnPropertyChanged(nameof(CanStopPlayback));
+                OnPropertyChanged(nameof(CurrentToneHzDisplay));
             }
         }
     }
@@ -241,7 +252,13 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
     public SignalProfile PlaybackProfile
     {
         get => _playbackProfile;
-        private set => Set(ref _playbackProfile, value);
+        private set
+        {
+            if (Set(ref _playbackProfile, value))
+            {
+                OnPropertyChanged(nameof(CurrentToneHzDisplay));
+            }
+        }
     }
 
     private bool _isPlaybackProfileBusy;
@@ -346,6 +363,49 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
     {
         get => _autoThreshold;
         set { if (Set(ref _autoThreshold, value)) PushConfig(); }
+    }
+
+    private bool _experimentalRangeLock = DecoderConfig.DefaultExperimentalRangeLock;
+    public bool ExperimentalRangeLock
+    {
+        get => _experimentalRangeLock;
+        set
+        {
+            if (Set(ref _experimentalRangeLock, value))
+            {
+                PushConfig();
+                OnPropertyChanged(nameof(CanRunLabelSweep));
+                OnPropertyChanged(nameof(RangeLockSummary));
+            }
+        }
+    }
+
+    private double _rangeLockMinHz = DecoderConfig.DefaultRangeLockMinHz;
+    public double RangeLockMinHz
+    {
+        get => _rangeLockMinHz;
+        set
+        {
+            if (Set(ref _rangeLockMinHz, value))
+            {
+                PushConfig();
+                OnPropertyChanged(nameof(RangeLockSummary));
+            }
+        }
+    }
+
+    private double _rangeLockMaxHz = DecoderConfig.DefaultRangeLockMaxHz;
+    public double RangeLockMaxHz
+    {
+        get => _rangeLockMaxHz;
+        set
+        {
+            if (Set(ref _rangeLockMaxHz, value))
+            {
+                PushConfig();
+                OnPropertyChanged(nameof(RangeLockSummary));
+            }
+        }
     }
 
     private string? _harvestFilePath;
@@ -699,6 +759,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
                 ClampAdjustedSpanToProfile();
                 OnPropertyChanged(nameof(CanUseSuggestedSpan));
                 OnPropertyChanged(nameof(CanResetAdjustedSpan));
+                OnPropertyChanged(nameof(CurrentToneHzDisplay));
             }
         }
     }
@@ -728,6 +789,33 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
             return "STRONG";
         }
     }
+    private double CurrentToneHzValue
+    {
+        get
+        {
+            if (IsRunning && PitchHz > 0)
+            {
+                return PitchHz;
+            }
+
+            if (HasPlaybackSource && PlaybackProfile.PitchHz > 0)
+            {
+                return PlaybackProfile.PitchHz;
+            }
+
+            if (CurrentSignalProfile.PitchHz > 0)
+            {
+                return CurrentSignalProfile.PitchHz;
+            }
+
+            return PitchHz > 0 ? PitchHz : 0;
+        }
+    }
+
+    public string CurrentToneHzDisplay => CurrentToneHzValue > 0 ? $"{CurrentToneHzValue:F1} Hz" : "—";
+    public string RangeLockSummary => ExperimentalRangeLock
+        ? $"Experimental range lock: {Math.Min(RangeLockMinHz, RangeLockMaxHz):F0}-{Math.Max(RangeLockMinHz, RangeLockMaxHz):F0} Hz"
+        : "Experimental range lock off.";
 
     public string SelectedCandidateRange => SelectedCandidate?.RangeLabel ?? "(no candidate selected)";
     public string SelectedCandidateNeedles => SelectedCandidate?.NeedlesLabel ?? "-";
@@ -768,6 +856,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
     public bool CanRunLabelSweep => !IsAdvancedBusy
         && !IsProfileBusy
         && !IsEvaluationBusy
+        && !ExperimentalRangeLock
         && HasLabelEvaluationTarget();
 
     public void ResetSensitivity()
@@ -776,9 +865,19 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
         PitchMinSnrDb = DecoderConfig.DefaultPitchMinSnrDb;
         ThresholdScale = DecoderConfig.DefaultThresholdScale;
         AutoThreshold = DecoderConfig.DefaultAutoThreshold;
+        ExperimentalRangeLock = DecoderConfig.DefaultExperimentalRangeLock;
+        RangeLockMinHz = DecoderConfig.DefaultRangeLockMinHz;
+        RangeLockMaxHz = DecoderConfig.DefaultRangeLockMaxHz;
     }
 
-    private DecoderConfig CurrentConfig() => new(MinSnrDb, PitchMinSnrDb, ThresholdScale, AutoThreshold);
+    private DecoderConfig CurrentConfig() => new(
+        MinSnrDb,
+        PitchMinSnrDb,
+        ThresholdScale,
+        AutoThreshold,
+        ExperimentalRangeLock,
+        Math.Min(RangeLockMinHz, RangeLockMaxHz),
+        Math.Max(RangeLockMinHz, RangeLockMaxHz));
     private BaselineDecoderConfig CurrentBaselineConfig() => new(
         WindowSeconds: LabelEvalWindowSeconds,
         MinWindowSeconds: LabelEvalMinWindowSeconds,
@@ -1358,6 +1457,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
                 LabelEvalMinWindowSeconds,
                 Math.Max(100, (int)Math.Round(LabelEvalDecodeEveryMs)),
                 Math.Max(1, (int)Math.Round(LabelEvalConfirmations)),
+                CurrentConfig(),
                 cts.Token).ConfigureAwait(true);
             CurrentLabelScoreResult = result;
             LabelEvaluationOutputText = JsonSerializer.Serialize(result, new JsonSerializerOptions { WriteIndented = true });
@@ -1390,6 +1490,12 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
     {
         if (!TryResolveLabelEvaluationTarget(out var labelPaths))
         {
+            return;
+        }
+
+        if (ExperimentalRangeLock)
+        {
+            LabelEvaluationStatusText = "Sweep Baseline tunes the causal ditdah reference only. Turn off Experimental Range Lock to run the baseline sweep, or use Score Labels to evaluate the range-lock experiment.";
             return;
         }
 

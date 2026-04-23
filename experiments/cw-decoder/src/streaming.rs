@@ -13,7 +13,7 @@
 //!     -> dot-length running median + dit/dah/letter/word classifier
 //!     -> StreamEvent::{Char, Word, WpmUpdate, PitchUpdate, ...}
 //!
-//! Pitch is locked from the first 2 s of resampled audio, and re-evaluated
+//! Pitch is locked from the first ~2 s of resampled audio, and re-evaluated
 //! every 5 s of *active* signal with hysteresis so we don't drift mid-letter.
 
 use std::collections::VecDeque;
@@ -81,10 +81,22 @@ pub const DEFAULT_PITCH_MIN_SNR_DB: f32 = 6.0;
 /// Default scale on the IQR-derived adaptive amplitude threshold. >1 makes
 /// the decoder less sensitive (raises the on/off cutoff); <1 more sensitive.
 pub const DEFAULT_THRESHOLD_SCALE: f32 = 1.0;
+/// Default lower bound for the experimental range-lock mode.
+pub const DEFAULT_RANGE_LOCK_MIN_HZ: f32 = 550.0;
+/// Default upper bound for the experimental range-lock mode.
+pub const DEFAULT_RANGE_LOCK_MAX_HZ: f32 = 850.0;
 /// Smoothing window for the noise reference (ms). Longer than the signal
 /// smoother so brief tone leakage into side bins doesn't lift the noise
 /// floor and disable the gate.
 const NOISE_SMOOTH_MS: f32 = 200.0;
+/// Pre-lock broadband activity history used to keep the UI's live signal meter
+/// responsive even while we're still hunting for a pitch or re-locking after a
+/// watchdog drop.
+const UNLOCK_POWER_HISTORY_EVENTS: usize = 80;
+/// Experimental relock buffer when range-lock mode is enabled. Constraining the
+/// pitch hunt to a narrow user-specified band lets us react much faster than the
+/// conservative default whole-band lock path.
+const RANGE_LOCK_SECONDS: f32 = 1.0;
 
 /// Runtime-tunable decoder parameters. Cloneable so the GUI/CLI can
 /// snapshot, mutate, and resend without locking. All fields use
@@ -107,6 +119,13 @@ pub struct DecoderConfig {
     /// weak/fading signals are pushed down toward ~0.4 so dits aren't
     /// missed. Lets the decoder follow QSB without operator intervention.
     pub auto_threshold: bool,
+    /// Experimental mode: constrain pitch locking to `range_lock_min_hz..=range_lock_max_hz`
+    /// and use a faster relock path inside that band.
+    pub experimental_range_lock: bool,
+    /// Lower bound for the experimental pitch-lock band.
+    pub range_lock_min_hz: f32,
+    /// Upper bound for the experimental pitch-lock band.
+    pub range_lock_max_hz: f32,
 }
 
 impl DecoderConfig {
@@ -116,6 +135,9 @@ impl DecoderConfig {
             pitch_min_snr_db: DEFAULT_PITCH_MIN_SNR_DB,
             threshold_scale: DEFAULT_THRESHOLD_SCALE,
             auto_threshold: true,
+            experimental_range_lock: false,
+            range_lock_min_hz: DEFAULT_RANGE_LOCK_MIN_HZ,
+            range_lock_max_hz: DEFAULT_RANGE_LOCK_MAX_HZ,
         }
     }
     /// Convert min_snr_db → linear power ratio for the inner gate.
@@ -124,6 +146,16 @@ impl DecoderConfig {
     }
     pub fn pitch_min_snr_linear(&self) -> f32 {
         10.0_f32.powf(self.pitch_min_snr_db / 10.0)
+    }
+
+    pub fn pitch_lock_bounds(&self) -> Option<(f32, f32)> {
+        if !self.experimental_range_lock {
+            return None;
+        }
+
+        let lo = self.range_lock_min_hz.min(self.range_lock_max_hz).max(FREQ_MIN_HZ);
+        let hi = self.range_lock_min_hz.max(self.range_lock_max_hz).min(FREQ_MAX_HZ);
+        (lo < hi).then_some((lo, hi))
     }
 }
 
@@ -299,7 +331,12 @@ impl Goertzel {
 /// of peak power to in-band median power; if not met we refuse to lock and
 /// return Err so the caller stays in "no signal" state instead of
 /// hallucinating decodes from background noise.
-fn detect_pitch(samples: &[f32], sample_rate: u32, min_snr_linear: f32) -> Result<f32> {
+fn detect_pitch(
+    samples: &[f32],
+    sample_rate: u32,
+    min_snr_linear: f32,
+    pitch_bounds: Option<(f32, f32)>,
+) -> Result<f32> {
     let fft_size = 4096;
     let step = fft_size / 4;
     if samples.len() < fft_size {
@@ -340,10 +377,16 @@ fn detect_pitch(samples: &[f32], sample_rate: u32, min_snr_linear: f32) -> Resul
     // strongly ON/OFF over time).
     let mut in_band_powers: Vec<f32> = Vec::new();
     let mut candidates: Vec<usize> = Vec::new();
+    let range_center = pitch_bounds.map(|(lo, hi)| (lo + hi) * 0.5);
     for (i, &p) in sum.iter().enumerate() {
         let f = i as f32 * df;
         if !(FREQ_MIN_HZ..=FREQ_MAX_HZ).contains(&f) {
             continue;
+        }
+        if let Some((lo, hi)) = pitch_bounds {
+            if !(lo..=hi).contains(&f) {
+                continue;
+            }
         }
         in_band_powers.push(p);
         // Local max with a 5-bin neighbourhood. This avoids picking flat
@@ -410,7 +453,18 @@ fn detect_pitch(samples: &[f32], sample_rate: u32, min_snr_linear: f32) -> Resul
             10.0 * min_snr_linear.log10()
         ));
     }
-    shortlist.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    shortlist.sort_by(|a, b| {
+        b.1.partial_cmp(&a.1)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| {
+                let center = range_center.unwrap_or(0.0);
+                let a_dist = (a.0 as f32 * df - center).abs();
+                let b_dist = (b.0 as f32 * df - center).abs();
+                a_dist
+                    .partial_cmp(&b_dist)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+    });
 
     // Trial-decode the top N candidates and rank by dit/dah cluster
     // separation (Fisher discriminant on on-pulse durations). For
@@ -1252,6 +1306,7 @@ pub struct StreamingDecoder {
     /// Decimation counter for `StreamEvent::Power` throttling.
     power_emit_accum: f32,
     power_emit_step: f32,
+    unlock_power_history: VecDeque<f32>,
 
     decoder: Decoder,
 }
@@ -1310,6 +1365,7 @@ impl StreamingDecoder {
             noise_smooth_sum: 0.0,
             power_emit_accum: 0.0,
             power_emit_step,
+            unlock_power_history: VecDeque::with_capacity(UNLOCK_POWER_HISTORY_EVENTS),
             decoder: Decoder::new(power_rate),
         })
     }
@@ -1350,44 +1406,9 @@ impl StreamingDecoder {
 
         // --- Pitch lock / re-eval -------------------------------------
         if self.pitch_locked.is_none() {
+            self.emit_unlock_power(&filtered, &mut events);
             self.pre_lock_buf.extend_from_slice(&filtered);
-            let need = (TARGET_RATE as f32 * PITCH_LOCK_SECONDS) as usize;
-            if self.pre_lock_buf.len() >= need {
-                if let Ok(pitch) = detect_pitch(
-                    &self.pre_lock_buf,
-                    TARGET_RATE,
-                    self.config.pitch_min_snr_linear(),
-                ) {
-                    self.pitch_locked = Some(pitch);
-                    let win_size = (TARGET_RATE as f32 * GOERTZEL_WIN_MS / 1000.0) as usize;
-                    let step = (win_size / 4).max(1);
-                    self.goertzel = Some(Goertzel::new(pitch, TARGET_RATE, win_size, step));
-                    // Multi-bin off-band noise references. Each offset is
-                    // tried on both sides; only those that fit inside the
-                    // audio passband [FREQ_MIN_HZ, FREQ_MAX_HZ] are used.
-                    self.noise_bins.clear();
-                    for &off in NOISE_OFFSETS_HZ {
-                        let lo = pitch - off;
-                        let hi = pitch + off;
-                        if lo >= FREQ_MIN_HZ {
-                            self.noise_bins
-                                .push(Goertzel::new(lo, TARGET_RATE, win_size, step));
-                        }
-                        if hi <= FREQ_MAX_HZ {
-                            self.noise_bins
-                                .push(Goertzel::new(hi, TARGET_RATE, win_size, step));
-                        }
-                    }
-                    events.push(StreamEvent::PitchUpdate { pitch_hz: pitch });
-                    // Replay the pre-lock audio through Goertzel so we don't lose it.
-                    let drained = std::mem::take(&mut self.pre_lock_buf);
-                    self.feed_goertzel(&drained, &mut events);
-                } else {
-                    // Drop oldest half so we don't keep growing forever on silence.
-                    let drop = self.pre_lock_buf.len() / 2;
-                    self.pre_lock_buf.drain(..drop);
-                }
-            }
+            self.try_acquire_pitch_lock(&mut events);
             return Ok(events);
         }
 
@@ -1426,7 +1447,9 @@ impl StreamingDecoder {
                             "quality watchdog: Fisher {:.2} < {:.1} for {} consecutive checks",
                             fisher, MIN_HOLD_FISHER, self.quality_failed_consecutive
                         );
-                        self.drop_pitch_lock();
+                        let preserve_pre_lock_buf =
+                            self.seed_fast_relock_from_recent_audio(&buf);
+                        self.drop_pitch_lock(preserve_pre_lock_buf);
                         events.push(StreamEvent::PitchLost { reason });
                     }
                 } else {
@@ -1452,7 +1475,7 @@ impl StreamingDecoder {
     /// Tear down all per-lock state so the next pitch search starts
     /// fresh. Called by the quality watchdog when the locked signal
     /// degrades to noise.
-    fn drop_pitch_lock(&mut self) {
+    fn drop_pitch_lock(&mut self, preserve_pre_lock_buf: bool) {
         self.pitch_locked = None;
         self.goertzel = None;
         self.noise_bins.clear();
@@ -1465,11 +1488,103 @@ impl StreamingDecoder {
         self.samples_since_quality_check = 0;
         self.quality_failed_consecutive = 0;
         self.quality_buf.clear();
-        self.pre_lock_buf.clear();
+        if !preserve_pre_lock_buf {
+            self.pre_lock_buf.clear();
+        }
+        self.unlock_power_history.clear();
         let power_rate = TARGET_RATE as f32 / ((TARGET_RATE as f32 * GOERTZEL_WIN_MS / 1000.0) as usize / 4).max(1) as f32;
         self.decoder = Decoder::new(power_rate);
         self.decoder.threshold_scale = self.config.threshold_scale;
         self.decoder.auto_threshold = self.config.auto_threshold;
+    }
+
+    fn try_acquire_pitch_lock(&mut self, events: &mut Vec<StreamEvent>) {
+        let need = self.pitch_lock_samples_needed();
+        if self.pre_lock_buf.len() < need {
+            return;
+        }
+
+        if let Ok(pitch) = detect_pitch(
+            &self.pre_lock_buf,
+            TARGET_RATE,
+            self.config.pitch_min_snr_linear(),
+            self.config.pitch_lock_bounds(),
+        ) {
+            self.pitch_locked = Some(pitch);
+            let win_size = (TARGET_RATE as f32 * GOERTZEL_WIN_MS / 1000.0) as usize;
+            let step = (win_size / 4).max(1);
+            self.goertzel = Some(Goertzel::new(pitch, TARGET_RATE, win_size, step));
+            self.noise_bins.clear();
+            for &off in NOISE_OFFSETS_HZ {
+                let lo = pitch - off;
+                let hi = pitch + off;
+                if lo >= FREQ_MIN_HZ {
+                    self.noise_bins
+                        .push(Goertzel::new(lo, TARGET_RATE, win_size, step));
+                }
+                if hi <= FREQ_MAX_HZ {
+                    self.noise_bins
+                        .push(Goertzel::new(hi, TARGET_RATE, win_size, step));
+                }
+            }
+            self.unlock_power_history.clear();
+            events.push(StreamEvent::PitchUpdate { pitch_hz: pitch });
+            let drained = std::mem::take(&mut self.pre_lock_buf);
+            self.feed_goertzel(&drained, events);
+        } else {
+            let keep = need.max(4096);
+            if self.pre_lock_buf.len() > keep {
+                let drop = self.pre_lock_buf.len() - keep;
+                self.pre_lock_buf.drain(..drop);
+            }
+        }
+    }
+
+    fn pitch_lock_samples_needed(&self) -> usize {
+        let seconds = if self.config.pitch_lock_bounds().is_some() {
+            RANGE_LOCK_SECONDS
+        } else {
+            PITCH_LOCK_SECONDS
+        };
+        ((TARGET_RATE as f32 * seconds).round() as usize).max(4096)
+    }
+
+    fn seed_fast_relock_from_recent_audio(&mut self, recent_audio: &[f32]) -> bool {
+        if self.config.pitch_lock_bounds().is_none() || recent_audio.is_empty() {
+            return false;
+        }
+
+        let keep = self.pitch_lock_samples_needed().max(4096);
+        let start = recent_audio.len().saturating_sub(keep);
+        self.pre_lock_buf.clear();
+        self.pre_lock_buf
+            .extend_from_slice(&recent_audio[start..]);
+        true
+    }
+
+    fn emit_unlock_power(&mut self, audio: &[f32], events: &mut Vec<StreamEvent>) {
+        if audio.is_empty() {
+            return;
+        }
+
+        let power = audio.iter().map(|sample| sample * sample).sum::<f32>() / audio.len() as f32;
+        self.unlock_power_history.push_back(power);
+        if self.unlock_power_history.len() > UNLOCK_POWER_HISTORY_EVENTS {
+            self.unlock_power_history.pop_front();
+        }
+
+        let mut sorted: Vec<f32> = self.unlock_power_history.iter().copied().collect();
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let noise = sorted[sorted.len() / 10].max(1e-10);
+        let threshold = noise * 4.0;
+        let snr = power / noise;
+        events.push(StreamEvent::Power {
+            power,
+            threshold,
+            noise,
+            snr: if snr.is_finite() { snr } else { 0.0 },
+            signal: power > threshold,
+        });
     }
 
     fn feed_goertzel(&mut self, audio: &[f32], events: &mut Vec<StreamEvent>) {
@@ -1858,6 +1973,26 @@ mod lock_behavior_tests {
     }
 
     #[test]
+    fn emits_power_before_pitch_lock() {
+        let sr = 16000u32;
+        let audio = synth_paris(sr, 700.0, 20.0, 1.0);
+        let mut dec = StreamingDecoder::new(sr).expect("decoder");
+        let mut saw_power = false;
+        let mut saw_pitch = false;
+        for chunk in audio.chunks((sr / 10) as usize) {
+            for ev in dec.feed(chunk).expect("feed") {
+                match ev {
+                    StreamEvent::Power { .. } => saw_power = true,
+                    StreamEvent::PitchUpdate { .. } => saw_pitch = true,
+                    _ => {}
+                }
+            }
+        }
+        assert!(saw_power, "decoder should emit live power events before pitch lock");
+        assert!(!saw_pitch, "1 second of audio should be below the pitch-lock buffer");
+    }
+
+    #[test]
     fn signal_loss_drops_lock() {
         let sr = 16000u32;
         // 12s of CW followed by 20s of pure noise — watchdog should drop within ~8s.
@@ -1866,5 +2001,57 @@ mod lock_behavior_tests {
         let (locked, lost, _chars) = run_decoder(&audio, sr);
         assert!(locked, "decoder should lock during the CW segment");
         assert!(lost, "decoder should drop lock after sustained noise-only input");
+    }
+
+    #[test]
+    fn emits_power_after_pitch_loss_while_relocking() {
+        let sr = 16000u32;
+        let mut audio = synth_paris(sr, 700.0, 20.0, 12.0);
+        audio.extend(lcg_noise(sr as usize * 20, 0.05, 0x1234_5678));
+        let mut dec = StreamingDecoder::new(sr).expect("decoder");
+        let chunk = (sr / 10) as usize;
+        let mut lost = false;
+        let mut power_after_loss = false;
+        for c in audio.chunks(chunk) {
+            let events = dec.feed(c).expect("feed");
+            for ev in events {
+                match ev {
+                    StreamEvent::PitchLost { .. } => lost = true,
+                    StreamEvent::Power { .. } if lost => power_after_loss = true,
+                    _ => {}
+                }
+            }
+            if lost && power_after_loss {
+                break;
+            }
+        }
+        assert!(lost, "decoder should eventually lose lock on sustained noise");
+        assert!(
+            power_after_loss,
+            "decoder should keep emitting power events while hunting for a new lock"
+        );
+    }
+
+    #[test]
+    fn preserves_seeded_relock_buffer_when_range_lock_drops_pitch() {
+        let sr = 16000u32;
+        let recent_audio = synth_paris(sr, 700.0, 20.0, 2.0);
+        let mut dec = StreamingDecoder::new(sr).expect("decoder");
+        let mut cfg = DecoderConfig::default();
+        cfg.experimental_range_lock = true;
+        dec.set_config(cfg);
+
+        let preserved = dec.seed_fast_relock_from_recent_audio(&recent_audio);
+        let before = dec.pre_lock_buf.len();
+        assert!(preserved, "range-lock mode should preserve a seeded relock buffer");
+        assert!(before > 0, "seeded relock buffer should contain recent audio");
+
+        dec.drop_pitch_lock(preserved);
+
+        assert_eq!(
+            dec.pre_lock_buf.len(),
+            before,
+            "drop_pitch_lock should keep the seeded relock buffer intact"
+        );
     }
 }

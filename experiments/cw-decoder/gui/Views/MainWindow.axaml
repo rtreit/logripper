@@ -121,59 +121,76 @@
     <Border Grid.Row="2" Padding="18,10" Background="{StaticResource BgPanel}"
             BorderBrush="{StaticResource GridLine}" BorderThickness="0,0,0,1">
       <Grid>
-        <Grid ColumnDefinitions="Auto,*,Auto,*,Auto,*,Auto,Auto"
-              IsVisible="{Binding IsCustomDecoderMode}">
-          <TextBlock Text="SENS" Classes="label" VerticalAlignment="Center" Margin="0,0,8,0" />
+        <StackPanel IsVisible="{Binding IsCustomDecoderMode}" Spacing="8">
+          <Grid ColumnDefinitions="Auto,*,Auto,*,Auto,*,Auto,Auto">
+            <TextBlock Text="SENS" Classes="label" VerticalAlignment="Center" Margin="0,0,8,0" />
 
-          <StackPanel Grid.Column="1" Spacing="2" Margin="4,0,16,0">
-            <Grid ColumnDefinitions="Auto,*,Auto" MinHeight="22">
-              <TextBlock Text="MIN SNR" Classes="label" />
-              <TextBlock Grid.Column="2" Text="{Binding MinSnrDb, StringFormat={}{0:F1} dB}" Classes="label" Foreground="{StaticResource AccentLime}" />
-            </Grid>
-            <Slider Minimum="0" Maximum="15" SmallChange="0.5" LargeChange="2"
-                    TickFrequency="3" IsSnapToTickEnabled="False"
-                    Value="{Binding MinSnrDb, Mode=TwoWay}" />
-          </StackPanel>
+            <StackPanel Grid.Column="1" Spacing="2" Margin="4,0,16,0">
+              <Grid ColumnDefinitions="Auto,*,Auto" MinHeight="22">
+                <TextBlock Text="MIN SNR" Classes="label" />
+                <TextBlock Grid.Column="2" Text="{Binding MinSnrDb, StringFormat={}{0:F1} dB}" Classes="label" Foreground="{StaticResource AccentLime}" />
+              </Grid>
+              <Slider Minimum="0" Maximum="15" SmallChange="0.5" LargeChange="2"
+                      TickFrequency="3" IsSnapToTickEnabled="False"
+                      Value="{Binding MinSnrDb, Mode=TwoWay}" />
+            </StackPanel>
 
-          <TextBlock Grid.Column="2" Text="·" Foreground="{StaticResource GridLine}" VerticalAlignment="Center" />
+            <TextBlock Grid.Column="2" Text="·" Foreground="{StaticResource GridLine}" VerticalAlignment="Center" />
 
-          <StackPanel Grid.Column="3" Spacing="2" Margin="4,0,16,0">
-            <Grid ColumnDefinitions="Auto,*,Auto" MinHeight="22">
-              <TextBlock Text="PITCH LOCK" Classes="label" />
-              <TextBlock Grid.Column="2" Text="{Binding PitchMinSnrDb, StringFormat={}{0:F1} dB}" Classes="label" Foreground="{StaticResource AccentLime}" />
-            </Grid>
-            <Slider Minimum="0" Maximum="20" SmallChange="0.5" LargeChange="2"
-                    TickFrequency="4" Value="{Binding PitchMinSnrDb, Mode=TwoWay}" />
-          </StackPanel>
+            <StackPanel Grid.Column="3" Spacing="2" Margin="4,0,16,0">
+              <Grid ColumnDefinitions="Auto,*,Auto" MinHeight="22">
+                <TextBlock Text="PITCH LOCK" Classes="label" />
+                <TextBlock Grid.Column="2" Text="{Binding PitchMinSnrDb, StringFormat={}{0:F1} dB}" Classes="label" Foreground="{StaticResource AccentLime}" />
+              </Grid>
+              <Slider Minimum="0" Maximum="20" SmallChange="0.5" LargeChange="2"
+                      TickFrequency="4" Value="{Binding PitchMinSnrDb, Mode=TwoWay}" />
+            </StackPanel>
 
-          <TextBlock Grid.Column="4" Text="·" Foreground="{StaticResource GridLine}" VerticalAlignment="Center" />
+            <TextBlock Grid.Column="4" Text="·" Foreground="{StaticResource GridLine}" VerticalAlignment="Center" />
 
-          <StackPanel Grid.Column="5" Spacing="2" Margin="4,0,16,0">
-            <Grid ColumnDefinitions="Auto,*,Auto,Auto" MinHeight="22">
-              <TextBlock Text="THRESHOLD ×" Classes="label" />
-              <CheckBox Grid.Column="2" Content="AUTO" Margin="0,0,8,0" Padding="2,0,0,0"
-                         FontFamily="Consolas" FontSize="10"
-                         Foreground="{StaticResource AccentLime}"
-                         VerticalAlignment="Center"
-                         IsChecked="{Binding AutoThreshold, Mode=TwoWay}"
-                         ToolTip.Tip="Auto-tune threshold from running SNR margin (follows QSB)" />
-              <TextBlock Grid.Column="3" Text="{Binding ThresholdScale, StringFormat={}{0:F2}}" Classes="label" Foreground="{StaticResource AccentLime}" />
-            </Grid>
-            <Slider Minimum="0.3" Maximum="2.0" SmallChange="0.05" LargeChange="0.2"
-                    TickFrequency="0.5" Value="{Binding ThresholdScale, Mode=TwoWay}"
-                    IsEnabled="{Binding !AutoThreshold}" />
-          </StackPanel>
+            <StackPanel Grid.Column="5" Spacing="2" Margin="4,0,16,0">
+              <Grid ColumnDefinitions="Auto,*,Auto,Auto" MinHeight="22">
+                <TextBlock Text="THRESHOLD ×" Classes="label" />
+                <CheckBox Grid.Column="2" Content="AUTO" Margin="0,0,8,0" Padding="2,0,0,0"
+                           FontFamily="Consolas" FontSize="10"
+                           Foreground="{StaticResource AccentLime}"
+                           VerticalAlignment="Center"
+                           IsChecked="{Binding AutoThreshold, Mode=TwoWay}"
+                           ToolTip.Tip="Auto-tune threshold from running SNR margin (follows QSB)" />
+                <TextBlock Grid.Column="3" Text="{Binding ThresholdScale, StringFormat={}{0:F2}}" Classes="label" Foreground="{StaticResource AccentLime}" />
+              </Grid>
+              <Slider Minimum="0.3" Maximum="2.0" SmallChange="0.05" LargeChange="0.2"
+                      TickFrequency="0.5" Value="{Binding ThresholdScale, Mode=TwoWay}"
+                      IsEnabled="{Binding !AutoThreshold}" />
+            </StackPanel>
 
-          <Border Grid.Column="6" Width="110" Padding="10,4" Margin="0,0,12,0" VerticalAlignment="Center"
-                  Background="#0E2A3D" BorderBrush="{StaticResource AccentCyan}" BorderThickness="1" CornerRadius="2">
-            <TextBlock Text="{Binding SignalQualityLabel}" FontFamily="Consolas" FontSize="13"
-                       Foreground="{StaticResource AccentCyan}" LetterSpacing="3"
-                       HorizontalAlignment="Center" TextAlignment="Center" />
-          </Border>
+            <Border Grid.Column="6" Width="110" Padding="10,4" Margin="0,0,12,0" VerticalAlignment="Center"
+                    Background="#0E2A3D" BorderBrush="{StaticResource AccentCyan}" BorderThickness="1" CornerRadius="2">
+              <TextBlock Text="{Binding SignalQualityLabel}" FontFamily="Consolas" FontSize="13"
+                         Foreground="{StaticResource AccentCyan}" LetterSpacing="3"
+                         HorizontalAlignment="Center" TextAlignment="Center" />
+            </Border>
 
-          <Button Grid.Column="7" Classes="primary" Content="RESET" Click="OnResetSensitivityClick"
-                  FontSize="11" Padding="14,4" />
-        </Grid>
+            <Button Grid.Column="7" Classes="primary" Content="RESET" Click="OnResetSensitivityClick"
+                    FontSize="11" Padding="14,4" />
+          </Grid>
+
+          <Grid ColumnDefinitions="Auto,Auto,Auto,Auto,*" ColumnSpacing="10">
+            <TextBlock Text="EXPERIMENT" Classes="label" VerticalAlignment="Center" />
+            <CheckBox Grid.Column="1" Content="RANGE LOCK" IsChecked="{Binding ExperimentalRangeLock, Mode=TwoWay}"
+                      VerticalAlignment="Center"
+                      ToolTip.Tip="Keep pitch hunting inside the selected Hz band and relock faster there." />
+            <StackPanel Grid.Column="2" Spacing="2">
+              <TextBlock Text="MIN Hz" Classes="label" />
+              <NumericUpDown Minimum="200" Maximum="1200" Increment="10" Value="{Binding RangeLockMinHz, Mode=TwoWay}" />
+            </StackPanel>
+            <StackPanel Grid.Column="3" Spacing="2">
+              <TextBlock Text="MAX Hz" Classes="label" />
+              <NumericUpDown Minimum="200" Maximum="1200" Increment="10" Value="{Binding RangeLockMaxHz, Mode=TwoWay}" />
+            </StackPanel>
+            <TextBlock Grid.Column="4" Text="{Binding RangeLockSummary}" Classes="label" TextWrapping="Wrap" VerticalAlignment="Center" />
+          </Grid>
+        </StackPanel>
 
         <Grid ColumnDefinitions="Auto,*" ColumnSpacing="12" IsVisible="{Binding IsBaselineDecoderMode}">
           <TextBlock Text="BASELINE" Classes="label" VerticalAlignment="Center" />
@@ -191,9 +208,10 @@
       <Border Classes="panel" Margin="0,0,7,0">
         <Grid RowDefinitions="Auto,Auto,Auto" RowSpacing="10">
           <!-- Header: section title + pitch -->
-          <Grid ColumnDefinitions="*,Auto" >
+          <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="8">
             <TextBlock Text="SIGNAL STRENGTH" Classes="label" />
-            <TextBlock Grid.Column="1" Text="{Binding PitchHz, StringFormat={}{0:F1} Hz}"
+            <TextBlock Grid.Column="1" Text="CURRENT TONE" Classes="label" VerticalAlignment="Center" />
+            <TextBlock Grid.Column="2" Text="{Binding CurrentToneHzDisplay}"
                        Classes="value" Foreground="{StaticResource AccentLime}" />
           </Grid>
 
@@ -277,15 +295,18 @@
     <Border Grid.Row="4" Margin="14,12,14,0" Classes="panel"
             IsVisible="{Binding HasPlaybackSource}">
       <Grid RowDefinitions="Auto,Auto,Auto" RowSpacing="8">
-        <Grid ColumnDefinitions="Auto,Auto,*,Auto,Auto" ColumnSpacing="10">
+        <Grid ColumnDefinitions="Auto,Auto,*,Auto,Auto,Auto,Auto" ColumnSpacing="10">
           <TextBlock Text="AUDIO" Classes="label" VerticalAlignment="Center" />
           <TextBlock Grid.Column="1" Text="{Binding PlaybackSourceLabel}" FontFamily="Consolas"
                      Foreground="{StaticResource AccentAmber}" VerticalAlignment="Center" />
           <TextBlock Grid.Column="2" Text="{Binding PlaybackSourceDisplay}" FontFamily="Consolas"
                      Foreground="{StaticResource AccentCyan}" VerticalAlignment="Center" />
-          <Button Grid.Column="3" Classes="primary" Content="PLAY AUDIO" Click="OnStartPlaybackClick"
+          <TextBlock Grid.Column="3" Text="CURRENT TONE" Classes="label" VerticalAlignment="Center" />
+          <TextBlock Grid.Column="4" Text="{Binding CurrentToneHzDisplay}" FontFamily="Consolas"
+                     Foreground="{StaticResource AccentLime}" VerticalAlignment="Center" />
+          <Button Grid.Column="5" Classes="primary" Content="PLAY AUDIO" Click="OnStartPlaybackClick"
                   IsEnabled="{Binding CanStartPlayback}" FontSize="11" Padding="14,4" />
-          <Button Grid.Column="4" Classes="primary" Content="STOP AUDIO" Click="OnStopPlaybackClick"
+          <Button Grid.Column="6" Classes="primary" Content="STOP AUDIO" Click="OnStopPlaybackClick"
                   IsEnabled="{Binding CanStopPlayback}" FontSize="11" Padding="14,4" />
         </Grid>
         <Grid Grid.Row="1" ColumnDefinitions="Auto,*,Auto" ColumnSpacing="10">
@@ -610,7 +631,7 @@
               </Grid>
             </Border>
 
-            <Grid Grid.Row="2" ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,*" ColumnSpacing="10">
+            <Grid Grid.Row="2" ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,*" ColumnSpacing="10">
               <StackPanel Spacing="2">
                 <TextBlock Text="WINDOW (s)" Classes="label" />
                 <NumericUpDown Minimum="8" Maximum="40" Increment="1" Value="{Binding LabelEvalWindowSeconds, Mode=TwoWay}" />
@@ -637,8 +658,21 @@
                   <NumericUpDown Grid.Column="1" Minimum="0" Maximum="5000" Increment="100" Value="{Binding LabelEvalPostRollMs, Mode=TwoWay}" />
                 </Grid>
               </StackPanel>
-              <StackPanel Grid.Column="5" Spacing="4" VerticalAlignment="Bottom">
+              <StackPanel Grid.Column="5" Spacing="2">
+                <TextBlock Text="EXPERIMENT" Classes="label" />
+                <CheckBox Content="RANGE LOCK" IsChecked="{Binding ExperimentalRangeLock, Mode=TwoWay}"
+                          ToolTip.Tip="Score labels with the custom streaming decoder constrained to the selected Hz band. Baseline sweep stays disabled in this mode." />
+              </StackPanel>
+              <StackPanel Grid.Column="6" Spacing="2">
+                <TextBlock Text="RANGE (Hz)" Classes="label" />
+                <Grid ColumnDefinitions="*,*" ColumnSpacing="6">
+                  <NumericUpDown Minimum="200" Maximum="1200" Increment="10" Value="{Binding RangeLockMinHz, Mode=TwoWay}" />
+                  <NumericUpDown Grid.Column="1" Minimum="200" Maximum="1200" Increment="10" Value="{Binding RangeLockMaxHz, Mode=TwoWay}" />
+                </Grid>
+              </StackPanel>
+              <StackPanel Grid.Column="7" Spacing="4" VerticalAlignment="Bottom">
                 <TextBlock Text="{Binding LabelEvaluationTargetLabel}" Classes="label" TextWrapping="Wrap" />
+                <TextBlock Text="{Binding RangeLockSummary}" Classes="label" TextWrapping="Wrap" />
                 <TextBlock Text="{Binding TopSweepSummary}" Classes="label" TextWrapping="Wrap" />
                 <Button Classes="primary" Content="APPLY TOP RESULT" Click="OnApplyTopSweepClick"
                         IsEnabled="{Binding CanApplyTopSweep}" FontSize="11" Padding="14,4" HorizontalAlignment="Left" />

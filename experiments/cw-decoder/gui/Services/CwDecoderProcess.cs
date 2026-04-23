@@ -249,11 +249,13 @@ internal sealed class CwDecoderProcess : IDisposable
         double minWindowSeconds,
         int decodeEveryMs,
         int confirmations,
+        DecoderConfig cfg,
         CancellationToken ct = default)
     {
         var psi = CreateEvalStartInfo();
         AddLabelSelectionArguments(psi, allLabels, labelPaths);
         AddLabelScoreModeArguments(psi, fullStreamMode, preRollMs, postRollMs);
+        AddStreamingExperimentArguments(psi, cfg);
         psi.ArgumentList.Add("--json");
         psi.ArgumentList.Add("--window");
         psi.ArgumentList.Add(F(windowSeconds));
@@ -552,6 +554,31 @@ internal sealed class CwDecoderProcess : IDisposable
             psi.ArgumentList.Add("--post-roll-ms");
             psi.ArgumentList.Add(postRollMs.ToString(CultureInfo.InvariantCulture));
         }
+    }
+
+    private static void AddStreamingExperimentArguments(ProcessStartInfo psi, DecoderConfig cfg)
+    {
+        psi.ArgumentList.Add("--min-snr-db");
+        psi.ArgumentList.Add(cfg.MinSnrDb.ToString(CultureInfo.InvariantCulture));
+        psi.ArgumentList.Add("--pitch-min-snr-db");
+        psi.ArgumentList.Add(cfg.PitchMinSnrDb.ToString(CultureInfo.InvariantCulture));
+        psi.ArgumentList.Add("--threshold-scale");
+        psi.ArgumentList.Add(cfg.ThresholdScale.ToString(CultureInfo.InvariantCulture));
+        if (!cfg.AutoThreshold)
+        {
+            psi.ArgumentList.Add("--no-auto-threshold");
+        }
+
+        if (!cfg.ExperimentalRangeLock)
+        {
+            return;
+        }
+
+        psi.ArgumentList.Add("--experimental-range-lock");
+        psi.ArgumentList.Add("--range-lock-min-hz");
+        psi.ArgumentList.Add(cfg.RangeLockMinHz.ToString(CultureInfo.InvariantCulture));
+        psi.ArgumentList.Add("--range-lock-max-hz");
+        psi.ArgumentList.Add(cfg.RangeLockMaxHz.ToString(CultureInfo.InvariantCulture));
     }
 
     private static async Task<string> RunOneShotAsync(ProcessStartInfo psi, CancellationToken ct)

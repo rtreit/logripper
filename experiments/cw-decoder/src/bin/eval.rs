@@ -107,6 +107,7 @@ fn main() -> Result<()> {
             mode: parse_label_score_mode(&args),
             pre_roll_s: arg_value_f32(&args, "--pre-roll-ms").unwrap_or(0.0) / 1000.0,
             post_roll_s: arg_value_f32(&args, "--post-roll-ms").unwrap_or(0.0) / 1000.0,
+            streaming_cfg: parse_streaming_decoder_config(&args),
         };
         let top = arg_value_usize(&args, "--top").unwrap_or(10);
         if args.iter().any(|a| a == "--sweep-ditdah") {
@@ -239,6 +240,7 @@ struct LabelScoreConfig {
     mode: LabelScoreMode,
     pre_roll_s: f32,
     post_roll_s: f32,
+    streaming_cfg: DecoderConfig,
 }
 
 impl LabelScoreMode {
@@ -273,6 +275,15 @@ fn run_label_score(
                 "min_window_seconds": score_cfg.baseline.min_window_seconds,
                 "decode_every_ms": score_cfg.baseline.decode_every_ms,
                 "required_confirmations": score_cfg.baseline.required_confirmations,
+            },
+            "streaming": {
+                "min_snr_db": score_cfg.streaming_cfg.min_snr_db,
+                "pitch_min_snr_db": score_cfg.streaming_cfg.pitch_min_snr_db,
+                "threshold_scale": score_cfg.streaming_cfg.threshold_scale,
+                "auto_threshold": score_cfg.streaming_cfg.auto_threshold,
+                "experimental_range_lock": score_cfg.streaming_cfg.experimental_range_lock,
+                "range_lock_min_hz": score_cfg.streaming_cfg.range_lock_min_hz,
+                "range_lock_max_hz": score_cfg.streaming_cfg.range_lock_max_hz,
             },
             "summary": {
                 "exact": exact,
@@ -694,6 +705,10 @@ fn score_labels_exact_window(
     audio_cache: &HashMap<PathBuf, audio::DecodedAudio>,
     score_cfg: LabelScoreConfig,
 ) -> Vec<LabelScore> {
+    if score_cfg.streaming_cfg.experimental_range_lock {
+        return score_labels_exact_window_streaming(labels, audio_cache, score_cfg);
+    }
+
     labels
         .iter()
         .map(|example| {
@@ -712,11 +727,39 @@ fn score_labels_exact_window(
         .collect()
 }
 
+fn score_labels_exact_window_streaming(
+    labels: &[LabelExample],
+    audio_cache: &HashMap<PathBuf, audio::DecodedAudio>,
+    score_cfg: LabelScoreConfig,
+) -> Vec<LabelScore> {
+    labels
+        .iter()
+        .map(|example| {
+            let audio = audio_cache
+                .get(&example.source)
+                .expect("audio cache missing source");
+            let (start, end) = expanded_sample_bounds(audio, example, score_cfg);
+            let samples = if end > start {
+                &audio.samples[start..end]
+            } else {
+                &[]
+            };
+            let trace = run_streaming_trace(samples, audio.sample_rate, score_cfg.streaming_cfg)
+                .expect("streaming exact-window trace failed");
+            build_label_score(example, &normalize_copy(&trace.transcript))
+        })
+        .collect()
+}
+
 fn score_labels_full_stream(
     labels: &[LabelExample],
     audio_cache: &HashMap<PathBuf, audio::DecodedAudio>,
     score_cfg: LabelScoreConfig,
 ) -> Vec<LabelScore> {
+    if score_cfg.streaming_cfg.experimental_range_lock {
+        return score_labels_full_stream_streaming(labels, audio_cache, score_cfg);
+    }
+
     let mut traces = HashMap::new();
     for source in labels.iter().map(|label| label.source.clone()) {
         traces.entry(source.clone()).or_insert_with(|| {
@@ -737,6 +780,40 @@ fn score_labels_full_stream(
             let (start, end) = expanded_sample_bounds(audio, example, score_cfg);
             let before = transcript_at_or_before(trace, start);
             let after = transcript_at_or_before(trace, end);
+            let decoded = normalize_copy(&extract_transcript_delta(before, after));
+            build_label_score(example, &decoded)
+        })
+        .collect()
+}
+
+fn score_labels_full_stream_streaming(
+    labels: &[LabelExample],
+    audio_cache: &HashMap<PathBuf, audio::DecodedAudio>,
+    score_cfg: LabelScoreConfig,
+) -> Vec<LabelScore> {
+    let mut traces = HashMap::new();
+    for source in labels.iter().map(|label| label.source.clone()) {
+        traces.entry(source.clone()).or_insert_with(|| {
+            let audio = audio_cache
+                .get(&source)
+                .expect("audio cache missing source");
+            run_streaming_trace(&audio.samples, audio.sample_rate, score_cfg.streaming_cfg)
+                .expect("streaming full-trace failed")
+        });
+    }
+
+    labels
+        .iter()
+        .map(|example| {
+            let audio = audio_cache
+                .get(&example.source)
+                .expect("audio cache missing source");
+            let trace = traces
+                .get(&example.source)
+                .expect("streaming trace missing source");
+            let (start, end) = expanded_sample_bounds(audio, example, score_cfg);
+            let before = transcript_at_or_before_streaming(trace, start);
+            let after = transcript_at_or_before_streaming(trace, end);
             let decoded = normalize_copy(&extract_transcript_delta(before, after));
             build_label_score(example, &decoded)
         })
@@ -797,6 +874,86 @@ fn expanded_sample_bounds(
 }
 
 fn transcript_at_or_before(trace: &CausalBaselineTrace, sample_index: usize) -> &str {
+    let index = trace
+        .snapshots
+        .partition_point(|snapshot| snapshot.end_sample <= sample_index);
+    if index == 0 {
+        ""
+    } else {
+        trace.snapshots[index - 1].transcript.as_str()
+    }
+}
+
+#[derive(Debug, Clone)]
+struct StreamingTraceSnapshot {
+    end_sample: usize,
+    transcript: String,
+}
+
+#[derive(Debug, Clone)]
+struct StreamingTrace {
+    transcript: String,
+    snapshots: Vec<StreamingTraceSnapshot>,
+}
+
+fn run_streaming_trace(
+    samples: &[f32],
+    sample_rate: u32,
+    cfg: DecoderConfig,
+) -> Result<StreamingTrace> {
+    let mut decoder = StreamingDecoder::new(sample_rate)?;
+    decoder.set_config(cfg);
+    let chunk_samples = (sample_rate as usize / 20).max(64);
+    let mut transcript = String::new();
+    let mut consumed = 0usize;
+    let mut snapshots = Vec::new();
+
+    for chunk in samples.chunks(chunk_samples) {
+        consumed += chunk.len();
+        for ev in decoder.feed(chunk)? {
+            if append_stream_event_to_transcript(&mut transcript, &ev) {
+                snapshots.push(StreamingTraceSnapshot {
+                    end_sample: consumed,
+                    transcript: transcript.trim().to_string(),
+                });
+            }
+        }
+    }
+
+    for ev in decoder.flush() {
+        if append_stream_event_to_transcript(&mut transcript, &ev) {
+            snapshots.push(StreamingTraceSnapshot {
+                end_sample: consumed,
+                transcript: transcript.trim().to_string(),
+            });
+        }
+    }
+
+    Ok(StreamingTrace {
+        transcript: transcript.trim().to_string(),
+        snapshots,
+    })
+}
+
+fn append_stream_event_to_transcript(transcript: &mut String, ev: &StreamEvent) -> bool {
+    match ev {
+        StreamEvent::Char { ch, .. } => {
+            transcript.push(*ch);
+            true
+        }
+        StreamEvent::Word => {
+            transcript.push(' ');
+            true
+        }
+        StreamEvent::Garbled { .. } => {
+            transcript.push('?');
+            true
+        }
+        _ => false,
+    }
+}
+
+fn transcript_at_or_before_streaming(trace: &StreamingTrace, sample_index: usize) -> &str {
     let index = trace
         .snapshots
         .partition_point(|snapshot| snapshot.end_sample <= sample_index);
@@ -933,6 +1090,10 @@ fn resolve_label_source(source: &std::path::Path, label_dir: &std::path::Path) -
 }
 
 fn parse_label_score_mode(args: &[String]) -> LabelScoreMode {
+    if args.iter().any(|arg| arg == "--full-stream") {
+        return LabelScoreMode::FullStream;
+    }
+
     match args
         .windows(2)
         .find(|w| w[0] == "--mode")
@@ -940,6 +1101,23 @@ fn parse_label_score_mode(args: &[String]) -> LabelScoreMode {
     {
         Some("full-stream") => LabelScoreMode::FullStream,
         _ => LabelScoreMode::ExactWindow,
+    }
+}
+
+fn parse_streaming_decoder_config(args: &[String]) -> DecoderConfig {
+    let defaults = DecoderConfig::default();
+    DecoderConfig {
+        min_snr_db: arg_value_f32(args, "--min-snr-db").unwrap_or(defaults.min_snr_db),
+        pitch_min_snr_db: arg_value_f32(args, "--pitch-min-snr-db")
+            .unwrap_or(defaults.pitch_min_snr_db),
+        threshold_scale: arg_value_f32(args, "--threshold-scale")
+            .unwrap_or(defaults.threshold_scale),
+        auto_threshold: !args.iter().any(|a| a == "--no-auto-threshold"),
+        experimental_range_lock: args.iter().any(|a| a == "--experimental-range-lock"),
+        range_lock_min_hz: arg_value_f32(args, "--range-lock-min-hz")
+            .unwrap_or(cw_decoder_poc::streaming::DEFAULT_RANGE_LOCK_MIN_HZ),
+        range_lock_max_hz: arg_value_f32(args, "--range-lock-max-hz")
+            .unwrap_or(cw_decoder_poc::streaming::DEFAULT_RANGE_LOCK_MAX_HZ),
     }
 }
 

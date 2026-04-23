@@ -119,6 +119,8 @@ Current decode-tab workflow also includes:
 - **Replay & Score** live-vs-offline comparison with a visible CER chip
 - inline audio playback with a shared transport / progress surface
 - a real-time playback signal view driven by the same broad-band profile pipeline used in labeling
+- an explicit **CURRENT TONE** readout during live decode and playback
+- an experimental **RANGE LOCK** mode for custom streaming, so live/file decode can prefer the strongest tone inside a chosen Hz window
 
 That replay path is useful for answering: _“what did the live path think happened, and what does an offline rerun on the same captured audio think happened?”_
 
@@ -159,6 +161,9 @@ The tuning workflow is now first-class in the GUI:
 - inspect score cards, failure-breakdown bars, and per-label truth-vs-decoded detail instead of raw console text
 - inspect sweep rankings with exact-match progress bars plus average / worst CER
 - **Apply Top Result**
+- score the experimental custom-streaming range-lock path against labels by enabling **RANGE LOCK** on the Tuning tab
+
+Baseline sweep still tunes the causal `ditdah` reference only. When **RANGE LOCK** is enabled, use **Score Labels** to measure the streaming experiment rather than **Sweep Baseline**.
 
 When Decode mode = **Baseline ditdah**, the Decode tab uses the same shared tuning settings as the Tuning tab.
 
@@ -441,6 +446,12 @@ Run the full-stream scorer:
 
 ```powershell
 cargo run --release --manifest-path experiments\cw-decoder\Cargo.toml --bin eval -- --labels-dir data\cw-samples --mode full-stream --window 20 --min-window 0.5 --decode-every-ms 1000 --confirmations 3 --post-roll-ms 1500
+```
+
+Run the experimental range-lock scorer against a focused label subset:
+
+```powershell
+cargo run --release --manifest-path experiments\cw-decoder\Cargo.toml --bin eval -- --labels data\cw-samples\W1AW_de_W5WZ_DX_CW_20180623_000422Z_14MHz.labels.jsonl --experimental-range-lock --range-lock-min-hz 550 --range-lock-max-hz 850
 ```
 
 Run a baseline `ditdah` parameter sweep against the corpus:
