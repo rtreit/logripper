@@ -1,85 +1,381 @@
 # CW Decoder Experiment
 
-This experiment is the current end-to-end workflow for tuning CW decode behavior against labeled off-air audio and then trying the tuned baseline on file or live input from the GUI.
+This folder is the current sandbox for improving QsoRipper CW decoding on real off-air audio.
 
-## What is here now
+The project has converged on two parallel goals:
 
-- `cw-decoder` Rust binary
-  - custom streaming decoder (`stream-file`, `stream-live`)
-  - causal ditdah baseline (`stream-file-ditdah`, `stream-live-ditdah`)
-  - harvest / preview / signal-profile helpers for labeling
-- `eval` Rust binary
-  - exact-window scoring against `*.labels.jsonl`
-  - full-stream scoring against the same corpus
-  - fast in-process parameter sweeps for the causal ditdah baseline
-- Avalonia GUI under `experiments\cw-decoder\gui`
-  - **Decode** tab for live/file decode
-  - **Labeling** tab for harvest, preview, exact-window editing, and saving labels
-  - **Tuning** tab for score/sweep runs and applying top sweep results to the baseline decoder mode
+1. keep a **boring, label-driven reference path** that we can score and tune honestly, and
+2. keep iterating on a **faster custom streaming path** for eventual live use.
 
-## Decoder modes
+Today, the reference path is the causal `ditdah` baseline. The custom streaming decoder has improved substantially, but it is still not the only truth source and should not replace corpus-driven evaluation yet.
 
-The GUI now has two decode modes:
+## Current architecture
 
-| Mode | Backing path | Tuned by |
+## Core binaries
+
+### `cw-decoder`
+
+Main experiment executable. It currently exposes several surfaces:
+
+- **Offline decode**
+  - `file`
+- **Custom streaming decoder**
+  - `stream-file`
+  - `stream-live`
+- **Causal ditdah baseline**
+  - `stream-file-ditdah`
+  - `stream-live-ditdah`
+- **Labeling helpers**
+  - `harvest-file`
+  - `preview-window`
+  - `profile-window`
+- **Tone diagnostics**
+  - `probe-fisher`
+
+### `eval`
+
+Corpus scorer and sweep harness.
+
+Current uses:
+
+- exact-window scoring against saved `*.labels.jsonl`
+- full-stream scoring by replaying whole recordings causally and intersecting transcript state at label boundaries
+- fast parameter sweeps for the causal `ditdah` baseline
+
+## Decoder families
+
+### 1. Custom streaming decoder
+
+Implemented in `src\streaming.rs`.
+
+Current shape:
+
+- live/file audio is resampled to 12 kHz
+- band-limited
+- pitch is selected from candidate tones
+- Goertzel power is tracked at the chosen tone
+- adaptive thresholding + SNR gating produce key-up/key-down state
+- on/off durations are classified into dits, dahs, letters, and words
+
+Recent custom-streaming changes on this branch added:
+
+- **keying-aware pitch picking** to resist strong continuous carriers
+- **trial-decode Fisher scoring** to rank candidate tones
+- **auto-threshold tuning** from running SNR margin so threshold follows QSB
+- **post-lock quality watchdog** so weak/dirty locks can be dropped instead of drifting forever
+
+This path is the more ambitious live decoder, but it still needs better corpus-driven measurement.
+
+### 2. Causal ditdah baseline
+
+Implemented in `src\ditdah_streaming.rs`.
+
+This is intentionally simpler:
+
+- keep a rolling audio window
+- repeatedly run whole-window `ditdah`
+- commit only the prefix that stabilizes across repeated snapshots
+
+This baseline exists because it is:
+
+- understandable
+- reproducible
+- easier to sweep
+- easier to score against human labels
+
+It is the current reference path for label-driven tuning.
+
+## GUI architecture
+
+The Avalonia app under `gui\` is the main operator surface.
+
+### Decode tab
+
+The GUI now supports two decoder modes:
+
+| Mode | Backing path | Primary use |
 |---|---|---|
-| Custom streaming | `stream-file` / `stream-live` | Decode-tab sensitivity sliders |
-| Baseline ditdah | `stream-file-ditdah` / `stream-live-ditdah` | Tuning-tab baseline settings |
+| `Custom streaming` | `stream-file` / `stream-live` | primary live-decoder experiment |
+| `Baseline ditdah` | `stream-file-ditdah` / `stream-live-ditdah` | honest label-driven A/B reference |
 
-The important consequence is:
+Current decode-tab workflow also includes:
 
-- **Custom streaming** is still the original experimental streaming decoder.
-- **Baseline ditdah** is the current honest label-driven reference path.
-- The **Tuning** tab now applies directly to **Decode** when Decoder Mode = **Baseline ditdah**.
+- live capture
+- optional recording of live audio to `data\cw-recordings\`
+- offline replay of the last live recording
+- **Replay & Score** live-vs-offline comparison with a visible CER chip
 
-## Recommended workflow
+That replay path is useful for answering: _“what did the live path think happened, and what does an offline rerun on the same captured audio think happened?”_
 
-1. Open an audio file on the **Labeling** tab.
-2. Click **Harvest** to find candidate CW regions.
-3. Adjust the exact window with the signal profile editor, play the slowed preview, and save verified copy to `data\cw-samples\*.labels.jsonl`.
-4. Switch to **Tuning**.
-5. Run **Score Labels** or **Sweep Baseline**.
-6. Click **Apply Top Result** after a sweep.
-7. Switch to **Decode**, choose **Baseline ditdah**, then:
-   - use **Open File...** for replay/A-B checks, or
-   - use **Start** for live audio from the selected input device.
+### Labeling tab
 
-## Harvest caching
+The labeling workflow is now built around exact-window truth:
 
-Harvest results are cached per selected audio file in the running GUI session.
+- harvest candidate regions from recordings
+- preview slowed audio
+- view signal profile
+- drag exact start/end handles
+- save uppercase verified copy to JSONL
 
-- Re-selecting the same file restores the cached candidate list, signal profiles, and unsaved draft edits.
-- Clicking **Harvest** explicitly re-runs the scan and replaces the cached results for that file.
+Saved labels retain:
 
-## Current baseline tuning loop
+- exact adjusted window
+- original harvested window
+- `clip_start`
+- `clip_end`
+- decoder snapshots used during labeling
 
-The baseline settings shared by **Tuning** and **Decode / Baseline ditdah** are:
+### Tuning tab
 
-- rolling window seconds
-- minimum warmup window seconds
-- decode cadence in milliseconds
-- required confirmation count
+The tuning workflow is now first-class in the GUI:
 
-The current labeled corpus is intentionally small and human-curated. It is meant to answer:
+- score one label file or the full corpus
+- run parameter sweeps
+- inspect textual results
+- **Apply Top Result**
 
-- boundary / warmup problems
-- commit/finalization problems
-- hard-signal target-isolation problems
+When Decode mode = **Baseline ditdah**, the Decode tab uses the same shared tuning settings as the Tuning tab.
 
-Use exact-window scoring first. Use full-stream scoring when you want to understand committed-output lag and end-of-region behavior.
+That gives the branch an honest loop:
 
-## Current corpus shape
+`label -> score/sweep -> apply top result -> decode tab file/live A/B`
 
-The working corpus currently lives under:
+## Labeling model and whether it still makes sense
+
+Yes — **the labeling approach still makes sense and is still worth pursuing**.
+
+The current exact-window + clipped-edge scheme has already paid off because it separated two very different classes of problems:
+
+- **boundary / warmup / commit issues**
+- **hard-signal isolation / segmentation issues**
+
+Without the labels, most misses just looked like “decoder bad.”
+
+With the labels, we can already see that:
+
+- strong W1AW-style copy is mostly recoverable
+- some misses are specifically leading-edge or commit-policy failures
+- the harder contest-style recordings are a different problem class
+
+That said, the current label schema is **necessary but not sufficient** for the hardest recordings.
+
+The next label additions should be optional, not a schema reset:
+
+- target tone estimate / confidence
+- multiple-signal flag
+- copy-confidence flag
+- negative / no-copy labels
+- short notes for “weaker target under stronger adjacent station” style cases
+
+So the answer is:
+
+- **keep labeling**
+- **keep exact-window truth**
+- **do not throw away the current corpus**
+- **expand metadata only where hard signals need more context**
+
+## Experiments to date
+
+## Phase 1: custom streaming decoder and real-audio harvest
+
+Initial work established:
+
+- real-file decode
+- live audio capture
+- an early custom streaming path
+- harvest from offline/stream agreement
+- pause-bounded region snapping
+
+This gave the project real off-air candidate regions instead of synthetic clean-CW toy cases.
+
+## Phase 2: exact-window human labeling
+
+The GUI labeling workflow added:
+
+- slowed preview audio
+- signal-profile editing
+- exact-window saved truth
+- clipped-edge flags
+
+This is the key change that turned the experiment into a measurable loop.
+
+## Phase 3: simplified causal baseline
+
+Whole-window `ditdah` succeeded on the strong W1AW sample where the earlier streaming path missed copy. That led to the simplified causal baseline:
+
+- repeated whole-window `ditdah`
+- prefix stabilization
+- streaming-style transcript commit
+
+This baseline became the reference scorer target.
+
+## Phase 4: scorer and parameter sweep
+
+`eval` now supports:
+
+- label discovery via `--labels-dir` / `--all-labels`
+- exact-window scoring
+- full-stream scoring
+- wide and interactive sweeps
+- failure classification such as:
+  - `exact`
+  - `leading_edge_error`
+  - `near_match`
+  - `spacing_only_error`
+  - `garbage_decode`
+  - `empty_output`
+
+## Phase 5: GUI integration
+
+The experiment no longer depends on shell-only tuning:
+
+- Tuning tab exposes score/sweep
+- Apply Top Result connects sweeps to baseline decode
+- harvest results are cached per file during the session
+- Decode tab can record live audio and replay it offline for CER comparison
+
+## Current labeled corpus
+
+Current corpus files:
 
 - `data\cw-samples\W1AW_de_W5WZ_DX_CW_20180623_000422Z_14MHz.labels.jsonl`
 - `data\cw-samples\k5zd-zs4tx-80m-qso.labels.jsonl`
 - `data\cw-samples\K1ZZ_de_DH8BQA_CQWWCW_CW_20151129_174710Z_14MHz.labels.jsonl`
 
-The present behavior split is roughly:
+Current size: **13 labels**
 
-- W1AW is mostly a boundary / commit problem.
-- The harder contest-style samples still look like target-isolation / segmentation problems.
+## Current results
+
+Using the current reference baseline settings:
+
+- `window = 20.0s`
+- `min-window = 0.5s`
+- `decode-every = 1000ms`
+- `confirmations = 3`
+
+### Exact-window baseline score
+
+Current scorer result:
+
+- **8 / 13 exact**
+- **avg CER = 0.11**
+- **total edit distance = 16**
+
+Interpretation:
+
+- **K1ZZ** is exact
+- **W1AW** is mostly solved in exact-window mode, with the remaining notable miss looking like a **leading-edge / warmup** problem (`TUST...` vs `QST...`)
+- **80m contest** labels still show mixed failure classes such as:
+  - garbage decode
+  - near match
+  - spacing-only errors
+
+### Full-stream baseline score
+
+Current scorer result with:
+
+- `mode = full-stream`
+- `post-roll = 1500ms`
+
+is:
+
+- **1 / 13 exact**
+- **avg CER = 0.90**
+- dominated by `empty_output` and `garbage_decode`
+
+Interpretation:
+
+- the baseline is much better as an **exact-window decode reference** than as a fully solved streaming-commit path
+- commit timing, final flush, and segmentation are still major open problems
+- this is a useful result, not a failure: it tells us the corpus is measuring something real
+
+## Current thinking
+
+## What we know with reasonable confidence
+
+1. **Labeling was the right move.**
+   It exposed boundary failures vs target-isolation failures much more clearly than raw listening or eyeballing waveforms.
+2. **The baseline remains the best tuning reference.**
+   It is simpler, sweepable, and already performs well enough on the easier labels to be meaningful.
+3. **The custom streaming decoder has improved materially.**
+   The new Fisher-based tone selection, adaptive thresholding, and lock watchdogs are promising, especially for live operation.
+4. **Hard contest audio is still the frontier.**
+   The remaining hard cases do not look like “just simplify the streamer” problems.
+
+## What this implies for next steps
+
+### Keep pursuing labeling, but evolve it carefully
+
+Do **not** stop investing in labels.
+
+Instead:
+
+1. keep the current exact-window label corpus active
+2. add richer metadata only for hard cases
+3. add some negative / no-copy examples
+4. add target-tone hints where multiple CW signals are present
+
+### Keep the baseline as the main evaluation reference
+
+For corpus work, the current order should stay:
+
+1. exact-window baseline score
+2. full-stream baseline score
+3. custom live/offline replay comparison
+4. future custom-streaming corpus score once instrumentation is ready
+
+### Use the custom streaming path as the algorithm sandbox
+
+The custom decoder is where more aggressive work belongs:
+
+- better target isolation
+- better lock retention / drop policy
+- better segmentation under contest-style pacing
+- lower ghost output
+
+But improvements there should be measured back against:
+
+- the label corpus
+- replay CER
+- exact-window vs full-stream deltas
+
+## Recommended next steps
+
+1. **Add richer label metadata for hard cases**
+   - target tone
+   - multi-signal flag
+   - negative/no-copy labels
+2. **Score the custom streaming path against the same corpus**
+   The branch now has stronger custom logic, but the corpus README story should eventually include real custom-vs-baseline numbers rather than replay-only intuition.
+3. **Improve full-stream commit behavior**
+   The baseline full-stream score shows that finalization and region-close behavior are still weak.
+4. **Use `probe-fisher` and label metadata together**
+   This looks like the right next diagnostic loop for multi-signal contest audio.
+5. **Decide whether the next major investment is**
+   - target isolation first, or
+   - segmentation / commit policy first
+
+Current evidence suggests:
+
+- **W1AW-like misses** -> boundary / commit / warmup
+- **80m contest misses** -> target isolation + segmentation
+
+## Practical workflow today
+
+If the goal is the fastest useful loop on another PC with live radio audio:
+
+1. pull this branch
+2. build `experiments\cw-decoder`
+3. run the GUI
+4. use **Baseline ditdah** for honest tuning
+5. record live audio and use **Replay & Score**
+6. keep using the label corpus to decide whether improvements are real
+
+If the goal is custom-streaming research:
+
+- keep the GUI default at **Custom streaming**
+- use live recording + replay CER for quick iteration
+- keep the label corpus as the harder regression gate
 
 ## Build and run
 
@@ -94,35 +390,20 @@ Run the GUI:
 dotnet run --project experiments\cw-decoder\gui\CwDecoderGui.csproj
 ```
 
-Run scorer/sweep from the shell:
+Run the scorer on the full corpus:
 
 ```powershell
-cargo run --manifest-path experiments\cw-decoder\Cargo.toml --bin eval -- --all-labels --sweep-ditdah
+cargo run --manifest-path experiments\cw-decoder\Cargo.toml --bin eval -- --all-labels --window 20 --min-window 0.5 --decode-every-ms 1000 --confirmations 3
 ```
 
-Run the baseline decoder directly on a file:
+Run the full-stream scorer:
 
 ```powershell
-cargo run --manifest-path experiments\cw-decoder\Cargo.toml -- stream-file-ditdah --json --window 20 --min-window 0.5 --decode-every-ms 1000 --confirmations 3 data\cw-samples\W1AW_de_W5WZ_DX_CW_20180623_000422Z_14MHz.mp3
+cargo run --manifest-path experiments\cw-decoder\Cargo.toml --bin eval -- --all-labels --mode full-stream --window 20 --min-window 0.5 --decode-every-ms 1000 --confirmations 3 --post-roll-ms 1500
 ```
 
-## What still needs work
+Probe likely target tones by Fisher score:
 
-1. Better full-stream scoring and commit/final-flush diagnosis.
-2. Better target-isolation tooling for multi-signal contest audio.
-3. Optional richer label metadata such as target tone, multi-signal flag, and negative/no-copy labels.
-4. Bridging learned behavior from the baseline path back into the custom streaming decoder, once the baseline diagnostics are stable enough to trust.
-
-## Practical note for the radio-attached PC
-
-If the goal is the fastest path to real experimentation on live radio audio, start with:
-
-- **Decoder Mode = Baseline ditdah**
-- a tuned setting set from **Tuning**
-- the same label corpus pulled from this branch
-
-That gives you the cleanest loop from:
-
-labels -> score/sweep -> apply top result -> live/file decode
-
-without mixing the still-evolving custom streaming path into the evaluation loop too early.
+```powershell
+cargo run --manifest-path experiments\cw-decoder\Cargo.toml -- probe-fisher data\cw-samples\k5zd-zs4tx-80m-qso.mp3 --min-hz 350 --max-hz 1500 --step-hz 10 --top 8
+```
