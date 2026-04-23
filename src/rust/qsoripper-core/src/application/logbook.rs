@@ -312,9 +312,8 @@ impl LogbookEngine {
 
     /// Permanently remove soft-deleted QSOs from storage.
     ///
-    /// Only rows with `deleted_at` set are eligible. When `exclude_ids` is
-    /// non-empty, those IDs are excluded from the purge (used by the handler
-    /// to keep rows whose remote delete failed).
+    /// Only rows with `deleted_at` set are eligible. When `local_ids` is
+    /// non-empty, only those IDs are considered (inclusion filter).
     ///
     /// # Errors
     ///

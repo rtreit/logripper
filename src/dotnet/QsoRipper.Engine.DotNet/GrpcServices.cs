@@ -318,6 +318,8 @@ internal sealed class ManagedLogbookGrpcService(ManagedEngineState state)
             throw new RpcException(new Status(StatusCode.InvalidArgument, "PurgeDeletedQsos requires confirm = true."));
         }
 
+        // TODO: IsSyncing is currently hardcoded false in ManagedEngineState.
+        // This guard will become effective when sync state tracking is implemented.
         var syncStatus = state.GetSyncStatus();
         if (syncStatus.IsSyncing)
         {
