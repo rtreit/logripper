@@ -1015,6 +1015,44 @@ public sealed class ManagedEngineStateTests : IDisposable
         });
     }
 
+    [Fact]
+    public void SyncWithQrz_populates_remote_deletes_pushed_counter()
+    {
+        var state = CreateStateWithSync();
+        state.SaveSetup(new SaveSetupRequest
+        {
+            QrzLogbookApiKey = "api-key",
+            StationProfile = new StationProfile
+            {
+                ProfileName = "Home",
+                StationCallsign = "K7RND",
+                OperatorCallsign = "K7RND",
+                Grid = "CN87",
+            },
+        });
+        var loggedResp = state.LogQso(new LogQsoRequest
+        {
+            SyncToQrz = false,
+            Qso = new QsoRecord
+            {
+                WorkedCallsign = "W1AW",
+                Band = Band._20M,
+                Mode = Mode.Ft8,
+                UtcTimestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            },
+        });
+        state.SyncWithQrz();
+        var synced = state.GetQso(loggedResp.LocalId)!;
+        Assert.False(string.IsNullOrEmpty(synced.QrzLogid));
+
+        state.DeleteQso(synced.LocalId, queueRemoteDelete: true);
+        var secondSync = state.SyncWithQrz();
+
+        Assert.True(secondSync.Complete);
+        Assert.Equal(1u, secondSync.RemoteDeletesPushed);
+        Assert.Equal(0u, secondSync.DeletesSkippedRemote);
+    }
+
     private static void EnsureStationConfigured(ManagedEngineState state)
     {
         state.SaveSetup(new SaveSetupRequest

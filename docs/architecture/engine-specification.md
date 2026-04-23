@@ -131,6 +131,7 @@ The primary QSO CRUD and sync surface. This is the most critical service in the 
 | `LogQso` | `LogQsoRequest` | `LogQsoResponse` | Unary |
 | `UpdateQso` | `UpdateQsoRequest` | `UpdateQsoResponse` | Unary |
 | `DeleteQso` | `DeleteQsoRequest` | `DeleteQsoResponse` | Unary |
+| `RestoreQso` | `RestoreQsoRequest` | `RestoreQsoResponse` | Unary |
 | `GetQso` | `GetQsoRequest` | `GetQsoResponse` | Unary |
 | `ListQsos` | `ListQsosRequest` | `stream ListQsosResponse` | Server-streaming |
 | `SyncWithQrz` | `SyncWithQrzRequest` | `stream SyncWithQrzResponse` | Server-streaming |
@@ -230,6 +231,21 @@ The sync follows a three-phase lifecycle:
 3. **Metadata phase** — Update the `sync_metadata` record with the current QRZ QSO count, last sync timestamp, and logbook owner callsign.
 
 Stream progress messages throughout all phases so clients can display real-time sync state.
+
+**Response fields (`SyncWithQrzResponse`):**
+
+| Field | Type | Description |
+|---|---|---|
+| `total_records` | `uint32` | Total records in scope for the sync pass. |
+| `processed_records` | `uint32` | Records processed so far. |
+| `uploaded_records` | `uint32` | Records successfully uploaded to QRZ. |
+| `downloaded_records` | `uint32` | Records downloaded (inserted or merged) from QRZ. |
+| `conflict_records` | `uint32` | Records flagged for conflict resolution. |
+| `current_action` | `string` (optional) | Human-readable status string for progress display. |
+| `complete` | `bool` | `true` on the terminal message; `false` on intermediate progress. |
+| `error` | `string` (optional) | Accumulated error summary if any phase encountered failures. |
+| `remote_deletes_pushed` | `uint32` | Number of pending remote deletes successfully pushed to QRZ (Phase 2.5). |
+| `deletes_skipped_remote` | `uint32` | Number of download records skipped because they matched a soft-deleted local row (Phase 1). |
 
 **Error semantics:**
 - `FAILED_PRECONDITION` — QRZ logbook credentials not configured.

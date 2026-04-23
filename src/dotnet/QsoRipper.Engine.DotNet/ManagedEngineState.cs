@@ -687,6 +687,8 @@ internal sealed class ManagedEngineState
                     ProcessedRecords = result.DownloadedCount + result.UploadedCount,
                     CurrentAction = "Sync completed.",
                     Complete = true,
+                    RemoteDeletesPushed = result.RemoteDeletesPushed,
+                    DeletesSkippedRemote = result.DeletesSkippedRemote,
                 };
 
                 if (result.ErrorSummary is not null)

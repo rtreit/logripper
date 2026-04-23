@@ -186,6 +186,8 @@ pub(crate) async fn execute_sync(
         counters.downloaded,
         counters.uploaded,
         counters.conflicts,
+        counters.remote_deletes_pushed,
+        counters.deletes_skipped_remote,
         error_summary,
     )
     .await;
@@ -231,6 +233,8 @@ async fn download_phase(
                 0,
                 0,
                 0,
+                0,
+                0,
                 Some(format!("Failed to load local QSOs: {err}")),
             )
             .await;
@@ -262,6 +266,8 @@ async fn download_phase(
         Err(err) => {
             send_complete(
                 progress_tx,
+                0,
+                0,
                 0,
                 0,
                 0,
@@ -892,6 +898,8 @@ async fn send_progress(
             current_action: Some(action.to_string()),
             complete: false,
             error: None,
+            remote_deletes_pushed: 0,
+            deletes_skipped_remote: 0,
         }))
         .await,
     );
@@ -902,6 +910,8 @@ async fn send_complete(
     downloaded: u32,
     uploaded: u32,
     conflicts: u32,
+    remote_deletes_pushed: u32,
+    deletes_skipped_remote: u32,
     error: Option<String>,
 ) {
     drop(
@@ -914,6 +924,8 @@ async fn send_complete(
             current_action: Some("Sync complete".to_string()),
             complete: true,
             error,
+            remote_deletes_pushed,
+            deletes_skipped_remote,
         }))
         .await,
     );
