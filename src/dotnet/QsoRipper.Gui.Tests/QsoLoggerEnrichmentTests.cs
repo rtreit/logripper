@@ -1,3 +1,4 @@
+using Google.Protobuf.WellKnownTypes;
 using QsoRipper.Domain;
 using QsoRipper.Gui.Services;
 using QsoRipper.Gui.ViewModels;
@@ -236,6 +237,7 @@ public sealed class QsoLoggerEnrichmentTests
 
         public Task<GetCurrentSpaceWeatherResponse> GetCurrentSpaceWeatherAsync(CancellationToken ct = default) =>
             throw new NotImplementedException();
+        public Task<PurgeDeletedQsosResponse> PurgeDeletedQsosAsync(IReadOnlyList<string>? localIds = null, Timestamp? olderThan = null, bool includePendingRemoteDeletes = false, CancellationToken ct = default) => throw new NotImplementedException();
     }
 
     private sealed class CapturingEngineClient : IEngineClient
@@ -292,5 +294,6 @@ public sealed class QsoLoggerEnrichmentTests
 
         public Task<GetCurrentSpaceWeatherResponse> GetCurrentSpaceWeatherAsync(CancellationToken ct = default) =>
             throw new NotImplementedException();
+        public Task<PurgeDeletedQsosResponse> PurgeDeletedQsosAsync(IReadOnlyList<string>? localIds = null, Timestamp? olderThan = null, bool includePendingRemoteDeletes = false, CancellationToken ct = default) => throw new NotImplementedException();
     }
 }

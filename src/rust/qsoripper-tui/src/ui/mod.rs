@@ -58,6 +58,10 @@ pub(crate) fn render_ui(app: &App, frame: &mut Frame) {
     if matches!(app.view, View::ConfirmDeleteQso) {
         confirm_dialog::render(app, frame);
     }
+
+    if matches!(app.view, View::ConfirmPurge) {
+        confirm_dialog::render_purge(frame);
+    }
 }
 
 /// Render the status bar (QSO log / error feedback).
@@ -196,6 +200,14 @@ mod tests {
         app.recent_qsos.push(make_qso("del-id", "K7ABC"));
         app.view = View::ConfirmDeleteQso;
         app.delete_candidate_id = Some("del-id".to_string());
+        terminal.draw(|f| super::render_ui(&app, f)).unwrap();
+    }
+
+    #[test]
+    fn render_confirm_purge_view() {
+        let mut terminal = make_terminal();
+        let mut app = make_app();
+        app.view = View::ConfirmPurge;
         terminal.draw(|f| super::render_ui(&app, f)).unwrap();
     }
 

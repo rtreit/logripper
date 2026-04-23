@@ -204,6 +204,13 @@ internal sealed class SwitchableEngineClient : IEngineClient, IDisposable
         CancellationToken ct = default) =>
         SnapshotClient().DeleteQsoAsync(localId, deleteFromQrz, ct);
 
+    public Task<PurgeDeletedQsosResponse> PurgeDeletedQsosAsync(
+        IReadOnlyList<string>? localIds = null,
+        Google.Protobuf.WellKnownTypes.Timestamp? olderThan = null,
+        bool includePendingRemoteDeletes = false,
+        CancellationToken ct = default) =>
+        SnapshotClient().PurgeDeletedQsosAsync(localIds, olderThan, includePendingRemoteDeletes, ct);
+
     public Task<LogQsoResponse> LogQsoAsync(
         QsoRecord qso,
         bool syncToQrz = false,

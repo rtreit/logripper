@@ -44,6 +44,8 @@ internal interface IEngineClient
 
     Task<DeleteQsoResponse> DeleteQsoAsync(string localId, bool deleteFromQrz = false, CancellationToken ct = default);
 
+    Task<PurgeDeletedQsosResponse> PurgeDeletedQsosAsync(IReadOnlyList<string>? localIds = null, Google.Protobuf.WellKnownTypes.Timestamp? olderThan = null, bool includePendingRemoteDeletes = false, CancellationToken ct = default);
+
     Task<LogQsoResponse> LogQsoAsync(QsoRecord qso, bool syncToQrz = false, CancellationToken ct = default);
 
     Task<GetRigSnapshotResponse> GetRigSnapshotAsync(CancellationToken ct = default);

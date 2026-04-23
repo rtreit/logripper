@@ -418,6 +418,15 @@ internal sealed class UxFixtureEngineClient : IEngineClient
         }
     }
 
+    public Task<PurgeDeletedQsosResponse> PurgeDeletedQsosAsync(
+        IReadOnlyList<string>? localIds = null,
+        Google.Protobuf.WellKnownTypes.Timestamp? olderThan = null,
+        bool includePendingRemoteDeletes = false,
+        CancellationToken ct = default)
+    {
+        return Task.FromResult(new PurgeDeletedQsosResponse { PurgedCount = 0 });
+    }
+
     public Task<LogQsoResponse> LogQsoAsync(QsoRecord qso, bool syncToQrz = false, CancellationToken ct = default)
     {
         return Task.FromResult(new LogQsoResponse { LocalId = Guid.NewGuid().ToString() });

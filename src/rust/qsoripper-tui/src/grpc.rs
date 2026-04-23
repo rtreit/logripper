@@ -13,7 +13,7 @@ use qsoripper_core::proto::qsoripper::services::{
     rig_control_service_client::RigControlServiceClient,
     space_weather_service_client::SpaceWeatherServiceClient, DeleteQsoRequest,
     GetCurrentSpaceWeatherRequest, GetRigSnapshotRequest, ListQsosRequest, LogQsoRequest,
-    LookupRequest, UpdateQsoRequest,
+    LookupRequest, PurgeDeletedQsosRequest, UpdateQsoRequest,
 };
 
 use crate::app::{CallsignInfo, RecentQso, RigInfo, RigStatus, SpaceWeatherInfo};
@@ -389,6 +389,19 @@ pub(crate) async fn delete_qso(channel: Channel, local_id: &str) -> anyhow::Resu
     };
     client.delete_qso(request).await?;
     Ok(())
+}
+
+/// Permanently purge all soft-deleted QSOs and return the number of records removed.
+pub(crate) async fn purge_deleted_qsos(channel: Channel) -> anyhow::Result<u32> {
+    let mut client = LogbookServiceClient::new(channel);
+    let request = PurgeDeletedQsosRequest {
+        local_ids: vec![],
+        older_than: None,
+        include_pending_remote_deletes: false,
+        confirm: true,
+    };
+    let response = client.purge_deleted_qsos(request).await?.into_inner();
+    Ok(response.purged_count)
 }
 
 /// Convert a frequency in MHz to Hz as a `u64`.
