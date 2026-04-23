@@ -227,6 +227,19 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
         set { if (Set(ref _thresholdScale, value)) PushConfig(); }
     }
 
+    private bool _autoThreshold = DecoderConfig.DefaultAutoThreshold;
+    /// <summary>
+    /// When true, the engine ignores <see cref="ThresholdScale"/> and picks
+    /// the scale itself from the running SNR margin. Lets the decoder
+    /// follow QSB without operator intervention. Toggle off to honour the
+    /// manual slider value verbatim.
+    /// </summary>
+    public bool AutoThreshold
+    {
+        get => _autoThreshold;
+        set { if (Set(ref _autoThreshold, value)) PushConfig(); }
+    }
+
     private string? _harvestFilePath;
     public string? HarvestFilePath { get => _harvestFilePath; set => Set(ref _harvestFilePath, value); }
 
@@ -567,9 +580,10 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
         MinSnrDb = DecoderConfig.DefaultMinSnrDb;
         PitchMinSnrDb = DecoderConfig.DefaultPitchMinSnrDb;
         ThresholdScale = DecoderConfig.DefaultThresholdScale;
+        AutoThreshold = DecoderConfig.DefaultAutoThreshold;
     }
 
-    private DecoderConfig CurrentConfig() => new(MinSnrDb, PitchMinSnrDb, ThresholdScale);
+    private DecoderConfig CurrentConfig() => new(MinSnrDb, PitchMinSnrDb, ThresholdScale, AutoThreshold);
     private BaselineDecoderConfig CurrentBaselineConfig() => new(
         WindowSeconds: LabelEvalWindowSeconds,
         MinWindowSeconds: LabelEvalMinWindowSeconds,
@@ -775,6 +789,10 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
             psi.ArgumentList.Add(cfg.PitchMinSnrDb.ToString(ic));
             psi.ArgumentList.Add("--threshold-scale");
             psi.ArgumentList.Add(cfg.ThresholdScale.ToString(ic));
+            if (!cfg.AutoThreshold)
+            {
+                psi.ArgumentList.Add("--no-auto-threshold");
+            }
             psi.ArgumentList.Add(wavPath);
         }
 

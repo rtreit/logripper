@@ -11,13 +11,15 @@ namespace CwDecoderGui.Models;
 public readonly record struct DecoderConfig(
     double MinSnrDb,
     double PitchMinSnrDb,
-    double ThresholdScale)
+    double ThresholdScale,
+    bool AutoThreshold)
 {
     public const double DefaultMinSnrDb = 3.0;
     public const double DefaultPitchMinSnrDb = 6.0;
     public const double DefaultThresholdScale = 1.0;
+    public const bool DefaultAutoThreshold = true;
 
-    public static DecoderConfig Defaults => new(DefaultMinSnrDb, DefaultPitchMinSnrDb, DefaultThresholdScale);
+    public static DecoderConfig Defaults => new(DefaultMinSnrDb, DefaultPitchMinSnrDb, DefaultThresholdScale, DefaultAutoThreshold);
 
     /// <summary>
     /// Render as CLI arguments for spawning the decoder with these initial
@@ -27,7 +29,12 @@ public readonly record struct DecoderConfig(
     public string ToCliArgs()
     {
         var ic = CultureInfo.InvariantCulture;
-        return $"--min-snr-db {MinSnrDb.ToString(ic)} --pitch-min-snr-db {PitchMinSnrDb.ToString(ic)} --threshold-scale {ThresholdScale.ToString(ic)}";
+        var args = $"--min-snr-db {MinSnrDb.ToString(ic)} --pitch-min-snr-db {PitchMinSnrDb.ToString(ic)} --threshold-scale {ThresholdScale.ToString(ic)}";
+        if (!AutoThreshold)
+        {
+            args += " --no-auto-threshold";
+        }
+        return args;
     }
 
     /// <summary>NDJSON command for live config update over stdin.</summary>
@@ -40,6 +47,8 @@ public readonly record struct DecoderConfig(
              + PitchMinSnrDb.ToString(ic)
              + ",\"threshold_scale\":"
              + ThresholdScale.ToString(ic)
+             + ",\"auto_threshold\":"
+             + (AutoThreshold ? "true" : "false")
              + "}";
     }
 }

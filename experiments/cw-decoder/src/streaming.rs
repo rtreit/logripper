@@ -85,8 +85,14 @@ pub struct DecoderConfig {
     /// time. Higher = more conservative, refuses to lock onto pure noise.
     pub pitch_min_snr_db: f32,
     /// Scale factor on the IQR-derived adaptive amplitude threshold. 1.0
-    /// is the classic value; >1 desensitises, <1 sensitises.
+    /// is the classic value; >1 desensitises, <1 sensitises. Ignored when
+    /// `auto_threshold` is true.
     pub threshold_scale: f32,
+    /// When true, the decoder picks `threshold_scale` automatically from
+    /// the current Q90/Q10 SNR margin: clean strong signals get scale~1.0,
+    /// weak/fading signals are pushed down toward ~0.4 so dits aren't
+    /// missed. Lets the decoder follow QSB without operator intervention.
+    pub auto_threshold: bool,
 }
 
 impl DecoderConfig {
@@ -95,6 +101,7 @@ impl DecoderConfig {
             min_snr_db: DEFAULT_MIN_SNR_DB,
             pitch_min_snr_db: DEFAULT_PITCH_MIN_SNR_DB,
             threshold_scale: DEFAULT_THRESHOLD_SCALE,
+            auto_threshold: true,
         }
     }
     /// Convert min_snr_db → linear power ratio for the inner gate.
@@ -657,7 +664,12 @@ struct Decoder {
     threshold: f32,
     threshold_dirty_count: usize,
     /// Operator-controlled multiplier on the IQR-derived threshold.
+    /// Ignored when `auto_threshold` is true.
     threshold_scale: f32,
+    /// When true, `update_threshold` derives the scale dynamically from
+    /// the recent Q90/Q10 SNR margin so the decoder follows QSB without
+    /// operator intervention.
+    auto_threshold: bool,
 
     is_on: bool,
     current_run: usize,
@@ -694,6 +706,7 @@ impl Decoder {
             threshold: 0.0,
             threshold_dirty_count: 0,
             threshold_scale: DEFAULT_THRESHOLD_SCALE,
+            auto_threshold: true,
             is_on: false,
             current_run: 0,
             have_first_sample: false,
@@ -726,13 +739,30 @@ impl Decoder {
         // Q25 and Q75 both sit in the off-region for slow code, biasing
         // the threshold low and missing dits. Q10/Q90 brackets the true
         // bimodal distribution far better across realistic duty cycles.
-        let p10 = v[v.len() / 10];
-        let p90 = v[v.len() * 9 / 10];
+        let p10 = v[v.len() / 10].max(1e-30);
+        let p90 = v[v.len() * 9 / 10].max(1e-30);
         let span = p90 - p10;
+        // Pick the threshold scale. In auto mode it tracks the recent
+        // SNR margin so the decoder follows QSB without retuning:
+        //
+        //   * strong clean signal (>=20 dB Q90/Q10): scale ≈ 1.0,
+        //     keeps the threshold safely above noise tails
+        //   * weak / fading signal (<=5 dB margin): scale ≈ 0.4, drops
+        //     the threshold close to noise so dits aren't missed
+        //   * linear interp between, clamped to [0.4, 1.0]
+        //
+        // In manual mode the operator-set `threshold_scale` is honoured
+        // verbatim, so existing slider workflows still work.
+        let scale = if self.auto_threshold {
+            let margin_db = 10.0 * (p90 / p10).log10();
+            let t = ((margin_db - 5.0) / 15.0).clamp(0.0, 1.0);
+            0.4 + t * 0.6
+        } else {
+            self.threshold_scale
+        };
         // Threshold sits halfway between off- and on-state by default;
-        // `threshold_scale` lets the operator slide it toward noise (<1)
-        // or toward signal (>1).
-        self.threshold = p10 + span * 0.5 * self.threshold_scale;
+        // the chosen scale slides it toward noise (<1) or toward signal (>1).
+        self.threshold = p10 + span * 0.5 * scale;
     }
 
     fn push_interval(&mut self, ivl: Interval) {
@@ -1058,6 +1088,7 @@ impl StreamingDecoder {
     pub fn set_config(&mut self, cfg: DecoderConfig) {
         self.config = cfg;
         self.decoder.threshold_scale = cfg.threshold_scale;
+        self.decoder.auto_threshold = cfg.auto_threshold;
     }
 
     /// Feed a chunk of raw audio at `source_rate`. Returns events emitted by

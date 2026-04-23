@@ -82,6 +82,11 @@ enum Cmd {
         /// Initial threshold scale (>1 = less sensitive amplitude gate).
         #[arg(long, default_value_t = streaming::DEFAULT_THRESHOLD_SCALE)]
         threshold_scale: f32,
+        /// Disable auto threshold tuning. By default the decoder picks the
+        /// scale dynamically from the running SNR margin so it follows
+        /// QSB. Pass this to honour `--threshold-scale` verbatim instead.
+        #[arg(long)]
+        no_auto_threshold: bool,
         /// Read NDJSON config-update lines from stdin while streaming.
         /// Each line: {"type":"config","min_snr_db":...,"pitch_min_snr_db":...,"threshold_scale":...}
         #[arg(long)]
@@ -184,6 +189,9 @@ enum Cmd {
         /// Initial threshold scale for the streaming path.
         #[arg(long, default_value_t = streaming::DEFAULT_THRESHOLD_SCALE)]
         threshold_scale: f32,
+        /// Disable auto threshold tuning for the streaming pass.
+        #[arg(long)]
+        no_auto_threshold: bool,
     },
 
     /// Render a slowed WAV preview for a specific file window so a human can
@@ -243,6 +251,10 @@ enum Cmd {
         /// Initial threshold scale.
         #[arg(long, default_value_t = streaming::DEFAULT_THRESHOLD_SCALE)]
         threshold_scale: f32,
+        /// Disable auto threshold tuning. By default the decoder follows
+        /// QSB by adapting the scale to the running SNR margin.
+        #[arg(long)]
+        no_auto_threshold: bool,
         /// Optional WAV path to mirror raw mono samples to (16-bit PCM at the
         /// device's native sample rate). Useful for post-stop offline analysis.
         #[arg(long)]
@@ -295,12 +307,14 @@ fn main() -> Result<()> {
             min_snr_db,
             pitch_min_snr_db,
             threshold_scale,
+            no_auto_threshold,
             stdin_control,
         } => {
             let cfg = streaming::DecoderConfig {
                 min_snr_db,
                 pitch_min_snr_db,
                 threshold_scale,
+                auto_threshold: !no_auto_threshold,
             };
             run_stream_file(&path, chunk_ms, realtime, quiet, json, cfg, stdin_control)
         }
@@ -360,11 +374,13 @@ fn main() -> Result<()> {
             min_snr_db,
             pitch_min_snr_db,
             threshold_scale,
+            no_auto_threshold,
         } => {
             let stream_cfg = streaming::DecoderConfig {
                 min_snr_db,
                 pitch_min_snr_db,
                 threshold_scale,
+                auto_threshold: !no_auto_threshold,
             };
             let harvest_cfg = harvest::HarvestConfig {
                 window_seconds: window,
@@ -398,6 +414,7 @@ fn main() -> Result<()> {
             min_snr_db,
             pitch_min_snr_db,
             threshold_scale,
+            no_auto_threshold,
             record,
             stdin_control,
         } => {
@@ -405,6 +422,7 @@ fn main() -> Result<()> {
                 min_snr_db,
                 pitch_min_snr_db,
                 threshold_scale,
+                auto_threshold: !no_auto_threshold,
             };
             run_stream_live(
                 device.as_deref(),
@@ -699,6 +717,7 @@ fn run_stream_file(
                     "min_snr_db": cfg.min_snr_db,
                     "pitch_min_snr_db": cfg.pitch_min_snr_db,
                     "threshold_scale": cfg.threshold_scale,
+                    "auto_threshold": cfg.auto_threshold,
                 }),
             }),
         );
@@ -742,6 +761,7 @@ fn run_stream_file(
                             "min_snr_db": c.min_snr_db,
                             "pitch_min_snr_db": c.pitch_min_snr_db,
                             "threshold_scale": c.threshold_scale,
+                            "auto_threshold": c.auto_threshold,
                         }),
                     );
                 }
@@ -1461,6 +1481,7 @@ fn run_stream_live(
                     "min_snr_db": cfg.min_snr_db,
                     "pitch_min_snr_db": cfg.pitch_min_snr_db,
                     "threshold_scale": cfg.threshold_scale,
+                    "auto_threshold": cfg.auto_threshold,
                 }),
             }),
         );
@@ -1497,6 +1518,7 @@ fn run_stream_live(
                             "min_snr_db": c.min_snr_db,
                             "pitch_min_snr_db": c.pitch_min_snr_db,
                             "threshold_scale": c.threshold_scale,
+                            "auto_threshold": c.auto_threshold,
                         }),
                     );
                 }
@@ -1637,6 +1659,9 @@ fn spawn_stdin_config_channel(
             }
             if let Some(x) = v.get("threshold_scale").and_then(|x| x.as_f64()) {
                 state.threshold_scale = x as f32;
+            }
+            if let Some(b) = v.get("auto_threshold").and_then(|x| x.as_bool()) {
+                state.auto_threshold = b;
             }
             if tx.send(state).is_err() {
                 break;

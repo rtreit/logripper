@@ -143,12 +143,18 @@
           <TextBlock Grid.Column="4" Text="·" Foreground="{StaticResource GridLine}" VerticalAlignment="Center" />
 
           <StackPanel Grid.Column="5" Spacing="2" Margin="4,0,16,0">
-            <Grid ColumnDefinitions="Auto,*,Auto">
+            <Grid ColumnDefinitions="Auto,*,Auto,Auto">
               <TextBlock Text="THRESHOLD ×" Classes="label" />
-              <TextBlock Grid.Column="2" Text="{Binding ThresholdScale, StringFormat={}{0:F2}}" Classes="label" Foreground="{StaticResource AccentLime}" />
+              <CheckBox Grid.Column="2" Content="AUTO" Margin="0,0,8,0" Padding="2,0,0,0"
+                        FontFamily="Consolas" FontSize="10"
+                        Foreground="{StaticResource AccentLime}"
+                        IsChecked="{Binding AutoThreshold, Mode=TwoWay}"
+                        ToolTip.Tip="Auto-tune threshold from running SNR margin (follows QSB)" />
+              <TextBlock Grid.Column="3" Text="{Binding ThresholdScale, StringFormat={}{0:F2}}" Classes="label" Foreground="{StaticResource AccentLime}" />
             </Grid>
             <Slider Minimum="0.3" Maximum="2.0" SmallChange="0.05" LargeChange="0.2"
-                    TickFrequency="0.5" Value="{Binding ThresholdScale, Mode=TwoWay}" />
+                    TickFrequency="0.5" Value="{Binding ThresholdScale, Mode=TwoWay}"
+                    IsEnabled="{Binding !AutoThreshold}" />
           </StackPanel>
 
           <Border Grid.Column="6" Width="110" Padding="10,4" Margin="0,0,12,0" VerticalAlignment="Center"
