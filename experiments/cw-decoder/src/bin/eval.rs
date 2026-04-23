@@ -1120,6 +1120,11 @@ fn parse_streaming_decoder_config(args: &[String]) -> DecoderConfig {
             .unwrap_or(cw_decoder_poc::streaming::DEFAULT_RANGE_LOCK_MAX_HZ),
         min_tone_purity: arg_value_f32(args, "--min-tone-purity")
             .unwrap_or(cw_decoder_poc::streaming::DEFAULT_MIN_TONE_PURITY),
+        force_pitch_hz: arg_value_f32(args, "--force-pitch-hz")
+            .filter(|x| *x > 0.0),
+        wide_bin_count: arg_value_f32(args, "--wide-bin-count")
+            .map(|x| x.clamp(0.0, 16.0) as u8)
+            .unwrap_or(0),
     }
 }
 

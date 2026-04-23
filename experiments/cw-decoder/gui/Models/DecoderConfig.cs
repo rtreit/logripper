@@ -16,7 +16,9 @@ public readonly record struct DecoderConfig(
     bool ExperimentalRangeLock,
     double RangeLockMinHz,
     double RangeLockMaxHz,
-    double MinTonePurity)
+    double MinTonePurity,
+    double ForcePitchHz,
+    int WideBinCount)
 {
     public const double DefaultMinSnrDb = 3.0;
     public const double DefaultPitchMinSnrDb = 6.0;
@@ -31,6 +33,19 @@ public readonly record struct DecoderConfig(
     /// <c>streaming::DEFAULT_MIN_TONE_PURITY</c>. Set to 0 to disable.
     /// </summary>
     public const double DefaultMinTonePurity = 3.0;
+    /// <summary>
+    /// 0 = auto pitch acquisition. Anything &gt; 0 forces the decoder
+    /// to lock to that exact pitch and disables the Fisher watchdog.
+    /// Useful for live capture where the operator knows the target tone.
+    /// </summary>
+    public const double DefaultForcePitchHz = 0.0;
+    /// <summary>
+    /// Number of side bins per side added to the target Goertzel.
+    /// 0 = single 40-Hz-wide integration. 2 ≈ 200 Hz of bandwidth,
+    /// useful for acoustically re-captured CW where the signal is
+    /// smeared across many bins.
+    /// </summary>
+    public const int DefaultWideBinCount = 0;
 
     public static DecoderConfig Defaults => new(
         DefaultMinSnrDb,
@@ -40,7 +55,9 @@ public readonly record struct DecoderConfig(
         DefaultExperimentalRangeLock,
         DefaultRangeLockMinHz,
         DefaultRangeLockMaxHz,
-        DefaultMinTonePurity);
+        DefaultMinTonePurity,
+        DefaultForcePitchHz,
+        DefaultWideBinCount);
 
     /// <summary>
     /// Render as CLI arguments for spawning the decoder with these initial
@@ -60,6 +77,14 @@ public readonly record struct DecoderConfig(
             args += $" --experimental-range-lock --range-lock-min-hz {RangeLockMinHz.ToString(ic)} --range-lock-max-hz {RangeLockMaxHz.ToString(ic)}";
         }
         args += $" --min-tone-purity {MinTonePurity.ToString(ic)}";
+        if (ForcePitchHz > 0.0)
+        {
+            args += $" --force-pitch-hz {ForcePitchHz.ToString(ic)}";
+        }
+        if (WideBinCount > 0)
+        {
+            args += $" --wide-bin-count {WideBinCount.ToString(ic)}";
+        }
         return args;
     }
 
@@ -83,6 +108,10 @@ public readonly record struct DecoderConfig(
              + RangeLockMaxHz.ToString(ic)
              + ",\"min_tone_purity\":"
              + MinTonePurity.ToString(ic)
+             + ",\"force_pitch_hz\":"
+             + (ForcePitchHz > 0.0 ? ForcePitchHz.ToString(ic) : "null")
+             + ",\"wide_bin_count\":"
+             + WideBinCount.ToString(ic)
              + "}";
     }
 }

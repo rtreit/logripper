@@ -103,6 +103,19 @@ enum Cmd {
         /// rejecting weaker tones.
         #[arg(long, default_value_t = streaming::DEFAULT_MIN_TONE_PURITY)]
         min_tone_purity: f32,
+        /// Force the streaming decoder to lock to this exact pitch
+        /// (Hz) instead of running pitch acquisition. 0 (the default)
+        /// leaves auto-acquisition enabled. When set, the Fisher
+        /// quality watchdog is disabled so the lock cannot be dropped.
+        #[arg(long, default_value_t = 0.0)]
+        force_pitch_hz: f32,
+        /// Wide-bin sniff: number of side bins per side to add to the
+        /// target Goertzel. 0 (default) = single 40-Hz-wide integration.
+        /// N=2 captures ~200 Hz of bandwidth — useful for acoustically
+        /// re-captured CW (speaker→mic round-trip) where speaker
+        /// frequency response smears the tone across many bins.
+        #[arg(long, default_value_t = 0)]
+        wide_bin_count: u8,
         /// Read NDJSON config-update lines from stdin while streaming.
         /// Each line: {"type":"config","min_snr_db":...,"pitch_min_snr_db":...,"threshold_scale":...}
         #[arg(long)]
@@ -292,6 +305,16 @@ enum Cmd {
         /// Minimum instantaneous adjacent-bin tone-purity ratio. 0 disables.
         #[arg(long, default_value_t = streaming::DEFAULT_MIN_TONE_PURITY)]
         min_tone_purity: f32,
+        /// Force the streaming decoder to lock to this exact pitch
+        /// (Hz) instead of running pitch acquisition. 0 (default) =
+        /// auto. When set, the Fisher watchdog is disabled. Useful for
+        /// live mic capture where speaker→mic acoustics shift the
+        /// apparent pitch and acquisition picks the wrong tone.
+        #[arg(long, default_value_t = 0.0)]
+        force_pitch_hz: f32,
+        /// Wide-bin sniff side count (0=off). See StreamFile docs.
+        #[arg(long, default_value_t = 0)]
+        wide_bin_count: u8,
         /// Optional WAV path to mirror raw mono samples to (16-bit PCM at the
         /// device's native sample rate). Useful for post-stop offline analysis.
         #[arg(long)]
@@ -368,6 +391,8 @@ fn main() -> Result<()> {
             range_lock_min_hz,
             range_lock_max_hz,
             min_tone_purity,
+            force_pitch_hz,
+            wide_bin_count,
             stdin_control,
         } => {
             let cfg = streaming::DecoderConfig {
@@ -379,6 +404,8 @@ fn main() -> Result<()> {
                 range_lock_min_hz,
                 range_lock_max_hz,
                 min_tone_purity,
+                force_pitch_hz: (force_pitch_hz > 0.0).then_some(force_pitch_hz),
+                wide_bin_count,
             };
             run_stream_file(&path, chunk_ms, realtime, quiet, json, cfg, stdin_control)
         }
@@ -449,6 +476,8 @@ fn main() -> Result<()> {
                 range_lock_min_hz: streaming::DEFAULT_RANGE_LOCK_MIN_HZ,
                 range_lock_max_hz: streaming::DEFAULT_RANGE_LOCK_MAX_HZ,
                 min_tone_purity: streaming::DEFAULT_MIN_TONE_PURITY,
+                force_pitch_hz: None,
+                wide_bin_count: 0,
             };
             let harvest_cfg = harvest::HarvestConfig {
                 window_seconds: window,
@@ -488,6 +517,8 @@ fn main() -> Result<()> {
             range_lock_min_hz,
             range_lock_max_hz,
             min_tone_purity,
+            force_pitch_hz,
+            wide_bin_count,
             record,
             stdin_control,
         } => {
@@ -500,6 +531,8 @@ fn main() -> Result<()> {
                 range_lock_min_hz,
                 range_lock_max_hz,
                 min_tone_purity,
+                force_pitch_hz: (force_pitch_hz > 0.0).then_some(force_pitch_hz),
+                wide_bin_count,
             };
             run_stream_live(
                 device.as_deref(),
@@ -1886,6 +1919,15 @@ fn spawn_stdin_config_channel(
             }
             if let Some(x) = v.get("min_tone_purity").and_then(|x| x.as_f64()) {
                 state.min_tone_purity = x as f32;
+            }
+            // force_pitch_hz: <number> sets a forced lock; 0/null clears it.
+            if let Some(x) = v.get("force_pitch_hz").and_then(|x| x.as_f64()) {
+                state.force_pitch_hz = if x > 0.0 { Some(x as f32) } else { None };
+            } else if v.get("force_pitch_hz").map(|x| x.is_null()).unwrap_or(false) {
+                state.force_pitch_hz = None;
+            }
+            if let Some(x) = v.get("wide_bin_count").and_then(|x| x.as_i64()) {
+                state.wide_bin_count = x.clamp(0, 16) as u8;
             }
             if tx.send(state).is_err() {
                 break;

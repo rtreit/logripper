@@ -199,6 +199,20 @@
                       ToolTip.Tip="Show the per-character tone-purity ratio in the transcript debug overlay." />
             <TextBlock Grid.Column="6" Text="{Binding RangeLockSummary}" Classes="label" TextWrapping="Wrap" VerticalAlignment="Center" />
           </Grid>
+
+          <Grid ColumnDefinitions="Auto,Auto,Auto,Auto,*" ColumnSpacing="10">
+            <TextBlock Text="ACQUISITION" Classes="label" VerticalAlignment="Center" />
+            <StackPanel Grid.Column="1" Spacing="2"
+                        ToolTip.Tip="Force the streaming decoder to lock to this exact pitch in Hz instead of running auto-acquisition. 0 = auto. Useful when you know the target tone or when speaker→mic round-trip distorts pitch acquisition.">
+              <TextBlock Text="FORCE PITCH (Hz)" Classes="label" />
+              <NumericUpDown Minimum="0" Maximum="1500" Increment="10" Value="{Binding ForcePitchHz, Mode=TwoWay}" />
+            </StackPanel>
+            <StackPanel Grid.Column="2" Spacing="2"
+                        ToolTip.Tip="Wide-bin sniff: side bins per side added to the target Goertzel. 0 = single 40 Hz bin. N=2 ≈ 200 Hz of bandwidth — recovers signals smeared across many bins (e.g. acoustically re-captured CW from speakers).">
+              <TextBlock Text="WIDE BINS" Classes="label" />
+              <NumericUpDown Minimum="0" Maximum="8" Increment="1" Value="{Binding WideBinCount, Mode=TwoWay}" />
+            </StackPanel>
+          </Grid>
         </StackPanel>
 
         <Grid ColumnDefinitions="Auto,*" ColumnSpacing="12" IsVisible="{Binding IsBaselineDecoderMode}">

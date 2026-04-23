@@ -142,6 +142,24 @@ pub struct DecoderConfig {
     /// required for a power sample to be treated as "tone present." Set to
     /// 0.0 to disable the gate. See [`DEFAULT_MIN_TONE_PURITY`].
     pub min_tone_purity: f32,
+    /// When `Some(hz)`, skip pitch acquisition entirely and lock the
+    /// streaming Goertzel to this exact frequency. Disables the
+    /// Fisher-quality watchdog so the lock cannot be dropped. Use this
+    /// to force the decoder onto a known target tone (e.g. 600 Hz from
+    /// a calibration recording or a known band-conditions target),
+    /// or to isolate "is the failure acquisition or downstream?".
+    pub force_pitch_hz: Option<f32>,
+    /// Number of side bins per side to add to the target Goertzel for
+    /// "wide-bin sniff." 0 (default) = a single Goertzel at the locked
+    /// pitch (~40 Hz wide on a 25 ms window). N > 0 also runs Goertzels
+    /// at pitch ± k*bin_width for k=1..=N and SUMs all 2N+1 powers as
+    /// the effective signal power. Use this for signals whose energy is
+    /// smeared across multiple bins (speaker → room → mic re-capture,
+    /// drifting transmitters, wide bandpass receivers): a single
+    /// Goertzel only catches a slice and the keying envelope flickers.
+    /// Each extra side bin also lifts the noise floor slightly, so this
+    /// trades selectivity for keying stability.
+    pub wide_bin_count: u8,
 }
 
 impl DecoderConfig {
@@ -155,6 +173,8 @@ impl DecoderConfig {
             range_lock_min_hz: DEFAULT_RANGE_LOCK_MIN_HZ,
             range_lock_max_hz: DEFAULT_RANGE_LOCK_MAX_HZ,
             min_tone_purity: DEFAULT_MIN_TONE_PURITY,
+            force_pitch_hz: None,
+            wide_bin_count: 0,
         }
     }
     /// Convert min_snr_db → linear power ratio for the inner gate.
@@ -1370,6 +1390,12 @@ pub struct StreamingDecoder {
     quality_failed_consecutive: u32,
 
     goertzel: Option<Goertzel>,
+    /// Optional companion Goertzels at pitch ± k*bin_width for k=1..=N
+    /// (N = `DecoderConfig::wide_bin_count`). Their power is summed with
+    /// the main Goertzel to form the effective signal power, capturing
+    /// energy from frequency-smeared signals (acoustic re-capture, drift,
+    /// wide receiver bandpass). Empty when wide_bin_count == 0.
+    wide_bins: Vec<Goertzel>,
     /// Off-band noise references at multiple offsets around the locked
     /// pitch. We take the *median* per power sample to estimate noise,
     /// which is robust to a single bin landing on adjacent CW or hum.
@@ -1441,6 +1467,7 @@ impl StreamingDecoder {
             quality_check_threshold: (TARGET_RATE as f32 * QUALITY_CHECK_SECONDS) as usize,
             quality_failed_consecutive: 0,
             goertzel: None,
+            wide_bins: Vec::new(),
             noise_bins: Vec::new(),
             smooth_window,
             smooth_buf: VecDeque::with_capacity(smooth_window + 1),
@@ -1472,9 +1499,47 @@ impl StreamingDecoder {
     /// Apply a new runtime configuration. Safe to call mid-stream — only
     /// affects subsequent power samples and the next pitch re-lock.
     pub fn set_config(&mut self, cfg: DecoderConfig) {
+        let prev_force = self.config.force_pitch_hz;
         self.config = cfg;
         self.decoder.threshold_scale = cfg.threshold_scale;
         self.decoder.auto_threshold = cfg.auto_threshold;
+        // If the operator changed (or cleared) the forced pitch, drop the
+        // current lock so the next `feed` re-acquires under the new
+        // policy. Otherwise we'd be stuck on a stale frequency.
+        if cfg.force_pitch_hz != prev_force && self.pitch_locked.is_some() {
+            self.drop_pitch_lock(false);
+        }
+    }
+
+    /// Install a forced pitch lock at exactly `pitch_hz`, bypassing
+    /// detect_pitch entirely. Used by `feed` when
+    /// `DecoderConfig::force_pitch_hz` is set so the decoder operates
+    /// on a known target tone instead of guessing.
+    fn install_forced_pitch(&mut self, pitch_hz: f32, events: &mut Vec<StreamEvent>) {
+        self.pitch_locked = Some(pitch_hz);
+        let win_size = (TARGET_RATE as f32 * GOERTZEL_WIN_MS / 1000.0) as usize;
+        let step = (win_size / 4).max(1);
+        self.goertzel = Some(Goertzel::new(pitch_hz, TARGET_RATE, win_size, step));
+        self.rebuild_wide_bins(pitch_hz, win_size, step);
+        self.noise_bins.clear();
+        for &off in NOISE_OFFSETS_HZ {
+            let lo = pitch_hz - off;
+            let hi = pitch_hz + off;
+            if lo >= FREQ_MIN_HZ {
+                self.noise_bins
+                    .push(Goertzel::new(lo, TARGET_RATE, win_size, step));
+            }
+            if hi <= FREQ_MAX_HZ {
+                self.noise_bins
+                    .push(Goertzel::new(hi, TARGET_RATE, win_size, step));
+            }
+        }
+        self.unlock_power_history.clear();
+        events.push(StreamEvent::PitchUpdate { pitch_hz });
+        let drained = std::mem::take(&mut self.pre_lock_buf);
+        if !drained.is_empty() {
+            self.feed_goertzel(&drained, events);
+        }
     }
 
     /// Feed a chunk of raw audio at `source_rate`. Returns events emitted by
@@ -1491,6 +1556,16 @@ impl StreamingDecoder {
 
         // --- Pitch lock / re-eval -------------------------------------
         if self.pitch_locked.is_none() {
+            // Forced-pitch mode: skip detection entirely and lock to the
+            // operator-supplied frequency the moment we have any audio.
+            // No pre-lock buffering, no Fisher gating.
+            if let Some(forced) = self.config.force_pitch_hz {
+                if forced.is_finite() && forced > 0.0 {
+                    self.install_forced_pitch(forced, &mut events);
+                    self.feed_goertzel(&filtered, &mut events);
+                    return Ok(events);
+                }
+            }
             self.emit_unlock_power(&filtered, &mut events);
             self.pre_lock_buf.extend_from_slice(&filtered);
             self.try_acquire_pitch_lock(&mut events);
@@ -1512,7 +1587,8 @@ impl StreamingDecoder {
         // drop the lock so the next caller doesn't keep emitting
         // letters from random spikes.
         self.samples_since_quality_check += filtered.len();
-        if self.samples_since_quality_check >= self.quality_check_threshold
+        if self.config.force_pitch_hz.is_none()
+            && self.samples_since_quality_check >= self.quality_check_threshold
             && self.quality_buf.len() >= self.quality_buf_capacity
         {
             self.samples_since_quality_check = 0;
@@ -1561,9 +1637,34 @@ impl StreamingDecoder {
     /// Tear down all per-lock state so the next pitch search starts
     /// fresh. Called by the quality watchdog when the locked signal
     /// degrades to noise.
+    /// (Re)build the optional wide-bin sniff Goertzels around `pitch_hz`.
+    /// Spaced one bin apart (40 Hz at the default 25 ms window) so the
+    /// (2N+1) bins together cover (2N+1)*40 Hz of bandwidth centered on
+    /// the target. Empty if `wide_bin_count == 0`. Bins outside
+    /// FREQ_MIN_HZ..=FREQ_MAX_HZ are silently dropped to avoid running
+    /// Goertzels in regions our HP/LP filter chain has already killed.
+    fn rebuild_wide_bins(&mut self, pitch_hz: f32, win_size: usize, step: usize) {
+        self.wide_bins.clear();
+        let n = self.config.wide_bin_count as i32;
+        if n <= 0 || win_size == 0 {
+            return;
+        }
+        let bin_width_hz = TARGET_RATE as f32 / win_size as f32;
+        for k in 1..=n {
+            for &sign in &[-1.0_f32, 1.0_f32] {
+                let f = pitch_hz + sign * (k as f32) * bin_width_hz;
+                if (FREQ_MIN_HZ..=FREQ_MAX_HZ).contains(&f) {
+                    self.wide_bins
+                        .push(Goertzel::new(f, TARGET_RATE, win_size, step));
+                }
+            }
+        }
+    }
+
     fn drop_pitch_lock(&mut self, preserve_pre_lock_buf: bool) {
         self.pitch_locked = None;
         self.goertzel = None;
+        self.wide_bins.clear();
         self.noise_bins.clear();
         self.smooth_buf.clear();
         self.smooth_sum = 0.0;
@@ -1600,6 +1701,7 @@ impl StreamingDecoder {
             let win_size = (TARGET_RATE as f32 * GOERTZEL_WIN_MS / 1000.0) as usize;
             let step = (win_size / 4).max(1);
             self.goertzel = Some(Goertzel::new(pitch, TARGET_RATE, win_size, step));
+            self.rebuild_wide_bins(pitch, win_size, step);
             self.noise_bins.clear();
             for &off in NOISE_OFFSETS_HZ {
                 let lo = pitch - off;
@@ -1682,6 +1784,25 @@ impl StreamingDecoder {
         };
         let mut power_out = Vec::new();
         goertzel.push(audio, &mut power_out);
+
+        // Wide-bin sniff: if the operator enabled it, also run companion
+        // Goertzels at pitch ± k*bin_width and ADD their power into
+        // `power_out` element-wise. This widens the effective integration
+        // bandwidth so we capture a frequency-smeared signal (acoustic
+        // re-capture, drift, wide-bandpass receivers) instead of just one
+        // ~40 Hz slice. All bins use identical win_size/step so they emit
+        // the same number of samples per call as the main Goertzel.
+        if !self.wide_bins.is_empty() {
+            let mut wide_outs: Vec<Vec<f32>> =
+                (0..self.wide_bins.len()).map(|_| Vec::new()).collect();
+            for (idx, wb) in self.wide_bins.iter_mut().enumerate() {
+                wb.push(audio, &mut wide_outs[idx]);
+            }
+            for (i, p) in power_out.iter_mut().enumerate() {
+                let extra: f32 = wide_outs.iter().filter_map(|v| v.get(i).copied()).sum();
+                *p += extra;
+            }
+        }
 
         // Run all noise-bin Goertzels in lockstep (identical win_size/step,
         // so each emits exactly the same number of samples as `power_out`).
@@ -2273,6 +2394,101 @@ mod lock_behavior_tests {
             chars_gated <= 1,
             "tone-purity gate should suppress impulse-driven chars (gated={chars_gated}, \
              ungated={chars_ungated})"
+        );
+    }
+}
+
+#[cfg(test)]
+mod wide_bin_sniff_tests {
+    use super::*;
+    use std::f32::consts::PI;
+
+    /// Synthesize CW that drifts in pitch by a small amount across the
+    /// recording — a stand-in for an acoustically re-captured signal
+    /// whose energy is smeared across several Goertzel bins.
+    fn synth_drifting_cw(
+        sr: u32,
+        center_hz: f32,
+        drift_hz: f32,
+        wpm: f32,
+        seconds: f32,
+    ) -> Vec<f32> {
+        let dot_s = 1.2 / wpm;
+        let mut audio = vec![0.0f32; (sr as f32 * seconds) as usize];
+        // Simple PARIS-style key sequence: ".- -... -.-." (ABC) repeated.
+        let pattern: &[(f32, bool)] = &[
+            (1.0, true), (1.0, false), (3.0, true), (1.0, false),  // A
+            (3.0, false),
+            (3.0, true), (1.0, false), (1.0, true), (1.0, false), (1.0, true), (1.0, false), (1.0, true), // B
+            (3.0, false),
+            (3.0, true), (1.0, false), (1.0, true), (1.0, false), (3.0, true), (1.0, false), (1.0, true), // C
+            (7.0, false),
+        ];
+        let mut t_samples: usize = 0;
+        let mut phase: f32 = 0.0;
+        let mut cycle = pattern.iter().cycle();
+        while t_samples < audio.len() {
+            let (units, on) = *cycle.next().unwrap();
+            let dur = (units * dot_s * sr as f32) as usize;
+            for i in 0..dur {
+                if t_samples + i >= audio.len() {
+                    break;
+                }
+                if on {
+                    let frac = (t_samples + i) as f32 / audio.len() as f32;
+                    let f = center_hz + drift_hz * (frac - 0.5);
+                    phase += 2.0 * PI * f / sr as f32;
+                    audio[t_samples + i] = 0.4 * phase.sin();
+                } else {
+                    phase = 0.0;
+                }
+            }
+            t_samples += dur;
+        }
+        audio
+    }
+
+    fn count_chars(audio: &[f32], sr: u32, wide_bin_count: u8) -> usize {
+        let mut dec = StreamingDecoder::new(sr).expect("decoder");
+        let mut cfg = DecoderConfig::defaults();
+        cfg.wide_bin_count = wide_bin_count;
+        cfg.min_tone_purity = 0.0; // isolate the wide-bin effect
+        dec.set_config(cfg);
+        let mut chars = 0usize;
+        for c in audio.chunks((sr / 10) as usize) {
+            for ev in dec.feed(c).unwrap_or_default() {
+                if matches!(ev, StreamEvent::Char { .. }) {
+                    chars += 1;
+                }
+            }
+        }
+        for ev in dec.flush() {
+            if matches!(ev, StreamEvent::Char { .. }) {
+                chars += 1;
+            }
+        }
+        chars
+    }
+
+    #[test]
+    fn wide_bins_recover_drifting_signal() {
+        // Drift 80 Hz across the recording — 2 Goertzel bins worth at the
+        // default 25 ms / 12 kHz window — so a single-bin Goertzel will
+        // see the signal fall out of band repeatedly.
+        let sr = 12000u32;
+        let audio = synth_drifting_cw(sr, 700.0, 80.0, 18.0, 8.0);
+        let narrow = count_chars(&audio, sr, 0);
+        let wide = count_chars(&audio, sr, 2);
+        assert!(
+            wide >= narrow,
+            "wide-bin sniff should not regress narrow case (narrow={narrow}, wide={wide})"
+        );
+        // The wide path should at least decode several characters even
+        // when the narrow path struggles. We do not assert exact counts
+        // because the synthesis is deliberately rough.
+        assert!(
+            wide >= 3,
+            "wide-bin sniff should recover at least a few drifting chars (got {wide})"
         );
     }
 }

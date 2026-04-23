@@ -448,6 +448,48 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
         }
     }
 
+    private double _forcePitchHz = DecoderConfig.DefaultForcePitchHz;
+    /// <summary>
+    /// 0 = auto pitch acquisition (default). Anything &gt; 0 forces the
+    /// streaming decoder to lock to that exact pitch and disables the
+    /// Fisher quality watchdog so the lock cannot be dropped. Useful for
+    /// live operation when the operator already knows the target tone
+    /// (e.g. tuned to a known CQ on the radio), or for diagnostics
+    /// ("does the decoder fail because of acquisition or downstream?").
+    /// </summary>
+    public double ForcePitchHz
+    {
+        get => _forcePitchHz;
+        set
+        {
+            var clamped = value < 0.0 ? 0.0 : value;
+            if (Set(ref _forcePitchHz, clamped))
+            {
+                PushConfig();
+            }
+        }
+    }
+
+    private int _wideBinCount = DecoderConfig.DefaultWideBinCount;
+    /// <summary>
+    /// Number of side bins per side added to the target Goertzel.
+    /// 0 = single 40-Hz-wide integration. N=2 ≈ 200 Hz of bandwidth,
+    /// useful for acoustically re-captured CW (speaker → mic round-trip)
+    /// where the signal is smeared across many bins.
+    /// </summary>
+    public int WideBinCount
+    {
+        get => _wideBinCount;
+        set
+        {
+            var clamped = value < 0 ? 0 : (value > 8 ? 8 : value);
+            if (Set(ref _wideBinCount, clamped))
+            {
+                PushConfig();
+            }
+        }
+    }
+
     private string? _harvestFilePath;
     public string? HarvestFilePath { get => _harvestFilePath; set => Set(ref _harvestFilePath, value); }
 
@@ -909,6 +951,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
         RangeLockMinHz = DecoderConfig.DefaultRangeLockMinHz;
         RangeLockMaxHz = DecoderConfig.DefaultRangeLockMaxHz;
         MinTonePurity = DecoderConfig.DefaultMinTonePurity;
+        ForcePitchHz = DecoderConfig.DefaultForcePitchHz;
+        WideBinCount = DecoderConfig.DefaultWideBinCount;
     }
 
     private DecoderConfig CurrentConfig() => new(
@@ -919,7 +963,9 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
         ExperimentalRangeLock,
         Math.Min(RangeLockMinHz, RangeLockMaxHz),
         Math.Max(RangeLockMinHz, RangeLockMaxHz),
-        Math.Max(0.0, MinTonePurity));
+        Math.Max(0.0, MinTonePurity),
+        Math.Max(0.0, ForcePitchHz),
+        Math.Max(0, WideBinCount));
     private BaselineDecoderConfig CurrentBaselineConfig() => new(
         WindowSeconds: LabelEvalWindowSeconds,
         MinWindowSeconds: LabelEvalMinWindowSeconds,
