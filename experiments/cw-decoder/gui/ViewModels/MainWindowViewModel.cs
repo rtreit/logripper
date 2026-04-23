@@ -31,7 +31,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
     public MainWindowViewModel()
     {
         Devices = new ObservableCollection<string>(CwDecoderProcess.ListDevices());
-        DecoderModes = new ObservableCollection<string>(new[] { BaselineDecoderModeLabel, CustomDecoderModeLabel });
+        DecoderModes = new ObservableCollection<string>(new[] { CustomDecoderModeLabel, BaselineDecoderModeLabel });
         SelectedDevice = Devices.Count > 0 ? Devices[0] : null;
         SelectedDecoderMode = DecoderModes[0];
         Cells = new ObservableCollection<TranscriptCell>();
@@ -56,7 +56,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
     private string? _selectedDevice;
     public string? SelectedDevice { get => _selectedDevice; set => Set(ref _selectedDevice, value); }
 
-    private string _selectedDecoderMode = BaselineDecoderModeLabel;
+    private string _selectedDecoderMode = CustomDecoderModeLabel;
     public string SelectedDecoderMode
     {
         get => _selectedDecoderMode;
