@@ -215,5 +215,45 @@ public sealed class CliUtilityTests
         Assert.DoesNotContain("QSORIPPER_QRZ_USERNAME", help, StringComparison.Ordinal);
         Assert.DoesNotContain("QSORIPPER_QRZ_PASSWORD", help, StringComparison.Ordinal);
     }
+
+    [Fact]
+    public void UsesPrimaryArgument_restore_is_true()
+    {
+        Assert.True(CliCommandMetadata.UsesPrimaryArgument("restore"));
+        Assert.True(CliCommandMetadata.RequiresPrimaryArgument("restore"));
+    }
+
+    [Fact]
+    public void GetGeneralHelp_includes_restore_command()
+    {
+        var help = CliHelpText.GetGeneralHelp();
+
+        Assert.Contains("restore <local-id>", help, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void GetCommandHelp_restore_shows_usage()
+    {
+        var help = CliHelpText.GetCommandHelp("restore");
+
+        Assert.Contains("Usage: restore <local-id>", help, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void GetCommandHelp_delete_mentions_restore()
+    {
+        var help = CliHelpText.GetCommandHelp("delete");
+
+        Assert.Contains("restore", help, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void GetCommandHelp_list_includes_deleted_flags()
+    {
+        var help = CliHelpText.GetCommandHelp("list");
+
+        Assert.Contains("--deleted", help, StringComparison.Ordinal);
+        Assert.Contains("--include-deleted", help, StringComparison.Ordinal);
+    }
 }
 #pragma warning restore CA1707

@@ -463,5 +463,48 @@ public sealed class CommandHelperTests
         var reconstructed = requests.SelectMany(static request => request.Chunk!.Data.ToByteArray()).ToArray();
         Assert.Equal(bytes, reconstructed);
     }
+
+    [Fact]
+    public void TryParseArgs_deleted_flag_sets_deleted_only_filter()
+    {
+        var success = ListQsosCommand.TryParseArgs(["--deleted"], out var request, out var displayOptions, out var error);
+
+        Assert.True(success);
+        Assert.Null(error);
+        Assert.Equal(DeletedRecordsFilter.DeletedOnly, request.DeletedFilter);
+        Assert.True(displayOptions.ShowDeletedAt);
+    }
+
+    [Fact]
+    public void TryParseArgs_include_deleted_flag_sets_all_filter()
+    {
+        var success = ListQsosCommand.TryParseArgs(["--include-deleted"], out var request, out var displayOptions, out var error);
+
+        Assert.True(success);
+        Assert.Null(error);
+        Assert.Equal(DeletedRecordsFilter.All, request.DeletedFilter);
+        Assert.True(displayOptions.ShowDeletedAt);
+    }
+
+    [Fact]
+    public void TryParseArgs_combining_deleted_and_include_deleted_is_rejected()
+    {
+        var success = ListQsosCommand.TryParseArgs(["--deleted", "--include-deleted"], out _, out _, out var error);
+
+        Assert.False(success);
+        Assert.NotNull(error);
+        Assert.Contains("--deleted", error, StringComparison.Ordinal);
+        Assert.Contains("--include-deleted", error, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void TryParseArgs_no_delete_flag_uses_default_filter()
+    {
+        var success = ListQsosCommand.TryParseArgs([], out var request, out var displayOptions, out _);
+
+        Assert.True(success);
+        Assert.Equal(DeletedRecordsFilter.Unspecified, request.DeletedFilter);
+        Assert.False(displayOptions.ShowDeletedAt);
+    }
 }
 #pragma warning restore CA1707

@@ -46,6 +46,16 @@ internal static class SyncCommand
         Console.WriteLine($"Conflicts:   {last.ConflictRecords}");
         Console.WriteLine($"Total:       {last.TotalRecords}");
 
+        if (last.RemoteDeletesPushed > 0)
+        {
+            Console.WriteLine($"Deleted (remote): {last.RemoteDeletesPushed}");
+        }
+
+        if (last.DeletesSkippedRemote > 0)
+        {
+            Console.WriteLine($"Skipped (trashed): {last.DeletesSkippedRemote}");
+        }
+
         return 0;
     }
 }
