@@ -228,32 +228,48 @@
 
           <Separator Margin="0,8,0,8" />
 
-          <TextBlock Classes="settingsSectionHeader" Text="CW WPM auto-fill" />
+          <TextBlock Classes="settingsSectionHeader" Text="Monitor radio" />
           <TextBlock Classes="settingsSectionHint"
-                     Text="Decode received CW from a capture device and auto-fill the QSO record's RX WPM (cw_decode_rx_wpm) on logged CW QSOs. Requires the cw-decoder binary built once from experiments\cw-decoder (cargo build --release)." />
+                     Text="Listen to the radio's audio (or your system speakers via loopback) so QsoRipper can auto-fill CW WPM on logged QSOs and power future audio features. Requires the cw-decoder binary built once from experiments\cw-decoder (cargo build --release)." />
 
-          <CheckBox x:Name="SettingsCwWpmAutoFillCheckBox"
-                    AutomationProperties.AutomationId="SettingsCwWpmAutoFillCheckBox"
-                    Content="Enable CW WPM auto-fill on logged QSOs"
-                    IsChecked="{Binding IsCwWpmAutoFillEnabled, Mode=TwoWay}" />
+          <CheckBox x:Name="SettingsRadioMonitorEnabledCheckBox"
+                    AutomationProperties.AutomationId="SettingsRadioMonitorEnabledCheckBox"
+                    Content="Enable radio monitor (auto-fills CW WPM on logged QSOs)"
+                    IsChecked="{Binding IsRadioMonitorEnabled, Mode=TwoWay}" />
 
-          <CheckBox x:Name="SettingsCwWpmLoopbackCheckBox"
-                    AutomationProperties.AutomationId="SettingsCwWpmLoopbackCheckBox"
-                    Content="Use WASAPI loopback (capture from a system OUTPUT device, e.g. for testing with playback)"
-                    IsChecked="{Binding IsCwWpmLoopback, Mode=TwoWay}"
-                    IsEnabled="{Binding IsCwWpmAutoFillEnabled}" />
+          <CheckBox x:Name="SettingsCwWpmStatusBarCheckBox"
+                    AutomationProperties.AutomationId="SettingsCwWpmStatusBarCheckBox"
+                    Content="Show CW WPM in the status bar (Ctrl+Shift+W)"
+                    IsChecked="{Binding IsCwWpmStatusBarVisible, Mode=TwoWay}" />
 
-          <Grid ColumnDefinitions="220,*"
-                IsEnabled="{Binding IsCwWpmAutoFillEnabled}">
+          <Grid ColumnDefinitions="180,*,Auto"
+                IsEnabled="{Binding IsRadioMonitorEnabled}">
             <TextBlock Grid.Column="0"
-                       Text="Capture device (substring):"
+                       Text="Capture device:"
                        VerticalAlignment="Center" />
-            <TextBox x:Name="SettingsCwWpmDeviceBox"
-                     AutomationProperties.AutomationId="SettingsCwWpmDeviceBox"
-                     Grid.Column="1"
-                     PlaceholderText="empty = system default; matches output device names when loopback is enabled"
-                     Text="{Binding CwWpmDeviceOverride, Mode=TwoWay}" />
+            <ComboBox x:Name="SettingsRadioMonitorDeviceCombo"
+                      AutomationProperties.AutomationId="SettingsRadioMonitorDeviceCombo"
+                      Grid.Column="1"
+                      HorizontalAlignment="Stretch"
+                      ItemsSource="{Binding RadioMonitorDevices}"
+                      SelectedItem="{Binding SelectedRadioMonitorDevice, Mode=TwoWay}">
+              <ComboBox.ItemTemplate>
+                <DataTemplate>
+                  <TextBlock Text="{Binding DisplayName}" />
+                </DataTemplate>
+              </ComboBox.ItemTemplate>
+            </ComboBox>
+            <Button Grid.Column="2"
+                    Margin="8,0,0,0"
+                    Content="Refresh"
+                    Command="{Binding RefreshRadioMonitorDevicesCommand}"
+                    AutomationProperties.AutomationId="SettingsRadioMonitorRefreshButton" />
           </Grid>
+
+          <TextBlock Classes="settingsSectionHint"
+                     Margin="0,4,0,0"
+                     Text="{Binding RadioMonitorBinaryStatus}"
+                     IsVisible="{Binding RadioMonitorBinaryStatus, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
         </StackPanel>
       </TabItem>
 

@@ -15,11 +15,11 @@ Today, the reference path is the causal `ditdah` baseline. The custom streaming 
 > field `APP_QSORIPPER_RX_WPM`). See
 > `src\dotnet\QsoRipper.Gui\Services\CwDecoderProcessSampleSource.cs`,
 > `src\dotnet\QsoRipper.Gui\Services\CwQsoWpmAggregator.cs`, and the
-> **Settings → Display → CW WPM auto-fill** section in the main window.
+> **Settings → Display → Monitor radio** section in the main window.
 > Round 2 will move the decoder behind an engine-side `CwDecodeService`
 > so all clients can consume the same stream.
 >
-> **Fresh-user prerequisites for CW WPM auto-fill to do anything:**
+> **Fresh-user prerequisites for the radio monitor to do anything:**
 >
 > 1. Build the decoder once: from `experiments\cw-decoder\` run
 >    `cargo build --release` (this folder is a stand-alone Cargo workspace and
@@ -29,13 +29,18 @@ Today, the reference path is the causal `ditdah` baseline. The custom streaming 
 >    its base directory looking for it) or set the `CW_DECODER_EXE` env var to
 >    an absolute path.
 > 3. Allow the application access to a capture device. The decoder uses the
->    OS default capture device unless an override string is supplied.
-> 4. Open **Settings → Display** in the GUI and tick *Enable CW WPM auto-fill
->    on logged QSOs*. Optionally tick *Use WASAPI loopback* and/or fill in a
->    capture-device substring. Save. The status row shows the live decoder
->    state only while auto-fill is enabled.
+>    OS default capture device unless you pick a specific one in the dropdown.
+> 4. Open **Settings → Display** in the GUI and tick *Enable radio monitor
+>    (auto-fills CW WPM on logged QSOs)*. Pick a capture device from the
+>    dropdown — physical inputs (microphones, USB Audio CODEC dongles) appear
+>    as plain device names; system output devices that can be tapped via
+>    WASAPI loopback appear with a `(system output / loopback)` suffix so you
+>    can validate without a radio by playing audio through your speakers.
+>    Save. Optionally tick *Show CW WPM in the status bar* (toggle live with
+>    `Ctrl+Shift+W`) to see the live WPM readout, which dims when the monitor
+>    is off as a reminder.
 >
-> If the binary cannot be found, the auto-fill toggle silently flips back off
+> If the binary cannot be found, the monitor toggle silently flips back off
 > and the status row reports `CW WPM: decoder not built`. If the binary is
 > found but launching fails (e.g. cpal cannot open the capture device), the
 > status row reports the underlying error and the toggle flips off.
@@ -43,28 +48,23 @@ Today, the reference path is the causal `ditdah` baseline. The custom streaming 
 > **Validating the GUI without a radio (loopback / file playback):**
 >
 > 1. Build the decoder (`cargo build --release` in `experiments\cw-decoder`).
-> 2. Pick how to feed audio into the decoder:
->    - **WASAPI loopback (Windows, no virtual cable required):** open
->      Settings → Display, tick *Enable CW WPM auto-fill*, tick *Use WASAPI
->      loopback*, and optionally put a substring of the system *output* device
->      name (e.g. `"Speakers"`) in the *Capture device* field. With loopback
->      on, the device substring matches output devices, not input devices.
->      Then play a CW practice clip through the speakers and the GUI status
->      row should report a live WPM.
->    - **Virtual audio cable (cross-platform):** install VB-Audio Cable or a
->      similar driver, route system output to the cable, and put the cable's
->      *input* name in the *Capture device* field with *Use WASAPI loopback*
->      left off. The cw-decoder then sees the cable as a normal input device.
->    - **Real microphone (no setup):** leave both fields empty and play a
->      practice clip through the speakers. Quality depends on the room and
->      mic, so loopback or a virtual cable is preferred for validation.
-> 3. List candidate device names from the command line with
->    `experiments\cw-decoder\target\release\cw-decoder.exe devices` — this
->    prints both input devices and the output devices that are usable as
->    `--loopback` targets.
-> 4. Start the GUI, enable CW WPM auto-fill in Settings, log a CW QSO during
->    playback, and confirm `cw_decode_rx_wpm` is populated on the new row in
->    the recent-QSO grid.
+> 2. Open **Settings → Display → Monitor radio**, enable the monitor, and
+>    pick a `(system output / loopback)` entry from the *Capture device*
+>    dropdown — for example *Speakers (Realtek)  (system output / loopback)*.
+>    The dropdown auto-detects the loopback case so you don't need to know
+>    the underlying WASAPI plumbing.
+> 3. Play a CW practice clip through your speakers. The status row (when
+>    enabled with `Ctrl+Shift+W`) reports a live WPM.
+> 4. Cross-platform alternative: install VB-Audio Cable or similar, route
+>    system output to the cable, and pick the cable's *input* entry from the
+>    dropdown (the plain non-loopback variant).
+> 5. List candidate device names from the command line with
+>    `experiments\cw-decoder\target\release\cw-decoder.exe devices` (add
+>    `--json` for machine-readable output that mirrors the GUI dropdown) —
+>    this prints both input devices and the output devices that are usable
+>    as loopback targets.
+> 6. Log a CW QSO during playback and confirm `cw_decode_rx_wpm` is
+>    populated on the new row in the recent-QSO grid.
 
 ## Current architecture
 
@@ -77,7 +77,7 @@ Main experiment executable. It currently exposes several surfaces:
 - **Offline decode**
   - `file` — single-pass or sliding-window whole-file decode through `ditdah`
 - **Live capture**
-  - `devices` — list available CPAL input devices
+  - `devices` — list available CPAL input devices (add `--json` for machine-readable output that includes both inputs and loopback-capable outputs)
   - `live` — TUI-driven capture + rolling-window `ditdah` decode (legacy interactive surface)
 - **Custom streaming decoder**
   - `stream-file` — file-driven streaming decode with optional NDJSON event output and live `--stdin-control` config updates

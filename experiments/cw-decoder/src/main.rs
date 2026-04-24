@@ -47,7 +47,12 @@ enum Cmd {
     },
 
     /// List available input audio devices.
-    Devices,
+    Devices {
+        /// Output as JSON for programmatic consumers (the QsoRipper GUI
+        /// uses this to populate the radio-monitor device drop-down).
+        #[arg(long)]
+        json: bool,
+    },
 
     /// Live capture + TUI from a USB Audio Codec / soundcard input.
     Live {
@@ -536,22 +541,38 @@ fn main() -> Result<()> {
             window,
             hop,
         } => run_file(&path, sliding, window, hop, &log_capture),
-        Cmd::Devices => {
+        Cmd::Devices { json } => {
             let names = audio::list_input_devices().context("listing devices")?;
-            if names.is_empty() {
-                println!("(no input devices found)");
-            } else {
-                println!("Input devices:");
-                for n in names {
-                    println!("  - {n}");
-                }
-            }
             let outs = audio::list_output_devices().context("listing output devices")?;
-            if !outs.is_empty() {
-                println!();
-                println!("Output devices (usable as --loopback for stream-live):");
-                for n in outs {
-                    println!("  - {n}");
+            if json {
+                let escape = |s: &str| s.replace('\\', "\\\\").replace('"', "\\\"");
+                let join = |items: &[String]| {
+                    items
+                        .iter()
+                        .map(|n| format!("\"{}\"", escape(n)))
+                        .collect::<Vec<_>>()
+                        .join(",")
+                };
+                println!(
+                    "{{\"inputs\":[{}],\"loopback\":[{}]}}",
+                    join(&names),
+                    join(&outs)
+                );
+            } else {
+                if names.is_empty() {
+                    println!("(no input devices found)");
+                } else {
+                    println!("Input devices:");
+                    for n in names {
+                        println!("  - {n}");
+                    }
+                }
+                if !outs.is_empty() {
+                    println!();
+                    println!("Output devices (usable as --loopback for stream-live):");
+                    for n in outs {
+                        println!("  - {n}");
+                    }
                 }
             }
             Ok(())

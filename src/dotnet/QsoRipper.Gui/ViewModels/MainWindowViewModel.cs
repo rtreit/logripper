@@ -135,6 +135,7 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
     private bool _isLoggerFocused;
 
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(CwDecoderStatusOpacity))]
     private bool _isCwDecoderEnabled;
 
     [ObservableProperty]
@@ -145,6 +146,19 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
 
     [ObservableProperty]
     private string _cwDecoderDeviceOverride = string.Empty;
+
+    /// <summary>
+    /// Whether the CW WPM live readout is shown in the status bar. Toggled
+    /// independently of <see cref="IsCwDecoderEnabled"/> so users can hide
+    /// the readout without tearing down the decoder, or reveal it as a
+    /// "(disabled)" marker as a reminder to enable the source in Settings.
+    /// </summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(CwDecoderStatusOpacity))]
+    private bool _isCwWpmStatusBarVisible;
+
+    /// <summary>Dimmed (0.4) when the source is off; full opacity when running.</summary>
+    public double CwDecoderStatusOpacity => IsCwDecoderEnabled ? 0.7 : 0.4;
 
     [ObservableProperty]
     private string _contextHintText = "F3 grid · F4 search · Ctrl+N logger · Alt+A card · F1 help";
@@ -489,13 +503,27 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
     /// Creates a <see cref="SettingsViewModel"/> wired to the shared engine client.
     /// Called by the View layer when handling <see cref="SettingsRequested"/>.
     /// </summary>
-    internal SettingsViewModel CreateSettingsViewModel() => new(_engine)
+    internal SettingsViewModel CreateSettingsViewModel()
     {
-        IsSpaceWeatherVisible = IsSpaceWeatherVisible,
-        IsCwWpmAutoFillEnabled = IsCwDecoderEnabled,
-        IsCwWpmLoopback = IsCwDecoderLoopback,
-        CwWpmDeviceOverride = CwDecoderDeviceOverride ?? string.Empty,
-    };
+        var vm = new SettingsViewModel(_engine)
+        {
+            IsSpaceWeatherVisible = IsSpaceWeatherVisible,
+            IsRadioMonitorEnabled = IsCwDecoderEnabled,
+            IsCwWpmStatusBarVisible = IsCwWpmStatusBarVisible,
+        };
+        // Pre-select the dropdown after LoadAsync populates the device list;
+        // we plumb it via PreselectRadioMonitorDevice when the catalog returns.
+        vm.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName == nameof(SettingsViewModel.IsLoadingRadioMonitorDevices)
+                && !vm.IsLoadingRadioMonitorDevices
+                && vm.SelectedRadioMonitorDevice is null)
+            {
+                vm.PreselectRadioMonitorDevice(CwDecoderDeviceOverride, IsCwDecoderLoopback);
+            }
+        };
+        return vm;
+    }
 
     /// <summary>
     /// Called by the View layer after the Settings dialog closes.
@@ -511,11 +539,17 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
     }
 
     internal void ApplySettingsUiPreferences(bool isSpaceWeatherVisible)
-        => ApplySettingsUiPreferences(isSpaceWeatherVisible, IsCwDecoderEnabled, IsCwDecoderLoopback, CwDecoderDeviceOverride);
+        => ApplySettingsUiPreferences(
+            isSpaceWeatherVisible,
+            IsCwDecoderEnabled,
+            IsCwWpmStatusBarVisible,
+            IsCwDecoderLoopback,
+            CwDecoderDeviceOverride);
 
     internal void ApplySettingsUiPreferences(
         bool isSpaceWeatherVisible,
-        bool isCwWpmEnabled,
+        bool isRadioMonitorEnabled,
+        bool isCwWpmStatusBarVisible,
         bool isCwWpmLoopback,
         string? cwDeviceOverride)
     {
@@ -525,13 +559,15 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
             _ = FetchSpaceWeatherAsync();
         }
 
+        IsCwWpmStatusBarVisible = isCwWpmStatusBarVisible;
+
         var trimmedDevice = string.IsNullOrWhiteSpace(cwDeviceOverride)
             ? string.Empty
             : cwDeviceOverride.Trim();
 
         var deviceChanged = !string.Equals(trimmedDevice, CwDecoderDeviceOverride, StringComparison.Ordinal);
         var loopbackChanged = isCwWpmLoopback != IsCwDecoderLoopback;
-        var enableChanged = isCwWpmEnabled != IsCwDecoderEnabled;
+        var enableChanged = isRadioMonitorEnabled != IsCwDecoderEnabled;
 
         CwDecoderDeviceOverride = trimmedDevice;
         IsCwDecoderLoopback = isCwWpmLoopback;
@@ -546,6 +582,28 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
             // Apply new device/loopback by restarting the source in place.
             ToggleCwDecoder(); // off
             ToggleCwDecoder(); // on, with new settings
+        }
+
+        UpdateDisabledCwStatusText();
+    }
+
+    /// <summary>
+    /// Keyboard shortcut (Ctrl+Shift+W) — toggles whether the live CW WPM
+    /// readout is shown in the status bar. Mirrors how Ctrl+W toggles space
+    /// weather. Independent of whether the decoder is actually running.
+    /// </summary>
+    [RelayCommand]
+    private void ToggleCwWpmStatusBar()
+    {
+        IsCwWpmStatusBarVisible = !IsCwWpmStatusBarVisible;
+        UpdateDisabledCwStatusText();
+    }
+
+    private void UpdateDisabledCwStatusText()
+    {
+        if (IsCwWpmStatusBarVisible && !IsCwDecoderEnabled)
+        {
+            CwDecoderStatusText = "CW WPM: disabled (Settings → Display)";
         }
     }
 
@@ -635,6 +693,7 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
         {
             _cwSampleSource?.Stop();
             CwDecoderStatusText = "CW WPM: OFF";
+            UpdateDisabledCwStatusText();
         }
     }
 
@@ -1134,11 +1193,14 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
         }
 
         IsCwDecoderLoopback = prefs.IsCwDecoderLoopback;
+        IsCwWpmStatusBarVisible = prefs.IsCwWpmStatusBarVisible;
 
         if (prefs.IsCwDecoderEnabled)
         {
             ToggleCwDecoder();
         }
+
+        UpdateDisabledCwStatusText();
     }
 
     /// <summary>
@@ -1153,6 +1215,7 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
         EngineEndpoint = _switchableEngine?.CurrentEndpoint,
         IsCwDecoderEnabled = IsCwDecoderEnabled,
         IsCwDecoderLoopback = IsCwDecoderLoopback,
+        IsCwWpmStatusBarVisible = IsCwWpmStatusBarVisible,
         CwDecoderDeviceOverride = string.IsNullOrWhiteSpace(CwDecoderDeviceOverride)
             ? null
             : CwDecoderDeviceOverride.Trim(),

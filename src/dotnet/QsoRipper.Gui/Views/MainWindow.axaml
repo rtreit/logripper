@@ -32,6 +32,7 @@
     <KeyBinding Gesture="Ctrl+N" Command="{Binding FocusLoggerCommand}" />
     <KeyBinding Gesture="Ctrl+R" Command="{Binding ToggleRigControlCommand}" />
     <KeyBinding Gesture="Ctrl+W" Command="{Binding ToggleSpaceWeatherCommand}" />
+    <KeyBinding Gesture="Ctrl+Shift+W" Command="{Binding ToggleCwWpmStatusBarCommand}" />
     <KeyBinding Gesture="Alt+A" Command="{Binding OpenQsoCardCommand}" />
     <KeyBinding Gesture="Ctrl+L" Command="{Binding OpenQsoCardCommand}" />
   </Window.KeyBindings>
@@ -423,9 +424,10 @@
                            FontFamily="Cascadia Mono, Consolas, monospace" />
               </Button>
               <TextBlock Text="{Binding CwDecoderStatusText}"
-                         FontSize="11" Opacity="0.7"
-                         IsVisible="{Binding IsCwDecoderEnabled}"
-                         ToolTip.Tip="CW WPM auto-fill — configure in Settings → Display"
+                         FontSize="11"
+                         IsVisible="{Binding IsCwWpmStatusBarVisible}"
+                         Opacity="{Binding CwDecoderStatusOpacity}"
+                         ToolTip.Tip="CW WPM live readout — toggle Ctrl+Shift+W · configure source in Settings → Display"
                          FontFamily="Cascadia Mono, Consolas, monospace" />
               <TextBlock Text="{Binding SpaceWeatherText}"
                          FontSize="11" Opacity="0.7"

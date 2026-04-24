@@ -78,4 +78,6 @@ internal sealed class UiPreferences
     public string? CwDecoderDeviceOverride { get; set; }
 
     public bool IsCwDecoderLoopback { get; set; }
+
+    public bool IsCwWpmStatusBarVisible { get; set; }
 }

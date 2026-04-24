@@ -1,5 +1,6 @@
 using QsoRipper.EngineSelection;
 using QsoRipper.Gui.Inspection;
+using QsoRipper.Gui.Services;
 using QsoRipper.Gui.ViewModels;
 
 namespace QsoRipper.Gui.Tests;
@@ -79,22 +80,35 @@ public class SettingsViewModelTests
     }
 
     [Fact]
-    public void CwWpmAutoFillPropertiesRoundTripDefaultsAndUpdates()
+    public void RadioMonitorPropertiesRoundTripDefaultsAndUpdates()
     {
         var client = new UxFixtureEngineClient(new UxCaptureFixture());
         var viewModel = new SettingsViewModel(client);
 
-        // Defaults: off, no loopback, no device override.
-        Assert.False(viewModel.IsCwWpmAutoFillEnabled);
-        Assert.False(viewModel.IsCwWpmLoopback);
-        Assert.Equal(string.Empty, viewModel.CwWpmDeviceOverride);
+        // Defaults: monitor off, status bar hidden, no device pre-selected.
+        Assert.False(viewModel.IsRadioMonitorEnabled);
+        Assert.False(viewModel.IsCwWpmStatusBarVisible);
+        Assert.Null(viewModel.SelectedRadioMonitorDevice);
+        Assert.Equal(string.Empty, viewModel.ResolvedCaptureDevice);
+        Assert.False(viewModel.ResolvedIsLoopback);
 
-        viewModel.IsCwWpmAutoFillEnabled = true;
-        viewModel.IsCwWpmLoopback = true;
-        viewModel.CwWpmDeviceOverride = "Speakers";
+        viewModel.IsRadioMonitorEnabled = true;
+        viewModel.IsCwWpmStatusBarVisible = true;
+        viewModel.SelectedRadioMonitorDevice = new RadioMonitorDevice("USB Audio CODEC", IsLoopback: false);
 
-        Assert.True(viewModel.IsCwWpmAutoFillEnabled);
-        Assert.True(viewModel.IsCwWpmLoopback);
-        Assert.Equal("Speakers", viewModel.CwWpmDeviceOverride);
+        Assert.True(viewModel.IsRadioMonitorEnabled);
+        Assert.True(viewModel.IsCwWpmStatusBarVisible);
+        Assert.Equal("USB Audio CODEC", viewModel.ResolvedCaptureDevice);
+        Assert.False(viewModel.ResolvedIsLoopback);
+
+        // Loopback flows through to ResolvedIsLoopback.
+        viewModel.SelectedRadioMonitorDevice = new RadioMonitorDevice("Speakers (Realtek)", IsLoopback: true);
+        Assert.True(viewModel.ResolvedIsLoopback);
+        Assert.Equal("Speakers (Realtek)", viewModel.ResolvedCaptureDevice);
+
+        // System default sentinel resolves to empty string + non-loopback.
+        viewModel.SelectedRadioMonitorDevice = RadioMonitorDeviceCatalog.SystemDefault;
+        Assert.Equal(string.Empty, viewModel.ResolvedCaptureDevice);
+        Assert.False(viewModel.ResolvedIsLoopback);
     }
 }

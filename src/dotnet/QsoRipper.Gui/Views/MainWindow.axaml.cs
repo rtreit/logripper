@@ -896,9 +896,10 @@ internal sealed partial class MainWindow : Window
         {
             _viewModel.ApplySettingsUiPreferences(
                 settingsVm.IsSpaceWeatherVisible,
-                settingsVm.IsCwWpmAutoFillEnabled,
-                settingsVm.IsCwWpmLoopback,
-                settingsVm.CwWpmDeviceOverride);
+                settingsVm.IsRadioMonitorEnabled,
+                settingsVm.IsCwWpmStatusBarVisible,
+                settingsVm.ResolvedIsLoopback,
+                settingsVm.ResolvedCaptureDevice);
             SavePreferences();
         }
 
