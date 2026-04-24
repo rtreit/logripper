@@ -232,6 +232,17 @@ pub struct DecoderConfig {
     /// watchdog are healthy. Typical useful range 0.2..0.6; values
     /// >= 1.0 will block all on→off transitions.
     pub hysteresis_fraction: f32,
+    /// CFAR (constant-false-alarm-rate) style keying: feed the threshold
+    /// detector the *residual* `max(0, smoothed_target - smoothed_noise)`
+    /// instead of raw target Goertzel power. The smoothed noise is the
+    /// q25 of side-bin Goertzels (already maintained for SNR), so
+    /// harsh same-band stochastic noise (band-passed white noise; deep
+    /// tremolo on a noise bed) collapses toward zero, leaving real
+    /// key-down energy to dominate the rolling-quantile threshold. Raw
+    /// `smoothed` is still emitted in `Power` events so the UI is
+    /// unchanged. Default false. See issue #322 for the harsh-tier
+    /// 30 WPM scenarios this targets.
+    pub cfar_keying: bool,
 }
 
 impl DecoderConfig {
@@ -250,6 +261,7 @@ impl DecoderConfig {
             min_pulse_dot_fraction: 0.0,
             min_gap_dot_fraction: 0.0,
             hysteresis_fraction: 0.0,
+            cfar_keying: false,
         }
     }
     /// Convert min_snr_db → linear power ratio for the inner gate.
@@ -2507,9 +2519,36 @@ impl StreamingDecoder {
                 // peak without polluting later max() comparisons with NaN.
                 1.0e6
             };
+            // CFAR keying: opt-in scale-invariant target/noise ratio
+            // metric for the threshold detector, plus bypass of the
+            // static 3 dB `snr_ok` gate. This was empirically the only
+            // per-frame variant tried in #322 that recovered ANY
+            // stable copy on `harsh_white` (band-passed white noise
+            // mixed with weak CW), but it costs baseline performance
+            // because the ratio is scale-invariant and clean signals
+            // (where target >> noise by 30+ dB) lose their absolute
+            // headroom in the rolling-quantile threshold. Use only
+            // for harsh same-band noise scenarios; defaults to off.
+            //
+            // The fundamental limit on per-frame methods: under
+            // band-passed noise the target/side-bin SNR median is only
+            // ~1 dB and per-frame variance overlaps key-up and
+            // key-down. Coherent recovery requires soft element-window
+            // integration (matched dit/dah scoring against the
+            // post-acquisition dot estimate), tracked in #322.
+            let (key_input, snr_ok_for_decoder) = if self.config.cfar_keying {
+                if noise > 1e-12 {
+                    (smoothed / noise, true)
+                } else {
+                    // Pre-warmup: noise smoother hasn't filled yet.
+                    (smoothed, snr_ok)
+                }
+            } else {
+                (smoothed, snr_ok)
+            };
             self.decoder.push_power(
-                smoothed,
-                snr_ok,
+                key_input,
+                snr_ok_for_decoder,
                 purity_ok,
                 purity_for_decoder,
                 self.pitch_locked,

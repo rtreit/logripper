@@ -10,7 +10,8 @@ param(
     [int]$ChunkMs = 100,
     [double]$Hysteresis = -1,
     [double]$MinGap = -1,
-    [double]$MinPulse = -1
+    [double]$MinPulse = -1,
+    [switch]$CfarKeying
 )
 
 $ErrorActionPreference = 'Stop'
@@ -51,6 +52,7 @@ foreach ($v in $variants) {
     if ($Hysteresis -ge 0) { $extra += '--hysteresis-fraction'; $extra += "$Hysteresis" }
     if ($MinGap -ge 0) { $extra += '--min-gap-dot-fraction'; $extra += "$MinGap" }
     if ($MinPulse -ge 0) { $extra += '--min-pulse-dot-fraction'; $extra += "$MinPulse" }
+    if ($CfarKeying) { $extra += '--cfar-keying' }
 
     $args = @(
         'bench-latency',

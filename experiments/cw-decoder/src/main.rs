@@ -505,6 +505,14 @@ enum Cmd {
         /// 0 = disabled.
         #[arg(long, default_value_t = 0.0)]
         min_pulse_dot_fraction: f32,
+        /// Enable CFAR-style keying: feed the threshold detector
+        /// `max(0, smoothed_target - smoothed_noise)` instead of raw
+        /// smoothed target power. Targets harsh same-band noise
+        /// (white-noise-bandpassed-to-CW-passband, deep tremolo on a
+        /// noise bed) where the rolling-quantile threshold ends up
+        /// inside the noise itself. Issue #322.
+        #[arg(long, default_value_t = false)]
+        cfar_keying: bool,
         /// Emit one NDJSON record per scenario in addition to the table
         /// (handy for collecting comparison runs into a file).
         #[arg(long, default_value_t = false)]
@@ -588,6 +596,8 @@ fn main() -> Result<()> {
                 min_pulse_dot_fraction,
                 min_gap_dot_fraction,
                 hysteresis_fraction,
+
+                cfar_keying: false,
             };
             run_stream_file(&path, chunk_ms, realtime, quiet, json, cfg, stdin_control)
         }
@@ -663,6 +673,7 @@ fn main() -> Result<()> {
                 min_pulse_dot_fraction: 0.0,
                 min_gap_dot_fraction: 0.0,
                 hysteresis_fraction: 0.0,
+                cfar_keying: false,
             };
             let harvest_cfg = harvest::HarvestConfig {
                 window_seconds: window,
@@ -724,6 +735,8 @@ fn main() -> Result<()> {
                 min_pulse_dot_fraction,
                 min_gap_dot_fraction,
                 hysteresis_fraction,
+
+                cfar_keying: false,
             };
             run_decode_and_play(&path, start, end, json, stdin_control, cfg)
         }
@@ -762,6 +775,8 @@ fn main() -> Result<()> {
                 min_pulse_dot_fraction,
                 min_gap_dot_fraction,
                 hysteresis_fraction,
+
+                cfar_keying: false,
             };
             run_stream_live(
                 device.as_deref(),
@@ -795,6 +810,7 @@ fn main() -> Result<()> {
             hysteresis_fraction,
             min_gap_dot_fraction,
             min_pulse_dot_fraction,
+            cfar_keying,
             json,
         } => run_bench_latency(
             from_file.as_deref(),
@@ -811,6 +827,7 @@ fn main() -> Result<()> {
             hysteresis_fraction,
             min_gap_dot_fraction,
             min_pulse_dot_fraction,
+            cfar_keying,
             json,
         ),
     }
@@ -867,6 +884,7 @@ fn run_bench_latency(
     hysteresis_fraction: f32,
     min_gap_dot_fraction: f32,
     min_pulse_dot_fraction: f32,
+    cfar_keying: bool,
     json: bool,
 ) -> Result<()> {
     let mut cfg = streaming::DecoderConfig::defaults();
@@ -891,6 +909,7 @@ fn run_bench_latency(
     if min_pulse_dot_fraction > 0.0 {
         cfg.min_pulse_dot_fraction = min_pulse_dot_fraction;
     }
+    cfg.cfar_keying = cfar_keying;
 
     let scenarios: Vec<bench_latency::Scenario> = if let Some(path) = from_file {
         let truth = truth
@@ -916,7 +935,7 @@ fn run_bench_latency(
         scenarios.len()
     );
     println!(
-        "Config: purity={:.2}  wide_bins={}  auto_threshold={}  force_pitch_hz={}  hysteresis={:.2}  min_gap={:.2}  min_pulse={:.2}",
+        "Config: purity={:.2}  wide_bins={}  auto_threshold={}  force_pitch_hz={}  hysteresis={:.2}  min_gap={:.2}  min_pulse={:.2}  cfar={}",
         cfg.min_tone_purity,
         cfg.wide_bin_count,
         cfg.auto_threshold,
@@ -926,6 +945,7 @@ fn run_bench_latency(
         cfg.hysteresis_fraction,
         cfg.min_gap_dot_fraction,
         cfg.min_pulse_dot_fraction,
+        cfg.cfar_keying,
     );
 
     let mut results = Vec::with_capacity(scenarios.len());

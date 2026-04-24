@@ -1150,6 +1150,7 @@ fn parse_streaming_decoder_config(args: &[String]) -> DecoderConfig {
         hysteresis_fraction: arg_value_f32(args, "--hysteresis-fraction")
             .map(|x| x.max(0.0))
             .unwrap_or(0.0),
+        cfar_keying: args.iter().any(|a| a == "--cfar-keying"),
     }
 }
 
