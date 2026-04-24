@@ -81,6 +81,14 @@ pub struct BenchResult {
     /// `[0.0, 1.0]`. `None` if first-lock never happened or if the CW
     /// segment after first-lock is empty. 1.0 = perfectly sticky lock.
     pub lock_uptime_ratio: Option<f32>,
+    /// Diagnostic counters captured from the streaming decoder at
+    /// end-of-run (raw_edges_total, short_pulses_dropped,
+    /// short_gaps_bridged, on_runs_merged, invalid_on_duration_dropped,
+    /// rhythm_closed_letters_dropped, single_element_rescue_suppressed,
+    /// chars_emitted, garbled_emitted). Surfaced via JSON output so
+    /// bench sweeps can tell *why* a configuration improved or
+    /// regressed instead of just looking at acquisition_latency.
+    pub decoder_counters: Option<serde_json::Value>,
 }
 
 impl BenchResult {
@@ -163,6 +171,7 @@ pub fn run_scenario(
 
     result.transcript = transcript;
     result.final_pitch_hz = dec.pitch();
+    result.decoder_counters = Some(dec.debug_counters());
     let transcript_owned = result.transcript.clone();
     update_truth_metrics(
         &transcript_owned,

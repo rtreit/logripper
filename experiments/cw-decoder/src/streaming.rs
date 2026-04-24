@@ -92,6 +92,14 @@ const DEBOUNCE_FRAC: f32 = 0.3;
 const PRIME_INTERVALS: usize = 8;
 /// EMA smoothing factor for post-bootstrap dit-length updates.
 const DIT_EMA_ALPHA: f32 = 0.15;
+/// Hard sanity gate on ON-interval duration in dot units. Anything
+/// shorter than `MIN_ON_DOT_FRAC` cannot be a real dit; anything longer
+/// than `MAX_ON_DOT_FRAC` cannot be a real dah and is treated as bad
+/// keying / impulsive noise. These are enforced after the chatter
+/// merge in `consume_interval`, in addition to the (configurable)
+/// `min_pulse_dot_fraction` knob.
+const MIN_ON_DOT_FRAC: f32 = 0.40;
+const MAX_ON_DOT_FRAC: f32 = 4.80;
 
 /// Off-band noise reference offsets from the locked pitch (Hz). We run extra
 /// Goertzels at ± each offset to estimate broadband noise around the same
@@ -1012,6 +1020,14 @@ impl RhythmGate {
         self.is_open && self.mature
     }
 
+    /// True if the gate has ever reached maturity since the last full
+    /// close. Used by the classifier to allow a multi-element morse
+    /// rescue when the gate transiently dips during QSB without
+    /// rescuing single-element ghosts (E/T) from pure noise.
+    fn was_recently_mature(&self) -> bool {
+        self.mature
+    }
+
     #[allow(dead_code)]
     fn reset(&mut self) {
         self.window.clear();
@@ -1222,6 +1238,31 @@ struct Decoder {
     /// emitted. None when the purity gate hasn't seen a value yet (e.g.
     /// pre-lock or with the gate disabled).
     current_letter_peak_purity: Option<f32>,
+
+    /// Pending ON-run length (in power samples) waiting to see whether
+    /// the next interval is a real OFF gap or a chatter-bridge ON. Used
+    /// by the min-gap merge sanitizer in `push_edge` so a short OFF
+    /// inside a real key-down element no longer fragments a dah into
+    /// two adjacent dits — the surrounding ON intervals are *merged*
+    /// into one, not just left to "continue accumulating".
+    pending_on_len: Option<usize>,
+    /// Total length of the short OFF gap(s) currently being bridged. Folded
+    /// into the merged ON run when the next ON arrives; flushed as a real
+    /// OFF when a long-enough OFF arrives.
+    pending_short_gap_len: usize,
+
+    // --- Bench / diagnostic counters. Cheap to maintain and surfaced via
+    // `debug_counters()` so bench-latency can publish them in its result
+    // JSON for #320 regression watching.
+    raw_edges_total: u64,
+    short_pulses_dropped: u64,
+    short_gaps_bridged: u64,
+    on_runs_merged: u64,
+    invalid_on_duration_dropped: u64,
+    rhythm_closed_letters_dropped: u64,
+    single_element_rescue_suppressed: u64,
+    chars_emitted: u64,
+    garbled_emitted: u64,
 }
 
 impl Decoder {
@@ -1249,6 +1290,17 @@ impl Decoder {
             rhythm: RhythmGate::new(),
             current_letter: String::new(),
             current_letter_peak_purity: None,
+            pending_on_len: None,
+            pending_short_gap_len: 0,
+            raw_edges_total: 0,
+            short_pulses_dropped: 0,
+            short_gaps_bridged: 0,
+            on_runs_merged: 0,
+            invalid_on_duration_dropped: 0,
+            rhythm_closed_letters_dropped: 0,
+            single_element_rescue_suppressed: 0,
+            chars_emitted: 0,
+            garbled_emitted: 0,
         }
     }
 
@@ -1385,9 +1437,9 @@ impl Decoder {
         }
     }
 
-    /// Consume a single interval and emit decode events. This is the logic
-    /// that was previously inline in `push_power`, factored out so we can
-    /// replay the bootstrap buffer once we've primed the dot length.
+    /// Consume a single (already-sanitized) interval and emit decode events.
+    /// "Sanitized" means the chatter merge in `push_edge` has already merged
+    /// short OFF gaps into the surrounding ON run when appropriate.
     fn consume_interval(
         &mut self,
         ivl: Interval,
@@ -1405,20 +1457,22 @@ impl Decoder {
         // threshold for a few ms otherwise gets classified as a dit and
         // produces "E"/"I" runs in silent stretches. We deliberately
         // do NOT touch off-runs here: short gaps inside a letter are
-        // already handled by `LETTER_SPACE_BOUNDARY`.
+        // already handled by the merge sanitizer in `push_edge`.
         if ivl.is_on && self.min_pulse_dot_fraction > 0.0 && len_norm < self.min_pulse_dot_fraction
         {
+            self.short_pulses_dropped += 1;
             return;
         }
-        // Min-gap gate: drop an *off*-run that is shorter than the
-        // configured fraction of the dot length. Twin of the min-pulse
-        // gate above. Re-captured acoustic CW often chatters around
-        // threshold inside a real key-down, producing a tiny false gap
-        // that would otherwise either (a) trigger a letter-space break
-        // mid-character or (b) split a real dah into two adjacent dits.
-        // We drop the off-interval entirely so the surrounding on-runs
-        // continue to accumulate into one letter without interruption.
-        if !ivl.is_on && self.min_gap_dot_fraction > 0.0 && len_norm < self.min_gap_dot_fraction {
+        // Hard ON-duration sanity gate (#320): no real Morse element is
+        // shorter than ~0.4 dot or longer than ~1.6 dah. Anything outside
+        // [MIN_ON_DOT_FRAC, MAX_ON_DOT_FRAC] is treated as bad keying or
+        // impulsive noise; we drop it AND clear any in-progress letter
+        // so a giant ON blob from QRM can't be classified as a dah, and
+        // a tiny chatter pulse can't be classified as a dit.
+        if ivl.is_on && !(MIN_ON_DOT_FRAC..=MAX_ON_DOT_FRAC).contains(&len_norm) {
+            self.invalid_on_duration_dropped += 1;
+            self.current_letter.clear();
+            self.current_letter_peak_purity = None;
             return;
         }
         // Feed the rhythm gate first so it always sees every interval.
@@ -1436,32 +1490,129 @@ impl Decoder {
                 events.push(StreamEvent::WpmUpdate { wpm: w });
             }
         } else if len_norm > LETTER_SPACE_BOUNDARY {
-            // Letter / word boundary. Emit when either the rhythm gate is
-            // currently open, OR the accumulated dot/dash pattern decodes to
-            // a real character (the latter rescues letters that span a
-            // transient gate flicker during normal QSB/QRM).
+            // Letter / word boundary. The original logic emitted whenever the
+            // pattern decoded to a real character, which lets single-element
+            // E (.) and T (-) leak through during dense in-band noise (#320).
+            // The conservative version: open gate always emits; otherwise we
+            // only rescue *multi-element* valid morse, and only while the
+            // rhythm gate has been mature recently.
             let gate_open = self.rhythm.is_open();
             let pattern = self.current_letter.clone();
             let valid_morse = !pattern.is_empty() && morse_to_char(&pattern).is_some();
-            if gate_open || valid_morse {
+            let single_element = pattern.chars().count() == 1;
+            let allow_rescue = valid_morse && !single_element && self.rhythm.was_recently_mature();
+            if gate_open || allow_rescue {
                 if let Some(ev) = self.classify_letter(pitch_hz) {
+                    match &ev {
+                        StreamEvent::Char { .. } => self.chars_emitted += 1,
+                        StreamEvent::Garbled { .. } => self.garbled_emitted += 1,
+                        _ => {}
+                    }
                     events.push(ev);
                 }
                 if len_norm > WORD_SPACE_BOUNDARY {
                     events.push(StreamEvent::Word);
                 }
             } else {
-                // Gate is closed AND the pattern is junk → drop it so we
-                // don't accumulate a long tail of dots/dashes from noise.
+                // Gate is closed AND pattern is junk/single-element → drop it
+                // so we don't accumulate a long tail of dots/dashes from noise.
+                if valid_morse && single_element {
+                    self.single_element_rescue_suppressed += 1;
+                } else if !pattern.is_empty() {
+                    self.rhythm_closed_letters_dropped += 1;
+                }
                 self.current_letter.clear();
                 self.current_letter_peak_purity = None;
             }
         }
     }
 
+    /// Pre-classifier sanitizer that merges short OFF gaps into the
+    /// surrounding ON run BEFORE feeding the timing history and the
+    /// classifier. The previous behaviour merely *dropped* a short OFF
+    /// interval, which still left the two adjacent ON runs to be
+    /// classified independently — a real dah broken by a tiny envelope
+    /// chatter would still come out as ". .". This routine returns up
+    /// to two intervals to forward (a flushed merged ON and/or the real
+    /// OFF) and updates the merge counters.
+    fn sanitize_interval(&mut self, ivl: Interval) -> (Option<Interval>, Option<Interval>) {
+        let dot = self.dot_len;
+        if ivl.is_on {
+            if let Some(prev_on) = self.pending_on_len.take() {
+                let merged = prev_on + self.pending_short_gap_len + ivl.len;
+                self.pending_short_gap_len = 0;
+                self.pending_on_len = Some(merged);
+                self.on_runs_merged += 1;
+            } else {
+                self.pending_on_len = Some(ivl.len);
+            }
+            return (None, None);
+        }
+
+        let is_short_gap = match dot {
+            Some(d) if d > 0.0 && self.min_gap_dot_fraction > 0.0 => {
+                (ivl.len as f32 / d) < self.min_gap_dot_fraction
+            }
+            _ => false,
+        };
+        if is_short_gap && self.pending_on_len.is_some() {
+            self.pending_short_gap_len += ivl.len;
+            self.short_gaps_bridged += 1;
+            return (None, None);
+        }
+
+        // Real OFF gap: flush any pending ON, then emit this OFF.
+        if let Some(on_len) = self.pending_on_len.take() {
+            self.pending_short_gap_len = 0;
+            (
+                Some(Interval {
+                    len: on_len,
+                    is_on: true,
+                }),
+                Some(ivl),
+            )
+        } else {
+            (None, Some(ivl))
+        }
+    }
+
+    /// Public accessor for bench/diagnostic counters.
+    pub fn debug_counters(&self) -> serde_json::Value {
+        serde_json::json!({
+            "raw_edges_total": self.raw_edges_total,
+            "short_pulses_dropped": self.short_pulses_dropped,
+            "short_gaps_bridged": self.short_gaps_bridged,
+            "on_runs_merged": self.on_runs_merged,
+            "invalid_on_duration_dropped": self.invalid_on_duration_dropped,
+            "rhythm_closed_letters_dropped": self.rhythm_closed_letters_dropped,
+            "single_element_rescue_suppressed": self.single_element_rescue_suppressed,
+            "chars_emitted": self.chars_emitted,
+            "garbled_emitted": self.garbled_emitted,
+        })
+    }
+
     /// Push one edge-terminated run into the decoder. During bootstrap we
-    /// buffer; once primed, we emit events immediately.
+    /// buffer; once primed, we emit events immediately. Routes the raw
+    /// interval through `sanitize_interval` first (Patch 2 from #320) so
+    /// short OFF chatter inside a real key-down element merges the
+    /// surrounding ON runs into one before they reach the timing
+    /// history, the rhythm gate, or the symbol classifier.
     fn push_edge(&mut self, ivl: Interval, pitch_hz: Option<f32>, events: &mut Vec<StreamEvent>) {
+        self.raw_edges_total += 1;
+        let (a, b) = self.sanitize_interval(ivl);
+        for forward in [a, b].into_iter().flatten() {
+            self.process_sanitized(forward, pitch_hz, events);
+        }
+    }
+
+    /// Process a single already-sanitized interval: update history,
+    /// recalibrate dit/dah, then either buffer (bootstrap) or consume.
+    fn process_sanitized(
+        &mut self,
+        ivl: Interval,
+        pitch_hz: Option<f32>,
+        events: &mut Vec<StreamEvent>,
+    ) {
         self.push_interval(ivl);
         self.recalibrate_from_history();
 
@@ -1471,7 +1622,6 @@ impl Decoder {
                 && self.dah_len.is_some()
                 && self.bootstrap.len() >= PRIME_INTERVALS;
             if have_contrast {
-                // Announce WPM once, then replay the whole buffer.
                 if let Some(w) = self.current_wpm() {
                     events.push(StreamEvent::WpmUpdate { wpm: w });
                 }
@@ -1481,7 +1631,6 @@ impl Decoder {
                     self.consume_interval(b, pitch_hz, events);
                 }
             }
-            // Still priming; hold off on emission.
             return;
         }
 
@@ -1768,6 +1917,12 @@ impl StreamingDecoder {
     }
     pub fn current_threshold(&self) -> f32 {
         self.decoder.threshold
+    }
+    /// Snapshot of the inner decoder's bench/diagnostic counters for
+    /// the harness to publish in result JSON. See
+    /// [`Decoder::debug_counters`] for the field set.
+    pub fn debug_counters(&self) -> serde_json::Value {
+        self.decoder.debug_counters()
     }
     #[allow(dead_code)]
     pub fn config(&self) -> DecoderConfig {

@@ -726,21 +726,32 @@ The variant matrix is intentionally tiered:
 
 The `harsh_white` / `inband_qrm` / `chaos` variants currently expose a real weakness: even with a healthy lock and a passed Fisher confidence check, the keying envelope chatters in dense in-band noise and the ditdah classifier emits long runs of garbage characters. Improving the `false_chars_before_stable` metric on these three is the next concrete bench target. Tracked in [#320](https://github.com/rtreit/qsoripper/issues/320).
 
-### Hysteresis on the keying threshold (partial fix for #320)
+### Downstream classifier hardening for #320 (chatter-merge + duration sanity + rescue suppression)
 
-`DecoderConfig::hysteresis_fraction` (CLI: `--hysteresis-fraction`, defaults to `0.0`) adds an asymmetric on/off threshold to the keying gate: when keying is OFF, the amplitude must exceed `threshold * (1 + h/2)` to flip ON; while ON, it can stay ON down to `threshold * (1 - h/2)`. SNR and tone-purity gates remain non-hysteretic on purpose (adding hysteresis there causes the decoder to overstay on impulses).
+The first hysteresis-only patch killed the long ghost-character stream on `harsh_white` but did not change the underlying truth: the dense-noise variants chatter the keying envelope, and the dot/dah classifier was happy to interpret the chatter as a stream of `E`s and `T`s. A second pass landed four cooperating fixes (all opt-in, all exposed via CLI / JSON config / bench script):
 
-Bench results on the 12-variant matrix (all baseline + extreme variants unchanged):
+1. **Hard ON-duration sanity gate** (always on). After the dot length is known, ON intervals shorter than `0.4 · dot` or longer than `4.8 · dot` are dropped *and* the in-progress letter is cleared. This stops both threshold chatter from being classified as a dit and giant QRM blobs from being classified as a dah. Tracked by the `invalid_on_duration_dropped` counter.
+2. **Single-element rescue suppression**. The previous code rescued any `valid_morse` letter when the rhythm gate was closed, which let single-element `E` (`.`) and `T` (`-`) ghosts leak through every short blip. The rescue is now restricted to multi-element patterns, gated by `RhythmGate::was_recently_mature`. Tracked by `single_element_rescue_suppressed`.
+3. **Real merge for `min_gap_dot_fraction`**. Previously a short OFF was just dropped, leaving the surrounding ON runs to be classified separately (so a real dah broken by a tiny noise dip could become `. .` instead of `-`). The new sanitizer (`sanitize_interval` in `streaming.rs`) actually fuses the surrounding ON intervals into one element before classification. Tracked by `short_gaps_bridged` and `on_runs_merged`.
+4. **Hysteresis wired through every streaming path**. `--hysteresis-fraction` is now accepted by `cw-decoder stream-file`, `stream-live`, `decode-and-play`, `bench-latency`, and `eval` (previously only `bench-latency` and JSON-stdin took it). The `bench-30wpm.ps1` script gained `-Hysteresis`, `-MinGap`, and `-MinPulse` parameters so the full sweep is one command.
 
-| variant       | baseline ghost | hyst 0.3 ghost | baseline lat_ms | hyst 0.3 lat_ms |
-|---------------|---------------:|---------------:|----------------:|----------------:|
-| harsh_white   | **343**        | **0**          | 110500          | (never stable)  |
-| inband_qrm    | 0              | 0              | (never stable)  | (never stable)  |
-| chaos         | 0              | 0              | (never stable)  | (never stable)  |
+Bench JSON now also carries a `decoder_counters` block (`raw_edges_total`, `short_pulses_dropped`, `short_gaps_bridged`, `on_runs_merged`, `invalid_on_duration_dropped`, `single_element_rescue_suppressed`, `chars_emitted`, etc.) so a future tuning pass can prove a config improves CER instead of just suppressing output.
 
-So hysteresis at any value ≥ 0.2 cleanly stops the long ghost-character stream on `harsh_white` without regressing the baseline tier — but it does **not** by itself let `harsh_white` reach a stable lock, and it does not move `inband_qrm` / `chaos` from "no stable run" to "stable run". The acceptance criteria in #320 are not yet met.
+Best-known bench config on the 12-variant matrix is `-Hysteresis 0.3 -MinGap 0.2 -MinPulse 0.3`:
 
-The knob is shipped as opt-in (default `0.0` to preserve historical behavior) and is exposed via `cw-decoder bench-latency --hysteresis-fraction`, `cw-decoder eval --hysteresis-fraction`, and the `hysteresis_fraction` field of the JSON stdin config protocol used by the GUI's decode-and-play subcommand. A future change should pair it with an element-duration sanity gate (`min_pulse_dot_fraction` / `min_gap_dot_fraction` already exist) and possibly a CFAR-style local-contrast detector before declaring #320 done.
+| variant       | baseline ghost | best-config ghost | baseline lat_ms | best-config lat_ms |
+|---------------|---------------:|------------------:|----------------:|-------------------:|
+| clean         | 0              | 0                 | 15700           | 15700              |
+| weak          | 0              | 0                 | 14000           | 14000              |
+| qsb           | 2              | 0                 | 14700           | 14700              |
+| weak_qsb      | 2              | 1                 | 14000           | 14000              |
+| crushed       | 6              | 0                 | 17800           | 17800              |
+| deep_qsb      | 3              | 1                 | 14000           | 14000              |
+| harsh_white   | **343**        | **0**             | 110500          | (never stable)     |
+| inband_qrm    | 0              | 0                 | (never stable)  | (never stable)     |
+| chaos         | 0              | 0                 | (never stable)  | (never stable)     |
+
+So the four-patch combination reduces ghost output across the whole baseline tier (zero on most, one on the two QSB-heavy variants) without regressing latency, and it completely silences the harsh-tier ghost flood. The remaining gap — getting `harsh_white` / `inband_qrm` / `chaos` to a *stable* lock at all — is no longer a downstream-classifier problem; it is acquisition under continuous in-band carriers, which is what the next iteration (CFAR-style local-contrast detection or envelope-against-slow-carrier-floor) needs to address. The acceptance criteria in #320 are still not fully met, but the ghost-character class of failure that the issue opened with is resolved.
 
 ## Repo-local artifacts
 

@@ -132,6 +132,14 @@ enum Cmd {
         /// envelope chatters around threshold inside a key-down.
         #[arg(long, default_value_t = 0.0)]
         min_gap_dot_fraction: f32,
+        /// Asymmetric hysteresis fraction on the keying threshold. 0 =
+        /// disabled (single threshold, historical behaviour). When >0,
+        /// the gate requires p > threshold * (1 + h/2) to flip ON and
+        /// accepts p > threshold * (1 - h/2) to stay ON. Typical useful
+        /// range 0.2..0.6. Stops the envelope chattering across a single
+        /// threshold under dense in-band noise (#320).
+        #[arg(long, default_value_t = 0.0)]
+        hysteresis_fraction: f32,
         /// Read NDJSON config-update lines from stdin while streaming.
         /// Each line: {"type":"config","min_snr_db":...,"pitch_min_snr_db":...,"threshold_scale":...}
         #[arg(long)]
@@ -332,6 +340,10 @@ enum Cmd {
         min_pulse_dot_fraction: f32,
         #[arg(long, default_value_t = 0.0)]
         min_gap_dot_fraction: f32,
+        /// Asymmetric hysteresis fraction on the keying threshold. See
+        /// stream-file --hysteresis-fraction.
+        #[arg(long, default_value_t = 0.0)]
+        hysteresis_fraction: f32,
     },
 
     /// Stream live audio through the streaming decoder, printing events to stdout.
@@ -389,6 +401,10 @@ enum Cmd {
         /// 0 = disabled. Twin of --min-pulse-dot-fraction.
         #[arg(long, default_value_t = 0.0)]
         min_gap_dot_fraction: f32,
+        /// Asymmetric hysteresis fraction on the keying threshold. See
+        /// stream-file --hysteresis-fraction.
+        #[arg(long, default_value_t = 0.0)]
+        hysteresis_fraction: f32,
         /// Optional WAV path to mirror raw mono samples to (16-bit PCM at the
         /// device's native sample rate). Useful for post-stop offline analysis.
         #[arg(long)]
@@ -479,6 +495,16 @@ enum Cmd {
         /// dense in-band noise.
         #[arg(long, default_value_t = 0.0)]
         hysteresis_fraction: f32,
+        /// Bridge off-runs shorter than this fraction of one dot length.
+        /// 0 = disabled. Engages the chatter-merge sanitizer (Patch 2
+        /// of #320) which fuses the surrounding ON runs into a single
+        /// element instead of just dropping the short OFF.
+        #[arg(long, default_value_t = 0.0)]
+        min_gap_dot_fraction: f32,
+        /// Drop on-runs shorter than this fraction of one dot length.
+        /// 0 = disabled.
+        #[arg(long, default_value_t = 0.0)]
+        min_pulse_dot_fraction: f32,
         /// Emit one NDJSON record per scenario in addition to the table
         /// (handy for collecting comparison runs into a file).
         #[arg(long, default_value_t = false)]
@@ -545,6 +571,7 @@ fn main() -> Result<()> {
             wide_bin_count,
             min_pulse_dot_fraction,
             min_gap_dot_fraction,
+            hysteresis_fraction,
             stdin_control,
         } => {
             let cfg = streaming::DecoderConfig {
@@ -560,7 +587,7 @@ fn main() -> Result<()> {
                 wide_bin_count,
                 min_pulse_dot_fraction,
                 min_gap_dot_fraction,
-                hysteresis_fraction: 0.0,
+                hysteresis_fraction,
             };
             run_stream_file(&path, chunk_ms, realtime, quiet, json, cfg, stdin_control)
         }
@@ -681,6 +708,7 @@ fn main() -> Result<()> {
             wide_bin_count,
             min_pulse_dot_fraction,
             min_gap_dot_fraction,
+            hysteresis_fraction,
         } => {
             let cfg = streaming::DecoderConfig {
                 min_snr_db,
@@ -695,7 +723,7 @@ fn main() -> Result<()> {
                 wide_bin_count,
                 min_pulse_dot_fraction,
                 min_gap_dot_fraction,
-                hysteresis_fraction: 0.0,
+                hysteresis_fraction,
             };
             run_decode_and_play(&path, start, end, json, stdin_control, cfg)
         }
@@ -715,6 +743,7 @@ fn main() -> Result<()> {
             wide_bin_count,
             min_pulse_dot_fraction,
             min_gap_dot_fraction,
+            hysteresis_fraction,
             record,
             stdin_control,
             loopback,
@@ -732,7 +761,7 @@ fn main() -> Result<()> {
                 wide_bin_count,
                 min_pulse_dot_fraction,
                 min_gap_dot_fraction,
-                hysteresis_fraction: 0.0,
+                hysteresis_fraction,
             };
             run_stream_live(
                 device.as_deref(),
@@ -764,6 +793,8 @@ fn main() -> Result<()> {
             no_auto_threshold,
             force_pitch_hz,
             hysteresis_fraction,
+            min_gap_dot_fraction,
+            min_pulse_dot_fraction,
             json,
         } => run_bench_latency(
             from_file.as_deref(),
@@ -778,6 +809,8 @@ fn main() -> Result<()> {
             no_auto_threshold,
             force_pitch_hz,
             hysteresis_fraction,
+            min_gap_dot_fraction,
+            min_pulse_dot_fraction,
             json,
         ),
     }
@@ -832,6 +865,8 @@ fn run_bench_latency(
     no_auto_threshold: bool,
     force_pitch_hz: f32,
     hysteresis_fraction: f32,
+    min_gap_dot_fraction: f32,
+    min_pulse_dot_fraction: f32,
     json: bool,
 ) -> Result<()> {
     let mut cfg = streaming::DecoderConfig::defaults();
@@ -849,6 +884,12 @@ fn run_bench_latency(
     }
     if hysteresis_fraction > 0.0 {
         cfg.hysteresis_fraction = hysteresis_fraction;
+    }
+    if min_gap_dot_fraction > 0.0 {
+        cfg.min_gap_dot_fraction = min_gap_dot_fraction;
+    }
+    if min_pulse_dot_fraction > 0.0 {
+        cfg.min_pulse_dot_fraction = min_pulse_dot_fraction;
     }
 
     let scenarios: Vec<bench_latency::Scenario> = if let Some(path) = from_file {
@@ -875,7 +916,7 @@ fn run_bench_latency(
         scenarios.len()
     );
     println!(
-        "Config: purity={:.2}  wide_bins={}  auto_threshold={}  force_pitch_hz={}  hysteresis={:.2}",
+        "Config: purity={:.2}  wide_bins={}  auto_threshold={}  force_pitch_hz={}  hysteresis={:.2}  min_gap={:.2}  min_pulse={:.2}",
         cfg.min_tone_purity,
         cfg.wide_bin_count,
         cfg.auto_threshold,
@@ -883,6 +924,8 @@ fn run_bench_latency(
             .map(|f| format!("{f:.0}"))
             .unwrap_or_else(|| "off".into()),
         cfg.hysteresis_fraction,
+        cfg.min_gap_dot_fraction,
+        cfg.min_pulse_dot_fraction,
     );
 
     let mut results = Vec::with_capacity(scenarios.len());
@@ -910,6 +953,7 @@ fn run_bench_latency(
                 "total_unlocked_ms_after_lock": r.total_unlocked_ms_after_lock,
                 "locked_pitch_hz": r.locked_pitch_hz,
                 "transcript": r.transcript,
+                "decoder_counters": r.decoder_counters.clone().unwrap_or(serde_json::Value::Null),
             });
             println!("{rec}");
         }
