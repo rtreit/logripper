@@ -34,6 +34,33 @@ Today, the reference path is the causal `ditdah` baseline. The custom streaming 
 > status row reports `CW WPM: decoder not built`. If the binary is found but
 > launching fails (e.g. cpal cannot open the capture device), the status row
 > reports the underlying error and the toggle flips off.
+>
+> **Validating the GUI without a radio (loopback / file playback):**
+>
+> 1. Build the decoder (`cargo build --release` in `experiments\cw-decoder`).
+> 2. Pick how to feed audio into the decoder:
+>    - **WASAPI loopback (Windows, no virtual cable required):** set
+>      `IsCwDecoderLoopback = true` in
+>      `%LocalAppData%\QsoRipper\ui-preferences.json` (and optionally set
+>      `CwDecoderDeviceOverride` to a substring of the system *output* device
+>      name, e.g. `"Speakers"`). With loopback on, `--device` matches output
+>      devices, not input devices. Then play a CW practice clip through the
+>      speakers and the GUI status row should report a live WPM.
+>    - **Virtual audio cable (cross-platform):** install VB-Audio Cable or a
+>      similar driver, route system output to the cable, and put the cable's
+>      *input* name in `CwDecoderDeviceOverride` with `IsCwDecoderLoopback`
+>      left at `false`. The cw-decoder then sees the cable as a normal input
+>      device.
+>    - **Real microphone (no setup):** leave both fields empty and play a
+>      practice clip through the speakers. Quality depends on the room and
+>      mic, so loopback or a virtual cable is preferred for validation.
+> 3. List candidate device names from the command line with
+>    `experiments\cw-decoder\target\release\cw-decoder.exe devices` — this
+>    prints both input devices and the output devices that are usable as
+>    `--loopback` targets.
+> 4. Start the GUI, toggle CW WPM on (status row), log a CW QSO during
+>    playback, and confirm `cw_decode_rx_wpm` is populated on the new row in
+>    the recent-QSO grid.
 
 ## Current architecture
 

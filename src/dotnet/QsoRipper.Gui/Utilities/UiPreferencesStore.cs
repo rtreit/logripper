@@ -76,4 +76,6 @@ internal sealed class UiPreferences
     public bool IsCwDecoderEnabled { get; set; }
 
     public string? CwDecoderDeviceOverride { get; set; }
+
+    public bool IsCwDecoderLoopback { get; set; }
 }

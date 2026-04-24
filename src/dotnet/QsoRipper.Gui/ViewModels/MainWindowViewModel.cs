@@ -138,6 +138,9 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
     private bool _isCwDecoderEnabled;
 
     [ObservableProperty]
+    private bool _isCwDecoderLoopback;
+
+    [ObservableProperty]
     private string _cwDecoderStatusText = "CW WPM: OFF";
 
     [ObservableProperty]
@@ -577,10 +580,12 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
             EnsureCwSampleSource();
             try
             {
-                _cwSampleSource?.Start(string.IsNullOrWhiteSpace(CwDecoderDeviceOverride)
-                    ? null
-                    : CwDecoderDeviceOverride.Trim());
-                CwDecoderStatusText = "CW WPM: starting\u2026";
+                _cwSampleSource?.Start(
+                    string.IsNullOrWhiteSpace(CwDecoderDeviceOverride) ? null : CwDecoderDeviceOverride.Trim(),
+                    IsCwDecoderLoopback);
+                CwDecoderStatusText = IsCwDecoderLoopback
+                    ? "CW WPM: starting (loopback)\u2026"
+                    : "CW WPM: starting\u2026";
             }
             catch (InvalidOperationException ex)
             {
@@ -1095,6 +1100,8 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
             CwDecoderDeviceOverride = prefs.CwDecoderDeviceOverride.Trim();
         }
 
+        IsCwDecoderLoopback = prefs.IsCwDecoderLoopback;
+
         if (prefs.IsCwDecoderEnabled)
         {
             ToggleCwDecoder();
@@ -1112,6 +1119,7 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
         EngineProfileId = _switchableEngine?.CurrentProfile.ProfileId,
         EngineEndpoint = _switchableEngine?.CurrentEndpoint,
         IsCwDecoderEnabled = IsCwDecoderEnabled,
+        IsCwDecoderLoopback = IsCwDecoderLoopback,
         CwDecoderDeviceOverride = string.IsNullOrWhiteSpace(CwDecoderDeviceOverride)
             ? null
             : CwDecoderDeviceOverride.Trim(),

@@ -52,7 +52,9 @@ internal sealed class CwDecoderProcessSampleSource : ICwWpmSampleSource
         }
     }
 
-    public void Start(string? deviceOverride)
+    public void Start(string? deviceOverride) => Start(deviceOverride, loopback: false);
+
+    public void Start(string? deviceOverride, bool loopback)
     {
         Stop();
 
@@ -73,6 +75,13 @@ internal sealed class CwDecoderProcessSampleSource : ICwWpmSampleSource
         };
         psi.ArgumentList.Add("stream-live");
         psi.ArgumentList.Add("--json");
+        if (loopback)
+        {
+            // WASAPI loopback: capture from a system OUTPUT device so audio
+            // played to the speakers (e.g. a YouTube CW practice clip) is
+            // decoded directly without going through speakers→room→mic.
+            psi.ArgumentList.Add("--loopback");
+        }
         if (!string.IsNullOrWhiteSpace(deviceOverride))
         {
             psi.ArgumentList.Add("--device");
