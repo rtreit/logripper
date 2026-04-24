@@ -753,6 +753,17 @@ Best-known bench config on the 12-variant matrix is `-Hysteresis 0.3 -MinGap 0.2
 
 So the four-patch combination reduces ghost output across the whole baseline tier (zero on most, one on the two QSB-heavy variants) without regressing latency, and it completely silences the harsh-tier ghost flood. The remaining gap — getting `harsh_white` / `inband_qrm` / `chaos` to a *stable* lock at all — is no longer a downstream-classifier problem; it is acquisition under continuous in-band carriers, which is what the next iteration (CFAR-style local-contrast detection or envelope-against-slow-carrier-floor) needs to address. The acceptance criteria in #320 are still not fully met, but the ghost-character class of failure that the issue opened with is resolved.
 
+### Opt-in CFAR keying (#322)
+
+A first cut of the CFAR keying idea ships behind an opt-in flag. With `--cfar-keying` (or `-CfarKeying` in `bench-30wpm.ps1`) the on/off threshold state machine is fed the dimensionless ratio `smoothed / noise` instead of raw `smoothed` Goertzel power, and the global `snr_ok` gate is bypassed (the rolling-quantile threshold over the ratio supplies its own discrimination). This is the only per-frame variant from the #322 experiment matrix that produced any stable transcript on `harsh_white` (stable @72.9 s with 38 ghost characters before lock). It costs the `clean` and `qsb` scenarios in exchange, so the flag stays off by default; the production decoder behavior across all 12 baseline scenarios is unchanged.
+
+| Mode | PASS | WARN | FAIL | Total ghost | `harsh_white` |
+| --- | --- | --- | --- | --- | --- |
+| default (no flag) | 6 | 3 | 3 | 2 | no stable |
+| `-CfarKeying` | 5 | 3 | 4 | 42 | **stable @72.9 s** |
+
+The empirical conclusion (recorded on issue #322): per-frame normalization alone cannot crack the harsh tier without regressing the clean tier. The `--cfar-keying` substrate is the foundation for the next iteration — soft element-window matched scoring that integrates the ratio metric over candidate ~1-dot, ~3-dot, and ~7-dot windows once the dot estimate is primed.
+
 ## Repo-local artifacts
 
 - `gui-screenshot*.png` — historical GUI screenshots tracking visual iteration on the Decode tab
