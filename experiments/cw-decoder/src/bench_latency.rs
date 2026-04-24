@@ -344,10 +344,8 @@ fn update_truth_metrics(
                 let stable_idx = end - 1;
                 out.t_stable_n_correct_ms = Some(char_times[stable_idx]);
                 // Count "garbage" chars emitted before the stable run started.
-                out.false_chars_before_stable = chars[..start]
-                    .iter()
-                    .filter(|c| !c.is_whitespace())
-                    .count();
+                out.false_chars_before_stable =
+                    chars[..start].iter().filter(|c| !c.is_whitespace()).count();
                 break;
             }
         }
@@ -697,10 +695,9 @@ pub fn aggregate(results: &[BenchResult]) -> Aggregate {
     } else {
         Some(uptimes.iter().sum::<f32>() / uptimes.len() as f32)
     };
-    let worst_uptime = uptimes
-        .iter()
-        .cloned()
-        .fold(None, |acc: Option<f32>, x| Some(acc.map_or(x, |a| a.min(x))));
+    let worst_uptime = uptimes.iter().cloned().fold(None, |acc: Option<f32>, x| {
+        Some(acc.map_or(x, |a| a.min(x)))
+    });
     Aggregate {
         n: results.len(),
         stable_hits: lats.len(),
@@ -768,8 +765,14 @@ mod tests {
             700.0,
             20.0,
         );
-        let r =
-            run_scenario(&scen, DecoderConfig::defaults(), 100, DEFAULT_STABLE_N, "default").unwrap();
+        let r = run_scenario(
+            &scen,
+            DecoderConfig::defaults(),
+            100,
+            DEFAULT_STABLE_N,
+            "default",
+        )
+        .unwrap();
         assert!(
             r.t_first_pitch_update_ms.is_some(),
             "expected pitch lock on synth CW"
@@ -796,8 +799,14 @@ mod tests {
             700.0,
             20.0,
         );
-        let r =
-            run_scenario(&scen, DecoderConfig::defaults(), 100, DEFAULT_STABLE_N, "default").unwrap();
+        let r = run_scenario(
+            &scen,
+            DecoderConfig::defaults(),
+            100,
+            DEFAULT_STABLE_N,
+            "default",
+        )
+        .unwrap();
         // Any chars emitted before the CW onset are necessarily false
         // positives, because the audio before onset is voice formants.
         if let Some(first_char) = r.t_first_char_ms {
@@ -823,8 +832,14 @@ mod tests {
             700.0,
             20.0,
         );
-        let r =
-            run_scenario(&scen, DecoderConfig::defaults(), 100, DEFAULT_STABLE_N, "default").unwrap();
+        let r = run_scenario(
+            &scen,
+            DecoderConfig::defaults(),
+            100,
+            DEFAULT_STABLE_N,
+            "default",
+        )
+        .unwrap();
         assert!(
             r.t_first_locked_ms.is_some(),
             "expected the decoder to reach Locked on clean CW"

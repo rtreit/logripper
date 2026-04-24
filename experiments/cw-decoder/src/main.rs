@@ -836,9 +836,8 @@ fn run_bench_latency(
     }
 
     let scenarios: Vec<bench_latency::Scenario> = if let Some(path) = from_file {
-        let truth = truth.context(
-            "--truth is required with --from-file (uppercase expected transcript)",
-        )?;
+        let truth = truth
+            .context("--truth is required with --from-file (uppercase expected transcript)")?;
         let audio = audio::decode_file(path).context("decoding audio file")?;
         let name = path
             .file_stem()

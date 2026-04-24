@@ -43,10 +43,20 @@ const QUALITY_CHECK_SECONDS: f32 = 4.0;
 /// lower than `MIN_LOCK_FISHER` so a brief signal dip doesn't
 /// immediately drop the lock — that's what `QUALITY_DROP_CONSECUTIVE`
 /// is for.
-const MIN_HOLD_FISHER: f32 = 3.5;
+/// Lowered from 3.5 → 2.0 after the 30 WPM abbrev bench showed real
+/// CW windows producing Fisher ≈ 2.4–2.5 when the 8 s window happens
+/// to capture an unbalanced mix of dits and dahs (e.g. the run of
+/// long-dah characters around `73 TNX RST`). Healthy steady-state
+/// Fisher on this clip is 4–10; values in [2, 3) are "ambiguous
+/// window" not "bad signal" and should not drop a working lock.
+/// `QUALITY_FAST_DROP_FISHER = 1.0` still catches real loss.
+const MIN_HOLD_FISHER: f32 = 2.0;
 /// Number of consecutive failed quality checks required before we
-/// drop the lock (hysteresis against QSB / brief pauses).
-const QUALITY_DROP_CONSECUTIVE: u32 = 2;
+/// drop the lock (hysteresis against QSB / brief pauses). Bumped
+/// from 2 → 3 so a single ambiguous window followed by another
+/// ambiguous one (still potentially benign) doesn't drop lock; it
+/// takes 12 s of sustained sub-threshold Fisher to drop.
+const QUALITY_DROP_CONSECUTIVE: u32 = 3;
 /// Trial-Fisher score below which the watchdog drops the lock on a
 /// SINGLE failed check, bypassing `QUALITY_DROP_CONSECUTIVE`. This
 /// catches the "we just locked onto voice/garbage" case where Fisher
@@ -54,6 +64,15 @@ const QUALITY_DROP_CONSECUTIVE: u32 = 2;
 /// Borderline-bad signals (Fisher in [FAST_DROP, MIN_HOLD)) still get
 /// the normal 2-check hysteresis so QSB doesn't drop a real lock.
 const QUALITY_FAST_DROP_FISHER: f32 = 1.0;
+/// RMS of the post-filter quality-window audio below which we treat
+/// the buffer as "silent" (key-up between transmissions, deep QSB
+/// null, pause between QSOs) and SKIP the watchdog check entirely.
+/// Fisher on a silent buffer is ~0 because there are no dit/dah
+/// clusters at all, but that's "no signal" not "bad signal" — we
+/// must hold the lock through it. Tuned well below the envelope of
+/// real CW chars (typical RMS 0.05–0.2 normalized) but above the
+/// post-HP+LP noise floor of typical recordings (~0.001–0.005).
+const QUALITY_SILENCE_RMS: f32 = 0.01;
 /// Pitch-lock buffer size after a recent watchdog drop. Smaller than
 /// PITCH_LOCK_SECONDS so we can re-acquire on the new clean signal
 /// quickly (typical case: voice ended, real CW just started — we
@@ -1569,6 +1588,14 @@ pub struct StreamingDecoder {
     /// MIN_HOLD_FISHER. Lock is dropped when this hits
     /// QUALITY_DROP_CONSECUTIVE.
     quality_failed_consecutive: u32,
+    /// Number of consecutive quality checks since we last saw a
+    /// healthy Fisher (>= MIN_HOLD_FISHER). Used to gate the
+    /// `fast_drop` path: a momentary degenerate window (rms healthy
+    /// but Fisher == 0 because the 8 s window was all dahs / all
+    /// dits / a very lopsided message) shouldn't drop a lock that
+    /// was clearly working a few seconds ago. Only after several
+    /// consecutive sub-threshold checks do we accept the loss.
+    quality_checks_since_healthy: u32,
     /// True between acquiring a fresh lock and passing the first
     /// post-lock probation check. While set we use a SHORT quality
     /// window so we can detect and drop a bogus lock fast (e.g. one
@@ -1674,6 +1701,7 @@ impl StreamingDecoder {
             samples_since_quality_check: 0,
             quality_check_threshold: (TARGET_RATE as f32 * QUALITY_CHECK_SECONDS) as usize,
             quality_failed_consecutive: 0,
+            quality_checks_since_healthy: 0,
             just_locked: false,
             had_pitch_loss: false,
             confidence: ConfidenceState::Hunting,
@@ -1831,55 +1859,93 @@ impl StreamingDecoder {
                 self.samples_since_quality_check = 0;
                 if let Some(pitch) = self.pitch_locked {
                     let buf: Vec<f32> = self.quality_buf.iter().copied().collect();
-                    let fisher = trial_decode_score(&buf, TARGET_RATE, pitch);
-                    let debug = std::env::var("CW_PITCH_DEBUG").is_ok();
-                    if debug {
-                        eprintln!(
-                            "[cw-decoder quality] phase={} pitch={:.1} Hz fisher={:.3} (hold>={:.1}, fast_drop<{:.1}, fails={})",
+                    // Silent-buffer skip. If the entire 8-second
+                    // quality window is essentially key-up audio
+                    // (operator paused, end-of-transmission, deep QSB
+                    // null), Fisher will be ~0 because there are no
+                    // dit/dah clusters AT ALL — but that is "no
+                    // signal", not "bad signal", and dropping lock
+                    // here is exactly the bug operators see ("strong
+                    // CW comes back and we have to re-acquire from
+                    // scratch"). We hold the lock and wait for audio.
+                    let mean_sq: f64 = buf.iter().map(|&s| (s as f64) * (s as f64)).sum::<f64>()
+                        / buf.len().max(1) as f64;
+                    let rms = mean_sq.sqrt() as f32;
+                    if rms < QUALITY_SILENCE_RMS {
+                        if std::env::var("CW_PITCH_DEBUG").is_ok() {
+                            eprintln!(
+                                "[cw-decoder quality] silent buffer (rms={rms:.4} < {QUALITY_SILENCE_RMS:.4}); holding lock"
+                            );
+                        }
+                        // Don't promote out of probation on a silent
+                        // window (no evidence yet) and don't increment
+                        // the failure counter. Just wait.
+                    } else {
+                        let fisher = trial_decode_score(&buf, TARGET_RATE, pitch);
+                        let debug = std::env::var("CW_PITCH_DEBUG").is_ok();
+                        if debug {
+                            eprintln!(
+                            "[cw-decoder quality] phase={} pitch={:.1} Hz fisher={:.3} rms={:.3} (hold>={:.1}, fast_drop<{:.1}, fails={})",
                             if in_probation { "probation" } else { "steady" },
                             pitch,
                             fisher,
+                            rms,
                             MIN_HOLD_FISHER,
                             QUALITY_FAST_DROP_FISHER,
                             self.quality_failed_consecutive
                         );
-                    }
-                    let fast_drop = fisher < QUALITY_FAST_DROP_FISHER;
-                    if fast_drop {
-                        let phase = if in_probation { "probation" } else { "steady" };
-                        let reason = format!(
-                            "quality watchdog ({phase}): Fisher {fisher:.2} < {QUALITY_FAST_DROP_FISHER:.1} (fast drop, signal not coherent CW)"
-                        );
-                        let preserve_pre_lock_buf = self.seed_fast_relock_from_recent_audio(&buf);
-                        self.drop_pitch_lock(preserve_pre_lock_buf);
-                        events.push(StreamEvent::PitchLost { reason });
-                        self.set_confidence(ConfidenceState::Hunting, &mut events);
-                    } else if fisher < MIN_HOLD_FISHER {
-                        self.quality_failed_consecutive += 1;
-                        if self.quality_failed_consecutive >= QUALITY_DROP_CONSECUTIVE {
+                        }
+                        let fast_drop = fisher < QUALITY_FAST_DROP_FISHER;
+                        // Only allow fast_drop while still in probation
+                        // (we have no track record of a healthy lock yet).
+                        // Once promoted to steady-state, even Fisher == 0
+                        // must accumulate QUALITY_DROP_CONSECUTIVE checks
+                        // before we surrender the lock — this prevents a
+                        // single degenerate window (e.g. the 8 s buffer
+                        // happens to span all-dahs or a long word with no
+                        // gaps, so trial_decode_score's bimodal cluster
+                        // analysis can't separate dits from dahs and
+                        // returns ~0) from dropping a lock that was
+                        // clearly healthy a few seconds earlier and will
+                        // be healthy again on the next check.
+                        if fast_drop && in_probation {
                             let reason = format!(
-                                "quality watchdog: Fisher {:.2} < {:.1} for {} consecutive checks",
-                                fisher, MIN_HOLD_FISHER, self.quality_failed_consecutive
-                            );
+                            "quality watchdog (probation): Fisher {fisher:.2} < {QUALITY_FAST_DROP_FISHER:.1} (fast drop, signal not coherent CW)"
+                        );
                             let preserve_pre_lock_buf =
                                 self.seed_fast_relock_from_recent_audio(&buf);
                             self.drop_pitch_lock(preserve_pre_lock_buf);
                             events.push(StreamEvent::PitchLost { reason });
                             self.set_confidence(ConfidenceState::Hunting, &mut events);
-                        } else if in_probation {
-                            // Borderline lock during probation: don't
-                            // promote yet, wait for the next check.
-                            // Held chars stay buffered.
-                        }
-                    } else {
-                        // Lock is healthy. Clear hysteresis. If we're
-                        // in probation, promote to Locked now —
-                        // this is the gate that flushes held chars.
-                        self.quality_failed_consecutive = 0;
-                        if in_probation {
-                            self.just_locked = false;
-                            self.had_pitch_loss = false;
-                            self.set_confidence(ConfidenceState::Locked, &mut events);
+                        } else if fisher < MIN_HOLD_FISHER {
+                            self.quality_failed_consecutive += 1;
+                            self.quality_checks_since_healthy += 1;
+                            if self.quality_failed_consecutive >= QUALITY_DROP_CONSECUTIVE {
+                                let reason = format!(
+                                "quality watchdog: Fisher {:.2} < {:.1} for {} consecutive checks",
+                                fisher, MIN_HOLD_FISHER, self.quality_failed_consecutive
+                            );
+                                let preserve_pre_lock_buf =
+                                    self.seed_fast_relock_from_recent_audio(&buf);
+                                self.drop_pitch_lock(preserve_pre_lock_buf);
+                                events.push(StreamEvent::PitchLost { reason });
+                                self.set_confidence(ConfidenceState::Hunting, &mut events);
+                            } else if in_probation {
+                                // Borderline lock during probation: don't
+                                // promote yet, wait for the next check.
+                                // Held chars stay buffered.
+                            }
+                        } else {
+                            // Lock is healthy. Clear hysteresis. If we're
+                            // in probation, promote to Locked now —
+                            // this is the gate that flushes held chars.
+                            self.quality_failed_consecutive = 0;
+                            self.quality_checks_since_healthy = 0;
+                            if in_probation {
+                                self.just_locked = false;
+                                self.had_pitch_loss = false;
+                                self.set_confidence(ConfidenceState::Locked, &mut events);
+                            }
                         }
                     }
                 }
@@ -1992,6 +2058,7 @@ impl StreamingDecoder {
         self.samples_since_pitch_eval = 0;
         self.samples_since_quality_check = 0;
         self.quality_failed_consecutive = 0;
+        self.quality_checks_since_healthy = 0;
         self.quality_buf.clear();
         self.just_locked = false;
         self.had_pitch_loss = true;
@@ -2656,6 +2723,54 @@ mod lock_behavior_tests {
         assert!(
             power_after_loss,
             "decoder should keep emitting power events while hunting for a new lock"
+        );
+    }
+
+    #[test]
+    fn steady_lock_holds_through_silence_and_degenerate_window() {
+        // Regression: 30 WPM clean clips were dropping lock when the
+        // 8 s quality window happened to span (a) long key-up gaps
+        // between transmissions or (b) a stretch dominated by either
+        // dits or dahs, so trial_decode_score's bimodal cluster
+        // analysis returned ~0. Once a lock has been promoted out of
+        // probation, it must take QUALITY_DROP_CONSECUTIVE consecutive
+        // sub-threshold checks to drop — a single bad window is not
+        // enough.
+        let sr = TARGET_RATE;
+        // 12 s of clean PARIS to acquire and survive probation, then
+        // 6 s of pure silence (worst case for trial_decode_score: zero
+        // power, zero on-runs), then 12 s more of clean PARIS.
+        let mut audio = synth_paris(sr, 700.0, 20.0, 12.0);
+        audio.extend(vec![0.0_f32; (sr as f32 * 6.0) as usize]);
+        audio.extend(synth_paris(sr, 700.0, 20.0, 12.0));
+
+        let mut dec = StreamingDecoder::new(sr).expect("decoder");
+        let chunk = (sr / 10) as usize;
+        let mut became_locked = false;
+        let mut lost_after_lock = false;
+        for c in audio.chunks(chunk) {
+            let events = dec.feed(c).expect("feed");
+            for ev in events {
+                match ev {
+                    StreamEvent::Confidence {
+                        state: ConfidenceState::Locked,
+                    } => {
+                        became_locked = true;
+                    }
+                    StreamEvent::PitchLost { .. } if became_locked => {
+                        lost_after_lock = true;
+                    }
+                    _ => {}
+                }
+            }
+        }
+        assert!(
+            became_locked,
+            "decoder should reach a steady lock on clean PARIS"
+        );
+        assert!(
+            !lost_after_lock,
+            "steady lock must hold through key-up silence and degenerate quality windows"
         );
     }
 
