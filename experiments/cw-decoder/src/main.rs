@@ -473,6 +473,12 @@ enum Cmd {
         /// Use 0 to leave acquisition on.
         #[arg(long, default_value_t = 0.0)]
         force_pitch_hz: f32,
+        /// Asymmetric hysteresis fraction on the keying threshold.
+        /// 0 = disabled. Typical useful range 0.2..0.6. Stops the
+        /// envelope from chattering across a single threshold under
+        /// dense in-band noise.
+        #[arg(long, default_value_t = 0.0)]
+        hysteresis_fraction: f32,
         /// Emit one NDJSON record per scenario in addition to the table
         /// (handy for collecting comparison runs into a file).
         #[arg(long, default_value_t = false)]
@@ -554,6 +560,7 @@ fn main() -> Result<()> {
                 wide_bin_count,
                 min_pulse_dot_fraction,
                 min_gap_dot_fraction,
+                hysteresis_fraction: 0.0,
             };
             run_stream_file(&path, chunk_ms, realtime, quiet, json, cfg, stdin_control)
         }
@@ -628,6 +635,7 @@ fn main() -> Result<()> {
                 wide_bin_count: 0,
                 min_pulse_dot_fraction: 0.0,
                 min_gap_dot_fraction: 0.0,
+                hysteresis_fraction: 0.0,
             };
             let harvest_cfg = harvest::HarvestConfig {
                 window_seconds: window,
@@ -687,6 +695,7 @@ fn main() -> Result<()> {
                 wide_bin_count,
                 min_pulse_dot_fraction,
                 min_gap_dot_fraction,
+                hysteresis_fraction: 0.0,
             };
             run_decode_and_play(&path, start, end, json, stdin_control, cfg)
         }
@@ -723,6 +732,7 @@ fn main() -> Result<()> {
                 wide_bin_count,
                 min_pulse_dot_fraction,
                 min_gap_dot_fraction,
+                hysteresis_fraction: 0.0,
             };
             run_stream_live(
                 device.as_deref(),
@@ -753,6 +763,7 @@ fn main() -> Result<()> {
             wide_bins,
             no_auto_threshold,
             force_pitch_hz,
+            hysteresis_fraction,
             json,
         } => run_bench_latency(
             from_file.as_deref(),
@@ -766,6 +777,7 @@ fn main() -> Result<()> {
             wide_bins,
             no_auto_threshold,
             force_pitch_hz,
+            hysteresis_fraction,
             json,
         ),
     }
@@ -819,6 +831,7 @@ fn run_bench_latency(
     wide_bins: Option<u8>,
     no_auto_threshold: bool,
     force_pitch_hz: f32,
+    hysteresis_fraction: f32,
     json: bool,
 ) -> Result<()> {
     let mut cfg = streaming::DecoderConfig::defaults();
@@ -833,6 +846,9 @@ fn run_bench_latency(
     }
     if force_pitch_hz > 0.0 {
         cfg.force_pitch_hz = Some(force_pitch_hz);
+    }
+    if hysteresis_fraction > 0.0 {
+        cfg.hysteresis_fraction = hysteresis_fraction;
     }
 
     let scenarios: Vec<bench_latency::Scenario> = if let Some(path) = from_file {
@@ -859,13 +875,14 @@ fn run_bench_latency(
         scenarios.len()
     );
     println!(
-        "Config: purity={:.2}  wide_bins={}  auto_threshold={}  force_pitch_hz={}",
+        "Config: purity={:.2}  wide_bins={}  auto_threshold={}  force_pitch_hz={}  hysteresis={:.2}",
         cfg.min_tone_purity,
         cfg.wide_bin_count,
         cfg.auto_threshold,
         cfg.force_pitch_hz
             .map(|f| format!("{f:.0}"))
             .unwrap_or_else(|| "off".into()),
+        cfg.hysteresis_fraction,
     );
 
     let mut results = Vec::with_capacity(scenarios.len());
@@ -1314,6 +1331,9 @@ fn spawn_stdin_playback_control(
             if let Some(x) = v.get("min_gap_dot_fraction").and_then(|x| x.as_f64()) {
                 state.min_gap_dot_fraction = x.max(0.0) as f32;
             }
+            if let Some(x) = v.get("hysteresis_fraction").and_then(|x| x.as_f64()) {
+                state.hysteresis_fraction = x.max(0.0) as f32;
+            }
             if tx.send(PlaybackControl::Config(state)).is_err() {
                 break;
             }
@@ -1397,6 +1417,7 @@ fn run_decode_and_play(
                     "wide_bin_count": cfg.wide_bin_count,
                     "min_pulse_dot_fraction": cfg.min_pulse_dot_fraction,
                     "min_gap_dot_fraction": cfg.min_gap_dot_fraction,
+                    "hysteresis_fraction": cfg.hysteresis_fraction,
                 }),
             }),
         );
@@ -1512,6 +1533,7 @@ fn run_decode_and_play(
                             "wide_bin_count": c.wide_bin_count,
                             "min_pulse_dot_fraction": c.min_pulse_dot_fraction,
                             "min_gap_dot_fraction": c.min_gap_dot_fraction,
+                            "hysteresis_fraction": c.hysteresis_fraction,
                         }),
                     );
                 }
@@ -2663,6 +2685,9 @@ fn spawn_stdin_config_channel(
             }
             if let Some(x) = v.get("min_gap_dot_fraction").and_then(|x| x.as_f64()) {
                 state.min_gap_dot_fraction = x.max(0.0) as f32;
+            }
+            if let Some(x) = v.get("hysteresis_fraction").and_then(|x| x.as_f64()) {
+                state.hysteresis_fraction = x.max(0.0) as f32;
             }
             if tx.send(state).is_err() {
                 break;

@@ -1147,6 +1147,9 @@ fn parse_streaming_decoder_config(args: &[String]) -> DecoderConfig {
         min_gap_dot_fraction: arg_value_f32(args, "--min-gap-dot-fraction")
             .map(|x| x.max(0.0))
             .unwrap_or(0.0),
+        hysteresis_fraction: arg_value_f32(args, "--hysteresis-fraction")
+            .map(|x| x.max(0.0))
+            .unwrap_or(0.0),
     }
 }
 

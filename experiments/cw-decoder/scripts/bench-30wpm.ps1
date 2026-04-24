@@ -7,7 +7,8 @@ param(
     [switch]$NoAutoThreshold,
     [double]$ForcePitchHz = 0,
     [int]$StableN = 5,
-    [int]$ChunkMs = 100
+    [int]$ChunkMs = 100,
+    [double]$Hysteresis = -1
 )
 
 $ErrorActionPreference = 'Stop'
@@ -45,6 +46,7 @@ foreach ($v in $variants) {
     if ($WideBins -ge 0) { $extra += '--wide-bins'; $extra += "$WideBins" }
     if ($NoAutoThreshold) { $extra += '--no-auto-threshold' }
     if ($ForcePitchHz -gt 0) { $extra += '--force-pitch-hz'; $extra += "$ForcePitchHz" }
+    if ($Hysteresis -ge 0) { $extra += '--hysteresis-fraction'; $extra += "$Hysteresis" }
 
     $args = @(
         'bench-latency',

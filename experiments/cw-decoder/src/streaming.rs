@@ -212,6 +212,18 @@ pub struct DecoderConfig {
     /// the envelope without touching legitimate intra-letter spacing
     /// (one dot ≈ 40 ms at 30 WPM, so 0.3 = ~12 ms ceiling).
     pub min_gap_dot_fraction: f32,
+    /// Hysteresis fraction on the on/off keying threshold. When OFF,
+    /// require `power > threshold * (1 + h/2)` to flip ON; when ON,
+    /// require `power < threshold * (1 - h/2)` to flip OFF. 0 =
+    /// disabled (single threshold, the historical behaviour). Built
+    /// to address the "harsh in-band noise" failure mode where the
+    /// smoothed envelope chatters across a single threshold many
+    /// times per CW element, fragmenting one dah into `dit dit`
+    /// or shattering inter-element gaps into runs of false `E`/`T`
+    /// characters even when the pitch lock and Fisher quality
+    /// watchdog are healthy. Typical useful range 0.2..0.6; values
+    /// >= 1.0 will block all on→off transitions.
+    pub hysteresis_fraction: f32,
 }
 
 impl DecoderConfig {
@@ -229,6 +241,7 @@ impl DecoderConfig {
             wide_bin_count: 0,
             min_pulse_dot_fraction: 0.0,
             min_gap_dot_fraction: 0.0,
+            hysteresis_fraction: 0.0,
         }
     }
     /// Convert min_snr_db → linear power ratio for the inner gate.
@@ -1177,6 +1190,10 @@ struct Decoder {
     /// Bridge off-runs shorter than this fraction of the dot length. 0 disables.
     min_gap_dot_fraction: f32,
 
+    /// Hysteresis fraction on the keying threshold. 0 disables (single
+    /// threshold, historical behaviour). See [`DecoderConfig::hysteresis_fraction`].
+    hysteresis_fraction: f32,
+
     is_on: bool,
     current_run: usize,
     have_first_sample: bool,
@@ -1220,6 +1237,7 @@ impl Decoder {
             auto_threshold: true,
             min_pulse_dot_fraction: 0.0,
             min_gap_dot_fraction: 0.0,
+            hysteresis_fraction: 0.0,
             is_on: false,
             current_run: 0,
             have_first_sample: false,
@@ -1508,7 +1526,26 @@ impl Decoder {
         //   3. instantaneous adjacent-bin tone purity (kills broadband
         //      impulses such as finger snaps and key clicks that briefly
         //      light up the locked bin without being a tone)
-        let above = p > self.threshold && snr_ok && purity_ok;
+        //
+        // Optional asymmetric hysteresis on the amplitude gate: when
+        // currently OFF, require `p > threshold * (1 + h/2)` to flip on;
+        // when currently ON, accept `p > threshold * (1 - h/2)` (i.e. a
+        // lower bar) to stay on. The SNR and purity gates are
+        // intentionally NOT hysteretic — they're already smoothed signals
+        // and adding hysteresis there causes locks to over-stay on
+        // genuine impulses.
+        let amp_gate = if self.hysteresis_fraction > 0.0 {
+            let half = self.hysteresis_fraction * 0.5;
+            let amp_threshold = if self.is_on {
+                self.threshold * (1.0 - half).max(0.0)
+            } else {
+                self.threshold * (1.0 + half)
+            };
+            p > amp_threshold
+        } else {
+            p > self.threshold
+        };
+        let above = amp_gate && snr_ok && purity_ok;
 
         // Track peak purity during on-runs so the emitted character carries
         // a useful debug number. Only update while the gate already says we
@@ -1746,6 +1783,7 @@ impl StreamingDecoder {
         self.decoder.auto_threshold = cfg.auto_threshold;
         self.decoder.min_pulse_dot_fraction = cfg.min_pulse_dot_fraction.max(0.0);
         self.decoder.min_gap_dot_fraction = cfg.min_gap_dot_fraction.max(0.0);
+        self.decoder.hysteresis_fraction = cfg.hysteresis_fraction.max(0.0);
         // If the operator changed (or cleared) the forced pitch, drop the
         // current lock so the next `feed` re-acquires under the new
         // policy. Otherwise we'd be stuck on a stale frequency.
@@ -2073,6 +2111,7 @@ impl StreamingDecoder {
         self.decoder.auto_threshold = self.config.auto_threshold;
         self.decoder.min_pulse_dot_fraction = self.config.min_pulse_dot_fraction.max(0.0);
         self.decoder.min_gap_dot_fraction = self.config.min_gap_dot_fraction.max(0.0);
+        self.decoder.hysteresis_fraction = self.config.hysteresis_fraction.max(0.0);
     }
 
     fn try_acquire_pitch_lock(&mut self, events: &mut Vec<StreamEvent>) {

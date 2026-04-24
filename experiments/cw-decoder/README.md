@@ -724,7 +724,23 @@ The variant matrix is intentionally tiered:
 | extreme | `extreme_qrn`, `crushed`, `deep_qsb`, `buried` | heavy brown noise (mostly killed by the 300 Hz HP) + deep slow QSB; `buried` combines all three and is where the decoder first cracks |
 | harsh   | `harsh_white`, `inband_qrm`, `chaos` | white / CW-band-bandpassed noise the front end *cannot* filter away; locks acquire instantly on the right pitch but symbol classification fails — this is where the decoder's downstream gating becomes the bottleneck rather than acquisition |
 
-The `harsh_white` / `inband_qrm` / `chaos` variants currently expose a real weakness: even with a healthy lock and a passed Fisher confidence check, the keying envelope chatters in dense in-band noise and the ditdah classifier emits long runs of garbage characters. Improving the `false_chars_before_stable` metric on these three is the next concrete bench target.
+The `harsh_white` / `inband_qrm` / `chaos` variants currently expose a real weakness: even with a healthy lock and a passed Fisher confidence check, the keying envelope chatters in dense in-band noise and the ditdah classifier emits long runs of garbage characters. Improving the `false_chars_before_stable` metric on these three is the next concrete bench target. Tracked in [#320](https://github.com/rtreit/qsoripper/issues/320).
+
+### Hysteresis on the keying threshold (partial fix for #320)
+
+`DecoderConfig::hysteresis_fraction` (CLI: `--hysteresis-fraction`, defaults to `0.0`) adds an asymmetric on/off threshold to the keying gate: when keying is OFF, the amplitude must exceed `threshold * (1 + h/2)` to flip ON; while ON, it can stay ON down to `threshold * (1 - h/2)`. SNR and tone-purity gates remain non-hysteretic on purpose (adding hysteresis there causes the decoder to overstay on impulses).
+
+Bench results on the 12-variant matrix (all baseline + extreme variants unchanged):
+
+| variant       | baseline ghost | hyst 0.3 ghost | baseline lat_ms | hyst 0.3 lat_ms |
+|---------------|---------------:|---------------:|----------------:|----------------:|
+| harsh_white   | **343**        | **0**          | 110500          | (never stable)  |
+| inband_qrm    | 0              | 0              | (never stable)  | (never stable)  |
+| chaos         | 0              | 0              | (never stable)  | (never stable)  |
+
+So hysteresis at any value ≥ 0.2 cleanly stops the long ghost-character stream on `harsh_white` without regressing the baseline tier — but it does **not** by itself let `harsh_white` reach a stable lock, and it does not move `inband_qrm` / `chaos` from "no stable run" to "stable run". The acceptance criteria in #320 are not yet met.
+
+The knob is shipped as opt-in (default `0.0` to preserve historical behavior) and is exposed via `cw-decoder bench-latency --hysteresis-fraction`, `cw-decoder eval --hysteresis-fraction`, and the `hysteresis_fraction` field of the JSON stdin config protocol used by the GUI's decode-and-play subcommand. A future change should pair it with an element-duration sanity gate (`min_pulse_dot_fraction` / `min_gap_dot_fraction` already exist) and possibly a CFAR-style local-contrast detector before declaring #320 done.
 
 ## Repo-local artifacts
 
