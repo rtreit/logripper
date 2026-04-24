@@ -45,10 +45,12 @@ public sealed class QsoLoggerEnrichmentTests
     {
         public bool IsRunning => false;
         public CwWpmSample? LatestSample { get; private set; }
+        public CwLockState CurrentLockState { get; private set; } = CwLockState.Locked;
         public event EventHandler<CwWpmSample>? SampleReceived;
         public event EventHandler? StatusChanged;
 #pragma warning disable CS0067 // unused in tests
         public event EventHandler<string>? RawLineReceived;
+        public event EventHandler<CwLockState>? LockStateChanged;
 #pragma warning restore CS0067
         public void Emit(CwWpmSample s)
         {

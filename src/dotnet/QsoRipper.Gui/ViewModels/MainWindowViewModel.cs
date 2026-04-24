@@ -812,6 +812,7 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
         src.SampleReceived += OnCwSampleReceived;
         src.StatusChanged += OnCwSourceStatusChanged;
         src.RawLineReceived += OnCwRawLineReceived;
+        src.LockStateChanged += OnCwLockStateChanged;
         _cwSampleSource = src;
         _cwAggregator = new CwQsoWpmAggregator(src);
         Logger.AttachCwAggregator(_cwAggregator);
@@ -862,6 +863,14 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
 
     private void OnCwEpisodeBoundary(object? sender, CwEpisodeBoundaryEventArgs e)
     {
+        // Always reset the F9 pane's per-episode state (decoded text, last
+        // garbled, WPM display) on QSO save/clear/abandoned so the next
+        // QSO doesn't inherit a stale smear from the previous one. The
+        // pane preserves its lock badge from the source's current state —
+        // if the decoder is still locked on the same signal, IsLocked
+        // stays true and the next sample will populate WPM again.
+        Dispatcher.UIThread.Post(() => CwStatsPane?.Reset());
+
         var recorder = _cwDiagnosticsRecorder;
         if (recorder is null)
         {
@@ -889,9 +898,34 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
     {
         Dispatcher.UIThread.Post(() =>
         {
-            CwDecoderStatusText = string.Create(
-                CultureInfo.InvariantCulture,
-                $"CW WPM: {sample.Wpm:F1}");
+            // Only display WPM as live when the decoder is locked.
+            // The decoder gates wpm emission on confidence, but the
+            // user's status bar is the most-glanced surface and must
+            // never show a stale value alongside an unlocked state.
+            if (_cwSampleSource?.CurrentLockState == CwLockState.Locked)
+            {
+                CwDecoderStatusText = string.Create(
+                    CultureInfo.InvariantCulture,
+                    $"CW WPM: {sample.Wpm:F1}");
+            }
+        });
+    }
+
+    private void OnCwLockStateChanged(object? sender, CwLockState newState)
+    {
+        Dispatcher.UIThread.Post(() =>
+        {
+            if (!IsCwDecoderEnabled || _cwSampleSource is null)
+            {
+                return;
+            }
+            CwDecoderStatusText = newState switch
+            {
+                CwLockState.Locked => "CW WPM: locking…",
+                CwLockState.Probation => "CW WPM: probation",
+                CwLockState.Hunting => "CW WPM: hunting",
+                _ => "CW WPM: idle",
+            };
         });
     }
 
@@ -1345,6 +1379,7 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
             _cwSampleSource.SampleReceived -= OnCwSampleReceived;
             _cwSampleSource.StatusChanged -= OnCwSourceStatusChanged;
             _cwSampleSource.RawLineReceived -= OnCwRawLineReceived;
+            _cwSampleSource.LockStateChanged -= OnCwLockStateChanged;
             _cwSampleSource.Stop();
             _cwSampleSource.Dispose();
             _cwSampleSource = null;

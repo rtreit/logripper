@@ -40,6 +40,11 @@ internal sealed partial class CwStatsPaneViewModel : ObservableObject, IDisposab
         {
             _source.RawLineReceived += OnRawLineReceived;
             _source.SampleReceived += OnSampleReceived;
+            _source.LockStateChanged += OnLockStateChanged;
+            // Seed initial state from whatever the source already saw before
+            // the pane was opened — otherwise the badge would lie about
+            // "Waiting" while a real lock is in progress.
+            ApplyLockState(_source.CurrentLockState);
         }
         else
         {
@@ -47,6 +52,7 @@ internal sealed partial class CwStatsPaneViewModel : ObservableObject, IDisposab
             ConfidenceText = "—";
             PitchText = "—";
             WpmText = "—";
+            LockBadgeText = "○ MONITOR OFF";
         }
     }
 
@@ -71,6 +77,25 @@ internal sealed partial class CwStatsPaneViewModel : ObservableObject, IDisposab
     [ObservableProperty]
     private string _lastGarbledText = string.Empty;
 
+    /// <summary>
+    /// True only when the decoder is currently in the <see cref="CwLockState.Locked"/>
+    /// state. Drives the stale/live styling in <c>CwStatsPaneView.axaml</c>:
+    /// the WPM and decoded-text panes dim out when this is false to make it
+    /// obvious to the operator that the displayed values are no longer being
+    /// refreshed.
+    /// </summary>
+    [ObservableProperty]
+    private bool _isLocked;
+
+    /// <summary>
+    /// Compact lock indicator shown in the pane header (e.g. "● LIVE",
+    /// "◐ PROBATION", "○ HUNTING"). Distilled from <see cref="ICwWpmSampleSource.CurrentLockState"/>
+    /// so the operator can see at a glance whether the displayed numbers
+    /// are fresh or frozen.
+    /// </summary>
+    [ObservableProperty]
+    private string _lockBadgeText = "○ WAITING";
+
     public bool IsLive => _source is not null;
 
     /// <summary>Raised when the operator presses Esc / F9 again to dismiss the pane.</summary>
@@ -78,6 +103,66 @@ internal sealed partial class CwStatsPaneViewModel : ObservableObject, IDisposab
 
     [RelayCommand]
     private void Close() => CloseRequested?.Invoke(this, EventArgs.Empty);
+
+    /// <summary>
+    /// Reset the live displays to a quiescent state. Called by
+    /// <c>MainWindowViewModel</c> when a QSO episode boundary fires
+    /// (logged / cleared / abandoned) so the pane doesn't keep showing
+    /// the previous QSO's last decoded text and WPM after the operator
+    /// has moved on. The lock badge is recomputed from the source's
+    /// current state so an in-progress lock is preserved across the
+    /// reset (decoder doesn't know about QSO boundaries — only the GUI
+    /// does).
+    /// </summary>
+    public void Reset()
+    {
+        Dispatcher.UIThread.Post(() =>
+        {
+            _decoded.Clear();
+            DecodedText = string.Empty;
+            LastGarbledText = string.Empty;
+            WpmText = "—";
+            PowerText = "—";
+            // Re-derive the badge / IsLocked from whatever the source
+            // currently reports so we don't lie about being locked when
+            // we aren't (or vice versa).
+            ApplyLockState(_source?.CurrentLockState ?? CwLockState.Unknown);
+        });
+    }
+
+    private void OnLockStateChanged(object? sender, CwLockState newState)
+        => Dispatcher.UIThread.Post(() => ApplyLockState(newState));
+
+    private void ApplyLockState(CwLockState state)
+    {
+        IsLocked = state == CwLockState.Locked;
+        switch (state)
+        {
+            case CwLockState.Locked:
+                LockBadgeText = "● LIVE";
+                ConfidenceText = "LOCKED";
+                break;
+            case CwLockState.Probation:
+                LockBadgeText = "◐ PROBATION";
+                ConfidenceText = "PROBATION";
+                break;
+            case CwLockState.Hunting:
+                LockBadgeText = "○ HUNTING";
+                ConfidenceText = "HUNTING";
+                // Lock just dropped — clear the per-decode text so the
+                // operator sees that we're no longer producing fresh
+                // characters. Keep WPM as a "last known" reading
+                // greyed-out via IsLocked styling.
+                _decoded.Clear();
+                DecodedText = string.Empty;
+                break;
+            case CwLockState.Unknown:
+            default:
+                LockBadgeText = "○ WAITING";
+                ConfidenceText = "Waiting…";
+                break;
+        }
+    }
 
     private void OnSampleReceived(object? sender, CwWpmSample sample)
     {
@@ -87,6 +172,12 @@ internal sealed partial class CwStatsPaneViewModel : ObservableObject, IDisposab
         // dispatcher.
         Dispatcher.UIThread.Post(() =>
         {
+            // The decoder filters wpm events while Hunting (see
+            // streaming.rs::filter_for_confidence), but we may briefly
+            // observe a wpm sample queued from before the lock dropped.
+            // Always show the value but leave IsLocked driving the
+            // staleness styling — never display a fresh value alongside
+            // a "no lock" badge.
             WpmText = $"{sample.Wpm:0.0} WPM";
         });
     }
@@ -120,7 +211,11 @@ internal sealed partial class CwStatsPaneViewModel : ObservableObject, IDisposab
             switch (eventType)
             {
                 case "confidence":
-                    HandleConfidence(doc.RootElement);
+                    // Confidence transitions are now driven by the source's
+                    // LockStateChanged event (which fires before this raw
+                    // line is teed) — that path also drives the lock badge,
+                    // IsLocked styling, and decoded-text reset. Skip the
+                    // duplicate handling here to avoid double-formatting.
                     break;
                 case "pitch":
                     HandlePitch(doc.RootElement);
@@ -159,14 +254,6 @@ internal sealed partial class CwStatsPaneViewModel : ObservableObject, IDisposab
             // Non-JSON or unexpected line — ignore silently. The decoder
             // also writes occasional human-readable status, which is fine.
         }
-    }
-
-    private void HandleConfidence(JsonElement root)
-    {
-        var state = TryGetString(root, "state") ?? "?";
-        // The decoder's confidence event payload is just {state: "hunting"|"locked"|"probation"}.
-        // No score field — round 1 confidence reporting is binary, not graded.
-        ConfidenceText = state.ToUpperInvariant();
     }
 
     private void HandlePitch(JsonElement root)
@@ -259,6 +346,7 @@ internal sealed partial class CwStatsPaneViewModel : ObservableObject, IDisposab
         {
             _source.RawLineReceived -= OnRawLineReceived;
             _source.SampleReceived -= OnSampleReceived;
+            _source.LockStateChanged -= OnLockStateChanged;
         }
     }
 }

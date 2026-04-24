@@ -24,11 +24,13 @@ internal sealed class CwDecoderProcessSampleSource : ICwWpmSampleSource
     public event EventHandler<CwWpmSample>? SampleReceived;
     public event EventHandler? StatusChanged;
     public event EventHandler<string>? RawLineReceived;
+    public event EventHandler<CwLockState>? LockStateChanged;
 
     private Process? _proc;
     private CancellationTokenSource? _cts;
     private long _epoch;
     private CwWpmSample? _latest;
+    private CwLockState _lockState = CwLockState.Unknown;
     private string? _lastStderrLine;
     private readonly object _stateLock = new();
 
@@ -67,6 +69,17 @@ internal sealed class CwDecoderProcessSampleSource : ICwWpmSampleSource
             lock (_stateLock)
             {
                 return _latest;
+            }
+        }
+    }
+
+    public CwLockState CurrentLockState
+    {
+        get
+        {
+            lock (_stateLock)
+            {
+                return _lockState;
             }
         }
     }
@@ -198,6 +211,22 @@ internal sealed class CwDecoderProcessSampleSource : ICwWpmSampleSource
         }
 
         proc?.Dispose();
+
+        // Decoder went away; any cached lock state is meaningless to
+        // GUI consumers now. Drop back to Unknown so the WPM/decoded
+        // displays go fresh-stale-clear instead of remembering "Locked"
+        // from the previous session.
+        bool fireLockChange;
+        lock (_stateLock)
+        {
+            fireLockChange = _lockState != CwLockState.Unknown;
+            _lockState = CwLockState.Unknown;
+        }
+        if (fireLockChange)
+        {
+            LockStateChanged?.Invoke(this, CwLockState.Unknown);
+        }
+
         StatusChanged?.Invoke(this, EventArgs.Empty);
     }
 
@@ -220,6 +249,37 @@ internal sealed class CwDecoderProcessSampleSource : ICwWpmSampleSource
                 // BEFORE WPM-specific parsing so they see every event the
                 // decoder emits — confidence, pitch, char, garbled, power, …
                 RawLineReceived?.Invoke(this, line);
+
+                if (TryParseConfidenceEvent(line, out var newState))
+                {
+                    bool changed;
+                    lock (_stateLock)
+                    {
+                        changed = _lockState != newState;
+                        _lockState = newState;
+                    }
+                    if (changed)
+                    {
+                        LockStateChanged?.Invoke(this, newState);
+                    }
+                }
+                else if (TryParsePitchLostEvent(line))
+                {
+                    // pitch_lost is the decoder's own "lock dropped"
+                    // signal; the next confidence event will follow but
+                    // we surface the lock loss immediately so the GUI
+                    // doesn't keep showing a stale WPM for the gap.
+                    bool changed;
+                    lock (_stateLock)
+                    {
+                        changed = _lockState != CwLockState.Hunting;
+                        _lockState = CwLockState.Hunting;
+                    }
+                    if (changed)
+                    {
+                        LockStateChanged?.Invoke(this, CwLockState.Hunting);
+                    }
+                }
 
                 if (TryParseWpmEvent(line, out var wpm))
                 {
@@ -273,6 +333,54 @@ internal sealed class CwDecoderProcessSampleSource : ICwWpmSampleSource
         catch (IOException)
         {
             // Stderr pipe closed during shutdown.
+        }
+    }
+
+    private static bool TryParseConfidenceEvent(string ndjsonLine, out CwLockState state)
+    {
+        state = CwLockState.Unknown;
+        try
+        {
+            using var doc = JsonDocument.Parse(ndjsonLine);
+            var root = doc.RootElement;
+            if (!root.TryGetProperty("type", out var typeProp)
+                || typeProp.ValueKind != JsonValueKind.String
+                || !string.Equals(typeProp.GetString(), "confidence", StringComparison.Ordinal))
+            {
+                return false;
+            }
+            if (!root.TryGetProperty("state", out var stateProp)
+                || stateProp.ValueKind != JsonValueKind.String)
+            {
+                return false;
+            }
+            state = stateProp.GetString() switch
+            {
+                "locked" => CwLockState.Locked,
+                "probation" => CwLockState.Probation,
+                "hunting" => CwLockState.Hunting,
+                _ => CwLockState.Unknown,
+            };
+            return true;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
+    private static bool TryParsePitchLostEvent(string ndjsonLine)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(ndjsonLine);
+            return doc.RootElement.TryGetProperty("type", out var typeProp)
+                && typeProp.ValueKind == JsonValueKind.String
+                && string.Equals(typeProp.GetString(), "pitch_lost", StringComparison.Ordinal);
+        }
+        catch (JsonException)
+        {
+            return false;
         }
     }
 

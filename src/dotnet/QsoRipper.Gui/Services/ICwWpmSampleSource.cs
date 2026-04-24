@@ -17,8 +17,23 @@ internal interface ICwWpmSampleSource : IDisposable
     /// <summary>Most recently received sample, or <c>null</c> if none yet.</summary>
     CwWpmSample? LatestSample { get; }
 
+    /// <summary>
+    /// Most recent decoder lock/confidence state, derived from
+    /// <c>confidence</c> NDJSON events. <see cref="CwLockState.Unknown"/>
+    /// until the decoder emits its first confidence event.
+    /// </summary>
+    CwLockState CurrentLockState { get; }
+
     /// <summary>Raised on the source's I/O thread for every parsed WPM sample.</summary>
     event EventHandler<CwWpmSample>? SampleReceived;
+
+    /// <summary>
+    /// Raised on the source's I/O thread whenever the decoder reports a
+    /// new <see cref="CurrentLockState"/>. Used by the GUI to distinguish
+    /// fresh live readings from stale displayed values after the decoder
+    /// stops emitting (lock dropped → no further wpm/char events).
+    /// </summary>
+    event EventHandler<CwLockState>? LockStateChanged;
 
     /// <summary>Raised when the source's running state changes.</summary>
     event EventHandler? StatusChanged;
