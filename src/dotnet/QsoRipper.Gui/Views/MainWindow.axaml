@@ -422,6 +422,14 @@
                            FontSize="11" Opacity="0.7"
                            FontFamily="Cascadia Mono, Consolas, monospace" />
               </Button>
+              <Button Command="{Binding ToggleCwDecoderCommand}"
+                      Background="Transparent" BorderThickness="0"
+                      Padding="2,0" Cursor="Hand"
+                      ToolTip.Tip="Toggle CW decoder for auto WPM logging">
+                <TextBlock Text="{Binding CwDecoderStatusText}"
+                           FontSize="11" Opacity="0.7"
+                           FontFamily="Cascadia Mono, Consolas, monospace" />
+              </Button>
               <TextBlock Text="{Binding SpaceWeatherText}"
                          FontSize="11" Opacity="0.7"
                          IsVisible="{Binding IsSpaceWeatherVisible}"

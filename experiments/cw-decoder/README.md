@@ -9,6 +9,15 @@ The project has converged on two parallel goals:
 
 Today, the reference path is the causal `ditdah` baseline. The custom streaming decoder has improved substantially, but it is still not the only truth source and should not replace corpus-driven evaluation yet.
 
+> **Integration status (round 1, issue #321)**: the production GUI now hosts the
+> `cw-decoder` binary as a subprocess and auto-fills `QsoRecord.cw_decode_rx_wpm`
+> on logged CW QSOs (time-weighted mean over the QSO start/end window, ADIF
+> field `APP_QSORIPPER_RX_WPM`). See
+> `src\dotnet\QsoRipper.Gui\Services\CwDecoderProcessSampleSource.cs`,
+> `src\dotnet\QsoRipper.Gui\Services\CwQsoWpmAggregator.cs`, and the toggle in
+> the main window status row. Round 2 will move the decoder behind an
+> engine-side `CwDecodeService` so all clients can consume the same stream.
+
 ## Current architecture
 
 ### Core binaries

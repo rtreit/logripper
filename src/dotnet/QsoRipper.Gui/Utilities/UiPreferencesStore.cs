@@ -72,4 +72,8 @@ internal sealed class UiPreferences
     public string? EngineProfileId { get; set; }
 
     public string? EngineEndpoint { get; set; }
+
+    public bool IsCwDecoderEnabled { get; set; }
+
+    public string? CwDecoderDeviceOverride { get; set; }
 }

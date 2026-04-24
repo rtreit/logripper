@@ -28,6 +28,8 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
     private readonly DispatcherTimer _utcTimer;
     private readonly DispatcherTimer _rigTimer;
     private readonly DispatcherTimer _spaceWeatherTimer;
+    private CwDecoderProcessSampleSource? _cwSampleSource;
+    private CwQsoWpmAggregator? _cwAggregator;
     private bool _setupCompleteBeforeWizard;
     private string? _preferredEngineProfileId;
     private string? _preferredEngineEndpoint;
@@ -131,6 +133,15 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
 
     [ObservableProperty]
     private bool _isLoggerFocused;
+
+    [ObservableProperty]
+    private bool _isCwDecoderEnabled;
+
+    [ObservableProperty]
+    private string _cwDecoderStatusText = "CW WPM: OFF";
+
+    [ObservableProperty]
+    private string _cwDecoderDeviceOverride = string.Empty;
 
     [ObservableProperty]
     private string _contextHintText = "F3 grid · F4 search · Ctrl+N logger · Alt+A card · F1 help";
@@ -551,6 +562,71 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
     }
 
     [RelayCommand]
+    private void ToggleCwDecoder()
+    {
+        IsCwDecoderEnabled = !IsCwDecoderEnabled;
+        if (IsCwDecoderEnabled)
+        {
+            EnsureCwSampleSource();
+            _cwSampleSource?.Start(string.IsNullOrWhiteSpace(CwDecoderDeviceOverride)
+                ? null
+                : CwDecoderDeviceOverride.Trim());
+            CwDecoderStatusText = "CW WPM: starting\u2026";
+        }
+        else
+        {
+            _cwSampleSource?.Stop();
+            CwDecoderStatusText = "CW WPM: OFF";
+        }
+    }
+
+    private void EnsureCwSampleSource()
+    {
+        if (_cwSampleSource is not null)
+        {
+            return;
+        }
+
+        var src = new CwDecoderProcessSampleSource();
+        src.SampleReceived += OnCwSampleReceived;
+        src.StatusChanged += OnCwSourceStatusChanged;
+        _cwSampleSource = src;
+        _cwAggregator = new CwQsoWpmAggregator(src);
+        Logger.AttachCwAggregator(_cwAggregator);
+    }
+
+    private void OnCwSampleReceived(object? sender, CwWpmSample sample)
+    {
+        Dispatcher.UIThread.Post(() =>
+        {
+            CwDecoderStatusText = string.Create(
+                CultureInfo.InvariantCulture,
+                $"CW WPM: {sample.Wpm:F1}");
+        });
+    }
+
+    private void OnCwSourceStatusChanged(object? sender, EventArgs e)
+    {
+        if (_cwSampleSource is null)
+        {
+            return;
+        }
+
+        var running = _cwSampleSource.IsRunning;
+        Dispatcher.UIThread.Post(() =>
+        {
+            if (!IsCwDecoderEnabled)
+            {
+                CwDecoderStatusText = "CW WPM: OFF";
+            }
+            else if (!running)
+            {
+                CwDecoderStatusText = "CW WPM: stopped";
+            }
+        });
+    }
+
+    [RelayCommand]
     private void ToggleSpaceWeather()
     {
         IsSpaceWeatherVisible = !IsSpaceWeatherVisible;
@@ -940,6 +1016,17 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
         _spaceWeatherTimer.Stop();
         _spaceWeatherTimer.Tick -= OnSpaceWeatherTimerTick;
 
+        if (_cwSampleSource is not null)
+        {
+            _cwSampleSource.SampleReceived -= OnCwSampleReceived;
+            _cwSampleSource.StatusChanged -= OnCwSourceStatusChanged;
+            _cwSampleSource.Stop();
+            _cwSampleSource.Dispose();
+            _cwSampleSource = null;
+        }
+        _cwAggregator?.Dispose();
+        _cwAggregator = null;
+
         if (_switchableEngine is not null)
         {
             _switchableEngine.Dispose();
@@ -982,6 +1069,16 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
         _preferredEngineEndpoint = string.IsNullOrWhiteSpace(prefs.EngineEndpoint)
             ? null
             : prefs.EngineEndpoint.Trim();
+
+        if (!string.IsNullOrWhiteSpace(prefs.CwDecoderDeviceOverride))
+        {
+            CwDecoderDeviceOverride = prefs.CwDecoderDeviceOverride.Trim();
+        }
+
+        if (prefs.IsCwDecoderEnabled)
+        {
+            ToggleCwDecoder();
+        }
     }
 
     /// <summary>
@@ -994,6 +1091,10 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
         IsInspectorOpen = IsInspectorOpen,
         EngineProfileId = _switchableEngine?.CurrentProfile.ProfileId,
         EngineEndpoint = _switchableEngine?.CurrentEndpoint,
+        IsCwDecoderEnabled = IsCwDecoderEnabled,
+        CwDecoderDeviceOverride = string.IsNullOrWhiteSpace(CwDecoderDeviceOverride)
+            ? null
+            : CwDecoderDeviceOverride.Trim(),
     };
 
     private async Task ActivateDashboardAsync(bool focusSearch, Task? recentQsoRefreshTask = null)

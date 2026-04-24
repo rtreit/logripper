@@ -21,6 +21,7 @@ internal sealed partial class QsoLoggerViewModel : ObservableObject
 {
     private readonly IEngineClient _engine;
     private readonly DispatcherTimer _elapsedTimer;
+    private CwQsoWpmAggregator? _cwWpmAggregator;
     private DateTimeOffset _qsoStartTime;
     private bool _timerRunning;
     private CancellationTokenSource? _lookupCts;
@@ -90,8 +91,14 @@ internal sealed partial class QsoLoggerViewModel : ObservableObject
     // ── Constructor ──────────────────────────────────────────────────────
 
     public QsoLoggerViewModel(IEngineClient engine)
+        : this(engine, cwWpmAggregator: null)
+    {
+    }
+
+    internal QsoLoggerViewModel(IEngineClient engine, CwQsoWpmAggregator? cwWpmAggregator)
     {
         _engine = engine;
+        _cwWpmAggregator = cwWpmAggregator;
         _selectedBandIndex = 5;  // 20 m
         _selectedModeIndex = 0;  // SSB
         _qsoStartTime = DateTimeOffset.UtcNow;
@@ -283,6 +290,7 @@ internal sealed partial class QsoLoggerViewModel : ObservableObject
         }
 
         EnrichFromLookup(qso, _lastLookupRecord);
+        EnrichFromCwDecoder(qso, utcStart, utcEnd);
 
         LogStatusText = "Logging\u2026";
         IsLogEnabled = false;
@@ -306,6 +314,48 @@ internal sealed partial class QsoLoggerViewModel : ObservableObject
     /// Copies cached callsign-lookup fields into the QSO record so the logged
     /// contact includes operator name, grid, country, DXCC, and zone data.
     /// </summary>
+    /// <summary>
+    /// Attach (or replace) the CW WPM aggregator used to populate
+    /// <see cref="QsoRecord.CwDecodeRxWpm"/> on logged CW QSOs. The
+    /// aggregator is owned by the host (typically the MainWindowViewModel)
+    /// and may be null when CW decoding is disabled or unsupported.
+    /// </summary>
+    internal void AttachCwAggregator(CwQsoWpmAggregator? aggregator)
+        => _cwWpmAggregator = aggregator;
+
+    /// <summary>
+    /// Auto-fills <see cref="QsoRecord.CwDecodeRxWpm"/> from the live CW
+    /// decoder source when the QSO is on CW mode and the aggregator has
+    /// at least one usable sample inside the QSO's window. Non-CW QSOs
+    /// and missing/empty sources are no-ops so logging is never blocked.
+    /// </summary>
+    internal void EnrichFromCwDecoder(QsoRecord qso, DateTimeOffset utcStart, DateTimeOffset utcEnd)
+    {
+        if (_cwWpmAggregator is null)
+        {
+            return;
+        }
+
+        if (qso.Mode != Mode.Cw)
+        {
+            return;
+        }
+
+        var mean = _cwWpmAggregator.GetMeanWpm(utcStart, utcEnd);
+        if (mean is null || !double.IsFinite(mean.Value) || mean.Value <= 0)
+        {
+            return;
+        }
+
+        var rounded = (uint)Math.Round(mean.Value, MidpointRounding.AwayFromZero);
+        if (rounded == 0)
+        {
+            return;
+        }
+
+        qso.CwDecodeRxWpm = rounded;
+    }
+
     internal static void EnrichFromLookup(QsoRecord qso, CallsignRecord? record)
     {
         if (record is not { } rec)

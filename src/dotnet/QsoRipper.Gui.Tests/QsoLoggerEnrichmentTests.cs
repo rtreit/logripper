@@ -41,6 +41,84 @@ public sealed class QsoLoggerEnrichmentTests
         Assert.Equal("NA", qso.WorkedContinent);
     }
 
+    private sealed class CwSampleHarness : ICwWpmSampleSource
+    {
+        public bool IsRunning => false;
+        public CwWpmSample? LatestSample { get; private set; }
+        public event EventHandler<CwWpmSample>? SampleReceived;
+        public event EventHandler? StatusChanged;
+        public void Emit(CwWpmSample s)
+        {
+            LatestSample = s;
+            SampleReceived?.Invoke(this, s);
+        }
+        public void Start(string? deviceOverride) => StatusChanged?.Invoke(this, EventArgs.Empty);
+        public void Stop() => StatusChanged?.Invoke(this, EventArgs.Empty);
+        public void Dispose() { }
+    }
+
+    [Fact]
+    public void EnrichFromCwDecoderFillsRxWpmForCwQsoWhenSamplesPresent()
+    {
+        using var src = new CwSampleHarness();
+        using var agg = new CwQsoWpmAggregator(src, maxSampleHoldDuration: TimeSpan.FromSeconds(60));
+
+        var start = new DateTimeOffset(2024, 6, 1, 12, 0, 0, TimeSpan.Zero);
+        var end = start.AddSeconds(20);
+
+        src.Emit(new CwWpmSample(start, 18.0, Epoch: 1));
+        src.Emit(new CwWpmSample(start.AddSeconds(10), 22.0, Epoch: 1));
+
+        var logger = new QsoLoggerViewModel(new FakeEngineClient(), agg);
+        var qso = new QsoRecord { WorkedCallsign = "K7DOE", Mode = Mode.Cw };
+
+        logger.EnrichFromCwDecoder(qso, start, end);
+
+        // Time-weighted: (18*10 + 22*10)/20 = 20 ⇒ rounds to 20.
+        Assert.True(qso.HasCwDecodeRxWpm);
+        Assert.Equal(20u, qso.CwDecodeRxWpm);
+    }
+
+    [Fact]
+    public void EnrichFromCwDecoderSkipsNonCwQso()
+    {
+        using var src = new CwSampleHarness();
+        using var agg = new CwQsoWpmAggregator(src);
+        src.Emit(new CwWpmSample(DateTimeOffset.UtcNow, 25.0, Epoch: 1));
+
+        var logger = new QsoLoggerViewModel(new FakeEngineClient(), agg);
+        var qso = new QsoRecord { WorkedCallsign = "K7DOE", Mode = Mode.Ssb };
+
+        logger.EnrichFromCwDecoder(qso, DateTimeOffset.UtcNow.AddSeconds(-30), DateTimeOffset.UtcNow);
+
+        Assert.False(qso.HasCwDecodeRxWpm);
+    }
+
+    [Fact]
+    public void EnrichFromCwDecoderIsNoOpWhenAggregatorMissing()
+    {
+        var logger = new QsoLoggerViewModel(new FakeEngineClient());
+        var qso = new QsoRecord { WorkedCallsign = "K7DOE", Mode = Mode.Cw };
+
+        logger.EnrichFromCwDecoder(qso, DateTimeOffset.UtcNow.AddSeconds(-30), DateTimeOffset.UtcNow);
+
+        Assert.False(qso.HasCwDecodeRxWpm);
+    }
+
+    [Fact]
+    public void EnrichFromCwDecoderSkipsCwQsoWithoutSamples()
+    {
+        using var src = new CwSampleHarness();
+        using var agg = new CwQsoWpmAggregator(src);
+
+        var logger = new QsoLoggerViewModel(new FakeEngineClient(), agg);
+        var qso = new QsoRecord { WorkedCallsign = "K7DOE", Mode = Mode.Cw };
+
+        logger.EnrichFromCwDecoder(qso, DateTimeOffset.UtcNow.AddSeconds(-30), DateTimeOffset.UtcNow);
+
+        Assert.False(qso.HasCwDecodeRxWpm);
+    }
+
     [Fact]
     public void EnrichFromLookupWithNullRecordLeavesQsoUnchanged()
     {

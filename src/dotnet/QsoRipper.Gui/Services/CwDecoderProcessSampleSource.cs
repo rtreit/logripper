@@ -1,0 +1,269 @@
+using System;
+using System.Diagnostics;
+using System.IO;
+using System.Linq;
+using System.Text.Json;
+using System.Threading;
+using System.Threading.Tasks;
+
+namespace QsoRipper.Gui.Services;
+
+/// <summary>
+/// Spawns the experimental <c>cw-decoder</c> Rust binary in
+/// <c>stream-live --json</c> mode and surfaces parsed <c>wpm</c>
+/// NDJSON events as <see cref="CwWpmSample"/>s.
+///
+/// Round 1 deliberately reuses the experiment binary rather than the
+/// not-yet-existent engine-side <c>CwDecodeService</c>. The binary is
+/// located by walking up from the GUI's BaseDirectory, looking for the
+/// experiment build output, in line with the existing experiment GUI's
+/// discovery logic.
+/// </summary>
+internal sealed class CwDecoderProcessSampleSource : ICwWpmSampleSource
+{
+    public event EventHandler<CwWpmSample>? SampleReceived;
+    public event EventHandler? StatusChanged;
+
+    private Process? _proc;
+    private CancellationTokenSource? _cts;
+    private long _epoch;
+    private CwWpmSample? _latest;
+    private readonly object _stateLock = new();
+
+    public bool IsRunning
+    {
+        get
+        {
+            lock (_stateLock)
+            {
+                return _proc is { HasExited: false };
+            }
+        }
+    }
+
+    public CwWpmSample? LatestSample
+    {
+        get
+        {
+            lock (_stateLock)
+            {
+                return _latest;
+            }
+        }
+    }
+
+    public void Start(string? deviceOverride)
+    {
+        Stop();
+
+        var exe = LocateBinary()
+            ?? throw new InvalidOperationException(
+                "Could not locate cw-decoder.exe. Build experiments/cw-decoder " +
+                "(`cargo build --release` in src/rust or experiments/cw-decoder) " +
+                "or set the CW_DECODER_EXE environment variable.");
+
+        var psi = new ProcessStartInfo(exe)
+        {
+            RedirectStandardInput = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            WorkingDirectory = Path.GetDirectoryName(exe)!,
+        };
+        psi.ArgumentList.Add("stream-live");
+        psi.ArgumentList.Add("--json");
+        if (!string.IsNullOrWhiteSpace(deviceOverride))
+        {
+            psi.ArgumentList.Add("--device");
+            psi.ArgumentList.Add(deviceOverride.Trim());
+        }
+
+        var p = Process.Start(psi)
+            ?? throw new InvalidOperationException("Failed to start cw-decoder.");
+
+        var cts = new CancellationTokenSource();
+        long epoch;
+        lock (_stateLock)
+        {
+            _proc = p;
+            _cts = cts;
+            _latest = null;
+            _epoch = unchecked(_epoch + 1);
+            epoch = _epoch;
+        }
+
+        StatusChanged?.Invoke(this, EventArgs.Empty);
+
+        _ = Task.Run(() => PumpStdoutAsync(p, epoch, cts.Token));
+        _ = Task.Run(() =>
+        {
+            try
+            { p.WaitForExit(); }
+            catch (InvalidOperationException) { /* process disposed */ }
+#pragma warning disable CA1031, RCS1075 // background watcher must not crash on shutdown
+            catch (Exception)
+            {
+                // Best effort: WaitForExit can throw a variety of platform-specific
+                // exceptions during process shutdown; we just want to fire the event.
+            }
+#pragma warning restore CA1031, RCS1075
+            StatusChanged?.Invoke(this, EventArgs.Empty);
+        });
+    }
+
+    public void Stop()
+    {
+        Process? proc;
+        CancellationTokenSource? cts;
+        lock (_stateLock)
+        {
+            proc = _proc;
+            cts = _cts;
+            _proc = null;
+            _cts = null;
+        }
+
+        if (cts is not null)
+        {
+            try
+            { cts.Cancel(); }
+            catch (ObjectDisposedException) { /* ignore */ }
+            cts.Dispose();
+        }
+
+        if (proc is { HasExited: false })
+        {
+            try
+            {
+                proc.StandardInput.WriteLine("stop");
+                proc.StandardInput.Flush();
+            }
+            catch (IOException) { /* best effort */ }
+            catch (InvalidOperationException) { /* best effort */ }
+            try
+            { proc.StandardInput.Close(); }
+            catch (IOException) { /* best effort */ }
+            if (!proc.WaitForExit(2000))
+            {
+                try
+                { proc.Kill(entireProcessTree: true); }
+                catch (InvalidOperationException) { /* best effort */ }
+                catch (System.ComponentModel.Win32Exception) { /* best effort */ }
+            }
+        }
+
+        proc?.Dispose();
+        StatusChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    public void Dispose() => Stop();
+
+    private async Task PumpStdoutAsync(Process p, long epoch, CancellationToken ct)
+    {
+        try
+        {
+            string? line;
+            while (!ct.IsCancellationRequested
+                   && (line = await p.StandardOutput.ReadLineAsync(ct).ConfigureAwait(false)) is not null)
+            {
+                if (string.IsNullOrWhiteSpace(line))
+                {
+                    continue;
+                }
+
+                if (TryParseWpmEvent(line, out var wpm))
+                {
+                    var sample = new CwWpmSample(DateTimeOffset.UtcNow, wpm, epoch);
+                    lock (_stateLock)
+                    {
+                        _latest = sample;
+                    }
+                    SampleReceived?.Invoke(this, sample);
+                }
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Expected on Stop().
+        }
+        catch (IOException)
+        {
+            // Stdout pipe closed during shutdown.
+        }
+    }
+
+    private static bool TryParseWpmEvent(string ndjsonLine, out double wpm)
+    {
+        wpm = 0;
+        try
+        {
+            using var doc = JsonDocument.Parse(ndjsonLine);
+            var root = doc.RootElement;
+            if (!root.TryGetProperty("type", out var typeProp)
+                || typeProp.ValueKind != JsonValueKind.String
+                || !string.Equals(typeProp.GetString(), "wpm", StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            if (!root.TryGetProperty("wpm", out var wpmProp))
+            {
+                return false;
+            }
+
+            if (wpmProp.ValueKind == JsonValueKind.Number && wpmProp.TryGetDouble(out var value)
+                && double.IsFinite(value) && value > 0)
+            {
+                wpm = value;
+                return true;
+            }
+        }
+        catch (JsonException)
+        {
+            // Non-JSON or malformed line — ignore quietly; the experiment
+            // binary occasionally emits stray non-NDJSON status lines.
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Locates the experiment <c>cw-decoder</c> binary. Mirrors the
+    /// experiment GUI's discovery logic so the same build artifacts work
+    /// for both surfaces.
+    /// </summary>
+    internal static string? LocateBinary()
+    {
+        var env = Environment.GetEnvironmentVariable("CW_DECODER_EXE");
+        if (!string.IsNullOrWhiteSpace(env) && File.Exists(env))
+        {
+            return env;
+        }
+
+        var exeName = OperatingSystem.IsWindows() ? "cw-decoder.exe" : "cw-decoder";
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        for (int i = 0; dir is not null && i < 8; i++, dir = dir.Parent)
+        {
+            var candidates = new[]
+            {
+                Path.Combine(dir.FullName, exeName),
+                Path.Combine(dir.FullName, "experiments", "cw-decoder", "target", "release", exeName),
+                Path.Combine(dir.FullName, "experiments", "cw-decoder", "target", "debug", exeName),
+                Path.Combine(dir.FullName, "target", "release", exeName),
+                Path.Combine(dir.FullName, "target", "debug", exeName),
+            };
+
+            var newest = candidates
+                .Where(File.Exists)
+                .Select(path => new FileInfo(path))
+                .OrderByDescending(info => info.LastWriteTimeUtc)
+                .FirstOrDefault();
+            if (newest is not null)
+            {
+                return newest.FullName;
+            }
+        }
+        return null;
+    }
+}
