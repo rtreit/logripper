@@ -77,4 +77,24 @@ public class SettingsViewModelTests
         Assert.Equal(PersistenceSetup.PathKey, persistenceValue.Key);
         Assert.Equal(@"C:\logs\portable.db", persistenceValue.Value);
     }
+
+    [Fact]
+    public void CwWpmAutoFillPropertiesRoundTripDefaultsAndUpdates()
+    {
+        var client = new UxFixtureEngineClient(new UxCaptureFixture());
+        var viewModel = new SettingsViewModel(client);
+
+        // Defaults: off, no loopback, no device override.
+        Assert.False(viewModel.IsCwWpmAutoFillEnabled);
+        Assert.False(viewModel.IsCwWpmLoopback);
+        Assert.Equal(string.Empty, viewModel.CwWpmDeviceOverride);
+
+        viewModel.IsCwWpmAutoFillEnabled = true;
+        viewModel.IsCwWpmLoopback = true;
+        viewModel.CwWpmDeviceOverride = "Speakers";
+
+        Assert.True(viewModel.IsCwWpmAutoFillEnabled);
+        Assert.True(viewModel.IsCwWpmLoopback);
+        Assert.Equal("Speakers", viewModel.CwWpmDeviceOverride);
+    }
 }

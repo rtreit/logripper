@@ -14,11 +14,12 @@ Today, the reference path is the causal `ditdah` baseline. The custom streaming 
 > on logged CW QSOs (time-weighted mean over the QSO start/end window, ADIF
 > field `APP_QSORIPPER_RX_WPM`). See
 > `src\dotnet\QsoRipper.Gui\Services\CwDecoderProcessSampleSource.cs`,
-> `src\dotnet\QsoRipper.Gui\Services\CwQsoWpmAggregator.cs`, and the toggle in
-> the main window status row. Round 2 will move the decoder behind an
-> engine-side `CwDecodeService` so all clients can consume the same stream.
+> `src\dotnet\QsoRipper.Gui\Services\CwQsoWpmAggregator.cs`, and the
+> **Settings → Display → CW WPM auto-fill** section in the main window.
+> Round 2 will move the decoder behind an engine-side `CwDecodeService`
+> so all clients can consume the same stream.
 >
-> **Fresh-user prerequisites for the GUI toggle to do anything:**
+> **Fresh-user prerequisites for CW WPM auto-fill to do anything:**
 >
 > 1. Build the decoder once: from `experiments\cw-decoder\` run
 >    `cargo build --release` (this folder is a stand-alone Cargo workspace and
@@ -29,28 +30,31 @@ Today, the reference path is the causal `ditdah` baseline. The custom streaming 
 >    an absolute path.
 > 3. Allow the application access to a capture device. The decoder uses the
 >    OS default capture device unless an override string is supplied.
+> 4. Open **Settings → Display** in the GUI and tick *Enable CW WPM auto-fill
+>    on logged QSOs*. Optionally tick *Use WASAPI loopback* and/or fill in a
+>    capture-device substring. Save. The status row shows the live decoder
+>    state only while auto-fill is enabled.
 >
-> If the binary cannot be found, the toggle silently flips back off and the
-> status row reports `CW WPM: decoder not built`. If the binary is found but
-> launching fails (e.g. cpal cannot open the capture device), the status row
-> reports the underlying error and the toggle flips off.
+> If the binary cannot be found, the auto-fill toggle silently flips back off
+> and the status row reports `CW WPM: decoder not built`. If the binary is
+> found but launching fails (e.g. cpal cannot open the capture device), the
+> status row reports the underlying error and the toggle flips off.
 >
 > **Validating the GUI without a radio (loopback / file playback):**
 >
 > 1. Build the decoder (`cargo build --release` in `experiments\cw-decoder`).
 > 2. Pick how to feed audio into the decoder:
->    - **WASAPI loopback (Windows, no virtual cable required):** set
->      `IsCwDecoderLoopback = true` in
->      `%LocalAppData%\QsoRipper\ui-preferences.json` (and optionally set
->      `CwDecoderDeviceOverride` to a substring of the system *output* device
->      name, e.g. `"Speakers"`). With loopback on, `--device` matches output
->      devices, not input devices. Then play a CW practice clip through the
->      speakers and the GUI status row should report a live WPM.
+>    - **WASAPI loopback (Windows, no virtual cable required):** open
+>      Settings → Display, tick *Enable CW WPM auto-fill*, tick *Use WASAPI
+>      loopback*, and optionally put a substring of the system *output* device
+>      name (e.g. `"Speakers"`) in the *Capture device* field. With loopback
+>      on, the device substring matches output devices, not input devices.
+>      Then play a CW practice clip through the speakers and the GUI status
+>      row should report a live WPM.
 >    - **Virtual audio cable (cross-platform):** install VB-Audio Cable or a
 >      similar driver, route system output to the cable, and put the cable's
->      *input* name in `CwDecoderDeviceOverride` with `IsCwDecoderLoopback`
->      left at `false`. The cw-decoder then sees the cable as a normal input
->      device.
+>      *input* name in the *Capture device* field with *Use WASAPI loopback*
+>      left off. The cw-decoder then sees the cable as a normal input device.
 >    - **Real microphone (no setup):** leave both fields empty and play a
 >      practice clip through the speakers. Quality depends on the room and
 >      mic, so loopback or a virtual cable is preferred for validation.
@@ -58,7 +62,7 @@ Today, the reference path is the causal `ditdah` baseline. The custom streaming 
 >    `experiments\cw-decoder\target\release\cw-decoder.exe devices` — this
 >    prints both input devices and the output devices that are usable as
 >    `--loopback` targets.
-> 4. Start the GUI, toggle CW WPM on (status row), log a CW QSO during
+> 4. Start the GUI, enable CW WPM auto-fill in Settings, log a CW QSO during
 >    playback, and confirm `cw_decode_rx_wpm` is populated on the new row in
 >    the recent-QSO grid.
 

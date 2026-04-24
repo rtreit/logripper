@@ -124,6 +124,16 @@ internal sealed partial class SettingsViewModel : ObservableObject
     [ObservableProperty]
     private bool _isSpaceWeatherVisible;
 
+    // CW WPM auto-fill (round 1, GUI-side decoder host)
+    [ObservableProperty]
+    private bool _isCwWpmAutoFillEnabled;
+
+    [ObservableProperty]
+    private bool _isCwWpmLoopback;
+
+    [ObservableProperty]
+    private string _cwWpmDeviceOverride = string.Empty;
+
     [ObservableProperty]
     private int _selectedSectionIndex;
 

@@ -491,7 +491,10 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
     /// </summary>
     internal SettingsViewModel CreateSettingsViewModel() => new(_engine)
     {
-        IsSpaceWeatherVisible = IsSpaceWeatherVisible
+        IsSpaceWeatherVisible = IsSpaceWeatherVisible,
+        IsCwWpmAutoFillEnabled = IsCwDecoderEnabled,
+        IsCwWpmLoopback = IsCwDecoderLoopback,
+        CwWpmDeviceOverride = CwDecoderDeviceOverride ?? string.Empty,
     };
 
     /// <summary>
@@ -508,11 +511,41 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
     }
 
     internal void ApplySettingsUiPreferences(bool isSpaceWeatherVisible)
+        => ApplySettingsUiPreferences(isSpaceWeatherVisible, IsCwDecoderEnabled, IsCwDecoderLoopback, CwDecoderDeviceOverride);
+
+    internal void ApplySettingsUiPreferences(
+        bool isSpaceWeatherVisible,
+        bool isCwWpmEnabled,
+        bool isCwWpmLoopback,
+        string? cwDeviceOverride)
     {
         IsSpaceWeatherVisible = isSpaceWeatherVisible;
         if (IsSpaceWeatherVisible && string.IsNullOrEmpty(SpaceWeatherText))
         {
             _ = FetchSpaceWeatherAsync();
+        }
+
+        var trimmedDevice = string.IsNullOrWhiteSpace(cwDeviceOverride)
+            ? string.Empty
+            : cwDeviceOverride.Trim();
+
+        var deviceChanged = !string.Equals(trimmedDevice, CwDecoderDeviceOverride, StringComparison.Ordinal);
+        var loopbackChanged = isCwWpmLoopback != IsCwDecoderLoopback;
+        var enableChanged = isCwWpmEnabled != IsCwDecoderEnabled;
+
+        CwDecoderDeviceOverride = trimmedDevice;
+        IsCwDecoderLoopback = isCwWpmLoopback;
+
+        if (enableChanged)
+        {
+            // ToggleCwDecoder flips the bool, then starts/stops with current settings.
+            ToggleCwDecoder();
+        }
+        else if (IsCwDecoderEnabled && (deviceChanged || loopbackChanged))
+        {
+            // Apply new device/loopback by restarting the source in place.
+            ToggleCwDecoder(); // off
+            ToggleCwDecoder(); // on, with new settings
         }
     }
 

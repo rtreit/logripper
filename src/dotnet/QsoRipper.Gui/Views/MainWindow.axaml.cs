@@ -894,7 +894,11 @@ internal sealed partial class MainWindow : Window
         await dialog.ShowDialog(this);
         if (settingsVm.DidSave)
         {
-            _viewModel.ApplySettingsUiPreferences(settingsVm.IsSpaceWeatherVisible);
+            _viewModel.ApplySettingsUiPreferences(
+                settingsVm.IsSpaceWeatherVisible,
+                settingsVm.IsCwWpmAutoFillEnabled,
+                settingsVm.IsCwWpmLoopback,
+                settingsVm.CwWpmDeviceOverride);
             SavePreferences();
         }
 
