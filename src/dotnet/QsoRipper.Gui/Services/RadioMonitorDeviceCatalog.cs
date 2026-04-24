@@ -10,11 +10,34 @@ namespace QsoRipper.Gui.Services;
 /// WASAPI loopback so users can audition CW playing through their speakers
 /// without setting up a virtual audio cable.
 /// </summary>
-internal sealed record RadioMonitorDevice(string Name, bool IsLoopback)
+/// <param name="Name">
+/// Underlying device name passed to cw-decoder via <c>--device</c>. Must
+/// stay verbatim — never suffix it for display purposes.
+/// </param>
+/// <param name="IsLoopback">
+/// True when <see cref="Name"/> refers to a system OUTPUT device that the
+/// decoder should capture in WASAPI loopback mode.
+/// </param>
+/// <param name="IsUnavailable">
+/// True when this entry was synthesized to represent a persisted device
+/// that is no longer enumerable (e.g. radio unplugged). The dropdown
+/// shows a "(not currently available)" suffix but <see cref="Name"/>
+/// stays clean so the user can still see what was previously chosen.
+/// </param>
+internal sealed record RadioMonitorDevice(string Name, bool IsLoopback, bool IsUnavailable = false)
 {
-    public string DisplayName => IsLoopback
-        ? $"{Name}  (system output / loopback)"
-        : Name;
+    public string DisplayName
+    {
+        get
+        {
+            if (IsUnavailable)
+            {
+                return $"{Name}  (not currently available)";
+            }
+
+            return IsLoopback ? $"{Name}  (system output / loopback)" : Name;
+        }
+    }
 }
 
 /// <summary>

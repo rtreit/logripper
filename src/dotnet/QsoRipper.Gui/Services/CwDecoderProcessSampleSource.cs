@@ -28,7 +28,25 @@ internal sealed class CwDecoderProcessSampleSource : ICwWpmSampleSource
     private CancellationTokenSource? _cts;
     private long _epoch;
     private CwWpmSample? _latest;
+    private string? _lastStderrLine;
     private readonly object _stateLock = new();
+
+    /// <summary>
+    /// Last non-empty line written to stderr by the cw-decoder process. Used
+    /// to surface the actual failure reason (e.g.
+    /// "no output (loopback) device matching ...") when the process exits
+    /// unexpectedly, instead of just showing "stopped".
+    /// </summary>
+    public string? LastStderrLine
+    {
+        get
+        {
+            lock (_stateLock)
+            {
+                return _lastStderrLine;
+            }
+        }
+    }
 
     public bool IsRunning
     {
@@ -98,6 +116,7 @@ internal sealed class CwDecoderProcessSampleSource : ICwWpmSampleSource
             _proc = p;
             _cts = cts;
             _latest = null;
+            _lastStderrLine = null;
             _epoch = unchecked(_epoch + 1);
             epoch = _epoch;
         }
@@ -105,6 +124,7 @@ internal sealed class CwDecoderProcessSampleSource : ICwWpmSampleSource
         StatusChanged?.Invoke(this, EventArgs.Empty);
 
         _ = Task.Run(() => PumpStdoutAsync(p, epoch, cts.Token));
+        _ = Task.Run(() => PumpStderrAsync(p, epoch, cts.Token));
         _ = Task.Run(() =>
         {
             try
@@ -199,6 +219,40 @@ internal sealed class CwDecoderProcessSampleSource : ICwWpmSampleSource
         catch (IOException)
         {
             // Stdout pipe closed during shutdown.
+        }
+    }
+
+    private async Task PumpStderrAsync(Process p, long epoch, CancellationToken ct)
+    {
+        try
+        {
+            string? line;
+            while (!ct.IsCancellationRequested
+                   && (line = await p.StandardError.ReadLineAsync(ct).ConfigureAwait(false)) is not null)
+            {
+                if (string.IsNullOrWhiteSpace(line))
+                {
+                    continue;
+                }
+
+                lock (_stateLock)
+                {
+                    // Only retain stderr from the *current* epoch; ignore late
+                    // lines from a stopped predecessor.
+                    if (_epoch == epoch)
+                    {
+                        _lastStderrLine = line.Trim();
+                    }
+                }
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Expected on Stop().
+        }
+        catch (IOException)
+        {
+            // Stderr pipe closed during shutdown.
         }
     }
 

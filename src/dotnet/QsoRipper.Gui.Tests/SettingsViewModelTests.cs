@@ -105,10 +105,56 @@ public class SettingsViewModelTests
         viewModel.SelectedRadioMonitorDevice = new RadioMonitorDevice("Speakers (Realtek)", IsLoopback: true);
         Assert.True(viewModel.ResolvedIsLoopback);
         Assert.Equal("Speakers (Realtek)", viewModel.ResolvedCaptureDevice);
+    }
 
-        // System default sentinel resolves to empty string + non-loopback.
-        viewModel.SelectedRadioMonitorDevice = RadioMonitorDeviceCatalog.SystemDefault;
-        Assert.Equal(string.Empty, viewModel.ResolvedCaptureDevice);
+    [Fact]
+    public void PreselectRadioMonitorDeviceWithMissingDeviceInsertsPlaceholder()
+    {
+        var client = new UxFixtureEngineClient(new UxCaptureFixture());
+        var viewModel = new SettingsViewModel(client);
+
+        // Persisted device that is no longer enumerable should round-trip via
+        // a synthesized "(not currently available)" entry so the user keeps
+        // visibility into what was previously chosen.
+        viewModel.PreselectRadioMonitorDevice("Missing Mic", isLoopback: false);
+
+        Assert.NotNull(viewModel.SelectedRadioMonitorDevice);
+        Assert.Equal("Missing Mic", viewModel.ResolvedCaptureDevice);
+        Assert.Equal("Missing Mic", viewModel.SelectedRadioMonitorDevice!.Name);
+        Assert.True(viewModel.SelectedRadioMonitorDevice.IsUnavailable);
         Assert.False(viewModel.ResolvedIsLoopback);
+        Assert.Contains("(not currently available)", viewModel.SelectedRadioMonitorDevice.DisplayName, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void PreselectRadioMonitorDeviceWithEmptyOverrideSelectsSystemDefault()
+    {
+        var client = new UxFixtureEngineClient(new UxCaptureFixture());
+        var viewModel = new SettingsViewModel(client);
+
+        viewModel.PreselectRadioMonitorDevice(string.Empty, isLoopback: false);
+
+        Assert.Same(RadioMonitorDeviceCatalog.SystemDefault, viewModel.SelectedRadioMonitorDevice);
+        Assert.Equal(string.Empty, viewModel.ResolvedCaptureDevice);
+    }
+
+    [Fact]
+    public void PreselectRadioMonitorDeviceMatchesByNameAndLoopbackFlag()
+    {
+        var client = new UxFixtureEngineClient(new UxCaptureFixture());
+        var viewModel = new SettingsViewModel(client);
+
+        // Simulate the catalog populating two entries with the same name but
+        // different loopback flags (a corner case but worth guarding).
+        var inputDevice = new RadioMonitorDevice("Speakers (Realtek)", IsLoopback: false);
+        var loopbackDevice = new RadioMonitorDevice("Speakers (Realtek)", IsLoopback: true);
+        viewModel.RadioMonitorDevices.Add(RadioMonitorDeviceCatalog.SystemDefault);
+        viewModel.RadioMonitorDevices.Add(inputDevice);
+        viewModel.RadioMonitorDevices.Add(loopbackDevice);
+
+        viewModel.PreselectRadioMonitorDevice("Speakers (Realtek)", isLoopback: true);
+
+        Assert.Same(loopbackDevice, viewModel.SelectedRadioMonitorDevice);
+        Assert.True(viewModel.ResolvedIsLoopback);
     }
 }

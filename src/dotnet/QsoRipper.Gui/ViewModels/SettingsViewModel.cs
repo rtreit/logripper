@@ -143,6 +143,19 @@ internal sealed partial class SettingsViewModel : ObservableObject
     private bool _isLoadingRadioMonitorDevices;
 
     /// <summary>
+    /// Captured by <see cref="MainWindowViewModel.CreateSettingsViewModel"/> so
+    /// <see cref="RefreshRadioMonitorDevicesAsync"/> can preselect the persisted
+    /// device once the device list is populated. Avoids the race where the
+    /// catalog auto-selects "System default" before the caller can apply its
+    /// own preselection.
+    /// </summary>
+    internal string? PendingPreselectDeviceOverride { get; set; }
+
+    internal bool PendingPreselectIsLoopback { get; set; }
+
+    private bool _pendingPreselectConsumed;
+
+    /// <summary>
     /// Resolved capture device name to forward to the decoder (empty = host
     /// default). Computed from <see cref="SelectedRadioMonitorDevice"/>.
     /// </summary>
@@ -267,8 +280,11 @@ internal sealed partial class SettingsViewModel : ObservableObject
         {
             // Persisted device is no longer present in the enumeration (radio
             // unplugged, etc.). Insert a synthetic entry so the user keeps the
-            // visible-state but can pick a different one.
-            match = new RadioMonitorDevice($"{deviceOverride}  (not currently available)", isLoopback);
+            // visible state but can still pick a different one. The synthetic
+            // entry's Name stays clean (so cw-decoder's substring matching can
+            // still succeed if the device reappears), and the
+            // "(not currently available)" suffix lives only in DisplayName.
+            match = new RadioMonitorDevice(deviceOverride, isLoopback, IsUnavailable: true);
             RadioMonitorDevices.Add(match);
         }
 
@@ -300,7 +316,19 @@ internal sealed partial class SettingsViewModel : ObservableObject
                 RadioMonitorDevices.Add(device);
             }
 
-            // Preserve user's selection across refresh.
+            // First refresh after construction: honor the caller's persisted
+            // preselection (set by MainWindowViewModel.CreateSettingsViewModel).
+            // This must run BEFORE the "preserve previousSelection" logic and
+            // BEFORE the SystemDefault fallback so we don't auto-select an
+            // unrelated entry.
+            if (!_pendingPreselectConsumed)
+            {
+                _pendingPreselectConsumed = true;
+                PreselectRadioMonitorDevice(PendingPreselectDeviceOverride, PendingPreselectIsLoopback);
+                return;
+            }
+
+            // Preserve user's selection across explicit refresh.
             if (previousSelection is not null)
             {
                 var match = RadioMonitorDevices.FirstOrDefault(d =>

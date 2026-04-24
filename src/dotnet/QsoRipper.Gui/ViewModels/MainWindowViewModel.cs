@@ -510,17 +510,8 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
             IsSpaceWeatherVisible = IsSpaceWeatherVisible,
             IsRadioMonitorEnabled = IsCwDecoderEnabled,
             IsCwWpmStatusBarVisible = IsCwWpmStatusBarVisible,
-        };
-        // Pre-select the dropdown after LoadAsync populates the device list;
-        // we plumb it via PreselectRadioMonitorDevice when the catalog returns.
-        vm.PropertyChanged += (_, e) =>
-        {
-            if (e.PropertyName == nameof(SettingsViewModel.IsLoadingRadioMonitorDevices)
-                && !vm.IsLoadingRadioMonitorDevices
-                && vm.SelectedRadioMonitorDevice is null)
-            {
-                vm.PreselectRadioMonitorDevice(CwDecoderDeviceOverride, IsCwDecoderLoopback);
-            }
+            PendingPreselectDeviceOverride = CwDecoderDeviceOverride,
+            PendingPreselectIsLoopback = IsCwDecoderLoopback,
         };
         return vm;
     }
@@ -730,6 +721,7 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
         }
 
         var running = _cwSampleSource.IsRunning;
+        var lastErr = _cwSampleSource.LastStderrLine;
         Dispatcher.UIThread.Post(() =>
         {
             if (!IsCwDecoderEnabled)
@@ -738,10 +730,15 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
             }
             else if (!running)
             {
-                CwDecoderStatusText = "CW WPM: stopped";
+                CwDecoderStatusText = string.IsNullOrWhiteSpace(lastErr)
+                    ? "CW WPM: stopped"
+                    : $"CW WPM: stopped — {Truncate(lastErr, 120)}";
             }
         });
     }
+
+    private static string Truncate(string text, int maxLength)
+        => text.Length <= maxLength ? text : text[..(maxLength - 1)] + "…";
 
     [RelayCommand]
     private void ToggleSpaceWeather()
