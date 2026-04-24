@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
+using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using QsoRipper.Gui.Services;
@@ -80,8 +81,14 @@ internal sealed partial class CwStatsPaneViewModel : ObservableObject, IDisposab
 
     private void OnSampleReceived(object? sender, CwWpmSample sample)
     {
-        // Keep WPM display fresh even if we miss a raw line parse.
-        WpmText = $"{sample.Wpm:0.0} WPM";
+        // SampleReceived fires on the decoder's stdout pump background thread;
+        // marshal to UI thread before mutating ObservableProperty backing fields
+        // so that PropertyChanged subscribers (Avalonia bindings) run on the
+        // dispatcher.
+        Dispatcher.UIThread.Post(() =>
+        {
+            WpmText = $"{sample.Wpm:0.0} WPM";
+        });
     }
 
     private void OnRawLineReceived(object? sender, string line)
@@ -91,10 +98,20 @@ internal sealed partial class CwStatsPaneViewModel : ObservableObject, IDisposab
             return;
         }
 
+        // Defer the entire parse + property write to the UI thread to keep all
+        // observable mutations on a single thread.
+        Dispatcher.UIThread.Post(() => ProcessRawLine(line));
+    }
+
+    private void ProcessRawLine(string line)
+    {
         try
         {
             using var doc = JsonDocument.Parse(line);
-            if (!doc.RootElement.TryGetProperty("event", out var typeProp))
+            // cw-decoder NDJSON uses "type" as the event discriminator, not "event".
+            // See experiments/cw-decoder/src/main.rs Event* serializers and the
+            // captured session-events.ndjson schema.
+            if (!doc.RootElement.TryGetProperty("type", out var typeProp))
             {
                 return;
             }
@@ -110,7 +127,7 @@ internal sealed partial class CwStatsPaneViewModel : ObservableObject, IDisposab
                     break;
                 case "pitch_lost":
                     PitchText = "lost";
-                    StatusText = "Pitch lost";
+                    StatusText = TryGetString(doc.RootElement, "reason") ?? "Pitch lost";
                     break;
                 case "wpm":
                     HandleWpm(doc.RootElement);
@@ -119,13 +136,19 @@ internal sealed partial class CwStatsPaneViewModel : ObservableObject, IDisposab
                     HandleChar(doc.RootElement);
                     break;
                 case "word":
-                    HandleWord(doc.RootElement);
+                    // The decoder emits a word event as a boundary marker only
+                    // (no text payload). Insert a space so the running decoded
+                    // text reads naturally.
+                    AppendDecoded(" ");
                     break;
                 case "garbled":
                     HandleGarbled(doc.RootElement);
                     break;
                 case "power":
                     HandlePower(doc.RootElement);
+                    break;
+                case "ready":
+                    StatusText = "Decoder ready";
                     break;
                 default:
                     break;
@@ -141,10 +164,9 @@ internal sealed partial class CwStatsPaneViewModel : ObservableObject, IDisposab
     private void HandleConfidence(JsonElement root)
     {
         var state = TryGetString(root, "state") ?? "?";
-        var score = TryGetDouble(root, "score");
-        ConfidenceText = score.HasValue
-            ? string.Create(CultureInfo.InvariantCulture, $"{state.ToUpperInvariant()}  ({score.Value:0.00})")
-            : state.ToUpperInvariant();
+        // The decoder's confidence event payload is just {state: "hunting"|"locked"|"probation"}.
+        // No score field — round 1 confidence reporting is binary, not graded.
+        ConfidenceText = state.ToUpperInvariant();
     }
 
     private void HandlePitch(JsonElement root)
@@ -167,35 +189,35 @@ internal sealed partial class CwStatsPaneViewModel : ObservableObject, IDisposab
 
     private void HandleChar(JsonElement root)
     {
-        var ch = TryGetString(root, "char");
+        // Decoder emits {ch: "N", morse: "-.", ...} — the field is "ch", not "char".
+        var ch = TryGetString(root, "ch");
         if (!string.IsNullOrEmpty(ch))
         {
             AppendDecoded(ch);
         }
     }
 
-    private void HandleWord(JsonElement root)
-    {
-        var w = TryGetString(root, "word");
-        if (!string.IsNullOrEmpty(w))
-        {
-            AppendDecoded(" " + w + " ");
-        }
-    }
-
     private void HandleGarbled(JsonElement root)
     {
-        var symbol = TryGetString(root, "symbol") ?? TryGetString(root, "raw") ?? "?";
+        var symbol = TryGetString(root, "symbol")
+            ?? TryGetString(root, "morse")
+            ?? TryGetString(root, "raw")
+            ?? "?";
         LastGarbledText = symbol;
         AppendDecoded("·");
     }
 
     private void HandlePower(JsonElement root)
     {
-        var dbfs = TryGetDouble(root, "dbfs");
-        if (dbfs.HasValue)
+        // SNR is far more operator-useful than raw power amplitude here.
+        var snr = TryGetDouble(root, "snr");
+        if (snr.HasValue)
         {
-            PowerText = string.Create(CultureInfo.InvariantCulture, $"{dbfs.Value:0.0} dBFS");
+            // SNR is dimensionless ratio; show as dB for at-a-glance comparison.
+            var snrDb = snr.Value > 0 ? 10.0 * Math.Log10(snr.Value) : double.NegativeInfinity;
+            PowerText = double.IsFinite(snrDb)
+                ? string.Create(CultureInfo.InvariantCulture, $"SNR {snrDb:0.0} dB")
+                : "SNR —";
         }
     }
 
