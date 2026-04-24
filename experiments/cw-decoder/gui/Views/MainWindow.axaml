@@ -881,6 +881,108 @@
           </Grid>
         </Border>
       </TabItem>
+      <TabItem Header="BENCH">
+        <Border Classes="panel">
+          <Grid RowDefinitions="Auto,Auto,Auto,Auto,*,Auto" RowSpacing="10">
+            <!-- Source mode + label -->
+            <Grid ColumnDefinitions="Auto,Auto,Auto,Auto,*,Auto" ColumnSpacing="10">
+              <TextBlock Text="SOURCE" Classes="label" VerticalAlignment="Center" />
+              <RadioButton Grid.Column="1" Content="SYNTHETIC SUITE" GroupName="BenchSource"
+                           IsChecked="{Binding IsBenchSourceSynthetic, Mode=TwoWay}" VerticalAlignment="Center" />
+              <RadioButton Grid.Column="2" Content="FROM FILE" GroupName="BenchSource"
+                           IsChecked="{Binding IsBenchSourceFile, Mode=TwoWay}" VerticalAlignment="Center" />
+              <TextBlock Grid.Column="3" Text="LABEL" Classes="label" VerticalAlignment="Center" Margin="14,0,0,0" />
+              <TextBox Grid.Column="4" Text="{Binding BenchLabel, Mode=TwoWay}" Width="220"
+                       FontFamily="Consolas" FontSize="12" />
+              <Button Grid.Column="5" Classes="primary" Content="{Binding BenchRunButtonLabel}"
+                      Click="OnRunBenchClick" IsEnabled="{Binding CanRunBench}" FontSize="11" Padding="14,4" />
+            </Grid>
+
+            <!-- File mode inputs -->
+            <Grid Grid.Row="1" ColumnDefinitions="Auto,*,Auto,Auto,Auto" ColumnSpacing="10"
+                  IsVisible="{Binding IsBenchSourceFile}">
+              <TextBlock Text="FILE" Classes="label" VerticalAlignment="Center" />
+              <TextBox Grid.Column="1" Text="{Binding BenchFilePath}" IsReadOnly="True"
+                       FontFamily="Consolas" FontSize="12" />
+              <Button Grid.Column="2" Classes="primary" Content="PICK…" Click="OnPickBenchFileClick"
+                      FontSize="11" Padding="14,4" />
+              <TextBlock Grid.Column="3" Text="ONSET (ms)" Classes="label" VerticalAlignment="Center" Margin="10,0,0,0" />
+              <NumericUpDown Grid.Column="4" Minimum="0" Maximum="600000" Increment="100"
+                             Value="{Binding BenchOnsetMs, Mode=TwoWay}" Width="120" />
+            </Grid>
+
+            <Grid Grid.Row="2" ColumnDefinitions="Auto,*" ColumnSpacing="10"
+                  IsVisible="{Binding IsBenchSourceFile}">
+              <TextBlock Text="TRUTH" Classes="label" VerticalAlignment="Center" />
+              <TextBox Grid.Column="1" Text="{Binding BenchTruth, Mode=TwoWay}" FontFamily="Consolas"
+                       FontSize="12" Watermark="Uppercase expected transcript starting at the onset" />
+            </Grid>
+
+            <!-- Decoder knobs -->
+            <Grid Grid.Row="3" ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,*" ColumnSpacing="14">
+              <StackPanel Spacing="2">
+                <TextBlock Text="STABLE N" Classes="label" />
+                <NumericUpDown Minimum="1" Maximum="20" Increment="1" Value="{Binding BenchStableN, Mode=TwoWay}" Width="100" />
+              </StackPanel>
+              <StackPanel Grid.Column="1" Spacing="2">
+                <TextBlock Text="PURITY" Classes="label" />
+                <NumericUpDown Minimum="0" Maximum="20" Increment="0.5" Value="{Binding BenchPurity, Mode=TwoWay}" Width="100" />
+              </StackPanel>
+              <StackPanel Grid.Column="2" Spacing="2">
+                <TextBlock Text="WIDE BINS" Classes="label" />
+                <NumericUpDown Minimum="0" Maximum="6" Increment="1" Value="{Binding BenchWideBins, Mode=TwoWay}" Width="100" />
+              </StackPanel>
+              <StackPanel Grid.Column="3" Spacing="2">
+                <TextBlock Text="FORCE PITCH (Hz)" Classes="label" />
+                <NumericUpDown Minimum="0" Maximum="2000" Increment="10" Value="{Binding BenchForcePitchHz, Mode=TwoWay}" Width="120" />
+              </StackPanel>
+              <StackPanel Grid.Column="4" Spacing="2" VerticalAlignment="Bottom">
+                <TextBlock Text="THRESHOLD" Classes="label" />
+                <CheckBox Content="AUTO" IsChecked="{Binding BenchAutoThreshold, Mode=TwoWay}" />
+              </StackPanel>
+              <StackPanel Grid.Column="7" VerticalAlignment="Bottom">
+                <TextBlock Text="{Binding BenchSourceSummary}" Classes="label" TextWrapping="Wrap" />
+                <TextBlock Text="{Binding BenchSummary}" FontFamily="Consolas" FontSize="12"
+                           Foreground="{StaticResource AccentCyan}" TextWrapping="Wrap" />
+              </StackPanel>
+            </Grid>
+
+            <!-- Results table + log -->
+            <Grid Grid.Row="4" ColumnDefinitions="2*,*" ColumnSpacing="10">
+              <Border BorderBrush="{StaticResource GridLine}" BorderThickness="1" CornerRadius="2">
+                <DataGrid ItemsSource="{Binding BenchResults}" AutoGenerateColumns="False"
+                          IsReadOnly="True" GridLinesVisibility="Horizontal" HeadersVisibility="Column"
+                          FontFamily="Consolas" FontSize="12">
+                  <DataGrid.Columns>
+                    <DataGridTextColumn Header="SCENARIO" Binding="{Binding ScenarioDisplay}" Width="*" />
+                    <DataGridTextColumn Header="LAT" Binding="{Binding LatencyDisplay}" Width="80" />
+                    <DataGridTextColumn Header="UPTIME" Binding="{Binding UptimeDisplay}" Width="80" />
+                    <DataGridTextColumn Header="DROPS" Binding="{Binding DropsDisplay}" Width="70" />
+                    <DataGridTextColumn Header="RELOCK" Binding="{Binding RelocksDisplay}" Width="70" />
+                    <DataGridTextColumn Header="LONGEST" Binding="{Binding LongestGapDisplay}" Width="90" />
+                    <DataGridTextColumn Header="GHOSTS" Binding="{Binding GhostsDisplay}" Width="80" />
+                    <DataGridTextColumn Header="PITCH" Binding="{Binding PitchDisplay}" Width="90" />
+                  </DataGrid.Columns>
+                </DataGrid>
+              </Border>
+              <Border Grid.Column="1" BorderBrush="{StaticResource GridLine}" BorderThickness="1" CornerRadius="2"
+                      Background="#0C1A28">
+                <Grid RowDefinitions="Auto,*">
+                  <TextBlock Text="LOG" Classes="label" Margin="8,6,0,0" />
+                  <ScrollViewer Grid.Row="1" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto">
+                    <TextBox Text="{Binding BenchLogText}" IsReadOnly="True" AcceptsReturn="True"
+                             TextWrapping="NoWrap" FontFamily="Consolas" FontSize="11"
+                             Background="Transparent" BorderThickness="0"
+                             Foreground="{StaticResource TextDim}" />
+                  </ScrollViewer>
+                </Grid>
+              </Border>
+            </Grid>
+
+            <TextBlock Grid.Row="5" Text="{Binding BenchStatus}" Classes="label" TextWrapping="Wrap" />
+          </Grid>
+        </Border>
+      </TabItem>
     </TabControl>
 
     <!-- Status -->

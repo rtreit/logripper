@@ -19,6 +19,7 @@
     <PackageReference Include="Avalonia.Themes.Fluent" Version="11.3.14" />
     <PackageReference Include="Avalonia.Fonts.Inter" Version="11.3.14" />
     <PackageReference Include="Avalonia.Diagnostics" Version="11.3.14" Condition="'$(Configuration)' == 'Debug'" />
+    <PackageReference Include="Avalonia.Controls.DataGrid" Version="11.3.13" />
   </ItemGroup>
 
 </Project>

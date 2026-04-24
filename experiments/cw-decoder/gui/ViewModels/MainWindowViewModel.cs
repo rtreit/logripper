@@ -17,7 +17,7 @@ using CwDecoderGui.Services;
 
 namespace CwDecoderGui.ViewModels;
 
-public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable
+public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDisposable
 {
     private readonly CwDecoderProcess _process = new();
     private readonly AudioPlaybackProcess _playback = new();

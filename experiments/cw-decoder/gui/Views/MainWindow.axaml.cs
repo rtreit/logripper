@@ -143,4 +143,30 @@ public partial class MainWindow : Window
 
     private void OnApplyTopSweepClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
         => Vm?.ApplyTopSweepResult();
+
+    private async void OnRunBenchClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (Vm is null) return;
+        await Vm.ToggleRunBenchAsync();
+    }
+
+    private async void OnPickBenchFileClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (StorageProvider is null || Vm is null) return;
+        var picked = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+        {
+            Title = "Pick a CW audio file for the bench",
+            AllowMultiple = false,
+            FileTypeFilter = new[]
+            {
+                new FilePickerFileType("Audio")
+                {
+                    Patterns = new[] { "*.wav", "*.mp3", "*.m4a", "*.aac" },
+                },
+            },
+        });
+        var first = picked.FirstOrDefault();
+        if (first?.TryGetLocalPath() is string path)
+            Vm.SetBenchFile(path);
+    }
 }
