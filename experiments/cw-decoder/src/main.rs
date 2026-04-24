@@ -7,7 +7,8 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use cw_decoder_poc::{
-    audio, decoder, ditdah_streaming, harvest, json, log_capture, preview, streaming, tui,
+    audio, bench_latency, decoder, ditdah_streaming, harvest, json, log_capture, preview,
+    streaming, tui,
 };
 
 #[derive(Parser, Debug)]
@@ -422,6 +423,61 @@ enum Cmd {
         #[arg(long, default_value_t = 8)]
         top: usize,
     },
+    /// Cold-start acquisition latency + lock-stability benchmark.
+    ///
+    /// Without flags, runs a deterministic synthetic scenario matrix
+    /// (silence/noise/voice lead-ins, plus a long-clean-CW lock-
+    /// stability stress) and prints latency + uptime metrics.
+    /// With `--from-file <path> --truth <T> --cw-onset-ms <N>`,
+    /// measures the same metrics on a real recording.
+    BenchLatency {
+        /// Real-audio scenario: path to an audio file. If omitted, the
+        /// built-in synthetic suite runs instead.
+        #[arg(long)]
+        from_file: Option<PathBuf>,
+        /// Audio-ms at which CW actually starts in `--from-file`.
+        #[arg(long, default_value_t = 0)]
+        cw_onset_ms: u32,
+        /// Expected uppercase transcript starting at `cw_onset_ms`.
+        /// Required when using `--from-file`.
+        #[arg(long)]
+        truth: Option<String>,
+        /// Sample rate to use for the synthetic suite (only used when
+        /// `--from-file` is not set).
+        #[arg(long, default_value_t = 16000)]
+        synth_rate: u32,
+        /// Chunk size (ms) used to feed the streaming decoder. The
+        /// decoder doesn't see chunk boundaries explicitly, but smaller
+        /// chunks give finer-grained event timestamps.
+        #[arg(long, default_value_t = 100)]
+        chunk_ms: u32,
+        /// Stable-N parameter: latency = first time a contiguous run of
+        /// N decoded chars is also a substring of truth.
+        #[arg(long, default_value_t = bench_latency::DEFAULT_STABLE_N)]
+        stable_n: usize,
+        /// Optional label printed alongside the result (use this to tag
+        /// runs when comparing different decoder configurations).
+        #[arg(long, default_value = "default")]
+        label: String,
+        /// Override the streaming decoder's tone-purity gate.
+        #[arg(long)]
+        purity: Option<f32>,
+        /// Override the wide-bin sniff side count.
+        #[arg(long)]
+        wide_bins: Option<u8>,
+        /// Disable the auto-threshold path so the IQR threshold is
+        /// frozen during the run (debug aid for stability regressions).
+        #[arg(long, default_value_t = false)]
+        no_auto_threshold: bool,
+        /// Force the decoder to a specific pitch and bypass acquisition.
+        /// Use 0 to leave acquisition on.
+        #[arg(long, default_value_t = 0.0)]
+        force_pitch_hz: f32,
+        /// Emit one NDJSON record per scenario in addition to the table
+        /// (handy for collecting comparison runs into a file).
+        #[arg(long, default_value_t = false)]
+        json: bool,
+    },
 }
 
 fn main() -> Result<()> {
@@ -685,6 +741,33 @@ fn main() -> Result<()> {
             step_hz,
             top,
         } => run_probe_fisher(&path, min_hz, max_hz, step_hz, top),
+        Cmd::BenchLatency {
+            from_file,
+            cw_onset_ms,
+            truth,
+            synth_rate,
+            chunk_ms,
+            stable_n,
+            label,
+            purity,
+            wide_bins,
+            no_auto_threshold,
+            force_pitch_hz,
+            json,
+        } => run_bench_latency(
+            from_file.as_deref(),
+            cw_onset_ms,
+            truth.as_deref(),
+            synth_rate,
+            chunk_ms,
+            stable_n,
+            &label,
+            purity,
+            wide_bins,
+            no_auto_threshold,
+            force_pitch_hz,
+            json,
+        ),
     }
 }
 
@@ -721,6 +804,104 @@ fn run_probe_fisher(
     let p50 = s2[s2.len() / 2];
     let p90 = s2[s2.len() * 9 / 10];
     println!("Distribution: max={max_fisher:.3} p90={p90:.3} p50={p50:.3} mean={mean:.3}");
+    Ok(())
+}
+
+fn run_bench_latency(
+    from_file: Option<&std::path::Path>,
+    cw_onset_ms: u32,
+    truth: Option<&str>,
+    synth_rate: u32,
+    chunk_ms: u32,
+    stable_n: usize,
+    label: &str,
+    purity: Option<f32>,
+    wide_bins: Option<u8>,
+    no_auto_threshold: bool,
+    force_pitch_hz: f32,
+    json: bool,
+) -> Result<()> {
+    let mut cfg = streaming::DecoderConfig::defaults();
+    if let Some(p) = purity {
+        cfg.min_tone_purity = p;
+    }
+    if let Some(w) = wide_bins {
+        cfg.wide_bin_count = w;
+    }
+    if no_auto_threshold {
+        cfg.auto_threshold = false;
+    }
+    if force_pitch_hz > 0.0 {
+        cfg.force_pitch_hz = Some(force_pitch_hz);
+    }
+
+    let scenarios: Vec<bench_latency::Scenario> = if let Some(path) = from_file {
+        let truth = truth.context(
+            "--truth is required with --from-file (uppercase expected transcript)",
+        )?;
+        let audio = audio::decode_file(path).context("decoding audio file")?;
+        let name = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("from_file")
+            .to_string();
+        vec![bench_latency::Scenario {
+            name,
+            audio,
+            cw_onset_ms,
+            truth: truth.to_string(),
+        }]
+    } else {
+        bench_latency::default_scenarios(synth_rate)
+    };
+
+    println!(
+        "Bench latency: label='{label}'  scenarios={}  chunk_ms={chunk_ms}  stable_n={stable_n}",
+        scenarios.len()
+    );
+    println!(
+        "Config: purity={:.2}  wide_bins={}  auto_threshold={}  force_pitch_hz={}",
+        cfg.min_tone_purity,
+        cfg.wide_bin_count,
+        cfg.auto_threshold,
+        cfg.force_pitch_hz
+            .map(|f| format!("{f:.0}"))
+            .unwrap_or_else(|| "off".into()),
+    );
+
+    let mut results = Vec::with_capacity(scenarios.len());
+    for scen in &scenarios {
+        let r = bench_latency::run_scenario(scen, cfg, chunk_ms, stable_n, label)?;
+        if json {
+            // Compact NDJSON record for off-line comparison/aggregation.
+            let rec = serde_json::json!({
+                "type": "bench_result",
+                "label": r.config_label,
+                "scenario": r.scenario,
+                "cw_onset_ms": r.cw_onset_ms,
+                "stable_n": r.stable_n,
+                "t_first_pitch_update_ms": r.t_first_pitch_update_ms,
+                "t_first_locked_ms": r.t_first_locked_ms,
+                "t_first_char_ms": r.t_first_char_ms,
+                "t_first_correct_char_ms": r.t_first_correct_char_ms,
+                "t_stable_n_correct_ms": r.t_stable_n_correct_ms,
+                "acquisition_latency_ms": r.acquisition_latency_ms(),
+                "false_chars_before_stable": r.false_chars_before_stable,
+                "n_pitch_lost_after_lock": r.n_pitch_lost_after_lock,
+                "n_relock_cycles": r.n_relock_cycles,
+                "lock_uptime_ratio": r.lock_uptime_ratio,
+                "longest_unlocked_gap_ms": r.longest_unlocked_gap_ms,
+                "total_unlocked_ms_after_lock": r.total_unlocked_ms_after_lock,
+                "locked_pitch_hz": r.locked_pitch_hz,
+                "transcript": r.transcript,
+            });
+            println!("{rec}");
+        }
+        results.push(r);
+    }
+    bench_latency::print_results_table(&results);
+    let agg = bench_latency::aggregate(&results);
+    bench_latency::print_aggregate(label, &agg);
     Ok(())
 }
 

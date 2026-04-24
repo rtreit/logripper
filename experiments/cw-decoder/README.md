@@ -36,6 +36,8 @@ Main experiment executable. It currently exposes several surfaces:
   - `play-file` — play an audio file through the default output device and emit JSON progress for the GUI's inline transport
 - **Tone diagnostics**
   - `probe-fisher` — sweep candidate pitches across an audio file and rank them by trial-decode Fisher score
+- **Cold-start + lock-stability benchmark**
+  - `bench-latency` — feed a deterministic synthetic scenario matrix (silence/noise/voice lead-ins + long-clean-CW lock-stability stress) or a real recording (`--from-file --truth --cw-onset-ms`) through the streaming decoder and report two classes of metrics: cold-start *acquisition latency* (time from CW onset to first stable-N-correct decoded run) and *lock stability* once locked (post-first-lock uptime ratio, `PitchLost` count, relock cycles, longest non-Locked gap). Headline metric is `lat_ms = t_stable_N - cw_onset_ms`. Use `--label <name>` and `--json` to collect comparison runs across decoder configurations.
 
 All `--json` and `--record` flags are what the Avalonia GUI uses to drive the engine over stdout/stderr NDJSON.
 
@@ -672,6 +674,29 @@ Probe likely target tones by Fisher score:
 
 ```powershell
 cargo run --release --manifest-path experiments\cw-decoder\Cargo.toml -- probe-fisher data\cw-samples\k5zd-zs4tx-80m-qso.mp3 --min-hz 350 --max-hz 1500 --step-hz 10 --top 8
+```
+
+Run the cold-start + lock-stability benchmark on the synthetic scenario matrix (silence/noise/voice/long-clean-CW lead-ins; latency `lat_ms = t_stable_N - cw_onset_ms`, plus post-lock uptime / drops / relock cycles / longest non-Locked gap):
+
+```powershell
+.\experiments\cw-decoder\target\release\cw-decoder.exe bench-latency
+```
+
+Same benchmark on a real recording (operator supplies CW onset + truth):
+
+```powershell
+.\experiments\cw-decoder\target\release\cw-decoder.exe bench-latency `
+    --from-file data\cw-recordings\live-20260422-220247.wav `
+    --cw-onset-ms 0 `
+    --truth "W7LXN DE WA?FBSA K" `
+    --stable-n 3
+```
+
+Compare two configurations by tagging each run with `--label`. Combine with `--json` to capture machine-readable rows for offline comparison:
+
+```powershell
+.\experiments\cw-decoder\target\release\cw-decoder.exe bench-latency --label baseline    --json > bench-baseline.ndjson
+.\experiments\cw-decoder\target\release\cw-decoder.exe bench-latency --label no-purity   --purity 0 --json > bench-no-purity.ndjson
 ```
 
 List live audio devices and run the legacy TUI:

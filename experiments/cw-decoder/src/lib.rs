@@ -3,6 +3,7 @@
 //! single-target while letting `src/bin/*.rs` reuse the heavy modules.
 
 pub mod audio;
+pub mod bench_latency;
 pub mod decoder;
 pub mod ditdah_streaming;
 pub mod harvest;
