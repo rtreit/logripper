@@ -14,6 +14,7 @@ internal static class Program
     [STAThread]
     public static void Main(string[] args)
     {
+        FrameworkAssemblyResolver.Register();
         GuiPerformanceTrace.Write(nameof(Main) + ".start");
         if (!UxCaptureOptions.TryParse(args, out var options, out var error))
         {
