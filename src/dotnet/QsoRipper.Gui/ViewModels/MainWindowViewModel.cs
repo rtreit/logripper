@@ -567,11 +567,31 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
         IsCwDecoderEnabled = !IsCwDecoderEnabled;
         if (IsCwDecoderEnabled)
         {
+            if (CwDecoderProcessSampleSource.LocateBinary() is null)
+            {
+                IsCwDecoderEnabled = false;
+                CwDecoderStatusText = "CW WPM: decoder not built (see experiments/cw-decoder/README.md)";
+                return;
+            }
+
             EnsureCwSampleSource();
-            _cwSampleSource?.Start(string.IsNullOrWhiteSpace(CwDecoderDeviceOverride)
-                ? null
-                : CwDecoderDeviceOverride.Trim());
-            CwDecoderStatusText = "CW WPM: starting\u2026";
+            try
+            {
+                _cwSampleSource?.Start(string.IsNullOrWhiteSpace(CwDecoderDeviceOverride)
+                    ? null
+                    : CwDecoderDeviceOverride.Trim());
+                CwDecoderStatusText = "CW WPM: starting\u2026";
+            }
+            catch (InvalidOperationException ex)
+            {
+                IsCwDecoderEnabled = false;
+                CwDecoderStatusText = $"CW WPM: {ex.Message}";
+            }
+            catch (System.ComponentModel.Win32Exception ex)
+            {
+                IsCwDecoderEnabled = false;
+                CwDecoderStatusText = $"CW WPM: launch failed ({ex.Message})";
+            }
         }
         else
         {

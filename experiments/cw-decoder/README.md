@@ -17,6 +17,23 @@ Today, the reference path is the causal `ditdah` baseline. The custom streaming 
 > `src\dotnet\QsoRipper.Gui\Services\CwQsoWpmAggregator.cs`, and the toggle in
 > the main window status row. Round 2 will move the decoder behind an
 > engine-side `CwDecodeService` so all clients can consume the same stream.
+>
+> **Fresh-user prerequisites for the GUI toggle to do anything:**
+>
+> 1. Build the decoder once: from `experiments\cw-decoder\` run
+>    `cargo build --release` (this folder is a stand-alone Cargo workspace and
+>    is **not** built by the main `cargo build` in `src\rust\`). Built outputs
+>    land in `experiments\cw-decoder\target\release\cw-decoder.exe`.
+> 2. Either leave the binary at that default location (the GUI walks up from
+>    its base directory looking for it) or set the `CW_DECODER_EXE` env var to
+>    an absolute path.
+> 3. Allow the application access to a capture device. The decoder uses the
+>    OS default capture device unless an override string is supplied.
+>
+> If the binary cannot be found, the toggle silently flips back off and the
+> status row reports `CW WPM: decoder not built`. If the binary is found but
+> launching fails (e.g. cpal cannot open the capture device), the status row
+> reports the underlying error and the toggle flips off.
 
 ## Current architecture
 
