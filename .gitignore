@@ -76,3 +76,13 @@ compile_commands.json
 
 # Stress test reports
 stress-report.html
+
+# Experimental audio test artifacts
+*.mp3
+*.wav
+
+
+# cw-decoder stress-test generated audio (large, regenerable via stress-gen.ps1)
+data/cw-stress/
+experiments/cw-decoder/bench-runs/
+data/cw-recordings/

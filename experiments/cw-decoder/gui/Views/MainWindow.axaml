@@ -1,0 +1,1008 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="clr-namespace:CwDecoderGui.ViewModels"
+        xmlns:m="clr-namespace:CwDecoderGui.Models"
+        xmlns:v="clr-namespace:CwDecoderGui.Views"
+        x:Class="CwDecoderGui.Views.MainWindow"
+        x:DataType="vm:MainWindowViewModel"
+        Title="CW SCOPE"
+        Width="1180" Height="780"
+        MinWidth="900" MinHeight="640"
+        Background="{StaticResource BgDeep}"
+        Foreground="{StaticResource TextHi}"
+        FontFamily="Inter">
+
+  <Window.Resources>
+    <v:IsWordCellConverter x:Key="IsWordCell" />
+    <v:IsCharCellConverter x:Key="IsCharCell" />
+    <v:KeyingBrushConverter x:Key="KeyingBrush" />
+    <v:KeyingTextConverter x:Key="KeyingText" />
+    <v:BoolToBlurEffectConverter x:Key="BlurFx" />
+  </Window.Resources>
+
+  <Window.Styles>
+    <Style Selector="TextBlock.label">
+      <Setter Property="FontFamily" Value="Consolas" />
+      <Setter Property="FontSize" Value="11" />
+      <Setter Property="Foreground" Value="{StaticResource TextDim}" />
+      <Setter Property="LetterSpacing" Value="2" />
+    </Style>
+    <Style Selector="TextBlock.value">
+      <Setter Property="FontFamily" Value="Consolas" />
+      <Setter Property="FontSize" Value="22" />
+      <Setter Property="Foreground" Value="{StaticResource AccentCyan}" />
+    </Style>
+    <Style Selector="Border.panel">
+      <Setter Property="Background" Value="{StaticResource BgPanel}" />
+      <Setter Property="BorderBrush" Value="{StaticResource GridLine}" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="CornerRadius" Value="4" />
+      <Setter Property="Padding" Value="14,10" />
+    </Style>
+    <Style Selector="Button.primary">
+      <Setter Property="Background" Value="#0E2A3D" />
+      <Setter Property="Foreground" Value="{StaticResource AccentCyan}" />
+      <Setter Property="BorderBrush" Value="{StaticResource AccentCyan}" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="CornerRadius" Value="2" />
+      <Setter Property="Padding" Value="22,8" />
+      <Setter Property="FontFamily" Value="Consolas" />
+      <Setter Property="FontSize" Value="14" />
+    </Style>
+    <Style Selector="Button.primary:pointerover /template/ ContentPresenter">
+      <Setter Property="Background" Value="#173A52" />
+    </Style>
+    <Style Selector="ToggleButton.primary">
+      <Setter Property="Background" Value="#0E2A3D" />
+      <Setter Property="Foreground" Value="{StaticResource TextHi}" />
+      <Setter Property="BorderBrush" Value="{StaticResource GridLine}" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="CornerRadius" Value="2" />
+      <Setter Property="Padding" Value="14,6" />
+      <Setter Property="FontFamily" Value="Consolas" />
+      <Setter Property="FontSize" Value="11" />
+    </Style>
+    <Style Selector="ToggleButton.primary:checked">
+      <Setter Property="Background" Value="#3A1F0E" />
+      <Setter Property="BorderBrush" Value="{StaticResource AccentAmber}" />
+      <Setter Property="Foreground" Value="{StaticResource AccentAmber}" />
+    </Style>
+  </Window.Styles>
+
+  <Grid RowDefinitions="Auto,Auto,Auto,Auto,Auto,*,Auto">
+    <!-- Header -->
+    <Border Grid.Row="0" Padding="18,14" Background="{StaticResource BgPanel}" BorderBrush="{StaticResource EdgeGlow}" BorderThickness="0,0,0,1">
+      <Grid ColumnDefinitions="Auto,*,Auto">
+        <StackPanel Orientation="Horizontal" Spacing="14" VerticalAlignment="Center">
+          <TextBlock Text="CW" FontFamily="Consolas" FontSize="22" Foreground="{StaticResource AccentCyan}" LetterSpacing="6" />
+          <TextBlock Text="SCOPE" FontFamily="Consolas" FontSize="22" Foreground="{StaticResource TextHi}" LetterSpacing="6" />
+          <Border Width="1" Background="{StaticResource GridLine}" Height="22" Margin="6,0" />
+          <TextBlock Text="streaming morse decoder · ditdah-core" FontFamily="Consolas" FontSize="11"
+                     Foreground="{StaticResource TextDim}" VerticalAlignment="Center" LetterSpacing="2" />
+        </StackPanel>
+        <TextBlock Grid.Column="2" Text="{Binding SourceLabel}" FontFamily="Consolas" FontSize="11"
+                   Foreground="{StaticResource AccentLime}" LetterSpacing="2" VerticalAlignment="Center" />
+      </Grid>
+    </Border>
+
+    <!-- Controls -->
+    <Border Grid.Row="1" Padding="18,12" Background="{StaticResource BgDeep}" BorderBrush="{StaticResource GridLine}" BorderThickness="0,0,0,1">
+      <Grid ColumnDefinitions="Auto,Auto,*,Auto,Auto,Auto,Auto,Auto,Auto" ColumnSpacing="12">
+        <StackPanel Orientation="Vertical" Spacing="2">
+          <TextBlock Text="{Binding DeviceListLabel}" Classes="label" />
+          <ComboBox Width="320" ItemsSource="{Binding Devices}" SelectedItem="{Binding SelectedDevice}"
+                    Background="{StaticResource BgPanel}" Foreground="{StaticResource TextHi}" />
+          <CheckBox Content="LOOPBACK (capture from output)" IsChecked="{Binding UseLoopback, Mode=TwoWay}"
+                    Foreground="{StaticResource TextHi}"
+                    ToolTip.Tip="Capture from a system OUTPUT device in WASAPI loopback mode instead of a microphone. Bypasses speaker→room→mic — recommended for decoding files / YouTube being played on this machine." />
+        </StackPanel>
+        <StackPanel Grid.Column="1" Orientation="Vertical" Spacing="2">
+          <TextBlock Text="DECODER MODE" Classes="label" />
+          <ComboBox Width="180" ItemsSource="{Binding DecoderModes}" SelectedItem="{Binding SelectedDecoderMode}"
+                    Background="{StaticResource BgPanel}" Foreground="{StaticResource TextHi}" />
+        </StackPanel>
+        <StackPanel Grid.Column="2" Margin="0,16,0,0" Spacing="2" VerticalAlignment="Center">
+          <TextBlock Text="OPEN FILE decodes that file immediately. START LIVE captures from the selected input device." Classes="label" TextWrapping="Wrap" MaxWidth="360" />
+          <TextBlock Text="{Binding SourceLabel}" Classes="label" Foreground="{StaticResource AccentCyan}" TextWrapping="Wrap" />
+        </StackPanel>
+        <Button Grid.Column="3" x:Name="RefreshButton" Margin="0,16,0,0" Classes="primary" Content="REFRESH" Click="OnRefreshClick" />
+        <Button Grid.Column="4" x:Name="OpenFileButton" Margin="0,16,0,0" Classes="primary" Content="DECODE FILE…" Click="OnOpenFileClick"
+                ToolTip.Tip="Choose an audio file and start decoding that file." />
+        <ToggleButton Grid.Column="5" Margin="0,16,0,0" Classes="primary" IsChecked="{Binding HideDecoded, Mode=TwoWay}" Content="HIDE DECODING" />
+        <ToggleButton Grid.Column="6" Margin="0,16,0,0" Classes="primary" IsChecked="{Binding ShowCharacterToneOverlay, Mode=TwoWay}" Content="SHOW CHAR HZ" />
+        <Button Grid.Column="7" x:Name="ReplayButton" Margin="0,16,0,0" Classes="primary"
+                Content="REPLAY &amp; SCORE" Click="OnReplayClick" MinWidth="140"
+                IsEnabled="{Binding HasLastRecording}"
+                ToolTip.Tip="Re-decode the last opened file or live recording offline and compare it to the transcript." />
+        <Button Grid.Column="8" x:Name="StartStopButton" Margin="0,16,0,0" Classes="primary"
+                Content="{Binding StartStopLabel}" Click="OnStartStopClick" MinWidth="120"
+                ToolTip.Tip="Start or stop live decoding from the selected input device." />
+      </Grid>
+    </Border>
+
+    <!-- Sensitivity panel: 3 sliders + signal-quality readout + reset.
+          Sends config-update commands to the decoder over stdin in real time. -->
+    <Border Grid.Row="2" Padding="18,10" Background="{StaticResource BgPanel}"
+            BorderBrush="{StaticResource GridLine}" BorderThickness="0,0,0,1">
+      <Grid>
+        <StackPanel IsVisible="{Binding IsCustomDecoderMode}" Spacing="8">
+          <Grid ColumnDefinitions="Auto,*,Auto,*,Auto,*,Auto,Auto">
+            <TextBlock Text="SENS" Classes="label" VerticalAlignment="Center" Margin="0,0,8,0" />
+
+            <StackPanel Grid.Column="1" Spacing="2" Margin="4,0,16,0">
+              <Grid ColumnDefinitions="Auto,*,Auto" MinHeight="22">
+                <TextBlock Text="MIN SNR" Classes="label" />
+                <TextBlock Grid.Column="2" Text="{Binding MinSnrDb, StringFormat={}{0:F1} dB}" Classes="label" Foreground="{StaticResource AccentLime}" />
+              </Grid>
+              <Slider Minimum="0" Maximum="15" SmallChange="0.5" LargeChange="2"
+                      TickFrequency="3" IsSnapToTickEnabled="False"
+                      Value="{Binding MinSnrDb, Mode=TwoWay}" />
+            </StackPanel>
+
+            <TextBlock Grid.Column="2" Text="·" Foreground="{StaticResource GridLine}" VerticalAlignment="Center" />
+
+            <StackPanel Grid.Column="3" Spacing="2" Margin="4,0,16,0">
+              <Grid ColumnDefinitions="Auto,*,Auto" MinHeight="22">
+                <TextBlock Text="PITCH LOCK" Classes="label" />
+                <TextBlock Grid.Column="2" Text="{Binding PitchMinSnrDb, StringFormat={}{0:F1} dB}" Classes="label" Foreground="{StaticResource AccentLime}" />
+              </Grid>
+              <Slider Minimum="0" Maximum="20" SmallChange="0.5" LargeChange="2"
+                      TickFrequency="4" Value="{Binding PitchMinSnrDb, Mode=TwoWay}" />
+            </StackPanel>
+
+            <TextBlock Grid.Column="4" Text="·" Foreground="{StaticResource GridLine}" VerticalAlignment="Center" />
+
+            <StackPanel Grid.Column="5" Spacing="2" Margin="4,0,16,0">
+              <Grid ColumnDefinitions="Auto,*,Auto,Auto" MinHeight="22">
+                <TextBlock Text="THRESHOLD ×" Classes="label" />
+                <CheckBox Grid.Column="2" Content="AUTO" Margin="0,0,8,0" Padding="2,0,0,0"
+                           FontFamily="Consolas" FontSize="10"
+                           Foreground="{StaticResource AccentLime}"
+                           VerticalAlignment="Center"
+                           IsChecked="{Binding AutoThreshold, Mode=TwoWay}"
+                           ToolTip.Tip="Auto-tune threshold from running SNR margin (follows QSB)" />
+                <TextBlock Grid.Column="3" Text="{Binding ThresholdScale, StringFormat={}{0:F2}}" Classes="label" Foreground="{StaticResource AccentLime}" />
+              </Grid>
+              <Slider Minimum="0.3" Maximum="2.0" SmallChange="0.05" LargeChange="0.2"
+                      TickFrequency="0.5" Value="{Binding ThresholdScale, Mode=TwoWay}"
+                      IsEnabled="{Binding !AutoThreshold}" />
+            </StackPanel>
+
+            <Border Grid.Column="6" Width="110" Padding="10,4" Margin="0,0,12,0" VerticalAlignment="Center"
+                    Background="#0E2A3D" BorderBrush="{StaticResource AccentCyan}" BorderThickness="1" CornerRadius="2">
+              <TextBlock Text="{Binding SignalQualityLabel}" FontFamily="Consolas" FontSize="13"
+                         Foreground="{StaticResource AccentCyan}" LetterSpacing="3"
+                         HorizontalAlignment="Center" TextAlignment="Center" />
+            </Border>
+
+            <Button Grid.Column="7" Classes="primary" Content="RESET" Click="OnResetSensitivityClick"
+                    FontSize="11" Padding="14,4" />
+          </Grid>
+
+          <Grid ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,*" ColumnSpacing="10">
+            <TextBlock Text="EXPERIMENT" Classes="label" VerticalAlignment="Center" />
+            <CheckBox Grid.Column="1" Content="RANGE LOCK" IsChecked="{Binding ExperimentalRangeLock, Mode=TwoWay}"
+                      VerticalAlignment="Center"
+                      ToolTip.Tip="Keep pitch hunting inside the selected Hz band and relock faster there." />
+            <StackPanel Grid.Column="2" Spacing="2">
+              <TextBlock Text="MIN Hz" Classes="label" />
+              <NumericUpDown Minimum="200" Maximum="1200" Increment="10" Value="{Binding RangeLockMinHz, Mode=TwoWay}" />
+            </StackPanel>
+            <StackPanel Grid.Column="3" Spacing="2">
+              <TextBlock Text="MAX Hz" Classes="label" />
+              <NumericUpDown Minimum="200" Maximum="1200" Increment="10" Value="{Binding RangeLockMaxHz, Mode=TwoWay}" />
+            </StackPanel>
+            <StackPanel Grid.Column="4" Spacing="2"
+                        ToolTip.Tip="Adjacent-bin tone purity (target / max(±60/120 Hz)). Real CW scores 5-20+; broadband impulses (finger snaps, key clicks) score ~1 and are rejected. Set to 0 to disable.">
+              <TextBlock Text="MIN PURITY" Classes="label" />
+              <NumericUpDown Minimum="0" Maximum="20" Increment="0.5" Value="{Binding MinTonePurity, Mode=TwoWay}" />
+            </StackPanel>
+            <CheckBox Grid.Column="5" Content="SHOW PURITY" IsChecked="{Binding ShowCharPurity, Mode=TwoWay}"
+                      VerticalAlignment="Center"
+                      ToolTip.Tip="Show the per-character tone-purity ratio in the transcript debug overlay." />
+            <TextBlock Grid.Column="6" Text="{Binding RangeLockSummary}" Classes="label" TextWrapping="Wrap" VerticalAlignment="Center" />
+          </Grid>
+
+          <Grid ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,*" ColumnSpacing="10">
+            <TextBlock Text="ACQUISITION" Classes="label" VerticalAlignment="Center" />
+            <StackPanel Grid.Column="1" Spacing="2"
+                        ToolTip.Tip="Force the streaming decoder to lock to this exact pitch in Hz instead of running auto-acquisition. 0 = auto. Useful when you know the target tone or when speaker→mic round-trip distorts pitch acquisition.">
+              <TextBlock Text="FORCE PITCH (Hz)" Classes="label" />
+              <NumericUpDown Minimum="0" Maximum="1500" Increment="10" Value="{Binding ForcePitchHz, Mode=TwoWay}" />
+            </StackPanel>
+            <StackPanel Grid.Column="2" Spacing="2"
+                        ToolTip.Tip="Wide-bin sniff: side bins per side added to the target Goertzel. 0 = single 40 Hz bin. N=2 ≈ 200 Hz of bandwidth — recovers signals smeared across many bins (e.g. acoustically re-captured CW from speakers).">
+              <TextBlock Text="WIDE BINS" Classes="label" />
+              <NumericUpDown Minimum="0" Maximum="8" Increment="1" Value="{Binding WideBinCount, Mode=TwoWay}" />
+            </StackPanel>
+            <StackPanel Grid.Column="3" Spacing="2"
+                        ToolTip.Tip="Drop on-runs shorter than this fraction of one estimated dot length. 0 disables. 0.3 is a good mic-mode value to suppress constant-noise ghost characters in silent stretches without killing real fast-keyed dits.">
+              <TextBlock Text="MIN PULSE (×dot)" Classes="label" />
+              <NumericUpDown Minimum="0" Maximum="1" Increment="0.05" Value="{Binding MinPulseDotFraction, Mode=TwoWay}" FormatString="0.00" />
+            </StackPanel>
+            <StackPanel Grid.Column="4" Spacing="2"
+                        ToolTip.Tip="Bridge off-runs shorter than this fraction of one estimated dot length. 0 disables. 0.3 stops a real dah from being fragmented when a noisy mic envelope chatters around threshold mid-key-down. Twin of MIN PULSE.">
+              <TextBlock Text="MIN GAP (×dot)" Classes="label" />
+              <NumericUpDown Minimum="0" Maximum="1" Increment="0.05" Value="{Binding MinGapDotFraction, Mode=TwoWay}" FormatString="0.00" />
+            </StackPanel>
+            <Button Grid.Column="5" Classes="primary" Content="MIC MODE" Click="OnMicModePresetClick"
+                    Margin="8,16,0,0" VerticalAlignment="Bottom"
+                    ToolTip.Tip="Apply the acoustic-capture preset: WIDE BINS=3, MIN PURITY=1.5, MIN PULSE=0.3, MIN GAP=0.3. Use when decoding speaker→mic re-captured CW." />
+            <Button Grid.Column="6" Classes="primary" Content="RADIO MODE" Click="OnRadioModePresetClick"
+                    Margin="8,16,0,0" VerticalAlignment="Bottom"
+                    ToolTip.Tip="Restore labeled-corpus defaults: narrow Goertzel, strict purity gate, no pulse/gap filtering." />
+          </Grid>
+        </StackPanel>
+
+        <Grid ColumnDefinitions="Auto,*" ColumnSpacing="12" IsVisible="{Binding IsBaselineDecoderMode}">
+          <TextBlock Text="BASELINE" Classes="label" VerticalAlignment="Center" />
+          <StackPanel Grid.Column="1" Spacing="4">
+            <TextBlock Text="{Binding BaselineDecoderSummary}" Foreground="{StaticResource AccentCyan}" TextWrapping="Wrap" />
+            <TextBlock Text="Run sweeps on the Tuning tab, click APPLY TOP RESULT, then use Baseline ditdah mode here for file or live A/B testing." Classes="label" TextWrapping="Wrap" />
+          </StackPanel>
+        </Grid>
+      </Grid>
+    </Border>
+
+    <!-- Telemetry row: signal meter + WPM panel + sparkline -->
+    <Grid Grid.Row="3" ColumnDefinitions="*,*" Margin="14,12,14,0" >
+      <!-- Signal strength column -->
+      <Border Classes="panel" Margin="0,0,7,0">
+        <Grid RowDefinitions="Auto,Auto,Auto" RowSpacing="10">
+          <!-- Header: section title + pitch -->
+          <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="8">
+            <TextBlock Text="SIGNAL STRENGTH" Classes="label" />
+            <TextBlock Grid.Column="1" Text="CURRENT TONE" Classes="label" VerticalAlignment="Center" />
+            <TextBlock Grid.Column="2" Text="{Binding CurrentToneHzDisplay}"
+                       Classes="value" Foreground="{StaticResource AccentLime}" />
+          </Grid>
+
+          <!-- Numeric readouts (above the bar so they never collide) -->
+          <Grid Grid.Row="1" ColumnDefinitions="*,*,*,*">
+            <StackPanel Spacing="2">
+              <TextBlock Text="POWER" Classes="label" />
+              <TextBlock Text="{Binding Power, StringFormat={}{0:E2}}" Classes="value" FontSize="14" Foreground="{StaticResource TextHi}" />
+            </StackPanel>
+            <StackPanel Grid.Column="1" Spacing="2">
+              <TextBlock Text="THRESHOLD" Classes="label" />
+              <TextBlock Text="{Binding Threshold, StringFormat={}{0:E2}}" Classes="value" FontSize="14" Foreground="{StaticResource AccentAmber}" />
+            </StackPanel>
+            <StackPanel Grid.Column="2" Spacing="2">
+              <TextBlock Text="SNR" Classes="label" />
+              <TextBlock Text="{Binding SnrDb, StringFormat={}{0:F1} dB}" Classes="value" FontSize="14" Foreground="{StaticResource AccentLime}" />
+            </StackPanel>
+            <StackPanel Grid.Column="3" Spacing="2">
+              <TextBlock Text="KEYING" Classes="label" />
+              <StackPanel Orientation="Horizontal" Spacing="8">
+                <Ellipse Width="14" Height="14" Fill="{Binding Signal, Converter={StaticResource KeyingBrush}}" VerticalAlignment="Center" />
+                <TextBlock Text="{Binding Signal, Converter={StaticResource KeyingText}}" Classes="value" FontSize="14"
+                           Foreground="{Binding Signal, Converter={StaticResource KeyingBrush}}" />
+              </StackPanel>
+            </StackPanel>
+          </Grid>
+
+          <!-- The meter (composed from native shapes — guaranteed to render) -->
+          <Grid Grid.Row="2" Height="48" HorizontalAlignment="Stretch">
+            <!-- Background -->
+            <Border Background="#0A121B" BorderBrush="#22364E" BorderThickness="1" CornerRadius="2" />
+            <!-- Tick grid -->
+            <UniformGrid Columns="10" Margin="1">
+              <Rectangle Fill="#1A2B40" Width="1" HorizontalAlignment="Right" />
+              <Rectangle Fill="#1A2B40" Width="1" HorizontalAlignment="Right" />
+              <Rectangle Fill="#1A2B40" Width="1" HorizontalAlignment="Right" />
+              <Rectangle Fill="#1A2B40" Width="1" HorizontalAlignment="Right" />
+              <Rectangle Fill="#1A2B40" Width="1" HorizontalAlignment="Right" />
+              <Rectangle Fill="#1A2B40" Width="1" HorizontalAlignment="Right" />
+              <Rectangle Fill="#1A2B40" Width="1" HorizontalAlignment="Right" />
+              <Rectangle Fill="#1A2B40" Width="1" HorizontalAlignment="Right" />
+              <Rectangle Fill="#1A2B40" Width="1" HorizontalAlignment="Right" />
+              <Rectangle Width="1" />
+            </UniformGrid>
+            <!-- The bar itself: a ProgressBar gives us reliable level-driven width -->
+            <ProgressBar Minimum="0" Maximum="1" Value="{Binding NormalizedLevel}"
+                         Background="Transparent" BorderThickness="0"
+                         Margin="2" Height="44">
+              <ProgressBar.Foreground>
+                <LinearGradientBrush StartPoint="0%,50%" EndPoint="100%,50%">
+                  <GradientStop Color="#10A0C8" Offset="0.0" />
+                  <GradientStop Color="#22D3EE" Offset="0.5" />
+                  <GradientStop Color="#84FF6E" Offset="1.0" />
+                </LinearGradientBrush>
+              </ProgressBar.Foreground>
+            </ProgressBar>
+            <!-- Magenta keying stripe across the top when above threshold -->
+            <Border Height="3" VerticalAlignment="Top" Margin="2,2,2,0"
+                    Background="{StaticResource AccentMag}"
+                    IsVisible="{Binding Signal}" />
+          </Grid>
+        </Grid>
+      </Border>
+      <!-- WPM column -->
+      <Border Grid.Column="1" Classes="panel" Margin="7,0,0,0">
+        <Grid ColumnDefinitions="Auto,*">
+          <StackPanel Orientation="Vertical" Width="140" Spacing="0">
+            <TextBlock Text="WORDS / MINUTE" Classes="label" />
+            <TextBlock Text="{Binding Wpm, StringFormat={}{0:F1}}"
+                       FontFamily="Consolas" FontSize="64" FontWeight="Bold"
+                       Foreground="{StaticResource AccentCyan}" />
+            <TextBlock Text="rolling avg" Classes="label" />
+          </StackPanel>
+          <v:WpmSparkline Grid.Column="1" Margin="14,0,0,0"
+                          Values="{Binding WpmHistory}" Current="{Binding Wpm}" />
+        </Grid>
+      </Border>
+    </Grid>
+
+    <!-- Transcript + review surfaces -->
+    <Border Grid.Row="4" Margin="14,12,14,0" Classes="panel"
+            IsVisible="{Binding HasPlaybackSource}">
+      <Grid RowDefinitions="Auto,Auto,Auto,Auto" RowSpacing="8">
+        <Grid ColumnDefinitions="Auto,Auto,*,Auto,Auto,Auto,Auto,Auto,Auto" ColumnSpacing="10">
+          <TextBlock Text="AUDIO" Classes="label" VerticalAlignment="Center" />
+          <TextBlock Grid.Column="1" Text="{Binding PlaybackSourceLabel}" FontFamily="Consolas"
+                     Foreground="{StaticResource AccentAmber}" VerticalAlignment="Center" />
+          <TextBlock Grid.Column="2" Text="{Binding PlaybackSourceDisplay}" FontFamily="Consolas"
+                     Foreground="{StaticResource AccentCyan}" VerticalAlignment="Center" />
+          <TextBlock Grid.Column="3" Text="CURRENT TONE" Classes="label" VerticalAlignment="Center" />
+          <TextBlock Grid.Column="4" Text="{Binding CurrentToneHzDisplay}" FontFamily="Consolas"
+                     Foreground="{StaticResource AccentLime}" VerticalAlignment="Center" />
+          <Button Grid.Column="5" Classes="primary" Content="PLAY AUDIO" Click="OnStartPlaybackClick"
+                  IsEnabled="{Binding CanStartPlayback}" FontSize="11" Padding="14,4" />
+          <Button Grid.Column="6" Classes="primary" Content="{Binding PauseResumeLabel}" Click="OnPauseResumeClick"
+                  IsEnabled="{Binding CanStopPlayback}" FontSize="11" Padding="14,4" />
+          <Button Grid.Column="7" Classes="primary" Content="STOP AUDIO" Click="OnStopPlaybackClick"
+                  IsEnabled="{Binding CanStopPlayback}" FontSize="11" Padding="14,4" />
+          <Button Grid.Column="8" Classes="primary" Content="✕ CLOSE" Click="OnClosePlaybackClick"
+                  ToolTip.Tip="Close audio preview panel" FontSize="11" Padding="14,4" />
+        </Grid>
+        <Grid Grid.Row="1" ColumnDefinitions="Auto,*,Auto" ColumnSpacing="10">
+          <TextBlock Text="{Binding PlaybackPositionDisplay}" FontFamily="Consolas"
+                     Foreground="{StaticResource AccentLime}" VerticalAlignment="Center" />
+          <Slider x:Name="PlaybackScrubSlider"
+                  Grid.Column="1" Minimum="0"
+                  Maximum="{Binding PlaybackDurationSeconds}"
+                  Value="{Binding PlaybackPositionSeconds, Mode=TwoWay}"
+                  IsEnabled="{Binding CanStopPlayback}"
+                  VerticalAlignment="Center" />
+          <TextBlock Grid.Column="2" Text="{Binding PlaybackDurationDisplay}" FontFamily="Consolas"
+                     Foreground="{StaticResource AccentLime}" VerticalAlignment="Center" />
+        </Grid>
+        <Grid Grid.Row="2" RowDefinitions="Auto,*" RowSpacing="6">
+          <TextBlock Text="{Binding PlaybackStatusText}" Classes="label" TextWrapping="Wrap" />
+          <v:PlaybackSignalView Grid.Row="1"
+                                Height="128"
+                                Points="{Binding PlaybackProfile.Points}"
+                                DisplayStartSeconds="{Binding PlaybackProfile.DisplayStartSeconds}"
+                                DisplayEndSeconds="{Binding PlaybackProfile.DisplayEndSeconds}"
+                                Threshold="{Binding PlaybackProfile.Threshold}"
+                                PlayheadSeconds="{Binding PlaybackPositionSeconds}" />
+        </Grid>
+        <!-- Region trim (decode-and-play): skip leading talking, focus on a slice -->
+        <Grid Grid.Row="3" ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,*" ColumnSpacing="10">
+          <CheckBox Content="USE REGION" IsChecked="{Binding UseRegion, Mode=TwoWay}" VerticalAlignment="Center" />
+          <TextBlock Grid.Column="1" Text="START (s)" Classes="label" VerticalAlignment="Center" />
+          <NumericUpDown Grid.Column="2" Width="110"
+                         Minimum="0"
+                         Maximum="{Binding FileDurationSeconds}"
+                         Increment="0.5"
+                         Value="{Binding RegionStartSeconds, Mode=TwoWay}"
+                         FormatString="0.00" />
+          <TextBlock Grid.Column="3" Text="END (s)" Classes="label" VerticalAlignment="Center" />
+          <NumericUpDown Grid.Column="4" Width="110"
+                         Minimum="0"
+                         Maximum="{Binding FileDurationSeconds}"
+                         Increment="0.5"
+                         Value="{Binding RegionEndSeconds, Mode=TwoWay}"
+                         FormatString="0.00" />
+          <Button Grid.Column="5" Classes="primary" Content="APPLY REGION" Click="OnApplyRegionClick"
+                  IsEnabled="{Binding CanStopPlayback}" FontSize="11" Padding="14,4" />
+          <TextBlock Grid.Column="6" Text="{Binding EffectiveRegionLabel}" Classes="label"
+                     VerticalAlignment="Center" Margin="10,0,0,0" />
+        </Grid>
+      </Grid>
+    </Border>
+
+    <TabControl Grid.Row="5" Margin="14,12,14,4">
+      <TabItem Header="DECODE">
+        <Border Classes="panel">
+          <Grid RowDefinitions="Auto,*,Auto">
+            <Grid ColumnDefinitions="*,Auto">
+              <TextBlock Text="DECODED MESSAGE" Classes="label" />
+              <TextBlock Grid.Column="1" Text="morse always visible · letters blur with HIDE DECODING" Classes="label" />
+            </Grid>
+            <ScrollViewer Grid.Row="1" Margin="0,8,0,0" HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+              <ItemsControl ItemsSource="{Binding Cells}" x:Name="CellsHost">
+                <ItemsControl.ItemsPanel>
+                  <ItemsPanelTemplate>
+                    <WrapPanel Orientation="Horizontal" />
+                  </ItemsPanelTemplate>
+                </ItemsControl.ItemsPanel>
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate DataType="m:TranscriptCell">
+                    <Grid>
+                      <Border Margin="2,2" Padding="6,2" Background="#0C1A28" BorderBrush="{StaticResource GridLine}" BorderThickness="1" CornerRadius="2"
+                              IsVisible="{Binding ., Converter={StaticResource IsCharCell}}">
+                        <StackPanel Orientation="Vertical" HorizontalAlignment="Center" MinWidth="32">
+                          <TextBlock Text="{Binding Morse}"
+                                     FontFamily="Consolas" FontSize="14"
+                                     Foreground="{StaticResource AccentAmber}"
+                                     HorizontalAlignment="Center" />
+                          <TextBlock Text="{Binding ToneDisplay}"
+                                     FontFamily="Consolas" FontSize="10"
+                                     Foreground="{StaticResource TextDim}"
+                                     HorizontalAlignment="Center"
+                                     IsVisible="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).ShowCharacterToneOverlay}" />
+                          <TextBlock Text="{Binding PurityDisplay}"
+                                     FontFamily="Consolas" FontSize="10"
+                                     Foreground="{StaticResource TextDim}"
+                                     HorizontalAlignment="Center"
+                                     IsVisible="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).ShowCharPurity}" />
+                          <TextBlock Text="{Binding Letter}"
+                                     FontFamily="Consolas" FontSize="32"
+                                     FontWeight="Bold"
+                                     Foreground="{StaticResource AccentCyan}"
+                                     HorizontalAlignment="Center"
+                                     x:Name="LetterText"
+                                     Effect="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).HideDecoded, Converter={StaticResource BlurFx}}" />
+                        </StackPanel>
+                      </Border>
+                      <Border Margin="6,2" Width="20" Height="56"
+                              IsVisible="{Binding ., Converter={StaticResource IsWordCell}}">
+                        <Rectangle Width="3" Height="44" Fill="{StaticResource AccentLime}"
+                                   Opacity="0.85"
+                                   HorizontalAlignment="Center" VerticalAlignment="Center"
+                                   RadiusX="1" RadiusY="1" />
+                      </Border>
+                    </Grid>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+            </ScrollViewer>
+            <Border Grid.Row="2" Margin="0,8,0,0" Padding="10,8"
+                    Background="{StaticResource BgDeep}"
+                    BorderBrush="{StaticResource GridLine}" BorderThickness="1"
+                    IsVisible="{Binding HasLastRecording}">
+              <Grid RowDefinitions="Auto,Auto,Auto" RowSpacing="6">
+                <Grid ColumnDefinitions="Auto,*" ColumnSpacing="12">
+                  <TextBlock Text="LAST SOURCE:" Classes="label" VerticalAlignment="Center" />
+                  <TextBlock Grid.Column="1" Text="{Binding LastRecordingDisplay}"
+                             FontFamily="Consolas" FontSize="12"
+                             Foreground="{StaticResource AccentCyan}" VerticalAlignment="Center" />
+                </Grid>
+                <Grid Grid.Row="1" ColumnDefinitions="Auto,*" ColumnSpacing="12">
+                  <Border Padding="14,8" CornerRadius="4"
+                          Background="{Binding ReplayCerBackground}"
+                          BorderBrush="{Binding ReplayCerForeground}" BorderThickness="2"
+                          IsVisible="{Binding HasReplayCer}">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                      <TextBlock Text="CER" FontFamily="Consolas" FontSize="11"
+                                 Foreground="{Binding ReplayCerForeground}" VerticalAlignment="Center" />
+                      <TextBlock Text="{Binding ReplayCerDisplay}" FontFamily="Consolas"
+                                 FontSize="22" FontWeight="Bold"
+                                 Foreground="{Binding ReplayCerForeground}" VerticalAlignment="Center" />
+                      <TextBlock Text="{Binding ReplayGradeLabel}" FontFamily="Consolas" FontSize="11"
+                                 Foreground="{Binding ReplayCerForeground}" VerticalAlignment="Center" />
+                    </StackPanel>
+                  </Border>
+                  <TextBlock Grid.Column="1" Text="{Binding ReplayStatus}"
+                             FontFamily="Consolas" FontSize="12"
+                             Foreground="{StaticResource AccentLime}"
+                             VerticalAlignment="Center"
+                             TextWrapping="Wrap"
+                             IsVisible="{Binding ReplayStatus, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                </Grid>
+                <Grid Grid.Row="2" ColumnDefinitions="*,*" ColumnSpacing="10"
+                      IsVisible="{Binding ReplayTranscript, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                  <Border Padding="8,6" Background="#0C1A28" BorderBrush="{StaticResource GridLine}" BorderThickness="1">
+                    <StackPanel>
+                      <TextBlock Text="LIVE TRANSCRIPT" Classes="label" Foreground="{StaticResource AccentAmber}" />
+                      <SelectableTextBlock Text="{Binding LiveTranscriptDisplay}"
+                                           FontFamily="Consolas" FontSize="12"
+                                           Foreground="{StaticResource TextHi}"
+                                           TextWrapping="Wrap" />
+                    </StackPanel>
+                  </Border>
+                  <Border Grid.Column="1" Padding="8,6" Background="#0C1A28" BorderBrush="{StaticResource GridLine}" BorderThickness="1">
+                    <StackPanel>
+                      <TextBlock Text="{Binding ReplayDecoderLabel}" Classes="label" Foreground="{StaticResource AccentCyan}" />
+                      <SelectableTextBlock Text="{Binding ReplayTranscript}"
+                                           FontFamily="Consolas" FontSize="12"
+                                           Foreground="{StaticResource TextHi}"
+                                           TextWrapping="Wrap" />
+                    </StackPanel>
+                  </Border>
+                </Grid>
+              </Grid>
+            </Border>
+          </Grid>
+        </Border>
+      </TabItem>
+      <TabItem Header="LABELING">
+        <Border Classes="panel">
+          <Grid RowDefinitions="Auto,Auto,Auto,*,Auto" RowSpacing="10">
+            <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="10">
+              <StackPanel Spacing="2">
+                <TextBlock Text="AUDIO FILE" Classes="label" />
+                <TextBox Text="{Binding HarvestFilePath}" IsReadOnly="True"
+                          Background="#0C1A28" Foreground="{StaticResource TextHi}" />
+              </StackPanel>
+              <Button Grid.Column="1" Classes="primary" Content="PICK AUDIO…" Click="OnOpenHarvestFileClick" Margin="0,16,0,0" />
+              <Button Grid.Column="2" Classes="primary" Content="HARVEST" Click="OnHarvestClick" Margin="0,16,0,0"
+                      IsEnabled="{Binding CanHarvestCandidates}" />
+            </Grid>
+
+            <Grid Grid.Row="1" ColumnDefinitions="2*,Auto,Auto,Auto,Auto" ColumnSpacing="10">
+              <StackPanel Spacing="2">
+                <TextBlock Text="ANCHOR NEEDLES" Classes="label" />
+                <TextBox Text="{Binding HarvestNeedlesText}" Watermark="Optional filters, e.g. 5NN TU W1AW"
+                         Background="#0C1A28" Foreground="{StaticResource TextHi}" />
+                <TextBlock Text="Optional only. Leave blank to harvest by decoder agreement; add needles to surface windows where either decoder copy contains those anchors."
+                           Classes="label" TextWrapping="Wrap" MaxWidth="420" />
+              </StackPanel>
+              <StackPanel Grid.Column="1" Spacing="2">
+                <TextBlock Text="WINDOW (s)" Classes="label" />
+                <NumericUpDown Minimum="1" Maximum="12" Increment="0.5" Value="{Binding HarvestWindowSeconds, Mode=TwoWay}" />
+              </StackPanel>
+              <StackPanel Grid.Column="2" Spacing="2">
+                <TextBlock Text="HOP (s)" Classes="label" />
+                <NumericUpDown Minimum="0.25" Maximum="6" Increment="0.25" Value="{Binding HarvestHopSeconds, Mode=TwoWay}" />
+              </StackPanel>
+              <StackPanel Grid.Column="3" Spacing="2">
+                <TextBlock Text="SLOWDOWN ×" Classes="label" />
+                <NumericUpDown Minimum="1" Maximum="6" Increment="0.25" Value="{Binding PreviewSlowdown, Mode=TwoWay}" />
+              </StackPanel>
+              <Button Grid.Column="4" Classes="primary" Content="PLAY PREVIEW" Click="OnPlayPreviewClick" Margin="0,16,0,0"
+                      IsEnabled="{Binding CanPreviewCandidate}" />
+            </Grid>
+
+            <Border Grid.Row="2" BorderBrush="{StaticResource GridLine}" BorderThickness="1" CornerRadius="2" Padding="8"
+                    IsVisible="{Binding IsHarvestBusy}">
+              <Grid ColumnDefinitions="Auto,*" ColumnSpacing="10">
+                <TextBlock Text="{Binding HarvestProgressLabel}" Classes="label" VerticalAlignment="Center" />
+                <ProgressBar Grid.Column="1" Minimum="0" Maximum="{Binding HarvestProgressMaximum}" Value="{Binding HarvestProgressValue}"
+                             Height="16" VerticalAlignment="Center" />
+              </Grid>
+            </Border>
+
+            <Grid Grid.Row="3" ColumnDefinitions="380,*" ColumnSpacing="12">
+              <Border BorderBrush="{StaticResource GridLine}" BorderThickness="1" CornerRadius="2" Padding="8">
+                <Grid RowDefinitions="Auto,*">
+                  <Grid ColumnDefinitions="*,Auto">
+                    <TextBlock Text="CANDIDATE REGIONS" Classes="label" />
+                    <TextBlock Grid.Column="1" Text="{Binding HarvestCandidates.Count, StringFormat={}{0} regions}" Classes="label" />
+                  </Grid>
+                  <ListBox Grid.Row="1" Margin="0,8,0,0"
+                           ItemsSource="{Binding HarvestCandidates}"
+                           SelectedItem="{Binding SelectedCandidate, Mode=TwoWay}"
+                           Background="#0C1A28" BorderThickness="0">
+                    <ListBox.ItemTemplate>
+                      <DataTemplate DataType="m:HarvestCandidate">
+                        <Border Padding="6" Margin="0,0,0,6" Background="#102132" BorderBrush="{StaticResource GridLine}" BorderThickness="1" CornerRadius="2">
+                          <StackPanel Spacing="4">
+                            <Grid ColumnDefinitions="Auto,*,Auto">
+                              <TextBlock Text="{Binding RangeLabel}" FontFamily="Consolas" Foreground="{StaticResource AccentCyan}" />
+                              <TextBlock Grid.Column="1" Text="{Binding MemberLabel}" FontFamily="Consolas" Foreground="{StaticResource TextDim}"
+                                         HorizontalAlignment="Center" />
+                              <TextBlock Grid.Column="2" Text="{Binding NeedlesLabel}" FontFamily="Consolas" Foreground="{StaticResource AccentLime}" />
+                            </Grid>
+                            <TextBlock Text="{Binding Offline.Text}" TextWrapping="Wrap" TextTrimming="CharacterEllipsis"
+                                       Foreground="{StaticResource TextHi}" MaxHeight="38" />
+                            <TextBlock Text="{Binding Stream.Text}" TextWrapping="Wrap" TextTrimming="CharacterEllipsis"
+                                       Foreground="{StaticResource TextDim}" MaxHeight="38" />
+                          </StackPanel>
+                        </Border>
+                      </DataTemplate>
+                    </ListBox.ItemTemplate>
+                  </ListBox>
+                </Grid>
+              </Border>
+
+              <ScrollViewer Grid.Column="1" HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+                <Grid RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,*" RowSpacing="10">
+                  <Grid ColumnDefinitions="Auto,*">
+                    <TextBlock Text="SELECTED" Classes="label" />
+                    <TextBlock Grid.Column="1" Text="{Binding SelectedCandidateRange}" Foreground="{StaticResource AccentCyan}" />
+                  </Grid>
+                  <Grid Grid.Row="1" ColumnDefinitions="*,*" ColumnSpacing="10">
+                    <Border BorderBrush="{StaticResource GridLine}" BorderThickness="1" CornerRadius="2" Padding="8">
+                      <StackPanel Spacing="6">
+                        <TextBlock Text="OFFLINE DITDAH" Classes="label" />
+                        <TextBlock Text="{Binding SelectedCandidate.Offline.Text}" TextWrapping="Wrap" Foreground="{StaticResource TextHi}" />
+                        <TextBlock Text="{Binding SelectedCandidate.Offline.PitchHz, StringFormat={}{0:F1} Hz}" Classes="label" />
+                        <TextBlock Text="{Binding SelectedCandidate.Offline.Wpm, StringFormat={}{0:F1} WPM}" Classes="label" />
+                      </StackPanel>
+                    </Border>
+                    <Border Grid.Column="1" BorderBrush="{StaticResource GridLine}" BorderThickness="1" CornerRadius="2" Padding="8">
+                      <StackPanel Spacing="6">
+                        <TextBlock Text="STREAMING DECODER" Classes="label" />
+                        <TextBlock Text="{Binding SelectedCandidate.Stream.Text}" TextWrapping="Wrap" Foreground="{StaticResource TextHi}" />
+                        <TextBlock Text="{Binding SelectedCandidate.Stream.PitchHz, StringFormat={}{0:F1} Hz}" Classes="label" />
+                        <TextBlock Text="{Binding SelectedCandidate.Stream.Wpm, StringFormat={}{0:F1} WPM}" Classes="label" />
+                      </StackPanel>
+                    </Border>
+                  </Grid>
+                  <Grid Grid.Row="2" ColumnDefinitions="Auto,*">
+                    <TextBlock Text="MATCH" Classes="label" />
+                    <TextBlock Grid.Column="1" Text="{Binding SelectedCandidateNeedles}" Foreground="{StaticResource AccentLime}" />
+                  </Grid>
+                  <Border Grid.Row="3" BorderBrush="{StaticResource GridLine}" BorderThickness="1" CornerRadius="2" Padding="8">
+                    <Grid RowDefinitions="Auto,Auto,Auto" RowSpacing="8">
+                      <Grid ColumnDefinitions="Auto,*,Auto,Auto" ColumnSpacing="10">
+                        <TextBlock Text="SIGNAL PROFILE" Classes="label" />
+                        <TextBlock Grid.Column="1" Text="{Binding AdjustedRangeLabel}" Foreground="{StaticResource AccentMag}" />
+                        <Button Grid.Column="2" Classes="primary" Content="RESET SPAN" Click="OnResetAdjustedSpanClick"
+                                IsEnabled="{Binding CanResetAdjustedSpan}" FontSize="11" Padding="14,4" />
+                        <Button Grid.Column="3" Classes="primary" Content="USE SUGGESTED" Click="OnUseSuggestedSpanClick"
+                                IsEnabled="{Binding CanUseSuggestedSpan}" FontSize="11" Padding="14,4" />
+                      </Grid>
+                      <TextBlock Grid.Row="1"
+                                 Text="Cyan outline = harvested span. Lime outline = pause-based suggestion. Drag the magenta handles or drag inside the magenta range to move the exact window."
+                                 Classes="label" TextWrapping="Wrap" />
+                      <Grid Grid.Row="2" RowDefinitions="Auto,*" RowSpacing="6">
+                        <TextBlock Text="LOADING PROFILE..."
+                                   Classes="label"
+                                   IsVisible="{Binding IsProfileBusy}" />
+                        <v:SignalProfileEditor Grid.Row="1"
+                                               Height="190"
+                                               Points="{Binding CurrentSignalProfile.Points}"
+                                               DisplayStartSeconds="{Binding CurrentSignalProfile.DisplayStartSeconds}"
+                                               DisplayEndSeconds="{Binding CurrentSignalProfile.DisplayEndSeconds}"
+                                               OriginalStartSeconds="{Binding CurrentSignalProfile.SelectionStartSeconds}"
+                                               OriginalEndSeconds="{Binding CurrentSignalProfile.SelectionEndSeconds}"
+                                               SuggestedStartSeconds="{Binding CurrentSignalProfile.SuggestedStartSeconds}"
+                                               SuggestedEndSeconds="{Binding CurrentSignalProfile.SuggestedEndSeconds}"
+                                               SelectionStartSeconds="{Binding AdjustedStartSeconds, Mode=TwoWay}"
+                                               SelectionEndSeconds="{Binding AdjustedEndSeconds, Mode=TwoWay}"
+                                               Threshold="{Binding CurrentSignalProfile.Threshold}" />
+                      </Grid>
+                    </Grid>
+                  </Border>
+                  <StackPanel Grid.Row="4" Spacing="6">
+                    <TextBlock Text="VERIFIED COPY" Classes="label" />
+                    <TextBox Text="{Binding CorrectCopy, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" AcceptsReturn="True" MinHeight="120"
+                              TextChanged="OnCorrectCopyTextChanged"
+                              Background="#0C1A28" Foreground="{StaticResource TextHi}" />
+                    <TextBlock Text="Type exactly what you hear in this selected window. If a symbol is cut at the edge, mark it below." Classes="label" TextWrapping="Wrap" />
+                    <Grid ColumnDefinitions="Auto,Auto,*" ColumnSpacing="14">
+                      <CheckBox Content="START CLIPPED" IsChecked="{Binding ClipStart, Mode=TwoWay}" />
+                      <CheckBox Grid.Column="1" Content="END CLIPPED" IsChecked="{Binding ClipEnd, Mode=TwoWay}" />
+                      <TextBlock Grid.Column="2" Text="Saved labels are exact-window truth (`label_scope = exact_window`)." Classes="label" VerticalAlignment="Center" />
+                    </Grid>
+                  </StackPanel>
+                  <Grid Grid.Row="5" ColumnDefinitions="*,Auto" ColumnSpacing="10">
+                    <TextBlock Text="{Binding LabelFilePath}" Classes="label" TextWrapping="Wrap" />
+                    <Button Grid.Column="1" Classes="primary" Content="SAVE LABEL" Click="OnSaveLabelClick"
+                            IsEnabled="{Binding CanSaveLabel}" />
+                  </Grid>
+                </Grid>
+              </ScrollViewer>
+            </Grid>
+
+            <TextBlock Grid.Row="4" Text="{Binding AdvancedStatusText}" Classes="label" Foreground="{StaticResource TextDim}" />
+          </Grid>
+        </Border>
+      </TabItem>
+      <TabItem Header="TUNING">
+        <Border Classes="panel">
+          <Grid RowDefinitions="Auto,Auto,Auto,Auto,*" RowSpacing="10">
+            <Grid ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto" ColumnSpacing="10">
+              <TextBlock Text="LABEL EVAL / SWEEP" Classes="label" VerticalAlignment="Center" />
+              <CheckBox Grid.Column="1" Content="ALL LABELS" IsChecked="{Binding EvaluateAllLabels, Mode=TwoWay}" VerticalAlignment="Center" />
+              <CheckBox Grid.Column="2" Content="FULL STREAM" IsChecked="{Binding UseFullStreamScorer, Mode=TwoWay}" VerticalAlignment="Center" />
+              <CheckBox Grid.Column="3" Content="WIDE SWEEP" IsChecked="{Binding UseWideSweep, Mode=TwoWay}" VerticalAlignment="Center" />
+              <CheckBox Grid.Column="4" Content="USE CHECKED LABELS" IsChecked="{Binding UseSelectedLabelFiles, Mode=TwoWay}" VerticalAlignment="Center" />
+              <Button Grid.Column="5" Classes="primary" Content="SCORE LABELS" Click="OnRunLabelScoreClick"
+                      IsEnabled="{Binding CanRunLabelScore}" FontSize="11" Padding="14,4" />
+              <Button Grid.Column="6" Classes="primary" Content="SWEEP BASELINE" Click="OnRunLabelSweepClick"
+                      IsEnabled="{Binding CanRunLabelSweep}" FontSize="11" Padding="14,4" />
+            </Grid>
+
+            <Border Grid.Row="1" BorderBrush="{StaticResource GridLine}" BorderThickness="1" CornerRadius="2" Padding="8"
+                    IsVisible="{Binding ShowSelectedLabelPicker}">
+              <Grid RowDefinitions="Auto,*" RowSpacing="6">
+                <TextBlock Text="{Binding SelectedLabelFilesSummary}" Classes="label" TextWrapping="Wrap" />
+                <ScrollViewer Grid.Row="1" MaxHeight="120" HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+                   <ItemsControl ItemsSource="{Binding AvailableLabelFiles}">
+                     <ItemsControl.ItemTemplate>
+                       <DataTemplate x:DataType="m:SelectableLabelFile">
+                         <CheckBox Content="{Binding DisplayName}" IsChecked="{Binding IsSelected, Mode=TwoWay}" Margin="0,0,0,4" />
+                       </DataTemplate>
+                     </ItemsControl.ItemTemplate>
+                   </ItemsControl>
+                </ScrollViewer>
+              </Grid>
+            </Border>
+
+            <Grid Grid.Row="2" ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,*" ColumnSpacing="10">
+              <StackPanel Spacing="2">
+                <TextBlock Text="WINDOW (s)" Classes="label" />
+                <NumericUpDown Minimum="8" Maximum="40" Increment="1" Value="{Binding LabelEvalWindowSeconds, Mode=TwoWay}" />
+              </StackPanel>
+              <StackPanel Grid.Column="1" Spacing="2">
+                <TextBlock Text="MIN WINDOW (s)" Classes="label" />
+                <NumericUpDown Minimum="0.25" Maximum="8" Increment="0.25" Value="{Binding LabelEvalMinWindowSeconds, Mode=TwoWay}" />
+              </StackPanel>
+              <StackPanel Grid.Column="2" Spacing="2">
+                <TextBlock Text="DECODE EVERY (ms)" Classes="label" />
+                <NumericUpDown Minimum="100" Maximum="3000" Increment="100" Value="{Binding LabelEvalDecodeEveryMs, Mode=TwoWay}" />
+              </StackPanel>
+              <StackPanel Grid.Column="3" Spacing="2">
+                <TextBlock Text="CONFIRM / TOP" Classes="label" />
+                <Grid ColumnDefinitions="*,*" ColumnSpacing="6">
+                  <NumericUpDown Minimum="1" Maximum="6" Increment="1" Value="{Binding LabelEvalConfirmations, Mode=TwoWay}" />
+                  <NumericUpDown Grid.Column="1" Minimum="1" Maximum="50" Increment="1" Value="{Binding LabelEvalTopResults, Mode=TwoWay}" />
+                </Grid>
+              </StackPanel>
+              <StackPanel Grid.Column="4" Spacing="2">
+                <TextBlock Text="PRE / POST (ms)" Classes="label" />
+                <Grid ColumnDefinitions="*,*" ColumnSpacing="6">
+                  <NumericUpDown Minimum="0" Maximum="5000" Increment="100" Value="{Binding LabelEvalPreRollMs, Mode=TwoWay}" />
+                  <NumericUpDown Grid.Column="1" Minimum="0" Maximum="5000" Increment="100" Value="{Binding LabelEvalPostRollMs, Mode=TwoWay}" />
+                </Grid>
+              </StackPanel>
+              <StackPanel Grid.Column="5" Spacing="2">
+                <TextBlock Text="EXPERIMENT" Classes="label" />
+                <CheckBox Content="RANGE LOCK" IsChecked="{Binding ExperimentalRangeLock, Mode=TwoWay}"
+                          ToolTip.Tip="Score labels with the custom streaming decoder constrained to the selected Hz band. Baseline sweep stays disabled in this mode." />
+              </StackPanel>
+              <StackPanel Grid.Column="6" Spacing="2">
+                <TextBlock Text="RANGE (Hz)" Classes="label" />
+                <Grid ColumnDefinitions="*,*" ColumnSpacing="6">
+                  <NumericUpDown Minimum="200" Maximum="1200" Increment="10" Value="{Binding RangeLockMinHz, Mode=TwoWay}" />
+                  <NumericUpDown Grid.Column="1" Minimum="200" Maximum="1200" Increment="10" Value="{Binding RangeLockMaxHz, Mode=TwoWay}" />
+                </Grid>
+              </StackPanel>
+              <StackPanel Grid.Column="7" Spacing="4" VerticalAlignment="Bottom">
+                <TextBlock Text="{Binding LabelEvaluationTargetLabel}" Classes="label" TextWrapping="Wrap" />
+                <TextBlock Text="{Binding RangeLockSummary}" Classes="label" TextWrapping="Wrap" />
+                <TextBlock Text="{Binding TopSweepSummary}" Classes="label" TextWrapping="Wrap" />
+                <Button Classes="primary" Content="APPLY TOP RESULT" Click="OnApplyTopSweepClick"
+                        IsEnabled="{Binding CanApplyTopSweep}" FontSize="11" Padding="14,4" HorizontalAlignment="Left" />
+              </StackPanel>
+            </Grid>
+
+            <Grid Grid.Row="3" ColumnDefinitions="Auto,*" ColumnSpacing="10">
+              <TextBlock Text="{Binding LabelEvaluationStatusText}" Classes="label" VerticalAlignment="Center" />
+              <ProgressBar Grid.Column="1" IsIndeterminate="True" Height="16" VerticalAlignment="Center"
+                           IsVisible="{Binding IsEvaluationBusy}" />
+            </Grid>
+
+            <ScrollViewer Grid.Row="4" HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+              <StackPanel Spacing="10">
+                <TextBlock Text="The Decoder tab’s Baseline ditdah mode uses these shared tuning settings directly. Sweep, apply the top result here, then switch back to Decoder for file or live A/B testing." Classes="label" TextWrapping="Wrap" />
+
+                <Border BorderBrush="{StaticResource GridLine}" BorderThickness="1" CornerRadius="2" Padding="8"
+                        IsVisible="{Binding HasLabelScoreResult}">
+                  <StackPanel Spacing="10">
+                    <Grid ColumnDefinitions="*,*,*" ColumnSpacing="10">
+                      <Border Background="#0C1A28" BorderBrush="{StaticResource GridLine}" BorderThickness="1" Padding="10">
+                        <StackPanel>
+                          <TextBlock Text="EXACT" Classes="label" />
+                          <TextBlock Text="{Binding LabelScoreExactDisplay}" FontFamily="Consolas" FontSize="24" Foreground="{StaticResource AccentCyan}" />
+                        </StackPanel>
+                      </Border>
+                      <Border Grid.Column="1" Background="#0C1A28" BorderBrush="{StaticResource GridLine}" BorderThickness="1" Padding="10">
+                        <StackPanel>
+                          <TextBlock Text="AVG CER" Classes="label" />
+                          <TextBlock Text="{Binding LabelScoreAverageCerDisplay}" FontFamily="Consolas" FontSize="24" Foreground="{StaticResource AccentAmber}" />
+                        </StackPanel>
+                      </Border>
+                      <Border Grid.Column="2" Background="#0C1A28" BorderBrush="{StaticResource GridLine}" BorderThickness="1" Padding="10">
+                        <StackPanel>
+                          <TextBlock Text="EDIT DISTANCE" Classes="label" />
+                          <TextBlock Text="{Binding LabelScoreDistanceDisplay}" FontFamily="Consolas" FontSize="24" Foreground="{StaticResource AccentLime}" />
+                        </StackPanel>
+                      </Border>
+                    </Grid>
+                    <TextBlock Text="{Binding LabelScoreBaselineDisplay}" Classes="label" TextWrapping="Wrap" />
+                    <Grid ColumnDefinitions="280,*" ColumnSpacing="12">
+                      <Border BorderBrush="{StaticResource GridLine}" BorderThickness="1" CornerRadius="2" Padding="8">
+                        <StackPanel Spacing="6">
+                          <TextBlock Text="FAILURE BREAKDOWN" Classes="label" />
+                          <ItemsControl ItemsSource="{Binding LabelScoreBreakdown}">
+                            <ItemsControl.ItemTemplate>
+                              <DataTemplate x:DataType="vm:MainWindowViewModel+FailureBucketView">
+                                <Grid ColumnDefinitions="Auto,Auto,*" ColumnSpacing="8" Margin="0,0,0,4">
+                                  <TextBlock Text="{Binding DisplayName}" FontFamily="Consolas" Foreground="{StaticResource TextHi}" />
+                                  <TextBlock Grid.Column="1" Text="{Binding Count}" FontFamily="Consolas" Foreground="{StaticResource AccentCyan}" />
+                                  <ProgressBar Grid.Column="2" Minimum="0" Maximum="1" Value="{Binding Ratio}" Height="12" VerticalAlignment="Center" />
+                                </Grid>
+                              </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                          </ItemsControl>
+                        </StackPanel>
+                      </Border>
+                      <Border Grid.Column="1" BorderBrush="{StaticResource GridLine}" BorderThickness="1" CornerRadius="2" Padding="8">
+                        <StackPanel Spacing="6">
+                          <TextBlock Text="PER-LABEL DETAIL" Classes="label" />
+                          <ItemsControl ItemsSource="{Binding CurrentLabelScoreResult.Rows}">
+                            <ItemsControl.ItemTemplate>
+                              <DataTemplate x:DataType="m:LabelScoreRowResult">
+                                <Border BorderBrush="{StaticResource GridLine}" BorderThickness="1" CornerRadius="2" Padding="6" Margin="0,0,0,6" Background="#0C1A28">
+                                  <Grid RowDefinitions="Auto,Auto,Auto" RowSpacing="4">
+                                    <Grid ColumnDefinitions="*,Auto,Auto,Auto" ColumnSpacing="10">
+                                      <TextBlock Text="{Binding Name}" FontFamily="Consolas" Foreground="{StaticResource AccentCyan}" />
+                                      <TextBlock Grid.Column="1" Text="{Binding MatchStatus}" FontFamily="Consolas" Foreground="{StaticResource AccentLime}" />
+                                      <TextBlock Grid.Column="2" Text="{Binding Cer, StringFormat=cer {0:P1}}" FontFamily="Consolas" Foreground="{StaticResource AccentAmber}" />
+                                      <TextBlock Grid.Column="3" Text="{Binding FailureClass}" FontFamily="Consolas" Foreground="{StaticResource TextDim}" />
+                                    </Grid>
+                                    <TextBlock Grid.Row="1" Text="{Binding Truth, StringFormat=truth: {0}}" TextWrapping="Wrap" Foreground="{StaticResource TextHi}" />
+                                    <TextBlock Grid.Row="2" Text="{Binding Decoded, StringFormat=decoded: {0}}" TextWrapping="Wrap" Foreground="{StaticResource TextDim}" />
+                                  </Grid>
+                                </Border>
+                              </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                          </ItemsControl>
+                        </StackPanel>
+                      </Border>
+                    </Grid>
+                  </StackPanel>
+                </Border>
+
+                <Border BorderBrush="{StaticResource GridLine}" BorderThickness="1" CornerRadius="2" Padding="8"
+                        IsVisible="{Binding HasLabelSweepResult}">
+                  <StackPanel Spacing="8">
+                    <TextBlock Text="{Binding LabelSweepSummaryDisplay}" Foreground="{StaticResource AccentCyan}" TextWrapping="Wrap" />
+                    <ItemsControl ItemsSource="{Binding LabelSweepResults}">
+                      <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="vm:MainWindowViewModel+SweepResultView">
+                          <Border BorderBrush="{StaticResource GridLine}" BorderThickness="1" CornerRadius="2" Padding="6" Margin="0,0,0,6" Background="#0C1A28">
+                            <Grid ColumnDefinitions="Auto,Auto,*,Auto,Auto,Auto,Auto,Auto,Auto,Auto" ColumnSpacing="10">
+                              <TextBlock Text="{Binding Rank, StringFormat=#{0}}" FontFamily="Consolas" Foreground="{StaticResource TextDim}" />
+                              <TextBlock Grid.Column="1" Text="{Binding ExactDisplay}" FontFamily="Consolas" Foreground="{StaticResource AccentCyan}" />
+                              <ProgressBar Grid.Column="2" Minimum="0" Maximum="1" Value="{Binding ExactRatio}" Height="12" VerticalAlignment="Center" />
+                              <TextBlock Grid.Column="3" Text="{Binding AverageCer, StringFormat=avg CER {0:P1}}" FontFamily="Consolas" Foreground="{StaticResource AccentAmber}" />
+                              <TextBlock Grid.Column="4" Text="{Binding WorstCer, StringFormat=worst {0:P1}}" FontFamily="Consolas" Foreground="{StaticResource AccentAmber}" />
+                              <TextBlock Grid.Column="5" Text="{Binding TotalDistance, StringFormat=dist {0}}" FontFamily="Consolas" Foreground="{StaticResource AccentLime}" />
+                              <TextBlock Grid.Column="6" Text="{Binding WindowSeconds, StringFormat=win {0:F1}s}" FontFamily="Consolas" Foreground="{StaticResource TextHi}" />
+                              <TextBlock Grid.Column="7" Text="{Binding MinWindowSeconds, StringFormat=min {0:F1}s}" FontFamily="Consolas" Foreground="{StaticResource TextHi}" />
+                              <TextBlock Grid.Column="8" Text="{Binding DecodeEveryMs, StringFormat={}{0}ms}" FontFamily="Consolas" Foreground="{StaticResource TextHi}" />
+                              <TextBlock Grid.Column="9" Text="{Binding RequiredConfirmations, StringFormat=conf {0}}" FontFamily="Consolas" Foreground="{StaticResource TextHi}" />
+                            </Grid>
+                          </Border>
+                        </DataTemplate>
+                      </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                  </StackPanel>
+                </Border>
+
+                <Expander Header="RAW RESULT JSON"
+                          IsVisible="{Binding LabelEvaluationOutputText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                  <TextBox Text="{Binding LabelEvaluationOutputText}"
+                           IsReadOnly="True"
+                           AcceptsReturn="True"
+                           TextWrapping="NoWrap"
+                           MinHeight="180"
+                           FontFamily="Consolas"
+                           FontSize="12"
+                           Background="#0C1A28"
+                           Foreground="{StaticResource TextHi}" />
+                </Expander>
+              </StackPanel>
+            </ScrollViewer>
+          </Grid>
+        </Border>
+      </TabItem>
+      <TabItem Header="BENCH">
+        <Border Classes="panel">
+          <Grid RowDefinitions="Auto,Auto,Auto,Auto,*,Auto" RowSpacing="10">
+            <!-- Source mode + label -->
+            <Grid ColumnDefinitions="Auto,Auto,Auto,Auto,*,Auto" ColumnSpacing="10">
+              <TextBlock Text="SOURCE" Classes="label" VerticalAlignment="Center" />
+              <RadioButton Grid.Column="1" Content="SYNTHETIC SUITE" GroupName="BenchSource"
+                           IsChecked="{Binding IsBenchSourceSynthetic, Mode=TwoWay}" VerticalAlignment="Center" />
+              <RadioButton Grid.Column="2" Content="FROM FILE" GroupName="BenchSource"
+                           IsChecked="{Binding IsBenchSourceFile, Mode=TwoWay}" VerticalAlignment="Center" />
+              <TextBlock Grid.Column="3" Text="LABEL" Classes="label" VerticalAlignment="Center" Margin="14,0,0,0" />
+              <TextBox Grid.Column="4" Text="{Binding BenchLabel, Mode=TwoWay}" Width="220"
+                       FontFamily="Consolas" FontSize="12" />
+              <Button Grid.Column="5" Classes="primary" Content="{Binding BenchRunButtonLabel}"
+                      Click="OnRunBenchClick" IsEnabled="{Binding CanRunBench}" FontSize="11" Padding="14,4" />
+            </Grid>
+
+            <!-- File mode inputs -->
+            <Grid Grid.Row="1" ColumnDefinitions="Auto,*,Auto,Auto,Auto" ColumnSpacing="10"
+                  IsVisible="{Binding IsBenchSourceFile}">
+              <TextBlock Text="FILE" Classes="label" VerticalAlignment="Center" />
+              <TextBox Grid.Column="1" Text="{Binding BenchFilePath}" IsReadOnly="True"
+                       FontFamily="Consolas" FontSize="12" />
+              <Button Grid.Column="2" Classes="primary" Content="PICK…" Click="OnPickBenchFileClick"
+                      FontSize="11" Padding="14,4" />
+              <TextBlock Grid.Column="3" Text="ONSET (ms)" Classes="label" VerticalAlignment="Center" Margin="10,0,0,0" />
+              <NumericUpDown Grid.Column="4" Minimum="0" Maximum="600000" Increment="100"
+                             Value="{Binding BenchOnsetMs, Mode=TwoWay}" Width="120" />
+            </Grid>
+
+            <Grid Grid.Row="2" ColumnDefinitions="Auto,*" ColumnSpacing="10"
+                  IsVisible="{Binding IsBenchSourceFile}">
+              <TextBlock Text="TRUTH" Classes="label" VerticalAlignment="Center" />
+              <TextBox Grid.Column="1" Text="{Binding BenchTruth, Mode=TwoWay}" FontFamily="Consolas"
+                       FontSize="12" Watermark="Uppercase expected transcript starting at the onset" />
+            </Grid>
+
+            <!-- Decoder knobs -->
+            <Grid Grid.Row="3" ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,*" ColumnSpacing="14">
+              <StackPanel Spacing="2">
+                <TextBlock Text="STABLE N" Classes="label" />
+                <NumericUpDown Minimum="1" Maximum="20" Increment="1" Value="{Binding BenchStableN, Mode=TwoWay}" Width="100" />
+              </StackPanel>
+              <StackPanel Grid.Column="1" Spacing="2">
+                <TextBlock Text="PURITY" Classes="label" />
+                <NumericUpDown Minimum="0" Maximum="20" Increment="0.5" Value="{Binding BenchPurity, Mode=TwoWay}" Width="100" />
+              </StackPanel>
+              <StackPanel Grid.Column="2" Spacing="2">
+                <TextBlock Text="WIDE BINS" Classes="label" />
+                <NumericUpDown Minimum="0" Maximum="6" Increment="1" Value="{Binding BenchWideBins, Mode=TwoWay}" Width="100" />
+              </StackPanel>
+              <StackPanel Grid.Column="3" Spacing="2">
+                <TextBlock Text="FORCE PITCH (Hz)" Classes="label" />
+                <NumericUpDown Minimum="0" Maximum="2000" Increment="10" Value="{Binding BenchForcePitchHz, Mode=TwoWay}" Width="120" />
+              </StackPanel>
+              <StackPanel Grid.Column="4" Spacing="2" VerticalAlignment="Bottom">
+                <TextBlock Text="THRESHOLD" Classes="label" />
+                <CheckBox Content="AUTO" IsChecked="{Binding BenchAutoThreshold, Mode=TwoWay}" />
+              </StackPanel>
+              <StackPanel Grid.Column="7" VerticalAlignment="Bottom">
+                <TextBlock Text="{Binding BenchSourceSummary}" Classes="label" TextWrapping="Wrap" />
+                <TextBlock Text="{Binding BenchSummary}" FontFamily="Consolas" FontSize="12"
+                           Foreground="{StaticResource AccentCyan}" TextWrapping="Wrap" />
+              </StackPanel>
+            </Grid>
+
+            <!-- Results table + log -->
+            <Grid Grid.Row="4" ColumnDefinitions="2*,*" ColumnSpacing="10">
+              <Border BorderBrush="{StaticResource GridLine}" BorderThickness="1" CornerRadius="2">
+                <DataGrid ItemsSource="{Binding BenchResults}" AutoGenerateColumns="False"
+                          IsReadOnly="True" GridLinesVisibility="Horizontal" HeadersVisibility="Column"
+                          FontFamily="Consolas" FontSize="12">
+                  <DataGrid.Columns>
+                    <DataGridTextColumn Header="SCENARIO" Binding="{Binding ScenarioDisplay}" Width="*" />
+                    <DataGridTextColumn Header="LAT" Binding="{Binding LatencyDisplay}" Width="80" />
+                    <DataGridTextColumn Header="UPTIME" Binding="{Binding UptimeDisplay}" Width="80" />
+                    <DataGridTextColumn Header="DROPS" Binding="{Binding DropsDisplay}" Width="70" />
+                    <DataGridTextColumn Header="RELOCK" Binding="{Binding RelocksDisplay}" Width="70" />
+                    <DataGridTextColumn Header="LONGEST" Binding="{Binding LongestGapDisplay}" Width="90" />
+                    <DataGridTextColumn Header="GHOSTS" Binding="{Binding GhostsDisplay}" Width="80" />
+                    <DataGridTextColumn Header="PITCH" Binding="{Binding PitchDisplay}" Width="90" />
+                  </DataGrid.Columns>
+                </DataGrid>
+              </Border>
+              <Border Grid.Column="1" BorderBrush="{StaticResource GridLine}" BorderThickness="1" CornerRadius="2"
+                      Background="#0C1A28">
+                <Grid RowDefinitions="Auto,*">
+                  <TextBlock Text="LOG" Classes="label" Margin="8,6,0,0" />
+                  <ScrollViewer Grid.Row="1" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto">
+                    <TextBox Text="{Binding BenchLogText}" IsReadOnly="True" AcceptsReturn="True"
+                             TextWrapping="NoWrap" FontFamily="Consolas" FontSize="11"
+                             Background="Transparent" BorderThickness="0"
+                             Foreground="{StaticResource TextDim}" />
+                  </ScrollViewer>
+                </Grid>
+              </Border>
+            </Grid>
+
+            <TextBlock Grid.Row="5" Text="{Binding BenchStatus}" Classes="label" TextWrapping="Wrap" />
+          </Grid>
+        </Border>
+      </TabItem>
+    </TabControl>
+
+    <!-- Status -->
+    <Border Grid.Row="6" Padding="18,8" Background="{StaticResource BgPanel}" BorderBrush="{StaticResource EdgeGlow}" BorderThickness="0,1,0,0">
+      <DockPanel LastChildFill="True">
+        <Border DockPanel.Dock="Right"
+                Padding="10,3"
+                CornerRadius="3"
+                Background="{Binding ConfidenceBackground}">
+          <TextBlock Text="{Binding ConfidenceLabel}"
+                     FontFamily="Consolas"
+                     FontSize="11"
+                     FontWeight="Bold"
+                     LetterSpacing="2"
+                     Foreground="{Binding ConfidenceColor}" />
+        </Border>
+        <TextBlock Text="{Binding StatusText}" FontFamily="Consolas" FontSize="11" Foreground="{StaticResource TextDim}" LetterSpacing="2" VerticalAlignment="Center" />
+      </DockPanel>
+    </Border>
+  </Grid>
+</Window>
