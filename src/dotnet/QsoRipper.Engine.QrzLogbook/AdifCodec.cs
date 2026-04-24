@@ -389,6 +389,17 @@ internal static class AdifCodec
                     }
 
                     break;
+                case "APP_QSORIPPER_RX_WPM":
+                    if (uint.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var rxWpm))
+                    {
+                        qso.CwDecodeRxWpm = rxWpm;
+                    }
+                    else
+                    {
+                        qso.ExtraFields[key] = value;
+                    }
+
+                    break;
                 case "COUNTRY":
                     qso.WorkedCountry = value;
                     break;
@@ -638,6 +649,11 @@ internal static class AdifCodec
             && TryFormatQsoCompletion(qso.QsoComplete, out var completionStr))
         {
             AppendField(sb, "QSO_COMPLETE", completionStr);
+        }
+
+        if (qso.HasCwDecodeRxWpm)
+        {
+            AppendField(sb, "APP_QSORIPPER_RX_WPM", qso.CwDecodeRxWpm.ToString(CultureInfo.InvariantCulture));
         }
 
         AppendOptional(sb, "COUNTRY", qso.WorkedCountry);
