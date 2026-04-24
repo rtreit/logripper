@@ -1416,6 +1416,18 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
         IsPlaybackRunning = false;
     }
 
+    public void ClosePlaybackPreview()
+    {
+        try { _playback.Stop(); } catch { /* swallow - best-effort */ }
+        IsPlaybackRunning = false;
+        PlaybackSourcePath = null;
+        PlaybackSourceLabel = "AUDIO";
+        PlaybackDurationSeconds = 0;
+        PlaybackPositionSeconds = 0;
+        PlaybackProfile = SignalProfile.Empty;
+        PlaybackStatusText = "Open a file or render a preview to play audio inline.";
+    }
+
     private async Task PreparePlaybackSourceAsync(string path, string label, bool autoPlay)
     {
         path = NormalizeFilePath(path);
@@ -1779,6 +1791,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
             HarvestCandidates.Clear();
             foreach (var candidate in result.Candidates)
                 HarvestCandidates.Add(candidate);
+            EnsureFullAudioCandidateFirst(result.DurationSeconds);
             SelectedCandidate = HarvestCandidates.FirstOrDefault();
             SaveCurrentHarvestSession();
             var usedFallback = HarvestCandidates.Any(candidate => candidate.IsFallback);
@@ -2541,6 +2554,47 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
         PersistHarvestCandidates(HarvestFilePath, HarvestCandidates.ToList(), SelectedCandidate is null ? null : CandidateKey(SelectedCandidate));
     }
 
+    private void EnsureFullAudioCandidateFirst(double durationSeconds)
+    {
+        if (durationSeconds <= 0)
+        {
+            return;
+        }
+
+        // If a "full audio" synthetic is already at the front, nothing to do.
+        if (HarvestCandidates.Count > 0 && HarvestCandidates[0].IsFullAudio)
+        {
+            return;
+        }
+
+        // If the rust harvester emitted a fallback candidate that already covers ~the whole file,
+        // promote it to "full audio" rather than duplicate it.
+        if (HarvestCandidates.Count > 0
+            && HarvestCandidates[0].IsFallback
+            && HarvestCandidates[0].StartSeconds < 0.5
+            && HarvestCandidates[0].EndSeconds >= durationSeconds - 0.5)
+        {
+            HarvestCandidates[0].IsFullAudio = true;
+            HarvestCandidates[0].EndSeconds = durationSeconds;
+            return;
+        }
+
+        var full = new HarvestCandidate
+        {
+            StartSeconds = 0,
+            EndSeconds = durationSeconds,
+            IsFallback = true,
+            IsFullAudio = true,
+            MemberCount = 0,
+            SharedChars = 0,
+            StrongestCopyLength = 0,
+            MatchedNeedles = System.Array.Empty<string>(),
+            Offline = new HarvestDecodeSnapshot(),
+            Stream = new HarvestStreamSnapshot(),
+        };
+        HarvestCandidates.Insert(0, full);
+    }
+
     private void RestoreHarvestSession(string path)
     {
         HarvestCandidates.Clear();
@@ -2562,6 +2616,13 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
         {
             HarvestCandidates.Add(candidate);
         }
+
+        var restoredDuration = TryProbeFileDurationSeconds(path);
+        if (restoredDuration <= 0 && HarvestCandidates.Count > 0)
+        {
+            restoredDuration = HarvestCandidates.Max(c => c.EndSeconds);
+        }
+        EnsureFullAudioCandidateFirst(restoredDuration);
 
         foreach (var pair in session.ProfileCache)
         {

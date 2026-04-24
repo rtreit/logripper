@@ -27,12 +27,19 @@ public sealed class HarvestCandidate
     [JsonPropertyName("stream")] public HarvestStreamSnapshot Stream { get; set; } = new();
 
     public string RangeLabel => $"{StartSeconds:F2}s - {EndSeconds:F2}s";
-    public string NeedlesLabel => IsFallback
-        ? "full-file fallback"
-        : MatchedNeedles.Length == 0 ? "agreement" : string.Join(", ", MatchedNeedles);
-    public string MemberLabel => IsFallback
-        ? "fallback"
-        : MemberCount <= 1 ? "1 window" : $"{MemberCount} windows";
+    public string NeedlesLabel => IsFullAudio
+        ? "full audio (trim with magenta handles)"
+        : IsFallback
+            ? "full-file fallback"
+            : MatchedNeedles.Length == 0 ? "agreement" : string.Join(", ", MatchedNeedles);
+    public string MemberLabel => IsFullAudio
+        ? "FULL AUDIO"
+        : IsFallback
+            ? "fallback"
+            : MemberCount <= 1 ? "1 window" : $"{MemberCount} windows";
+
+    [JsonIgnore]
+    public bool IsFullAudio { get; set; }
 }
 
 public class HarvestDecodeSnapshot

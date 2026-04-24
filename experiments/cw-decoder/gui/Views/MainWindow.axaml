@@ -337,7 +337,7 @@
     <Border Grid.Row="4" Margin="14,12,14,0" Classes="panel"
             IsVisible="{Binding HasPlaybackSource}">
       <Grid RowDefinitions="Auto,Auto,Auto,Auto" RowSpacing="8">
-        <Grid ColumnDefinitions="Auto,Auto,*,Auto,Auto,Auto,Auto,Auto" ColumnSpacing="10">
+        <Grid ColumnDefinitions="Auto,Auto,*,Auto,Auto,Auto,Auto,Auto,Auto" ColumnSpacing="10">
           <TextBlock Text="AUDIO" Classes="label" VerticalAlignment="Center" />
           <TextBlock Grid.Column="1" Text="{Binding PlaybackSourceLabel}" FontFamily="Consolas"
                      Foreground="{StaticResource AccentAmber}" VerticalAlignment="Center" />
@@ -352,6 +352,8 @@
                   IsEnabled="{Binding CanStopPlayback}" FontSize="11" Padding="14,4" />
           <Button Grid.Column="7" Classes="primary" Content="STOP AUDIO" Click="OnStopPlaybackClick"
                   IsEnabled="{Binding CanStopPlayback}" FontSize="11" Padding="14,4" />
+          <Button Grid.Column="8" Classes="primary" Content="✕ CLOSE" Click="OnClosePlaybackClick"
+                  ToolTip.Tip="Close audio preview panel" FontSize="11" Padding="14,4" />
         </Grid>
         <Grid Grid.Row="1" ColumnDefinitions="Auto,*,Auto" ColumnSpacing="10">
           <TextBlock Text="{Binding PlaybackPositionDisplay}" FontFamily="Consolas"

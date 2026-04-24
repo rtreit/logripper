@@ -93,6 +93,9 @@ public partial class MainWindow : Window
     private void OnStopPlaybackClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
         => Vm?.StopPlayback();
 
+    private void OnClosePlaybackClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+        => Vm?.ClosePlaybackPreview();
+
     private void OnPauseResumeClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
         => Vm?.TogglePauseResume();
 
