@@ -23,6 +23,7 @@ internal sealed class CwDecoderProcessSampleSource : ICwWpmSampleSource
 {
     public event EventHandler<CwWpmSample>? SampleReceived;
     public event EventHandler? StatusChanged;
+    public event EventHandler<string>? RawLineReceived;
 
     private Process? _proc;
     private CancellationTokenSource? _cts;
@@ -70,9 +71,18 @@ internal sealed class CwDecoderProcessSampleSource : ICwWpmSampleSource
         }
     }
 
-    public void Start(string? deviceOverride) => Start(deviceOverride, loopback: false);
+    public void Start(string? deviceOverride) => Start(deviceOverride, loopback: false, recordingPath: null);
 
-    public void Start(string? deviceOverride, bool loopback)
+    public void Start(string? deviceOverride, bool loopback) => Start(deviceOverride, loopback, recordingPath: null);
+
+    /// <summary>
+    /// Start the cw-decoder subprocess. When <paramref name="recordingPath"/>
+    /// is supplied, also passes <c>--record &lt;path&gt;</c> so the decoder
+    /// mirrors all captured audio into a WAV file alongside the live stream.
+    /// The destination directory must already exist; the WAV file is created
+    /// by the decoder itself when the input device is opened.
+    /// </summary>
+    public void Start(string? deviceOverride, bool loopback, string? recordingPath)
     {
         Stop();
 
@@ -104,6 +114,11 @@ internal sealed class CwDecoderProcessSampleSource : ICwWpmSampleSource
         {
             psi.ArgumentList.Add("--device");
             psi.ArgumentList.Add(deviceOverride.Trim());
+        }
+        if (!string.IsNullOrWhiteSpace(recordingPath))
+        {
+            psi.ArgumentList.Add("--record");
+            psi.ArgumentList.Add(recordingPath.Trim());
         }
 
         var p = Process.Start(psi)
@@ -200,6 +215,11 @@ internal sealed class CwDecoderProcessSampleSource : ICwWpmSampleSource
                 {
                     continue;
                 }
+
+                // Tee the full raw line to subscribers (diagnostics recorder)
+                // BEFORE WPM-specific parsing so they see every event the
+                // decoder emits — confidence, pitch, char, garbled, power, …
+                RawLineReceived?.Invoke(this, line);
 
                 if (TryParseWpmEvent(line, out var wpm))
                 {

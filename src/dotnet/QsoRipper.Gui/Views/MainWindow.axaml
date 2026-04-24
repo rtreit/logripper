@@ -26,6 +26,7 @@
     <KeyBinding Gesture="Ctrl+H" Command="{Binding ToggleColumnChooserCommand}" />
     <KeyBinding Gesture="Alt+Enter" Command="{Binding ToggleInspectorCommand}" />
     <KeyBinding Gesture="F8" Command="{Binding OpenCallsignCardCommand}" />
+    <KeyBinding Gesture="F9" Command="{Binding ToggleCwStatsPaneCommand}" />
     <KeyBinding Gesture="F6" Command="{Binding SyncNowCommand}" />
     <KeyBinding Gesture="Ctrl+Enter" Command="{Binding Logger.LogQsoCommand}" />
     <KeyBinding Gesture="F10" Command="{Binding Logger.LogQsoCommand}" />
@@ -175,6 +176,8 @@
                   Command="{Binding OpenQsoCardCommand}" />
         <MenuItem Header="Callsign _Card" InputGesture="F8"
                   Command="{Binding OpenCallsignCardCommand}" />
+        <MenuItem Header="C_W Stats Pane" InputGesture="F9"
+                  Command="{Binding ToggleCwStatsPaneCommand}" />
       </MenuItem>
       <MenuItem Header="_Tools">
         <MenuItem Header="Sync _Now" InputGesture="F6"
@@ -1009,6 +1012,20 @@
                         VerticalAlignment="Top"
                         Margin="0,8,14,8">
                   <v:CallsignCardView />
+                </Border>
+              </DataTemplate>
+            </ContentControl.DataTemplates>
+          </ContentControl>
+
+          <!-- CW Stats pane overlay (F9) -->
+          <ContentControl Content="{Binding CwStatsPane}">
+            <ContentControl.DataTemplates>
+              <DataTemplate x:DataType="vm:CwStatsPaneViewModel">
+                <Border AutomationProperties.AutomationId="CwStatsPanePanel"
+                        HorizontalAlignment="Right"
+                        VerticalAlignment="Bottom"
+                        Margin="0,8,14,46">
+                  <v:CwStatsPaneView />
                 </Border>
               </DataTemplate>
             </ContentControl.DataTemplates>

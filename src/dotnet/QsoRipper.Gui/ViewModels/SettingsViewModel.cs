@@ -131,6 +131,15 @@ internal sealed partial class SettingsViewModel : ObservableObject
     [ObservableProperty]
     private bool _isCwWpmStatusBarVisible;
 
+    /// <summary>
+    /// When true, every cw-decoder NDJSON event + audio is mirrored to a
+    /// per-session diagnostics directory. See
+    /// <see cref="QsoRipper.Gui.Services.CwDiagnosticsRecorder"/> for the
+    /// on-disk layout.
+    /// </summary>
+    [ObservableProperty]
+    private bool _isAdvancedDiagnosticsEnabled;
+
     public ObservableCollection<RadioMonitorDevice> RadioMonitorDevices { get; } = [];
 
     [ObservableProperty]

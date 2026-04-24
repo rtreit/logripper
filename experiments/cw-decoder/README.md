@@ -528,6 +528,56 @@ The experiment no longer depends on shell-only tuning:
 - Decode and Labeling now share inline audio playback instead of launching an external media player
 - CW SCOPE now shows a moving signal profile/playhead during playback
 
+### Integration with the QsoRipper GUI (Round 1, PR #324)
+
+The QsoRipper desktop GUI (`src\dotnet\QsoRipper.Gui`) hosts `cw-decoder.exe`
+as a subprocess (`stream-live --json`) and consumes the NDJSON event stream
+to drive two operator-facing surfaces:
+
+- **CW WPM auto-fill**: when a CW QSO is logged, the time-weighted mean WPM
+  over the QSO start→end window is written to `QsoRecord.cw_decode_rx_wpm`.
+- **F9 CW Stats pane**: live overlay showing the current confidence/lock
+  state, signal pitch (Hz), instantaneous WPM, last decoded characters and
+  the most recent garbled symbol. Driven entirely by the same NDJSON stream
+  the CW Scope tooling uses.
+
+The episode boundary for both surfaces is **operator activity, not decoder
+lock**: the QSO clock starts the moment the operator first types a callsign
+and ends on save or clear. The decoder process itself runs continuously
+whenever Radio Monitor is enabled.
+
+### Advanced diagnostics mode
+
+Enable **Settings → Advanced CW diagnostics** to capture an offline-debug
+bundle for every QSO. Each radio-monitor session writes to:
+
+```text
+%LOCALAPPDATA%\QsoRipper\diagnostics\session-<UTC>\
+  session.json                 startup metadata (binary, device, loopback)
+  session.wav                  continuous mirror of decoder input audio
+  session-events.ndjson        every raw NDJSON line emitted by the decoder
+  episodes\episode-NNN\
+    events.ndjson              decoder events between callsign-typed and save/clear
+    ux-snapshot.json           comparison: aggregator mean vs displayed UI
+                               WPM vs in-window samples + the QsoRecord +
+                               a copy/paste repro command
+```
+
+The repro command in each `ux-snapshot.json` re-runs the decoder against the
+captured WAV over the same time window. Sample form:
+
+```text
+cw-decoder decode-and-play --json --start 12.4 --end 47.9 "session.wav"
+```
+
+Use this to compare what the operator saw in the status bar against what the
+decoder would emit in a deterministic offline replay — the canonical way to
+debug round 1 WPM regressions without trying to reproduce live propagation.
+
+WAV size is roughly 330 MB/hour (48 kHz mono, 16-bit) and is not rotated in
+round 1. Disable diagnostics or prune `%LOCALAPPDATA%\QsoRipper\diagnostics`
+manually between debug sessions.
+
 ## Current labeled corpus
 
 Label files live at the **repo root** under `data\cw-samples\`, not under `experiments\cw-decoder\`. `--all-labels` resolves `data\cw-samples\` relative to the current working directory, so it works fine when `eval` is invoked from the repo root and silently finds nothing when invoked from elsewhere. The examples below use `--labels-dir data\cw-samples` to make the path explicit, but `--all-labels` is equivalent when the cwd is the repo root.

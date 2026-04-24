@@ -242,6 +242,12 @@
                     Content="Show CW WPM in the status bar (Ctrl+Shift+W)"
                     IsChecked="{Binding IsCwWpmStatusBarVisible, Mode=TwoWay}" />
 
+          <CheckBox x:Name="SettingsAdvancedDiagnosticsCheckBox"
+                    AutomationProperties.AutomationId="SettingsAdvancedDiagnosticsCheckBox"
+                    Content="Advanced diagnostics (record audio + decoder events to %LOCALAPPDATA%\QsoRipper\diagnostics)"
+                    IsChecked="{Binding IsAdvancedDiagnosticsEnabled, Mode=TwoWay}"
+                    IsEnabled="{Binding IsRadioMonitorEnabled}" />
+
           <Grid ColumnDefinitions="180,*,Auto"
                 IsEnabled="{Binding IsRadioMonitorEnabled}">
             <TextBlock Grid.Column="0"

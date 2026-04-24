@@ -23,6 +23,16 @@ internal interface ICwWpmSampleSource : IDisposable
     /// <summary>Raised when the source's running state changes.</summary>
     event EventHandler? StatusChanged;
 
+    /// <summary>
+    /// Raised on the source's I/O thread for every non-empty raw NDJSON line
+    /// emitted by the underlying decoder. Subscribers (e.g. the diagnostics
+    /// recorder) tee these to disk so the full event stream — confidence
+    /// transitions, pitch updates, char/word/garbled events, power meter,
+    /// etc. — can be replayed offline. Round 1 implementations will simply
+    /// skip raising this if no subscribers are attached.
+    /// </summary>
+    event EventHandler<string>? RawLineReceived;
+
     /// <summary>Start the source, capturing from <paramref name="deviceOverride"/>
     /// (null/empty = system default capture device).</summary>
     void Start(string? deviceOverride);

@@ -127,6 +127,13 @@ internal sealed partial class MainWindow : Window
             return;
         }
 
+        if (_viewModel.IsCwStatsPaneOpen)
+        {
+            _viewModel.ToggleCwStatsPaneCommand.Execute(null);
+            e.Handled = true;
+            return;
+        }
+
         if (_viewModel.IsInspectorOpen)
         {
             _viewModel.ToggleInspectorCommand.Execute(null);
@@ -309,6 +316,13 @@ internal sealed partial class MainWindow : Window
             if (_viewModel.IsCallsignCardOpen)
             {
                 _viewModel.CloseCallsignCardCommand.Execute(null);
+                e.Handled = true;
+                return;
+            }
+
+            if (_viewModel.IsCwStatsPaneOpen)
+            {
+                _viewModel.ToggleCwStatsPaneCommand.Execute(null);
                 e.Handled = true;
                 return;
             }
@@ -899,7 +913,8 @@ internal sealed partial class MainWindow : Window
                 settingsVm.IsRadioMonitorEnabled,
                 settingsVm.IsCwWpmStatusBarVisible,
                 settingsVm.ResolvedIsLoopback,
-                settingsVm.ResolvedCaptureDevice);
+                settingsVm.ResolvedCaptureDevice,
+                settingsVm.IsAdvancedDiagnosticsEnabled);
             SavePreferences();
         }
 

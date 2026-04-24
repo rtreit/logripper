@@ -1,0 +1,102 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:QsoRipper.Gui.ViewModels"
+             xmlns:automation="clr-namespace:Avalonia.Automation;assembly=Avalonia.Controls"
+             x:Class="QsoRipper.Gui.Views.CwStatsPaneView"
+             x:DataType="vm:CwStatsPaneViewModel">
+
+  <UserControl.Styles>
+    <Style Selector="TextBlock.label">
+      <Setter Property="FontSize" Value="11" />
+      <Setter Property="Foreground" Value="#888888" />
+      <Setter Property="Margin" Value="0,0,8,0" />
+      <Setter Property="VerticalAlignment" Value="Center" />
+    </Style>
+    <Style Selector="TextBlock.value">
+      <Setter Property="FontSize" Value="14" />
+      <Setter Property="FontFamily" Value="Cascadia Mono, Consolas, monospace" />
+      <Setter Property="Foreground" Value="White" />
+      <Setter Property="VerticalAlignment" Value="Center" />
+    </Style>
+    <Style Selector="TextBlock.bigvalue">
+      <Setter Property="FontSize" Value="22" />
+      <Setter Property="FontWeight" Value="SemiBold" />
+      <Setter Property="FontFamily" Value="Cascadia Mono, Consolas, monospace" />
+      <Setter Property="Foreground" Value="#0096D6" />
+    </Style>
+  </UserControl.Styles>
+
+  <Border Background="#202028"
+          BorderBrush="#0096D6"
+          BorderThickness="1"
+          CornerRadius="4"
+          Padding="14,12"
+          MinWidth="320"
+          MaxWidth="380"
+          automation:AutomationProperties.AutomationId="CwStatsPane">
+    <StackPanel Spacing="8">
+
+      <DockPanel>
+        <TextBlock DockPanel.Dock="Left"
+                   Text="CW Stats"
+                   FontSize="13"
+                   FontWeight="SemiBold"
+                   Foreground="#aaaacc"
+                   VerticalAlignment="Center" />
+        <Button DockPanel.Dock="Right"
+                Content="✕"
+                Command="{Binding CloseCommand}"
+                Width="24" Height="22"
+                Padding="0"
+                FontSize="11"
+                ToolTip.Tip="Close (Esc or F9)" />
+      </DockPanel>
+
+      <Border Height="1" Background="#333355" />
+
+      <Grid ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto,Auto,Auto" >
+        <TextBlock Grid.Row="0" Grid.Column="0" Classes="label" Text="State" />
+        <TextBlock Grid.Row="0" Grid.Column="1" Classes="value" Text="{Binding ConfidenceText}" />
+
+        <TextBlock Grid.Row="1" Grid.Column="0" Classes="label" Text="Pitch" />
+        <TextBlock Grid.Row="1" Grid.Column="1" Classes="value" Text="{Binding PitchText}" />
+
+        <TextBlock Grid.Row="2" Grid.Column="0" Classes="label" Text="Power" />
+        <TextBlock Grid.Row="2" Grid.Column="1" Classes="value" Text="{Binding PowerText}" />
+
+        <TextBlock Grid.Row="3" Grid.Column="0" Classes="label" Text="Last garbled" />
+        <TextBlock Grid.Row="3" Grid.Column="1" Classes="value" Foreground="#cc8866"
+                   Text="{Binding LastGarbledText}" />
+      </Grid>
+
+      <Border Height="1" Background="#333355" />
+
+      <DockPanel LastChildFill="True">
+        <TextBlock DockPanel.Dock="Left" Classes="label" Text="WPM" />
+        <TextBlock Classes="bigvalue" HorizontalAlignment="Right"
+                   Text="{Binding WpmText}" />
+      </DockPanel>
+
+      <Border Height="1" Background="#333355" />
+
+      <TextBlock Classes="label" Text="Decoded" />
+      <Border Background="#101018"
+              BorderBrush="#333355"
+              BorderThickness="1"
+              CornerRadius="2"
+              Padding="6,4"
+              MinHeight="44">
+        <TextBlock Text="{Binding DecodedText}"
+                   FontFamily="Cascadia Mono, Consolas, monospace"
+                   FontSize="12.5"
+                   Foreground="#bbeebb"
+                   TextWrapping="Wrap" />
+      </Border>
+
+      <TextBlock Text="{Binding StatusText}"
+                 FontSize="10.5"
+                 Foreground="#888888"
+                 TextTrimming="CharacterEllipsis" />
+    </StackPanel>
+  </Border>
+</UserControl>

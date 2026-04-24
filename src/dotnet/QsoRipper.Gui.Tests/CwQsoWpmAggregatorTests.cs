@@ -14,6 +14,9 @@ public sealed class CwQsoWpmAggregatorTests
         public CwWpmSample? LatestSample { get; private set; }
         public event EventHandler<CwWpmSample>? SampleReceived;
         public event EventHandler? StatusChanged;
+#pragma warning disable CS0067 // unused in tests
+        public event EventHandler<string>? RawLineReceived;
+#pragma warning restore CS0067
 
         public void Emit(CwWpmSample sample)
         {

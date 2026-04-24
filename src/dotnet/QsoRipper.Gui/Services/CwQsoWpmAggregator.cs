@@ -129,6 +129,28 @@ internal sealed class CwQsoWpmAggregator : IDisposable
         return weightedSum / totalWeight;
     }
 
+    /// <summary>
+    /// Returns a snapshot of all retained samples whose <see cref="CwWpmSample.ReceivedUtc"/>
+    /// timestamp falls inside the supplied window (inclusive of both ends).
+    /// Used by the diagnostics recorder to attach the slice of live samples
+    /// the aggregator considered when computing the QSO's WPM. Returns an
+    /// empty list if no samples fall in the window.
+    /// </summary>
+    public IReadOnlyList<CwWpmSample> GetSamplesInWindow(DateTimeOffset utcStart, DateTimeOffset utcEnd)
+    {
+        if (utcEnd < utcStart)
+        {
+            return Array.Empty<CwWpmSample>();
+        }
+
+        lock (_lock)
+        {
+            return _samples
+                .Where(s => s.ReceivedUtc >= utcStart && s.ReceivedUtc <= utcEnd)
+                .ToArray();
+        }
+    }
+
     /// <summary>Drops all retained samples. Used by tests and on settings reset.</summary>
     public void Clear()
     {

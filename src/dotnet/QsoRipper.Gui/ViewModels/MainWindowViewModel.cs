@@ -30,6 +30,7 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
     private readonly DispatcherTimer _spaceWeatherTimer;
     private CwDecoderProcessSampleSource? _cwSampleSource;
     private CwQsoWpmAggregator? _cwAggregator;
+    private CwDiagnosticsRecorder? _cwDiagnosticsRecorder;
     private bool _setupCompleteBeforeWizard;
     private string? _preferredEngineProfileId;
     private string? _preferredEngineEndpoint;
@@ -108,6 +109,12 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
     private CallsignCardViewModel? _callsignCard;
 
     [ObservableProperty]
+    private bool _isCwStatsPaneOpen;
+
+    [ObservableProperty]
+    private CwStatsPaneViewModel? _cwStatsPane;
+
+    [ObservableProperty]
     private bool _isRigEnabled;
 
     [ObservableProperty]
@@ -148,6 +155,15 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
     private string _cwDecoderDeviceOverride = string.Empty;
 
     /// <summary>
+    /// When true, the GUI mirrors all cw-decoder NDJSON events + audio to
+    /// disk under <c>%LOCALAPPDATA%\QsoRipper\diagnostics\</c> so a developer
+    /// can compare what the UX displayed vs what the decoder emitted vs
+    /// what got logged on the QSO. Off by default.
+    /// </summary>
+    [ObservableProperty]
+    private bool _isCwDiagnosticsEnabled;
+
+    /// <summary>
     /// Whether the CW WPM live readout is shown in the status bar. Toggled
     /// independently of <see cref="IsCwDecoderEnabled"/> so users can hide
     /// the readout without tearing down the decoder, or reveal it as a
@@ -175,6 +191,8 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
         Logger = new QsoLoggerViewModel(_engine);
         Logger.QsoLogged += OnQsoLogged;
         Logger.LoggerFocusRequested += OnLoggerFocusRequested;
+        Logger.CwEpisodeBoundary += OnCwEpisodeBoundary;
+        Logger.CwEpisodeStarted += OnCwEpisodeStarted;
         ActiveEngineText = BuildEngineText(engineProfile, endpoint);
         UpdateUtcClock();
         _utcTimer = CreateUtcTimer();
@@ -195,6 +213,8 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
         Logger = new QsoLoggerViewModel(engine);
         Logger.QsoLogged += OnQsoLogged;
         Logger.LoggerFocusRequested += OnLoggerFocusRequested;
+        Logger.CwEpisodeBoundary += OnCwEpisodeBoundary;
+        Logger.CwEpisodeStarted += OnCwEpisodeStarted;
         if (_switchableEngine is not null)
         {
             ActiveEngineText = BuildEngineText(_switchableEngine.CurrentProfile, _switchableEngine.CurrentEndpoint);
@@ -510,6 +530,7 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
             IsSpaceWeatherVisible = IsSpaceWeatherVisible,
             IsRadioMonitorEnabled = IsCwDecoderEnabled,
             IsCwWpmStatusBarVisible = IsCwWpmStatusBarVisible,
+            IsAdvancedDiagnosticsEnabled = IsCwDiagnosticsEnabled,
             PendingPreselectDeviceOverride = CwDecoderDeviceOverride,
             PendingPreselectIsLoopback = IsCwDecoderLoopback,
         };
@@ -535,7 +556,8 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
             IsCwDecoderEnabled,
             IsCwWpmStatusBarVisible,
             IsCwDecoderLoopback,
-            CwDecoderDeviceOverride);
+            CwDecoderDeviceOverride,
+            IsCwDiagnosticsEnabled);
 
     internal void ApplySettingsUiPreferences(
         bool isSpaceWeatherVisible,
@@ -543,6 +565,21 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
         bool isCwWpmStatusBarVisible,
         bool isCwWpmLoopback,
         string? cwDeviceOverride)
+        => ApplySettingsUiPreferences(
+            isSpaceWeatherVisible,
+            isRadioMonitorEnabled,
+            isCwWpmStatusBarVisible,
+            isCwWpmLoopback,
+            cwDeviceOverride,
+            IsCwDiagnosticsEnabled);
+
+    internal void ApplySettingsUiPreferences(
+        bool isSpaceWeatherVisible,
+        bool isRadioMonitorEnabled,
+        bool isCwWpmStatusBarVisible,
+        bool isCwWpmLoopback,
+        string? cwDeviceOverride,
+        bool isCwDiagnosticsEnabled)
     {
         IsSpaceWeatherVisible = isSpaceWeatherVisible;
         if (IsSpaceWeatherVisible && string.IsNullOrEmpty(SpaceWeatherText))
@@ -559,18 +596,20 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
         var deviceChanged = !string.Equals(trimmedDevice, CwDecoderDeviceOverride, StringComparison.Ordinal);
         var loopbackChanged = isCwWpmLoopback != IsCwDecoderLoopback;
         var enableChanged = isRadioMonitorEnabled != IsCwDecoderEnabled;
+        var diagnosticsChanged = isCwDiagnosticsEnabled != IsCwDiagnosticsEnabled;
 
         CwDecoderDeviceOverride = trimmedDevice;
         IsCwDecoderLoopback = isCwWpmLoopback;
+        IsCwDiagnosticsEnabled = isCwDiagnosticsEnabled;
 
         if (enableChanged)
         {
             // ToggleCwDecoder flips the bool, then starts/stops with current settings.
             ToggleCwDecoder();
         }
-        else if (IsCwDecoderEnabled && (deviceChanged || loopbackChanged))
+        else if (IsCwDecoderEnabled && (deviceChanged || loopbackChanged || diagnosticsChanged))
         {
-            // Apply new device/loopback by restarting the source in place.
+            // Apply new device/loopback/diagnostics by restarting the source in place.
             ToggleCwDecoder(); // off
             ToggleCwDecoder(); // on, with new settings
         }
@@ -606,11 +645,32 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
             return;
         }
 
+        // Tear down any open episode + recorder so the restart begins a fresh
+        // diagnostics session aligned to the new decoder process. This avoids
+        // splicing audio across two decoder lifetimes inside one WAV file.
+        DisposeDiagnosticsRecorder();
+
+        string? recordingPath = null;
+        if (IsCwDiagnosticsEnabled)
+        {
+            try
+            {
+                StartDiagnosticsSession();
+                recordingPath = _cwDiagnosticsRecorder?.SessionWavPath;
+            }
+            catch (IOException ex)
+            {
+                CwDecoderStatusText = $"CW WPM: diagnostics dir error ({ex.Message})";
+                DisposeDiagnosticsRecorder();
+            }
+        }
+
         try
         {
             _cwSampleSource.Start(
                 string.IsNullOrWhiteSpace(CwDecoderDeviceOverride) ? null : CwDecoderDeviceOverride.Trim(),
-                IsCwDecoderLoopback);
+                IsCwDecoderLoopback,
+                recordingPath);
             CwDecoderStatusText = IsCwDecoderLoopback
                 ? "CW WPM: restarting (loopback)\u2026"
                 : "CW WPM: restarting\u2026";
@@ -695,11 +755,26 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
             }
 
             EnsureCwSampleSource();
+            string? recordingPath = null;
+            if (IsCwDiagnosticsEnabled)
+            {
+                try
+                {
+                    StartDiagnosticsSession();
+                    recordingPath = _cwDiagnosticsRecorder?.SessionWavPath;
+                }
+                catch (IOException ex)
+                {
+                    CwDecoderStatusText = $"CW WPM: diagnostics dir error ({ex.Message})";
+                    DisposeDiagnosticsRecorder();
+                }
+            }
             try
             {
                 _cwSampleSource?.Start(
                     string.IsNullOrWhiteSpace(CwDecoderDeviceOverride) ? null : CwDecoderDeviceOverride.Trim(),
-                    IsCwDecoderLoopback);
+                    IsCwDecoderLoopback,
+                    recordingPath);
                 CwDecoderStatusText = IsCwDecoderLoopback
                     ? "CW WPM: starting (loopback)\u2026"
                     : "CW WPM: starting\u2026";
@@ -708,16 +783,19 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
             {
                 IsCwDecoderEnabled = false;
                 CwDecoderStatusText = $"CW WPM: {ex.Message}";
+                DisposeDiagnosticsRecorder();
             }
             catch (System.ComponentModel.Win32Exception ex)
             {
                 IsCwDecoderEnabled = false;
                 CwDecoderStatusText = $"CW WPM: launch failed ({ex.Message})";
+                DisposeDiagnosticsRecorder();
             }
         }
         else
         {
             _cwSampleSource?.Stop();
+            DisposeDiagnosticsRecorder();
             CwDecoderStatusText = "CW WPM: OFF";
             UpdateDisabledCwStatusText();
         }
@@ -733,9 +811,78 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
         var src = new CwDecoderProcessSampleSource();
         src.SampleReceived += OnCwSampleReceived;
         src.StatusChanged += OnCwSourceStatusChanged;
+        src.RawLineReceived += OnCwRawLineReceived;
         _cwSampleSource = src;
         _cwAggregator = new CwQsoWpmAggregator(src);
         Logger.AttachCwAggregator(_cwAggregator);
+    }
+
+    private void OnCwRawLineReceived(object? sender, string line)
+    {
+        // Tee to the active diagnostics recorder if one is open. Called from
+        // the source's stdout pump background thread; recorder is internally
+        // thread-safe.
+        _cwDiagnosticsRecorder?.IngestRawLine(line);
+    }
+
+    private void StartDiagnosticsSession()
+    {
+        DisposeDiagnosticsRecorder();
+        var sessionDir = BuildDiagnosticsSessionDirectory(DateTimeOffset.UtcNow);
+        var binary = CwDecoderProcessSampleSource.LocateBinary();
+        var deviceLabel = string.IsNullOrWhiteSpace(CwDecoderDeviceOverride)
+            ? "(system default)"
+            : CwDecoderDeviceOverride.Trim();
+        _cwDiagnosticsRecorder = new CwDiagnosticsRecorder(
+            sessionDir,
+            DateTimeOffset.UtcNow,
+            binary,
+            deviceLabel,
+            IsCwDecoderLoopback);
+    }
+
+    private void DisposeDiagnosticsRecorder()
+    {
+        var recorder = _cwDiagnosticsRecorder;
+        _cwDiagnosticsRecorder = null;
+        recorder?.Dispose();
+    }
+
+    private static string BuildDiagnosticsSessionDirectory(DateTimeOffset utc)
+    {
+        var localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        var stamp = utc.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture);
+        return Path.Combine(localAppData, "QsoRipper", "diagnostics", $"session-{stamp}");
+    }
+
+    private void OnCwEpisodeStarted(object? sender, CwEpisodeStartedEventArgs e)
+    {
+        _cwDiagnosticsRecorder?.BeginEpisode(e.UtcStart);
+    }
+
+    private void OnCwEpisodeBoundary(object? sender, CwEpisodeBoundaryEventArgs e)
+    {
+        var recorder = _cwDiagnosticsRecorder;
+        if (recorder is null)
+        {
+            return;
+        }
+
+        var samples = _cwAggregator?.GetSamplesInWindow(e.UtcStart, e.UtcEnd)
+            ?? Array.Empty<CwWpmSample>();
+        var aggregateMean = _cwAggregator?.GetMeanWpm(e.UtcStart, e.UtcEnd);
+        var displayedWpm = _cwSampleSource?.LatestSample?.Wpm;
+        var displayedStatus = CwDecoderStatusText;
+
+        recorder.FinalizeEpisode(
+            e.Reason,
+            e.Qso,
+            displayedWpm,
+            displayedStatus,
+            aggregateMean,
+            samples,
+            e.UtcStart,
+            e.UtcEnd);
     }
 
     private void OnCwSampleReceived(object? sender, CwWpmSample sample)
@@ -947,6 +1094,34 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
     {
         Logger.AcceptLookupRecord(record);
     }
+
+    [RelayCommand]
+    private void ToggleCwStatsPane()
+    {
+        if (IsCwStatsPaneOpen)
+        {
+            CloseCwStatsPane();
+            return;
+        }
+
+        var vm = new CwStatsPaneViewModel(_cwSampleSource);
+        vm.CloseRequested += OnCwStatsPaneCloseRequested;
+        CwStatsPane = vm;
+        IsCwStatsPaneOpen = true;
+    }
+
+    private void CloseCwStatsPane()
+    {
+        if (CwStatsPane is { } pane)
+        {
+            pane.CloseRequested -= OnCwStatsPaneCloseRequested;
+            pane.Dispose();
+        }
+        IsCwStatsPaneOpen = false;
+        CwStatsPane = null;
+    }
+
+    private void OnCwStatsPaneCloseRequested(object? sender, EventArgs e) => CloseCwStatsPane();
 
     private void CloseHelp()
     {
@@ -1169,12 +1344,16 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
         {
             _cwSampleSource.SampleReceived -= OnCwSampleReceived;
             _cwSampleSource.StatusChanged -= OnCwSourceStatusChanged;
+            _cwSampleSource.RawLineReceived -= OnCwRawLineReceived;
             _cwSampleSource.Stop();
             _cwSampleSource.Dispose();
             _cwSampleSource = null;
         }
         _cwAggregator?.Dispose();
         _cwAggregator = null;
+        DisposeDiagnosticsRecorder();
+        CwStatsPane?.Dispose();
+        CwStatsPane = null;
 
         if (_switchableEngine is not null)
         {
@@ -1226,6 +1405,7 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
 
         IsCwDecoderLoopback = prefs.IsCwDecoderLoopback;
         IsCwWpmStatusBarVisible = prefs.IsCwWpmStatusBarVisible;
+        IsCwDiagnosticsEnabled = prefs.IsCwDiagnosticsEnabled;
 
         if (prefs.IsCwDecoderEnabled)
         {
@@ -1248,6 +1428,7 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
         IsCwDecoderEnabled = IsCwDecoderEnabled,
         IsCwDecoderLoopback = IsCwDecoderLoopback,
         IsCwWpmStatusBarVisible = IsCwWpmStatusBarVisible,
+        IsCwDiagnosticsEnabled = IsCwDiagnosticsEnabled,
         CwDecoderDeviceOverride = string.IsNullOrWhiteSpace(CwDecoderDeviceOverride)
             ? null
             : CwDecoderDeviceOverride.Trim(),

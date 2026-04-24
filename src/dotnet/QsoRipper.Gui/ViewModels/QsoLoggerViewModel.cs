@@ -127,6 +127,25 @@ internal sealed partial class QsoLoggerViewModel : ObservableObject
     /// <summary>Raised after a QSO is successfully logged.</summary>
     public event EventHandler? QsoLogged;
 
+    /// <summary>
+    /// Raised when a logged or cleared QSO crosses an episode boundary
+    /// (whichever the diagnostics recorder, if any, should finalize against).
+    /// The host (<see cref="MainWindowViewModel"/>) subscribes and writes
+    /// the per-episode comparison snapshot. Fired on the same thread as the
+    /// triggering action — UI thread for save success and Clear.
+    /// </summary>
+    public event EventHandler<CwEpisodeBoundaryEventArgs>? CwEpisodeBoundary;
+
+    /// <summary>
+    /// Raised when the operator first commits to a new QSO by typing into
+    /// the Callsign field (the same trigger that starts the elapsed timer).
+    /// The host (<see cref="MainWindowViewModel"/>) subscribes and asks an
+    /// active <see cref="Services.CwDiagnosticsRecorder"/> to open a new
+    /// per-QSO episode aligned to <c>UtcStart</c>. Idempotent semantics —
+    /// the timer only starts once per QSO so this fires once per QSO.
+    /// </summary>
+    public event EventHandler<CwEpisodeStartedEventArgs>? CwEpisodeStarted;
+
     /// <summary>Raised when the view should move focus to the callsign field.</summary>
     public event EventHandler? LoggerFocusRequested;
 
@@ -149,7 +168,17 @@ internal sealed partial class QsoLoggerViewModel : ObservableObject
         }
         else if (string.IsNullOrWhiteSpace(value) && _timerRunning)
         {
+            // Operator backed out of a QSO without saving or pressing Clear.
+            // Treat that the same as Clear() for episode-boundary purposes
+            // so a diagnostics recorder doesn't leave the episode hanging.
+            var boundaryStart = _qsoStartTime;
+            var boundaryEnd = DateTimeOffset.UtcNow;
             StopTimer();
+            CwEpisodeBoundary?.Invoke(this, new CwEpisodeBoundaryEventArgs(
+                Reason: "abandoned",
+                Qso: null,
+                UtcStart: boundaryStart,
+                UtcEnd: boundaryEnd));
         }
 
         // Cancel any pending lookup
@@ -299,8 +328,18 @@ internal sealed partial class QsoLoggerViewModel : ObservableObject
         {
             var response = await _engine.LogQsoAsync(qso);
             LogStatusText = $"Logged {callsign}";
+            // Snapshot the window before Clear() resets _qsoStartTime, then
+            // raise the boundary event so a host-side diagnostics recorder
+            // (if attached) can finalize the episode against the actual QSO.
+            var boundaryStart = utcStart;
+            var boundaryEnd = utcEnd;
             Clear();
             QsoLogged?.Invoke(this, EventArgs.Empty);
+            CwEpisodeBoundary?.Invoke(this, new CwEpisodeBoundaryEventArgs(
+                Reason: "logged",
+                Qso: qso,
+                UtcStart: boundaryStart,
+                UtcEnd: boundaryEnd));
             FocusLogger();
         }
         catch (Grpc.Core.RpcException ex)
@@ -420,6 +459,14 @@ internal sealed partial class QsoLoggerViewModel : ObservableObject
     [RelayCommand]
     private void Clear()
     {
+        // Snapshot the window before we reset state. We only fire the
+        // episode boundary if the timer was running (i.e. there was an
+        // operator-driven QSO attempt with a meaningful start time);
+        // resetting an already-empty form is not an episode boundary.
+        var hadTimer = _timerRunning;
+        var boundaryStart = _qsoStartTime;
+        var boundaryEnd = DateTimeOffset.UtcNow;
+
         _lookupCts?.Cancel();
         Callsign = string.Empty;
         Comment = string.Empty;
@@ -441,6 +488,15 @@ internal sealed partial class QsoLoggerViewModel : ObservableObject
         StopTimer();
         ElapsedTimeText = "00:00";
         UpdateLogEnabled();
+
+        if (hadTimer)
+        {
+            CwEpisodeBoundary?.Invoke(this, new CwEpisodeBoundaryEventArgs(
+                Reason: "cleared",
+                Qso: null,
+                UtcStart: boundaryStart,
+                UtcEnd: boundaryEnd));
+        }
     }
 
     [RelayCommand]
@@ -627,6 +683,7 @@ internal sealed partial class QsoLoggerViewModel : ObservableObject
         _qsoStartTime = DateTimeOffset.UtcNow;
         _timerRunning = true;
         _elapsedTimer.Start();
+        CwEpisodeStarted?.Invoke(this, new CwEpisodeStartedEventArgs(_qsoStartTime));
     }
 
     private void StopTimer()
