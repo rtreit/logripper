@@ -92,6 +92,22 @@ const DEBOUNCE_FRAC: f32 = 0.3;
 const PRIME_INTERVALS: usize = 8;
 /// EMA smoothing factor for post-bootstrap dit-length updates.
 const DIT_EMA_ALPHA: f32 = 0.15;
+/// Number of recent raw `current_wpm()` samples used to compute the
+/// median that drives `current_wpm_smoothed()`. A small odd window
+/// rejects single degenerate calibration windows without lagging real
+/// keying-speed changes.
+const WPM_SMOOTH_WINDOW: usize = 7;
+/// Maximum fractional change in emitted WPM per `WpmUpdate`. Caps
+/// sustained drift driven by `dot_len` calibration degrading under a
+/// weakening signal. Real operators cannot physically alter keying
+/// speed faster than this between adjacent character emits; anything
+/// larger is the calibration tracking the noise instead of the
+/// operator. With ~3 emits/sec at 18 WPM, 3% per emit lets a genuine
+/// 5 WPM change converge in ~3 s while a 40% calibration crash gets
+/// stretched across ~17 emits — long enough for the pitch-quality
+/// watchdog to drop the lock before the displayed WPM collapses.
+/// See QsoRipper issue #326.
+const WPM_MAX_REL_DELTA_PER_EMIT: f32 = 0.03;
 /// Hard sanity gate on ON-interval duration in dot units. Anything
 /// shorter than `MIN_ON_DOT_FRAC` cannot be a real dit; anything longer
 /// than `MAX_ON_DOT_FRAC` cannot be a real dah and is treated as bad
@@ -1275,6 +1291,19 @@ struct Decoder {
     single_element_rescue_suppressed: u64,
     chars_emitted: u64,
     garbled_emitted: u64,
+
+    /// Recent raw `current_wpm()` observations, newest at the back.
+    /// Capped at `WPM_SMOOTH_WINDOW`. Drives `current_wpm_smoothed()`,
+    /// which is what the streaming layer emits in `WpmUpdate` events
+    /// so a single bad calibration window can't yank the displayed
+    /// speed (issue #326).
+    wpm_history: VecDeque<f32>,
+    /// Last value returned by `current_wpm_smoothed()`. Used to
+    /// rate-limit emitted WPM so a sustained calibration drift
+    /// (signal degrading over several seconds) cannot pull the
+    /// displayed speed in half before the pitch-quality watchdog
+    /// notices and drops the lock.
+    last_smoothed_wpm: Option<f32>,
 }
 
 impl Decoder {
@@ -1313,6 +1342,8 @@ impl Decoder {
             single_element_rescue_suppressed: 0,
             chars_emitted: 0,
             garbled_emitted: 0,
+            wpm_history: VecDeque::with_capacity(WPM_SMOOTH_WINDOW),
+            last_smoothed_wpm: None,
         }
     }
 
@@ -1427,6 +1458,51 @@ impl Decoder {
         Some(1200.0 / dot_ms)
     }
 
+    /// Outlier-resistant, rate-limited WPM emitted in
+    /// `StreamEvent::WpmUpdate`.
+    ///
+    /// Two-stage filter on top of the raw `current_wpm()`:
+    ///
+    /// 1. **Median over `WPM_SMOOTH_WINDOW` raw samples.** Rejects
+    ///    single degenerate calibration windows (one mis-classified
+    ///    character producing a wild dot-length estimate). This alone
+    ///    is not enough — a sustained signal degradation produces a
+    ///    monotonically drifting raw stream whose median tracks right
+    ///    along with it.
+    /// 2. **Rate cap of `WPM_MAX_REL_DELTA_PER_EMIT`** vs the previous
+    ///    smoothed value. Real operators cannot physically alter
+    ///    keying speed faster than this between adjacent character
+    ///    emits, so anything larger is the dit-cluster calibration
+    ///    chasing noise. Genuine WPM changes converge in ~1 s; a
+    ///    crashing calibration gets stretched out far enough that the
+    ///    pitch-quality watchdog drops the lock first (which clears
+    ///    the smoother by reconstructing the inner `Decoder`).
+    ///
+    /// Returns `None` only while no `dot_len` estimate exists. Pure
+    /// callers that want the raw instantaneous value (final-summary
+    /// output, end-of-run JSON) keep using [`Self::current_wpm`].
+    fn current_wpm_smoothed(&mut self) -> Option<f32> {
+        let raw = self.current_wpm()?;
+        if self.wpm_history.len() == WPM_SMOOTH_WINDOW {
+            self.wpm_history.pop_front();
+        }
+        self.wpm_history.push_back(raw);
+        let mut sorted: Vec<f32> = self.wpm_history.iter().copied().collect();
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let median = sorted[sorted.len() / 2];
+
+        let rate_limited = match self.last_smoothed_wpm {
+            Some(prev) if prev > 0.0 => {
+                let max_delta = prev * WPM_MAX_REL_DELTA_PER_EMIT;
+                let delta = (median - prev).clamp(-max_delta, max_delta);
+                prev + delta
+            }
+            _ => median,
+        };
+        self.last_smoothed_wpm = Some(rate_limited);
+        Some(rate_limited)
+    }
+
     fn classify_letter(&mut self, pitch_hz: Option<f32>) -> Option<StreamEvent> {
         if self.current_letter.is_empty() {
             return None;
@@ -1497,8 +1573,10 @@ impl Decoder {
             }
             // WPM is a "decoder is alive" indicator. Always emit when we have
             // a tempo estimate, so the operator can see the decoder is still
-            // tracking even when the rhythm gate is briefly closed.
-            if let Some(w) = self.current_wpm() {
+            // tracking even when the rhythm gate is briefly closed. We emit
+            // the median-smoothed value (issue #326) so a single degenerate
+            // calibration window can't yank the displayed speed in half.
+            if let Some(w) = self.current_wpm_smoothed() {
                 events.push(StreamEvent::WpmUpdate { wpm: w });
             }
         } else if len_norm > LETTER_SPACE_BOUNDARY {
@@ -1634,7 +1712,7 @@ impl Decoder {
                 && self.dah_len.is_some()
                 && self.bootstrap.len() >= PRIME_INTERVALS;
             if have_contrast {
-                if let Some(w) = self.current_wpm() {
+                if let Some(w) = self.current_wpm_smoothed() {
                     events.push(StreamEvent::WpmUpdate { wpm: w });
                 }
                 let buffered = std::mem::take(&mut self.bootstrap);
@@ -3391,5 +3469,123 @@ mod min_pulse_filter_tests {
             "expected at least one short blip to be filtered out \
              (ungated={chars_ungated}, gated={chars_gated})"
         );
+    }
+}
+
+#[cfg(test)]
+mod wpm_smoothing_tests {
+    use super::*;
+
+    /// Force a sequence of raw `current_wpm()` observations through
+    /// the inner `Decoder` and confirm that `current_wpm_smoothed()`
+    /// returns the median of the last `WPM_SMOOTH_WINDOW` samples.
+    /// This is the regression guard for QsoRipper issue #326: a
+    /// degraded calibration window can briefly halve the raw value;
+    /// smoothing must hold the displayed WPM steady.
+    fn force_dot_for_wpm(decoder: &mut Decoder, target_wpm: f32) {
+        // current_wpm = 1200 / dot_ms = 1200 / ((dot/power_rate) * 1000)
+        // => dot = (1200 / target_wpm / 1000) * power_rate
+        let dot_ms = 1200.0 / target_wpm;
+        decoder.dot_len = Some((dot_ms / 1000.0) * decoder.power_rate);
+    }
+
+    #[test]
+    fn smoothed_wpm_rejects_a_single_outlier() {
+        let mut decoder = Decoder::new(400.0);
+
+        // Steady-state run at 18 WPM long enough to fill the window.
+        for _ in 0..WPM_SMOOTH_WINDOW {
+            force_dot_for_wpm(&mut decoder, 18.0);
+            let w = decoder.current_wpm_smoothed().expect("wpm");
+            assert!(
+                (w - 18.0).abs() < 0.5,
+                "steady-state should report ~18 WPM, got {w}"
+            );
+        }
+
+        // One degenerate calibration window halves the raw WPM.
+        force_dot_for_wpm(&mut decoder, 6.0);
+        let w_after_outlier = decoder.current_wpm_smoothed().expect("wpm");
+        assert!(
+            w_after_outlier > 14.0,
+            "single-outlier observation must not pull the emitted WPM \
+             below the operator-plausible range; got {w_after_outlier}"
+        );
+    }
+
+    /// Regression for QsoRipper #326: a sustained calibration drift
+    /// (real captured failure: 11.3 WPM -> 6.75 WPM over ~6 s) must be
+    /// rate-limited so the displayed value cannot collapse before the
+    /// pitch watchdog has a chance to drop the lock.
+    #[test]
+    fn smoothed_wpm_rate_caps_a_sustained_calibration_crash() {
+        let mut decoder = Decoder::new(400.0);
+
+        // Establish a stable 13 WPM lock.
+        for _ in 0..WPM_SMOOTH_WINDOW * 2 {
+            force_dot_for_wpm(&mut decoder, 13.0);
+            let _ = decoder.current_wpm_smoothed();
+        }
+        let baseline = decoder.current_wpm_smoothed().expect("wpm");
+        assert!((baseline - 13.0).abs() < 0.5, "baseline {baseline} != 13");
+
+        // Simulate the captured #326 trajectory: monotonic decay from
+        // 11.3 down to 6.75 over 14 raw observations (matches the
+        // session-events.ndjson timeline at t=35..41).
+        let trajectory = [
+            11.33, 11.22, 11.03, 10.81, 9.81, 8.87, 8.08, 7.54, 7.15, 6.97, 6.75, 6.75, 6.75, 6.75,
+        ];
+        let mut last_emitted = baseline;
+        for &raw_wpm in &trajectory {
+            force_dot_for_wpm(&mut decoder, raw_wpm);
+            let emitted = decoder.current_wpm_smoothed().expect("wpm");
+            let drop_frac = (last_emitted - emitted) / last_emitted;
+            assert!(
+                drop_frac <= WPM_MAX_REL_DELTA_PER_EMIT + 1e-3,
+                "single-emit drop {drop_frac:.3} exceeded cap \
+                 {WPM_MAX_REL_DELTA_PER_EMIT} (prev={last_emitted}, now={emitted})"
+            );
+            last_emitted = emitted;
+        }
+        // After 14 capped emits at 3% each, the worst-case floor is
+        // baseline * 0.97^14 ≈ 0.65 * baseline ≈ 8.5. The displayed
+        // WPM must not have collapsed all the way to 6.75 (the raw
+        // floor) over this window — that would mean the cap is doing
+        // nothing.
+        assert!(
+            last_emitted > 8.0,
+            "rate cap should keep displayed WPM above 8.0 across the \
+             #326 trajectory, got {last_emitted}"
+        );
+    }
+
+    #[test]
+    fn smoothed_wpm_tracks_a_real_speed_change() {
+        // If the operator (or the upstream decoder genuinely tracking
+        // a real change) sustains a new tempo for long enough, the
+        // smoothed value must converge to it. Otherwise the rate cap
+        // would mask real WPM changes. With WPM_MAX_REL_DELTA_PER_EMIT
+        // = 0.03, going 18 -> 28 (~+55%) takes ~15 emits to converge;
+        // 40 emits is comfortably enough.
+        let mut decoder = Decoder::new(400.0);
+        for _ in 0..WPM_SMOOTH_WINDOW {
+            force_dot_for_wpm(&mut decoder, 18.0);
+            let _ = decoder.current_wpm_smoothed();
+        }
+        for _ in 0..40 {
+            force_dot_for_wpm(&mut decoder, 28.0);
+            let _ = decoder.current_wpm_smoothed();
+        }
+        let w = decoder.current_wpm_smoothed().expect("wpm");
+        assert!(
+            (w - 28.0).abs() < 0.5,
+            "sustained speed change should converge under the rate cap, got {w}"
+        );
+    }
+
+    #[test]
+    fn smoothed_wpm_returns_none_before_any_dot_estimate() {
+        let mut decoder = Decoder::new(400.0);
+        assert!(decoder.current_wpm_smoothed().is_none());
     }
 }

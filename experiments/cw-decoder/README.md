@@ -578,6 +578,34 @@ WAV size is roughly 330 MB/hour (48 kHz mono, 16-bit) and is not rotated in
 round 1. Disable diagnostics or prune `%LOCALAPPDATA%\QsoRipper\diagnostics`
 manually between debug sessions.
 
+### WPM emission smoothing (#326)
+
+The first live capture made with the diagnostics bundle revealed a failure
+mode in `current_wpm()`: a sustained signal degradation produced a
+monotonically drifting raw WPM (11.3 → 6.75 over ~6 s on a real on-air QSO)
+while the pitch lock was still nominally healthy. The pitch-quality
+watchdog only fired ~6 s after the WPM had already collapsed, so the
+operator-facing speed dropped from a correct ~13 WPM to ~6 WPM mid-QSO.
+
+`StreamingDecoder` now emits a smoothed value instead of the raw
+`current_wpm()` in `StreamEvent::WpmUpdate`:
+
+1. **Median over the last `WPM_SMOOTH_WINDOW` (=7) raw samples.** Rejects
+   single degenerate calibration windows where one mis-classified
+   character produces a wild dot-length estimate.
+2. **Rate cap of `WPM_MAX_REL_DELTA_PER_EMIT` (=3%) per emit.** Real
+   operators cannot physically alter keying speed faster than this between
+   adjacent character emits; anything larger is the dit-cluster
+   calibration tracking the noise instead of the operator. Genuine WPM
+   changes still converge in ~3 s; a crashing calibration gets stretched
+   far enough that the watchdog drops the lock first.
+
+The internal `current_wpm()` is unchanged and is still what end-of-run
+summaries and the harvest output use. Replaying the original captured
+session through the fixed decoder shows the displayed WPM staying above
+9.5 WPM across the same crash window where the pre-fix value bottomed at
+6.75 WPM.
+
 ## Current labeled corpus
 
 Label files live at the **repo root** under `data\cw-samples\`, not under `experiments\cw-decoder\`. `--all-labels` resolves `data\cw-samples\` relative to the current working directory, so it works fine when `eval` is invoked from the repo root and silently finds nothing when invoked from elsewhere. The examples below use `--labels-dir data\cw-samples` to make the path explicit, but `--all-labels` is equivalent when the cwd is the repo root.
