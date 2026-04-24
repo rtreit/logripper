@@ -27,7 +27,14 @@ $variants = @(
     'cw_30wpm_abbrev_weak.wav',
     'cw_30wpm_abbrev_qrn.wav',
     'cw_30wpm_abbrev_qsb.wav',
-    'cw_30wpm_abbrev_weak_qsb.wav'
+    'cw_30wpm_abbrev_weak_qsb.wav',
+    'cw_30wpm_abbrev_extreme_qrn.wav',
+    'cw_30wpm_abbrev_crushed.wav',
+    'cw_30wpm_abbrev_deep_qsb.wav',
+    'cw_30wpm_abbrev_buried.wav',
+    'cw_30wpm_abbrev_harsh_white.wav',
+    'cw_30wpm_abbrev_inband_qrm.wav',
+    'cw_30wpm_abbrev_chaos.wav'
 )
 
 $results = @()

@@ -706,11 +706,32 @@ cargo run --release --manifest-path experiments\cw-decoder\Cargo.toml -- devices
 cargo run --release --manifest-path experiments\cw-decoder\Cargo.toml -- live --device "USB Audio CODEC"
 ```
 
+Run the 30 WPM abbreviation bench across the full real-audio variant matrix (12 scenarios from clean to chaos):
+
+```powershell
+# One-time: regenerate the variant WAVs (gitignored, ~50 MB total).
+.\experiments\cw-decoder\scripts\gen-30wpm-variants.ps1
+
+# Then bench:
+.\experiments\cw-decoder\scripts\bench-30wpm.ps1 -Label default
+```
+
+The variant matrix is intentionally tiered:
+
+| Tier | Variants | What stresses the decoder |
+|---|---|---|
+| baseline | `clean`, `weak`, `qrn`, `qsb`, `weak_qsb` | mild SNR / fade — decoder should pass cleanly |
+| extreme | `extreme_qrn`, `crushed`, `deep_qsb`, `buried` | heavy brown noise (mostly killed by the 300 Hz HP) + deep slow QSB; `buried` combines all three and is where the decoder first cracks |
+| harsh   | `harsh_white`, `inband_qrm`, `chaos` | white / CW-band-bandpassed noise the front end *cannot* filter away; locks acquire instantly on the right pitch but symbol classification fails — this is where the decoder's downstream gating becomes the bottleneck rather than acquisition |
+
+The `harsh_white` / `inband_qrm` / `chaos` variants currently expose a real weakness: even with a healthy lock and a passed Fisher confidence check, the keying envelope chatters in dense in-band noise and the ditdah classifier emits long runs of garbage characters. Improving the `false_chars_before_stable` metric on these three is the next concrete bench target.
+
 ## Repo-local artifacts
 
 - `gui-screenshot*.png` — historical GUI screenshots tracking visual iteration on the Decode tab
 - `screenshots\sensitivity-panel.png` — close-up of the sensitivity / threshold panel
 - `target\` — local Cargo build output (debug + release) for `cw-decoder` and `eval`
 - `gui\bin\`, `gui\obj\` — local .NET build output for the Avalonia GUI
+- `bench-runs\` — per-label JSON results from `bench-30wpm.ps1`
 
 These are not committed-meaningful build artifacts; they exist to make the GUI runnable without an extra build step on the developer machine.
