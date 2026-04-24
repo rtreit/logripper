@@ -38,7 +38,10 @@ Today, the reference path is the causal `ditdah` baseline. The custom streaming 
 >    can validate without a radio by playing audio through your speakers.
 >    Save. Optionally tick *Show CW WPM in the status bar* (toggle live with
 >    `Ctrl+Shift+W`) to see the live WPM readout, which dims when the monitor
->    is off as a reminder.
+>    is off as a reminder. If the decoder gets "stuck" on a wrong baseline
+>    (e.g. a slow station hands off to a fast one and the dot/dash estimator
+>    doesn't follow), press `Ctrl+Alt+W` to restart the decoder process and
+>    let the confidence state machine re-acquire from scratch.
 >
 > If the binary cannot be found, the monitor toggle silently flips back off
 > and the status row reports `CW WPM: decoder not built`. If the binary is

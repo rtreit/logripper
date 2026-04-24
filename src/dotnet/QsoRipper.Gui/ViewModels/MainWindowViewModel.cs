@@ -590,6 +590,41 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
         UpdateDisabledCwStatusText();
     }
 
+    /// <summary>
+    /// Keyboard shortcut (Ctrl+Alt+W) — restarts the running cw-decoder
+    /// process so the dot/dash duration estimator and confidence state
+    /// machine start fresh. Useful when the decoder has latched onto a
+    /// wrong baseline (e.g. one station finishes a slow exchange and the
+    /// next operator starts much faster, leaving the WPM estimator
+    /// "stuck" on a stale dot length). No-op when the monitor is off.
+    /// </summary>
+    [RelayCommand]
+    private void RestartCwDecoder()
+    {
+        if (!IsCwDecoderEnabled || _cwSampleSource is null)
+        {
+            return;
+        }
+
+        try
+        {
+            _cwSampleSource.Start(
+                string.IsNullOrWhiteSpace(CwDecoderDeviceOverride) ? null : CwDecoderDeviceOverride.Trim(),
+                IsCwDecoderLoopback);
+            CwDecoderStatusText = IsCwDecoderLoopback
+                ? "CW WPM: restarting (loopback)\u2026"
+                : "CW WPM: restarting\u2026";
+        }
+        catch (InvalidOperationException ex)
+        {
+            CwDecoderStatusText = $"CW WPM: {ex.Message}";
+        }
+        catch (System.ComponentModel.Win32Exception ex)
+        {
+            CwDecoderStatusText = $"CW WPM: restart failed ({ex.Message})";
+        }
+    }
+
     private void UpdateDisabledCwStatusText()
     {
         if (IsCwWpmStatusBarVisible && !IsCwDecoderEnabled)
