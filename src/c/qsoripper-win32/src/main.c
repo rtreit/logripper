@@ -455,6 +455,36 @@ static void safe_strcat(char *dst, size_t dstsz, const char *src)
     safe_strcpy(dst + cur, avail, src);
 }
 
+/* Parse "HH:MM" into seconds since midnight, or -1 on error. */
+static int parse_hhmm_to_seconds(const char *s)
+{
+    if (!s) return -1;
+    if (!(s[0] >= '0' && s[0] <= '9')) return -1;
+    if (!(s[1] >= '0' && s[1] <= '9')) return -1;
+    if (s[2] != ':') return -1;
+    if (!(s[3] >= '0' && s[3] <= '9')) return -1;
+    if (!(s[4] >= '0' && s[4] <= '9')) return -1;
+    if (s[5] != 0) return -1;
+    int h = (s[0] - '0') * 10 + (s[1] - '0');
+    int m = (s[3] - '0') * 10 + (s[4] - '0');
+    if (h > 23 || m > 59) return -1;
+    return h * 3600 + m * 60;
+}
+
+/* Compute duration in seconds between two "HH:MM" timestamps.
+   Returns -1 if either input cannot be parsed. If time_off is earlier
+   than time_on (e.g. a QSO that crossed midnight) the result wraps by
+   adding 24 hours so the displayed duration is non-negative. */
+static int qso_duration_seconds(const char *time_on, const char *time_off)
+{
+    int on = parse_hhmm_to_seconds(time_on);
+    int off = parse_hhmm_to_seconds(time_off);
+    if (on < 0 || off < 0) return -1;
+    int diff = off - on;
+    if (diff < 0) diff += 24 * 3600;
+    return diff;
+}
+
 /* Convert raw MHz decimal string to radio-style: "14.22500" -> "14.225.00" */
 static void freq_to_radio_style(const char *mhz_str, char *out, size_t outsz)
 {
@@ -809,6 +839,11 @@ void qsr_test_apply_lookup_result(const char *callsign, unsigned generation, int
     }
     /* ApplyLookupResult takes ownership and frees res. */
     ApplyLookupResult(res);
+}
+
+int qsr_test_qso_duration_seconds(const char *time_on, const char *time_off)
+{
+    return qso_duration_seconds(time_on, time_off);
 }
 #endif
 
@@ -2356,7 +2391,7 @@ static int PaintLogForm(HDC hdc, int y_start, int w)
 
     /* Row 6: QSO Duration */
     {
-        char dur[32];
+        char dur[48];
         if (g_state.qso_timer_active) {
             ULONGLONG elapsed = GetTickCount64() - g_state.qso_started_at;
             int secs = (int)(elapsed / 1000);
@@ -2365,7 +2400,15 @@ static int PaintLogForm(HDC hdc, int y_start, int w)
             snprintf(dur, sizeof(dur), "QSO Duration: %02d:%02d", mins, secs);
             DrawText_A(hdc, pad, y + 3, CLR_GREEN, dur);
         } else {
-            DrawText_A(hdc, pad, y + 3, CLR_DARKGRAY, "QSO Duration: 00:00");
+            int total = qso_duration_seconds(g_state.time_str, g_state.time_off);
+            if (total >= 0) {
+                int mins = total / 60;
+                int secs = total % 60;
+                snprintf(dur, sizeof(dur), "QSO Duration: %02d:%02d", mins, secs);
+                DrawText_A(hdc, pad, y + 3, CLR_DARKGRAY, dur);
+            } else {
+                DrawText_A(hdc, pad, y + 3, CLR_DARKGRAY, "QSO Duration: 00:00");
+            }
         }
     }
     y += row_h;
