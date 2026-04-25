@@ -149,7 +149,7 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
     private bool _isCwDecoderLoopback;
 
     [ObservableProperty]
-    private string _cwDecoderStatusText = "CW WPM: OFF";
+    private string _cwDecoderStatusText = "WPM: OFF";
 
     [ObservableProperty]
     private string _cwDecoderDeviceOverride = string.Empty;
@@ -668,7 +668,7 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
             }
             catch (IOException ex)
             {
-                CwDecoderStatusText = $"CW WPM: diagnostics dir error ({ex.Message})";
+                CwDecoderStatusText = $"WPM: diagnostics dir error ({ex.Message})";
                 DisposeDiagnosticsRecorder();
             }
         }
@@ -680,16 +680,16 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
                 IsCwDecoderLoopback,
                 recordingPath);
             CwDecoderStatusText = IsCwDecoderLoopback
-                ? "CW WPM: restarting (loopback)\u2026"
-                : "CW WPM: restarting\u2026";
+                ? "WPM: restarting (loopback)\u2026"
+                : "WPM: restarting\u2026";
         }
         catch (InvalidOperationException ex)
         {
-            CwDecoderStatusText = $"CW WPM: {ex.Message}";
+            CwDecoderStatusText = $"WPM: {ex.Message}";
         }
         catch (System.ComponentModel.Win32Exception ex)
         {
-            CwDecoderStatusText = $"CW WPM: restart failed ({ex.Message})";
+            CwDecoderStatusText = $"WPM: restart failed ({ex.Message})";
         }
     }
 
@@ -697,7 +697,7 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
     {
         if (IsCwWpmStatusBarVisible && !IsCwDecoderEnabled)
         {
-            CwDecoderStatusText = "CW WPM: disabled (Settings → Display)";
+            CwDecoderStatusText = "WPM: disabled (Settings → Display)";
         }
     }
 
@@ -758,7 +758,7 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
             if (CwDecoderProcessSampleSource.LocateBinary() is null)
             {
                 IsCwDecoderEnabled = false;
-                CwDecoderStatusText = "CW WPM: decoder not built (see experiments/cw-decoder/README.md)";
+                CwDecoderStatusText = "WPM: decoder not built (see experiments/cw-decoder/README.md)";
                 return;
             }
 
@@ -771,7 +771,7 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
             // matches operator expectation: "type a callsign → CW hunts; Esc
             // → CW silent" and avoids the decoder reporting a stale lock on
             // ambient noise when no QSO is in progress.
-            CwDecoderStatusText = "CW WPM: armed (type a callsign to listen)";
+            CwDecoderStatusText = "WPM: armed";
 
             // If the operator already has a callsign in the field when they
             // turn the monitor on, start hunting immediately so they don't
@@ -784,7 +784,7 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
         else
         {
             StopCwDecoderProcess();
-            CwDecoderStatusText = "CW WPM: OFF";
+            CwDecoderStatusText = "WPM: OFF";
             UpdateDisabledCwStatusText();
         }
     }
@@ -817,7 +817,7 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
             }
             catch (IOException ex)
             {
-                CwDecoderStatusText = $"CW WPM: diagnostics dir error ({ex.Message})";
+                CwDecoderStatusText = $"WPM: diagnostics dir error ({ex.Message})";
                 DisposeDiagnosticsRecorder();
             }
         }
@@ -829,17 +829,17 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
                 IsCwDecoderLoopback,
                 recordingPath);
             CwDecoderStatusText = IsCwDecoderLoopback
-                ? "CW WPM: starting (loopback)\u2026"
-                : "CW WPM: starting\u2026";
+                ? "WPM: starting (loopback)\u2026"
+                : "WPM: starting\u2026";
         }
         catch (InvalidOperationException ex)
         {
-            CwDecoderStatusText = $"CW WPM: {ex.Message}";
+            CwDecoderStatusText = $"WPM: {ex.Message}";
             DisposeDiagnosticsRecorder();
         }
         catch (System.ComponentModel.Win32Exception ex)
         {
-            CwDecoderStatusText = $"CW WPM: launch failed ({ex.Message})";
+            CwDecoderStatusText = $"WPM: launch failed ({ex.Message})";
             DisposeDiagnosticsRecorder();
         }
     }
@@ -953,21 +953,21 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
             // listening anymore until they start the next QSO.
             if (!IsCwDecoderEnabled)
             {
-                CwDecoderStatusText = "CW WPM: OFF";
+                CwDecoderStatusText = "WPM: OFF";
                 UpdateDisabledCwStatusText();
             }
             else if (wasRunning)
             {
-                CwDecoderStatusText = "CW WPM: armed (type a callsign to listen)";
+                CwDecoderStatusText = "WPM: armed";
             }
             else if (_cwSampleSource is not null)
             {
                 CwDecoderStatusText = _cwSampleSource.CurrentLockState switch
                 {
-                    CwLockState.Locked => "CW WPM: locked",
-                    CwLockState.Probation => "CW WPM: probation",
-                    CwLockState.Hunting => "CW WPM: hunting",
-                    _ => "CW WPM: armed (type a callsign to listen)",
+                    CwLockState.Locked => "WPM: locked",
+                    CwLockState.Probation => "WPM: probation",
+                    CwLockState.Hunting => "WPM: hunting",
+                    _ => "WPM: armed",
                 };
             }
         });
@@ -1007,7 +1007,7 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
             {
                 CwDecoderStatusText = string.Create(
                     CultureInfo.InvariantCulture,
-                    $"CW WPM: {sample.Wpm:F1}");
+                    $"WPM: {sample.Wpm:F1}");
             }
         });
     }
@@ -1022,10 +1022,10 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
             }
             CwDecoderStatusText = newState switch
             {
-                CwLockState.Locked => "CW WPM: locking…",
-                CwLockState.Probation => "CW WPM: probation",
-                CwLockState.Hunting => "CW WPM: hunting",
-                _ => "CW WPM: idle",
+                CwLockState.Locked => "WPM: locking…",
+                CwLockState.Probation => "WPM: probation",
+                CwLockState.Hunting => "WPM: hunting",
+                _ => "WPM: idle",
             };
         });
     }
@@ -1043,13 +1043,13 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
         {
             if (!IsCwDecoderEnabled)
             {
-                CwDecoderStatusText = "CW WPM: OFF";
+                CwDecoderStatusText = "WPM: OFF";
             }
             else if (!running)
             {
                 CwDecoderStatusText = string.IsNullOrWhiteSpace(lastErr)
-                    ? "CW WPM: stopped"
-                    : $"CW WPM: stopped — {Truncate(lastErr, 120)}";
+                    ? "WPM: stopped"
+                    : $"WPM: stopped — {Truncate(lastErr, 120)}";
             }
         });
     }
