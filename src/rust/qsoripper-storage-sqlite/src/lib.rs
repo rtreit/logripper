@@ -895,4 +895,45 @@ mod tests {
             .unwrap();
         assert_eq!(purged, 0);
     }
+
+    #[tokio::test]
+    async fn sqlite_storage_round_trips_cw_decode_rx_wpm() {
+        let storage: Arc<dyn EngineStorage> =
+            Arc::new(SqliteStorageBuilder::new().in_memory().build().unwrap());
+        let engine = LogbookEngine::new(storage);
+        let mut qso = QsoRecordBuilder::new("W1AW", "K7ABC")
+            .band(Band::Band40m)
+            .mode(Mode::Cw)
+            .timestamp(Timestamp {
+                seconds: 1_700_000_000,
+                nanos: 0,
+            })
+            .build();
+        qso.cw_decode_rx_wpm = Some(28);
+
+        let stored = engine.log_qso(qso).await.unwrap();
+        let loaded = engine.get_qso(&stored.local_id).await.unwrap();
+
+        assert_eq!(loaded.cw_decode_rx_wpm, Some(28));
+    }
+
+    #[tokio::test]
+    async fn sqlite_storage_round_trips_no_cw_decode_rx_wpm() {
+        let storage: Arc<dyn EngineStorage> =
+            Arc::new(SqliteStorageBuilder::new().in_memory().build().unwrap());
+        let engine = LogbookEngine::new(storage);
+        let qso = QsoRecordBuilder::new("W1AW", "K7ABC")
+            .band(Band::Band20m)
+            .mode(Mode::Ssb)
+            .timestamp(Timestamp {
+                seconds: 1_700_000_000,
+                nanos: 0,
+            })
+            .build();
+
+        let stored = engine.log_qso(qso).await.unwrap();
+        let loaded = engine.get_qso(&stored.local_id).await.unwrap();
+
+        assert_eq!(loaded.cw_decode_rx_wpm, None);
+    }
 }

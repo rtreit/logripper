@@ -123,4 +123,14 @@ message QsoRecord {
   optional string owner_callsign = 106;
   // ADIF QSO_COMPLETE — whether the contact was completed.
   QsoCompletion qso_complete = 107;
+
+  // --- Decoded signal characteristics ---
+  // Estimated receive-side CW sending speed in words per minute, inferred
+  // from decoded audio over the QSO's start..end window. This reflects the
+  // *worked* station's sending speed, not the local operator's transmit
+  // speed. A future `cw_decode_tx_wpm` field will carry the local sending
+  // speed (sourced from CAT keyer-speed query and/or PTT-gated sidetone
+  // decoding); ADIF `SPEED` mapping waits for that field, so this round-1
+  // RX value is exported via `APP_QSORIPPER_RX_WPM`.
+  optional uint32 cw_decode_rx_wpm = 130;
 }
