@@ -869,7 +869,28 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
         // pane preserves its lock badge from the source's current state —
         // if the decoder is still locked on the same signal, IsLocked
         // stays true and the next sample will populate WPM again.
-        Dispatcher.UIThread.Post(() => CwStatsPane?.Reset());
+        Dispatcher.UIThread.Post(() =>
+        {
+            CwStatsPane?.Reset();
+            // Also reset the main status bar's CW WPM text to a neutral
+            // lock-state-appropriate value so the operator gets clear
+            // feedback that the previous QSO's reading is gone. Without
+            // this the status bar keeps showing "CW WPM: 13.4" from the
+            // last sample until the next sample arrives — which can be
+            // many seconds if the band went quiet between QSOs, leaving
+            // the operator looking at a stale value that no longer
+            // belongs to anything they're working on.
+            if (IsCwDecoderEnabled && _cwSampleSource is not null)
+            {
+                CwDecoderStatusText = _cwSampleSource.CurrentLockState switch
+                {
+                    CwLockState.Locked => "CW WPM: locked",
+                    CwLockState.Probation => "CW WPM: probation",
+                    CwLockState.Hunting => "CW WPM: hunting",
+                    _ => "CW WPM: idle",
+                };
+            }
+        });
 
         var recorder = _cwDiagnosticsRecorder;
         if (recorder is null)
