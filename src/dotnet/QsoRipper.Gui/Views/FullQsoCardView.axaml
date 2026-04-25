@@ -169,6 +169,24 @@
                   <TextBlock Classes="fieldLabel" Text="Notes" />
                   <TextBox Text="{Binding Notes, Mode=TwoWay}" AcceptsReturn="True" Height="140" TextWrapping="Wrap" />
                 </StackPanel>
+
+                <StackPanel>
+                  <TextBlock Classes="fieldLabel" Text="CW decode (RX)" />
+                  <Grid ColumnDefinitions="Auto,*" ColumnSpacing="10">
+                    <StackPanel Grid.Column="0" Width="120">
+                      <TextBlock Classes="fieldLabel" Text="WPM" Opacity="0.72" />
+                      <TextBox Text="{Binding CwDecodeRxWpmText, Mode=TwoWay}"
+                               PlaceholderText="auto" />
+                    </StackPanel>
+                    <StackPanel Grid.Column="1">
+                      <TextBlock Classes="fieldLabel" Text="Transcript" Opacity="0.72" />
+                      <TextBox Text="{Binding CwDecodeTranscript, Mode=TwoWay}"
+                               AcceptsReturn="True" Height="88" TextWrapping="Wrap"
+                               Classes="mono"
+                               PlaceholderText="Auto-filled from CW decoder; editable" />
+                    </StackPanel>
+                  </Grid>
+                </StackPanel>
               </StackPanel>
             </Grid>
           </ScrollViewer>

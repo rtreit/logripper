@@ -233,6 +233,12 @@ internal sealed partial class FullQsoCardViewModel : ObservableObject, IDisposab
     private string _comment = string.Empty;
 
     [ObservableProperty]
+    private string _cwDecodeRxWpmText = string.Empty;
+
+    [ObservableProperty]
+    private string _cwDecodeTranscript = string.Empty;
+
+    [ObservableProperty]
     private string _snapshotProfileName = string.Empty;
 
     [ObservableProperty]
@@ -355,6 +361,14 @@ internal sealed partial class FullQsoCardViewModel : ObservableObject, IDisposab
             }
             else
             {
+                // Auto-fill CW WPM/transcript from the live decoder if the
+                // operator hasn't typed values manually. Mirrors the
+                // simple-logger path so QSOs logged via the full card
+                // get the same CW enrichment.
+                var cwStart = qso.UtcTimestamp?.ToDateTimeOffset() ?? DateTimeOffset.UtcNow;
+                var cwEnd = qso.UtcEndTimestamp?.ToDateTimeOffset() ?? DateTimeOffset.UtcNow;
+                _logger?.EnrichFromCwDecoder(qso, cwStart, cwEnd);
+
                 var response = await _engine.LogQsoAsync(qso);
                 LocalId = response.LocalId;
                 StatusText = $"Logged {qso.WorkedCallsign}.";
@@ -538,6 +552,10 @@ internal sealed partial class FullQsoCardViewModel : ObservableObject, IDisposab
         SatMode = qso.SatMode ?? string.Empty;
         Notes = qso.Notes ?? string.Empty;
         Comment = qso.Comment ?? string.Empty;
+        CwDecodeRxWpmText = qso.HasCwDecodeRxWpm
+            ? qso.CwDecodeRxWpm.ToString(CultureInfo.InvariantCulture)
+            : string.Empty;
+        CwDecodeTranscript = qso.HasCwDecodeTranscript ? (qso.CwDecodeTranscript ?? string.Empty) : string.Empty;
         LocalId = qso.LocalId;
         SyncStatusText = BuildSyncStatus(qso.SyncStatus);
         CreatedAtText = FormatTimestamp(qso.CreatedAt);
@@ -890,6 +908,15 @@ internal sealed partial class FullQsoCardViewModel : ObservableObject, IDisposab
         ApplyOptionalString(SatMode, value => working.SatMode = value, working.ClearSatMode, uppercase: true);
         ApplyOptionalString(Notes, value => working.Notes = value, working.ClearNotes);
         ApplyOptionalString(Comment, value => working.Comment = value, working.ClearComment);
+        ApplyOptionalString(CwDecodeTranscript, value => working.CwDecodeTranscript = value, working.ClearCwDecodeTranscript);
+        if (uint.TryParse(CwDecodeRxWpmText, NumberStyles.None, CultureInfo.InvariantCulture, out var parsedRxWpm) && parsedRxWpm > 0)
+        {
+            working.CwDecodeRxWpm = parsedRxWpm;
+        }
+        else
+        {
+            working.ClearCwDecodeRxWpm();
+        }
 
         working.QslSentStatus = ParseQslStatus(SelectedQslSentStatus);
         working.QslReceivedStatus = ParseQslStatus(SelectedQslReceivedStatus);
