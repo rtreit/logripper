@@ -38,7 +38,7 @@ internal sealed partial class FullQsoCardViewModel : ObservableObject, IDisposab
         .ToArray();
 
     private static readonly string[] QslStatusLabels = ["-", "No", "Yes", "Requested", "Queued", "Ignore"];
-    private const string SectionHintText = "Ctrl+Tab / Ctrl+Shift+Tab or Alt+1..6 to switch sections";
+    private const string SectionHintText = "Ctrl+Tab / Ctrl+Shift+Tab or Alt+1..7 to switch sections";
 
     private readonly IEngineClient _engine;
     private readonly QsoLoggerViewModel? _logger;
@@ -326,6 +326,90 @@ internal sealed partial class FullQsoCardViewModel : ObservableObject, IDisposab
         {
             _lastAutoWorkedOperatorCallsign = string.Empty;
         }
+    }
+
+    partial void OnCwDecodeRxWpmTextChanged(string value)
+    {
+        OnPropertyChanged(nameof(CwTranscriptSummary));
+        OnPropertyChanged(nameof(CwTranscriptSourceBadge));
+    }
+
+    partial void OnCwDecodeTranscriptChanged(string value)
+    {
+        OnPropertyChanged(nameof(CwTranscriptSummary));
+        OnPropertyChanged(nameof(CwTranscriptPreview));
+        OnPropertyChanged(nameof(HasCwTranscriptContent));
+    }
+
+    /// <summary>
+    /// True when CW WPM or transcript is populated. Used to show a "no data" state in the
+    /// Transcript tab without hiding the editable fields.
+    /// </summary>
+    public bool HasCwTranscriptContent =>
+        !string.IsNullOrWhiteSpace(CwDecodeTranscript) || !string.IsNullOrWhiteSpace(CwDecodeRxWpmText);
+
+    /// <summary>
+    /// Compact summary line shown on the Core tab so the operator can see at-a-glance whether
+    /// CW decoder data is captured without leaving the section.
+    /// </summary>
+    public string CwTranscriptSummary
+    {
+        get
+        {
+            var hasWpm = !string.IsNullOrWhiteSpace(CwDecodeRxWpmText);
+            var hasText = !string.IsNullOrWhiteSpace(CwDecodeTranscript);
+            if (!hasWpm && !hasText)
+            {
+                return "No CW decoder data captured.";
+            }
+
+            var parts = new List<string>(2);
+            if (hasWpm)
+            {
+                parts.Add(string.Concat(CwDecodeRxWpmText.Trim(), " WPM"));
+            }
+
+            if (hasText)
+            {
+                parts.Add(string.Concat(
+                    CwDecodeTranscript.Length.ToString(CultureInfo.InvariantCulture),
+                    " chars"));
+            }
+
+            return string.Join(" \u00B7 ", parts);
+        }
+    }
+
+    /// <summary>
+    /// First ~80 characters of the CW transcript with newlines collapsed, for the Core tab preview.
+    /// </summary>
+    public string CwTranscriptPreview
+    {
+        get
+        {
+            if (string.IsNullOrWhiteSpace(CwDecodeTranscript))
+            {
+                return string.Empty;
+            }
+
+            var collapsed = CwDecodeTranscript.Replace('\n', ' ').Replace('\r', ' ').Trim();
+            return collapsed.Length <= 80 ? collapsed : string.Concat(collapsed.AsSpan(0, 79), "\u2026");
+        }
+    }
+
+    /// <summary>
+    /// Source-and-metric badge shown atop each transcript section in the Transcript tab.
+    /// Designed to be reused for future voice STT sections (e.g. "Voice STT \u00B7 Whisper").
+    /// </summary>
+    public string CwTranscriptSourceBadge =>
+        string.IsNullOrWhiteSpace(CwDecodeRxWpmText)
+            ? "CW decoder (RX)"
+            : string.Concat("CW decoder (RX) \u00B7 ", CwDecodeRxWpmText.Trim(), " WPM");
+
+    [RelayCommand]
+    private void ShowTranscriptTab()
+    {
+        SelectedTabIndex = 5;
     }
 
     [RelayCommand]
