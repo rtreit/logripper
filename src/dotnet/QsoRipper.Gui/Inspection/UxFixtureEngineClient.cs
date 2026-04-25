@@ -468,6 +468,86 @@ internal sealed class UxFixtureEngineClient : IEngineClient
         });
     }
 
+    public Task<ComputeGreatCircleResponse> ComputeGreatCircleAsync(
+        ComputeGreatCircleRequest request,
+        CancellationToken ct = default)
+    {
+        var origin = request?.Origin?.Coordinates ?? new GeoPoint { Latitude = 47.45, Longitude = -122.31 };
+        var target = request?.Target?.Coordinates ?? new GeoPoint { Latitude = 51.47, Longitude = -0.46 };
+        var path = new GreatCirclePath
+        {
+            Origin = origin,
+            Target = target,
+            DistanceKm = HaversineKm(origin, target),
+            InitialBearingDeg = InitialBearingDeg(origin, target) ?? 0.0,
+        };
+        const int sampleCount = 96;
+        var (lat1, lon1) = (origin.Latitude * Math.PI / 180.0, origin.Longitude * Math.PI / 180.0);
+        var (lat2, lon2) = (target.Latitude * Math.PI / 180.0, target.Longitude * Math.PI / 180.0);
+        var (x1, y1, z1) = (Math.Cos(lat1) * Math.Cos(lon1), Math.Cos(lat1) * Math.Sin(lon1), Math.Sin(lat1));
+        var (x2, y2, z2) = (Math.Cos(lat2) * Math.Cos(lon2), Math.Cos(lat2) * Math.Sin(lon2), Math.Sin(lat2));
+        var dot = Math.Clamp((x1 * x2) + (y1 * y2) + (z1 * z2), -1.0, 1.0);
+        var omega = Math.Acos(dot);
+        var sinOmega = Math.Sin(omega);
+        for (var i = 0; i < sampleCount; i++)
+        {
+            var t = i / (double)(sampleCount - 1);
+            double sLat, sLon;
+            if (Math.Abs(sinOmega) < 1e-9)
+            {
+                sLat = origin.Latitude;
+                sLon = origin.Longitude;
+            }
+            else
+            {
+                var a = Math.Sin((1 - t) * omega) / sinOmega;
+                var b = Math.Sin(t * omega) / sinOmega;
+                var x = (a * x1) + (b * x2);
+                var y = (a * y1) + (b * y2);
+                var z = (a * z1) + (b * z2);
+                sLat = Math.Asin(z) * 180.0 / Math.PI;
+                sLon = Math.Atan2(y, x) * 180.0 / Math.PI;
+            }
+            path.Samples.Add(new GeoPoint { Latitude = sLat, Longitude = sLon });
+        }
+        return Task.FromResult(new ComputeGreatCircleResponse { Path = path });
+
+        static double HaversineKm(GeoPoint a, GeoPoint b)
+        {
+            const double R = 6371.0088;
+            var lat1 = a.Latitude * Math.PI / 180.0;
+            var lat2 = b.Latitude * Math.PI / 180.0;
+            var dLat = (b.Latitude - a.Latitude) * Math.PI / 180.0;
+            var dLon = (b.Longitude - a.Longitude) * Math.PI / 180.0;
+            var h = (Math.Sin(dLat / 2) * Math.Sin(dLat / 2))
+                + (Math.Cos(lat1) * Math.Cos(lat2) * Math.Sin(dLon / 2) * Math.Sin(dLon / 2));
+            return 2.0 * R * Math.Atan2(Math.Sqrt(h), Math.Sqrt(1.0 - h));
+        }
+
+        static double? InitialBearingDeg(GeoPoint a, GeoPoint b)
+        {
+            var lat1 = a.Latitude * Math.PI / 180.0;
+            var lat2 = b.Latitude * Math.PI / 180.0;
+            var dLon = (b.Longitude - a.Longitude) * Math.PI / 180.0;
+            var y = Math.Sin(dLon) * Math.Cos(lat2);
+            var x = (Math.Cos(lat1) * Math.Sin(lat2)) - (Math.Sin(lat1) * Math.Cos(lat2) * Math.Cos(dLon));
+            var deg = Math.Atan2(y, x) * 180.0 / Math.PI;
+            return deg - (Math.Floor(deg / 360.0) * 360.0);
+        }
+    }
+
+    public Task<GetActiveStationContextResponse> GetActiveStationContextAsync(CancellationToken ct = default)
+    {
+        var ctx = new ActiveStationContext
+        {
+            EffectiveActiveProfile = _stationProfile.Clone(),
+        };
+        return Task.FromResult(new GetActiveStationContextResponse
+        {
+            Context = ctx,
+        });
+    }
+
     private SetupStatus BuildSetupStatus()
     {
         var suggestedPath = string.IsNullOrWhiteSpace(_logFilePath)

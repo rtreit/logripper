@@ -1,6 +1,7 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="using:QsoRipper.Gui.ViewModels"
+             xmlns:ctrl="using:QsoRipper.Gui.Controls"
              x:Class="QsoRipper.Gui.Views.CallsignCardView"
              x:DataType="vm:CallsignCardViewModel">
 
@@ -221,6 +222,30 @@
             <TextBlock Classes="cardValue" Grid.Row="3" Grid.Column="1" Text="{Binding Email}"
                        IsVisible="{Binding HasEmail}" />
           </Grid>
+
+          <!-- Azimuthal Map Section -->
+          <Border Classes="sectionDivider" IsVisible="{Binding IsMapAvailable}" />
+          <TextBlock Classes="sectionHeader" Text="AZIMUTHAL MAP" IsVisible="{Binding IsMapAvailable}" />
+          <StackPanel Spacing="6" IsVisible="{Binding IsMapAvailable}">
+            <ctrl:AzimuthalMapControl Path="{Binding MapPath}"
+                                      Width="240"
+                                      Height="240"
+                                      HorizontalAlignment="Center" />
+            <Grid ColumnDefinitions="Auto,*,Auto" Margin="0,4,0,0">
+              <TextBlock Grid.Column="0"
+                         Classes="cardLabel"
+                         Text="Distance" />
+              <TextBlock Grid.Column="0"
+                         Margin="64,0,0,0"
+                         Classes="cardValue"
+                         FontWeight="SemiBold"
+                         Text="{Binding MapDistanceText}" />
+              <TextBlock Grid.Column="2"
+                         Classes="cardValue"
+                         Foreground="#aaaacc"
+                         Text="{Binding MapBearingText}" />
+            </Grid>
+          </StackPanel>
 
         </StackPanel>
       </ScrollViewer>

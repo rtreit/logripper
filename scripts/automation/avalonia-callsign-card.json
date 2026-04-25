@@ -3,9 +3,9 @@
   "window": {
     "title": "QsoRipper",
     "x": 80,
-    "y": 80,
+    "y": 20,
     "width": 1280,
-    "height": 760
+    "height": 1100
   },
   "actions": [
     {
@@ -40,6 +40,18 @@
     {
       "type": "screenshot",
       "path": "callsign-card-open.png"
+    },
+    {
+      "type": "send-keys",
+      "keys": "{PGDN}{PGDN}{PGDN}"
+    },
+    {
+      "type": "wait",
+      "milliseconds": 800
+    },
+    {
+      "type": "screenshot",
+      "path": "callsign-card-map.png"
     },
     {
       "type": "send-keys",

@@ -1,0 +1,27 @@
+syntax = "proto3";
+
+package qsoripper.domain;
+
+option csharp_namespace = "QsoRipper.Domain";
+
+import "domain/geo_point.proto";
+
+// Geodesic between two points on a spherical Earth model
+// (R = 6371.0088 km; Haversine for distance, spherical interpolation
+// for samples).
+//
+// `samples` includes both endpoints (samples[0] == origin,
+// samples[N-1] == target). The number of samples equals the resolved
+// `sample_count` requested by the caller (after defaulting/clamping).
+//
+// Bearings are degrees clockwise from true north in [0, 360). They are
+// omitted (`optional`) when undefined: e.g. when origin == target, or
+// for antipodal points where the great circle is not unique.
+message GreatCirclePath {
+  GeoPoint origin = 1;
+  GeoPoint target = 2;
+  double distance_km = 3;
+  optional double initial_bearing_deg = 4;
+  optional double final_bearing_deg = 5;
+  repeated GeoPoint samples = 6;
+}
