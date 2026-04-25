@@ -122,6 +122,16 @@ internal sealed partial class QsoLoggerViewModel : ObservableObject
     internal CallsignRecord? LastLookupRecord => _lastLookupRecord;
     internal DateTimeOffset SuggestedUtcStart => _timerRunning ? _qsoStartTime : DateTimeOffset.UtcNow;
 
+    /// <summary>
+    /// True while the operator has an in-progress QSO entry — i.e., the
+    /// elapsed-time timer is running because a non-empty callsign was typed
+    /// and not yet logged, cleared, or abandoned. Consumed by
+    /// <c>MainWindowViewModel</c> to gate the cw-decoder subprocess
+    /// lifecycle on actual operator activity rather than running it
+    /// continuously.
+    /// </summary>
+    internal bool IsLoggerEpisodeActive => _timerRunning;
+
     // ── Events ───────────────────────────────────────────────────────────
 
     /// <summary>Raised after a QSO is successfully logged.</summary>

@@ -604,14 +604,22 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
 
         if (enableChanged)
         {
-            // ToggleCwDecoder flips the bool, then starts/stops with current settings.
+            // ToggleCwDecoder flips the bool. With the new lifecycle policy
+            // it only arms/disarms — the actual subprocess starts when an
+            // episode begins.
             ToggleCwDecoder();
         }
         else if (IsCwDecoderEnabled && (deviceChanged || loopbackChanged || diagnosticsChanged))
         {
-            // Apply new device/loopback/diagnostics by restarting the source in place.
-            ToggleCwDecoder(); // off
-            ToggleCwDecoder(); // on, with new settings
+            // Apply new device/loopback/diagnostics. If the decoder is
+            // currently running (active QSO episode), restart it in place
+            // to pick up the new settings; otherwise the next episode start
+            // will use them automatically.
+            if (_cwSampleSource?.IsRunning == true)
+            {
+                StopCwDecoderProcess();
+                StartCwDecoderProcessForActiveEpisode();
+            }
         }
 
         UpdateDisabledCwStatusText();
@@ -755,50 +763,97 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
             }
 
             EnsureCwSampleSource();
-            string? recordingPath = null;
-            if (IsCwDiagnosticsEnabled)
+
+            // Decoder is now ARMED but not running. The cw-decoder subprocess
+            // is launched on demand when the operator begins a QSO (typing in
+            // the callsign field raises CwEpisodeStarted). It is stopped on
+            // every CwEpisodeBoundary (logged / cleared / abandoned). This
+            // matches operator expectation: "type a callsign → CW hunts; Esc
+            // → CW silent" and avoids the decoder reporting a stale lock on
+            // ambient noise when no QSO is in progress.
+            CwDecoderStatusText = "CW WPM: armed (type a callsign to listen)";
+
+            // If the operator already has a callsign in the field when they
+            // turn the monitor on, start hunting immediately so they don't
+            // have to clear and retype to wake the decoder.
+            if (Logger.IsLoggerEpisodeActive)
             {
-                try
-                {
-                    StartDiagnosticsSession();
-                    recordingPath = _cwDiagnosticsRecorder?.SessionWavPath;
-                }
-                catch (IOException ex)
-                {
-                    CwDecoderStatusText = $"CW WPM: diagnostics dir error ({ex.Message})";
-                    DisposeDiagnosticsRecorder();
-                }
-            }
-            try
-            {
-                _cwSampleSource?.Start(
-                    string.IsNullOrWhiteSpace(CwDecoderDeviceOverride) ? null : CwDecoderDeviceOverride.Trim(),
-                    IsCwDecoderLoopback,
-                    recordingPath);
-                CwDecoderStatusText = IsCwDecoderLoopback
-                    ? "CW WPM: starting (loopback)\u2026"
-                    : "CW WPM: starting\u2026";
-            }
-            catch (InvalidOperationException ex)
-            {
-                IsCwDecoderEnabled = false;
-                CwDecoderStatusText = $"CW WPM: {ex.Message}";
-                DisposeDiagnosticsRecorder();
-            }
-            catch (System.ComponentModel.Win32Exception ex)
-            {
-                IsCwDecoderEnabled = false;
-                CwDecoderStatusText = $"CW WPM: launch failed ({ex.Message})";
-                DisposeDiagnosticsRecorder();
+                StartCwDecoderProcessForActiveEpisode();
             }
         }
         else
         {
-            _cwSampleSource?.Stop();
-            DisposeDiagnosticsRecorder();
+            StopCwDecoderProcess();
             CwDecoderStatusText = "CW WPM: OFF";
             UpdateDisabledCwStatusText();
         }
+    }
+
+    /// <summary>
+    /// Launches the cw-decoder subprocess with the current device/loopback/
+    /// diagnostics settings. Safe to call repeatedly — <see
+    /// cref="CwDecoderProcessSampleSource.Start"/> stops any prior instance
+    /// first. Called from <see cref="OnCwEpisodeStarted"/> when the operator
+    /// begins typing a new callsign.
+    /// </summary>
+    private void StartCwDecoderProcessForActiveEpisode()
+    {
+        if (!IsCwDecoderEnabled || _cwSampleSource is null)
+        {
+            return;
+        }
+        if (_cwSampleSource.IsRunning)
+        {
+            return;
+        }
+
+        string? recordingPath = null;
+        if (IsCwDiagnosticsEnabled)
+        {
+            try
+            {
+                StartDiagnosticsSession();
+                recordingPath = _cwDiagnosticsRecorder?.SessionWavPath;
+            }
+            catch (IOException ex)
+            {
+                CwDecoderStatusText = $"CW WPM: diagnostics dir error ({ex.Message})";
+                DisposeDiagnosticsRecorder();
+            }
+        }
+
+        try
+        {
+            _cwSampleSource.Start(
+                string.IsNullOrWhiteSpace(CwDecoderDeviceOverride) ? null : CwDecoderDeviceOverride.Trim(),
+                IsCwDecoderLoopback,
+                recordingPath);
+            CwDecoderStatusText = IsCwDecoderLoopback
+                ? "CW WPM: starting (loopback)\u2026"
+                : "CW WPM: starting\u2026";
+        }
+        catch (InvalidOperationException ex)
+        {
+            CwDecoderStatusText = $"CW WPM: {ex.Message}";
+            DisposeDiagnosticsRecorder();
+        }
+        catch (System.ComponentModel.Win32Exception ex)
+        {
+            CwDecoderStatusText = $"CW WPM: launch failed ({ex.Message})";
+            DisposeDiagnosticsRecorder();
+        }
+    }
+
+    /// <summary>
+    /// Stops the cw-decoder subprocess (if running) and tears down any
+    /// active diagnostics recorder. Leaves <see cref="IsCwDecoderEnabled"/>
+    /// untouched — the monitor stays armed and will relaunch when the next
+    /// QSO begins.
+    /// </summary>
+    private void StopCwDecoderProcess()
+    {
+        _cwSampleSource?.Stop();
+        DisposeDiagnosticsRecorder();
     }
 
     private void EnsureCwSampleSource()
@@ -859,35 +914,60 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
     private void OnCwEpisodeStarted(object? sender, CwEpisodeStartedEventArgs e)
     {
         _cwDiagnosticsRecorder?.BeginEpisode(e.UtcStart);
+
+        // Operator has begun a new QSO by typing into the callsign field.
+        // If the radio monitor is armed but the cw-decoder subprocess is not
+        // yet running, launch it now so the WPM readout / F9 stats reflect
+        // *this* contact rather than ambient noise from before the operator
+        // started typing. No-op when monitor is OFF or the process is
+        // already running (e.g. operator armed mid-QSO).
+        Dispatcher.UIThread.Post(StartCwDecoderProcessForActiveEpisode);
     }
 
     private void OnCwEpisodeBoundary(object? sender, CwEpisodeBoundaryEventArgs e)
     {
+        // The QSO entry just ended (logged, cleared via Esc, or abandoned by
+        // emptying the callsign field). Tear down the cw-decoder subprocess
+        // so we go fully silent until the operator begins another QSO. This
+        // is the deliberate lifecycle policy: the monitor is *armed* via
+        // Settings → Radio Monitor, but only *runs* during an active episode.
+        // Without this, the decoder would keep reporting a stale lock on
+        // ambient noise (or on a still-transmitting station) while the
+        // operator stared at a blank form, which is what users were seeing
+        // as "F9 says LOCKED even though I cleared the field".
+        var wasRunning = _cwSampleSource?.IsRunning ?? false;
+        if (wasRunning)
+        {
+            StopCwDecoderProcess();
+        }
+
         // Always reset the F9 pane's per-episode state (decoded text, last
         // garbled, WPM display) on QSO save/clear/abandoned so the next
-        // QSO doesn't inherit a stale smear from the previous one. The
-        // pane preserves its lock badge from the source's current state —
-        // if the decoder is still locked on the same signal, IsLocked
-        // stays true and the next sample will populate WPM again.
+        // QSO doesn't inherit a stale smear from the previous one.
         Dispatcher.UIThread.Post(() =>
         {
             CwStatsPane?.Reset();
-            // Also reset the main status bar's CW WPM text to a neutral
-            // lock-state-appropriate value so the operator gets clear
-            // feedback that the previous QSO's reading is gone. Without
-            // this the status bar keeps showing "CW WPM: 13.4" from the
-            // last sample until the next sample arrives — which can be
-            // many seconds if the band went quiet between QSOs, leaving
-            // the operator looking at a stale value that no longer
-            // belongs to anything they're working on.
-            if (IsCwDecoderEnabled && _cwSampleSource is not null)
+            // Update the main status bar to reflect the new lifecycle. With
+            // the decoder stopped, fall back to the armed/idle/disabled text
+            // so the operator gets unambiguous feedback that nothing is
+            // listening anymore until they start the next QSO.
+            if (!IsCwDecoderEnabled)
+            {
+                CwDecoderStatusText = "CW WPM: OFF";
+                UpdateDisabledCwStatusText();
+            }
+            else if (wasRunning)
+            {
+                CwDecoderStatusText = "CW WPM: armed (type a callsign to listen)";
+            }
+            else if (_cwSampleSource is not null)
             {
                 CwDecoderStatusText = _cwSampleSource.CurrentLockState switch
                 {
                     CwLockState.Locked => "CW WPM: locked",
                     CwLockState.Probation => "CW WPM: probation",
                     CwLockState.Hunting => "CW WPM: hunting",
-                    _ => "CW WPM: idle",
+                    _ => "CW WPM: armed (type a callsign to listen)",
                 };
             }
         });
