@@ -400,6 +400,17 @@ internal static class AdifCodec
                     }
 
                     break;
+                case "APP_QSORIPPER_CW_TRANSCRIPT":
+                    // Decoded CW transcript text — accepted as-is. Empty
+                    // values are dropped to avoid a noisy `HasCwDecodeTranscript`
+                    // flag for round-trips through tools that emit zero-length
+                    // user-defined fields.
+                    if (!string.IsNullOrEmpty(value))
+                    {
+                        qso.CwDecodeTranscript = value;
+                    }
+
+                    break;
                 case "COUNTRY":
                     qso.WorkedCountry = value;
                     break;
@@ -656,6 +667,15 @@ internal static class AdifCodec
             AppendField(sb, "APP_QSORIPPER_RX_WPM", qso.CwDecodeRxWpm.ToString(CultureInfo.InvariantCulture));
         }
 
+        if (qso.HasCwDecodeTranscript && !string.IsNullOrEmpty(qso.CwDecodeTranscript))
+        {
+            // ADIF length-delimited fields tolerate `<`, `>`, and embedded
+            // newlines. Sanitize ASCII control bytes (defensive — the
+            // decoder shouldn't emit them but the field is operator-editable)
+            // and emit verbatim.
+            AppendField(sb, "APP_QSORIPPER_CW_TRANSCRIPT", SanitizeCwTranscriptForAdif(qso.CwDecodeTranscript));
+        }
+
         AppendOptional(sb, "COUNTRY", qso.WorkedCountry);
 
         if (qso.HasWorkedDxcc)
@@ -729,7 +749,12 @@ internal static class AdifCodec
         string.Equals(key, "APP_QRZLOG_LOGID", StringComparison.OrdinalIgnoreCase) ||
         string.Equals(key, "APP_QRZ_LOGID", StringComparison.OrdinalIgnoreCase) ||
         string.Equals(key, "APP_QRZLOG_QSO_ID", StringComparison.OrdinalIgnoreCase) ||
-        string.Equals(key, "APP_QRZ_BOOKID", StringComparison.OrdinalIgnoreCase);
+        string.Equals(key, "APP_QRZ_BOOKID", StringComparison.OrdinalIgnoreCase) ||
+        // QsoRipper-owned app keys are emitted from their dedicated proto
+        // fields above; never re-emit them from ExtraFields, even if a
+        // caller seeded a stale value there.
+        string.Equals(key, "APP_QSORIPPER_RX_WPM", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(key, "APP_QSORIPPER_CW_TRANSCRIPT", StringComparison.OrdinalIgnoreCase);
 
     // -- Helpers -------------------------------------------------------------
 
@@ -750,6 +775,47 @@ internal static class AdifCodec
         {
             AppendField(sb, key, value);
         }
+    }
+
+    /// <summary>
+    /// Strip ASCII control bytes (other than CR/LF/tab) from operator-editable
+    /// CW transcript text before writing to ADIF. The .NET writer uses
+    /// <c>value.Length</c> (chars) for the length prefix while the Rust writer
+    /// uses byte length; restricting payload to printable ASCII + CR/LF/tab
+    /// keeps both runtimes' length math consistent and avoids round-trip drift.
+    /// </summary>
+    internal static string SanitizeCwTranscriptForAdif(string value)
+    {
+        if (string.IsNullOrEmpty(value))
+        {
+            return string.Empty;
+        }
+
+        var sb = new StringBuilder(value.Length);
+        foreach (var c in value)
+        {
+            if (c == '\r' || c == '\n' || c == '\t')
+            {
+                sb.Append(c);
+                continue;
+            }
+
+            if (c < 0x20 || c == 0x7F)
+            {
+                continue;
+            }
+
+            // Drop non-ASCII so byte length and char length agree
+            // across runtimes when the field is round-tripped.
+            if (c > 0x7E)
+            {
+                continue;
+            }
+
+            sb.Append(c);
+        }
+
+        return sb.ToString();
     }
 
     private static bool TryNormalizeQrzPower(string? value, out string normalized)

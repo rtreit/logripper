@@ -54,4 +54,62 @@ public sealed class RecentQsoItemViewModelTests
         Assert.Equal((uint)110, item.DxccSortKey);
         Assert.Equal(new DateTimeOffset(2026, 4, 14, 1, 12, 3, TimeSpan.Zero), item.UtcEndSortKey);
     }
+
+    [Fact]
+    public void RxWpmDisplayShowsValueWhenPresent()
+    {
+        var item = RecentQsoItemViewModel.FromQso(new QsoRecord
+        {
+            LocalId = "qso-wpm",
+            WorkedCallsign = "K1ABC",
+            StationCallsign = "K7RND",
+            Mode = Mode.Cw,
+            CwDecodeRxWpm = 22,
+        });
+
+        Assert.Equal("22", item.RxWpmDisplay);
+        Assert.Equal((uint)22, item.RxWpmSortKey);
+    }
+
+    [Fact]
+    public void RxWpmDisplayUsesEmDashWhenAbsent()
+    {
+        var item = RecentQsoItemViewModel.FromQso(new QsoRecord
+        {
+            LocalId = "qso-no-wpm",
+            WorkedCallsign = "K2XYZ",
+            StationCallsign = "K7RND",
+            Mode = Mode.Cw,
+        });
+
+        Assert.Equal("\u2014", item.RxWpmDisplay);
+        Assert.Equal((uint)0, item.RxWpmSortKey);
+    }
+
+    [Fact]
+    public void AcceptSavedChangesRefreshesRxWpmDisplay()
+    {
+        var qso = new QsoRecord
+        {
+            LocalId = "qso-edit",
+            WorkedCallsign = "W1AW",
+            StationCallsign = "K7RND",
+            Mode = Mode.Cw,
+        };
+        var item = RecentQsoItemViewModel.FromQso(qso);
+
+        Assert.Equal("\u2014", item.RxWpmDisplay);
+
+        var updated = qso.Clone();
+        updated.CwDecodeRxWpm = 30;
+        var raised = new List<string?>();
+        item.PropertyChanged += (_, e) => raised.Add(e.PropertyName);
+
+        item.AcceptSavedChanges(updated);
+
+        Assert.Equal("30", item.RxWpmDisplay);
+        Assert.Equal((uint)30, item.RxWpmSortKey);
+        Assert.Contains(nameof(RecentQsoItemViewModel.RxWpmDisplay), raised);
+        Assert.Contains(nameof(RecentQsoItemViewModel.RxWpmSortKey), raised);
+    }
 }

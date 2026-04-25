@@ -36,6 +36,7 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
     private bool _engineHealthProbeInFlight;
     private CwDecoderProcessSampleSource? _cwSampleSource;
     private CwQsoWpmAggregator? _cwAggregator;
+    private CwQsoTranscriptAggregator? _cwTranscriptAggregator;
     private CwDiagnosticsRecorder? _cwDiagnosticsRecorder;
     private bool _setupCompleteBeforeWizard;
     private string? _preferredEngineProfileId;
@@ -915,7 +916,9 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
         src.LockStateChanged += OnCwLockStateChanged;
         _cwSampleSource = src;
         _cwAggregator = new CwQsoWpmAggregator(src);
+        _cwTranscriptAggregator = new CwQsoTranscriptAggregator(src);
         Logger.AttachCwAggregator(_cwAggregator);
+        Logger.AttachCwTranscriptAggregator(_cwTranscriptAggregator);
     }
 
     private void OnCwRawLineReceived(object? sender, string line)
@@ -1583,6 +1586,8 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
         }
         _cwAggregator?.Dispose();
         _cwAggregator = null;
+        _cwTranscriptAggregator?.Dispose();
+        _cwTranscriptAggregator = null;
         DisposeDiagnosticsRecorder();
         CwStatsPane?.Dispose();
         CwStatsPane = null;

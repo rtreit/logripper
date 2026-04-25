@@ -22,6 +22,7 @@ internal sealed partial class QsoLoggerViewModel : ObservableObject
     private readonly IEngineClient _engine;
     private readonly DispatcherTimer _elapsedTimer;
     private CwQsoWpmAggregator? _cwWpmAggregator;
+    private CwQsoTranscriptAggregator? _cwTranscriptAggregator;
     private DateTimeOffset _qsoStartTime;
     private bool _timerRunning;
     private CancellationTokenSource? _lookupCts;
@@ -404,36 +405,60 @@ internal sealed partial class QsoLoggerViewModel : ObservableObject
         => _cwWpmAggregator = aggregator;
 
     /// <summary>
-    /// Auto-fills <see cref="QsoRecord.CwDecodeRxWpm"/> from the live CW
-    /// decoder source when the QSO is on CW mode and the aggregator has
-    /// at least one usable sample inside the QSO's window. Non-CW QSOs
-    /// and missing/empty sources are no-ops so logging is never blocked.
+    /// Attach (or replace) the CW transcript aggregator used to populate
+    /// <see cref="QsoRecord.CwDecodeTranscript"/> on logged CW QSOs. The
+    /// aggregator is owned by the host (typically the MainWindowViewModel)
+    /// and may be null when CW decoding is disabled or unsupported.
+    /// </summary>
+    internal void AttachCwTranscriptAggregator(CwQsoTranscriptAggregator? aggregator)
+        => _cwTranscriptAggregator = aggregator;
+
+    /// <summary>
+    /// Auto-fills <see cref="QsoRecord.CwDecodeRxWpm"/> and
+    /// <see cref="QsoRecord.CwDecodeTranscript"/> from the live CW
+    /// decoder when the QSO is on CW mode and the aggregator(s) have
+    /// data inside the QSO's window. Non-CW QSOs and missing/empty
+    /// sources are no-ops so logging is never blocked. Existing
+    /// transcript text on the QSO (e.g. typed by the operator on the
+    /// full card) is preserved — auto-fill never overwrites a
+    /// caller-supplied transcript.
     /// </summary>
     internal void EnrichFromCwDecoder(QsoRecord qso, DateTimeOffset utcStart, DateTimeOffset utcEnd)
     {
-        if (_cwWpmAggregator is null)
-        {
-            return;
-        }
-
         if (qso.Mode != Mode.Cw)
         {
+            // Defensive: if mode isn't CW, scrub any auto-filled CW
+            // fields so they can't ride along on a re-classified QSO.
+            qso.ClearCwDecodeRxWpm();
+            qso.ClearCwDecodeTranscript();
             return;
         }
 
-        var mean = _cwWpmAggregator.GetMeanWpm(utcStart, utcEnd);
-        if (mean is null || !double.IsFinite(mean.Value) || mean.Value <= 0)
+        if (_cwWpmAggregator is not null)
         {
-            return;
+            var mean = _cwWpmAggregator.GetMeanWpm(utcStart, utcEnd);
+            if (mean is not null && double.IsFinite(mean.Value) && mean.Value > 0)
+            {
+                var rounded = (uint)Math.Round(mean.Value, MidpointRounding.AwayFromZero);
+                if (rounded > 0)
+                {
+                    qso.CwDecodeRxWpm = rounded;
+                }
+            }
         }
 
-        var rounded = (uint)Math.Round(mean.Value, MidpointRounding.AwayFromZero);
-        if (rounded == 0)
+        // Operator wins: if the QSO already carries non-empty transcript
+        // text (typed/edited on the full QSO card), don't overwrite it
+        // with the decoder's snapshot.
+        if (_cwTranscriptAggregator is not null
+            && (!qso.HasCwDecodeTranscript || string.IsNullOrWhiteSpace(qso.CwDecodeTranscript)))
         {
-            return;
+            var transcript = _cwTranscriptAggregator.GetTranscript(utcStart, utcEnd);
+            if (!string.IsNullOrWhiteSpace(transcript))
+            {
+                qso.CwDecodeTranscript = transcript;
+            }
         }
-
-        qso.CwDecodeRxWpm = rounded;
     }
 
     internal static void EnrichFromLookup(QsoRecord qso, CallsignRecord? record)
