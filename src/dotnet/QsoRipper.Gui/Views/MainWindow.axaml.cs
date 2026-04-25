@@ -1035,12 +1035,13 @@ internal sealed partial class MainWindow : Window
             [RecentQsoGridColumn.Note] = _recentQsoGrid.Columns[14],
             [RecentQsoGridColumn.Comment] = _recentQsoGrid.Columns[15],
             [RecentQsoGridColumn.UtcEnd] = _recentQsoGrid.Columns[16],
-            [RecentQsoGridColumn.CqZone] = _recentQsoGrid.Columns[17],
-            [RecentQsoGridColumn.ItuZone] = _recentQsoGrid.Columns[18],
-            [RecentQsoGridColumn.State] = _recentQsoGrid.Columns[19],
-            [RecentQsoGridColumn.County] = _recentQsoGrid.Columns[20],
-            [RecentQsoGridColumn.Sync] = _recentQsoGrid.Columns[21],
-            [RecentQsoGridColumn.Continent] = _recentQsoGrid.Columns[22]
+            [RecentQsoGridColumn.CqZone] = _recentQsoGrid.Columns[18],
+            [RecentQsoGridColumn.ItuZone] = _recentQsoGrid.Columns[19],
+            [RecentQsoGridColumn.State] = _recentQsoGrid.Columns[20],
+            [RecentQsoGridColumn.County] = _recentQsoGrid.Columns[21],
+            [RecentQsoGridColumn.Sync] = _recentQsoGrid.Columns[22],
+            [RecentQsoGridColumn.Continent] = _recentQsoGrid.Columns[23],
+            [RecentQsoGridColumn.RxWpm] = _recentQsoGrid.Columns[24]
         };
     }
 

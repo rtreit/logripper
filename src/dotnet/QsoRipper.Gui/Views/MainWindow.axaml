@@ -783,6 +783,13 @@
                                       SortMemberPath="Continent"
                                       IsReadOnly="True"
                                       IsVisible="False" />
+                  <DataGridTextColumn Header="WPM"
+                                      Width="64"
+                                      MinWidth="48"
+                                      Binding="{ReflectionBinding RxWpmDisplay}"
+                                      SortMemberPath="RxWpmSortKey"
+                                      IsReadOnly="True"
+                                      IsVisible="False" />
                 </DataGrid.Columns>
               </DataGrid>
 

@@ -90,7 +90,8 @@ internal sealed partial class FullQsoCardView : UserControl
             2 => "QslSentStatusBox",
             3 => "ContestIdBox",
             4 => "StationCallsignSnapshotBox",
-            5 => "ExtraFieldsBox",
+            5 => "CwTranscriptBox",
+            6 => "ExtraFieldsBox",
             _ => "WorkedCallsignBox"
         };
 }

@@ -832,6 +832,7 @@ internal sealed partial class RecentQsoListViewModel : ObservableObject
         RecentQsoSortColumn.State => nameof(RecentQsoItemViewModel.State),
         RecentQsoSortColumn.County => nameof(RecentQsoItemViewModel.County),
         RecentQsoSortColumn.Comment => nameof(RecentQsoItemViewModel.Comment),
+        RecentQsoSortColumn.RxWpm => nameof(RecentQsoItemViewModel.RxWpmSortKey),
         RecentQsoSortColumn.Sync => nameof(RecentQsoItemViewModel.SyncStatus),
         _ => nameof(RecentQsoItemViewModel.UtcSortKey)
     };
@@ -861,6 +862,7 @@ internal sealed partial class RecentQsoListViewModel : ObservableObject
         nameof(RecentQsoItemViewModel.State) => RecentQsoSortColumn.State,
         nameof(RecentQsoItemViewModel.County) => RecentQsoSortColumn.County,
         nameof(RecentQsoItemViewModel.Comment) => RecentQsoSortColumn.Comment,
+        nameof(RecentQsoItemViewModel.RxWpmSortKey) => RecentQsoSortColumn.RxWpm,
         nameof(RecentQsoItemViewModel.SyncStatus) => RecentQsoSortColumn.Sync,
         _ => RecentQsoSortColumn.Utc
     };
@@ -923,6 +925,7 @@ internal sealed partial class RecentQsoListViewModel : ObservableObject
         yield return new RecentQsoColumnOptionViewModel(RecentQsoGridColumn.County, "County", false);
         yield return new RecentQsoColumnOptionViewModel(RecentQsoGridColumn.Sync, "Sync", false);
         yield return new RecentQsoColumnOptionViewModel(RecentQsoGridColumn.Continent, "Cont", false);
+        yield return new RecentQsoColumnOptionViewModel(RecentQsoGridColumn.RxWpm, "WPM", false);
     }
 
     private readonly record struct SearchToken(string Key, string Value);

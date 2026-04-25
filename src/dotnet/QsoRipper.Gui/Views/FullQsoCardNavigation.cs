@@ -4,7 +4,7 @@ namespace QsoRipper.Gui.Views;
 
 internal static class FullQsoCardNavigation
 {
-    internal const int TabCount = 6;
+    internal const int TabCount = 7;
 
     internal static bool TryResolve(Key key, KeyModifiers modifiers, int currentIndex, out int targetIndex)
     {
@@ -30,6 +30,7 @@ internal static class FullQsoCardNavigation
             Key.D4 or Key.NumPad4 => 3,
             Key.D5 or Key.NumPad5 => 4,
             Key.D6 or Key.NumPad6 => 5,
+            Key.D7 or Key.NumPad7 => 6,
             _ => currentIndex,
         };
 
@@ -39,6 +40,7 @@ internal static class FullQsoCardNavigation
                 or Key.D3 or Key.NumPad3
                 or Key.D4 or Key.NumPad4
                 or Key.D5 or Key.NumPad5
-                or Key.D6 or Key.NumPad6;
+                or Key.D6 or Key.NumPad6
+                or Key.D7 or Key.NumPad7;
     }
 }
