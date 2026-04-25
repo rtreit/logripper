@@ -2,8 +2,10 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
+using Grpc.Core;
 using Avalonia;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Threading;
@@ -22,12 +24,16 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
     private static readonly TimeSpan PreferredEngineSwitchTimeout = TimeSpan.FromSeconds(1.5);
     private static readonly TimeSpan SpaceWeatherRefreshInterval = TimeSpan.FromHours(1);
     private static readonly TimeSpan RigPollInterval = TimeSpan.FromMilliseconds(500);
+    private static readonly TimeSpan EngineHealthPollInterval = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan EngineHealthProbeTimeout = TimeSpan.FromMilliseconds(1500);
 
     private readonly IEngineClient _engine;
     private readonly SwitchableEngineClient? _switchableEngine;
     private readonly DispatcherTimer _utcTimer;
     private readonly DispatcherTimer _rigTimer;
     private readonly DispatcherTimer _spaceWeatherTimer;
+    private readonly DispatcherTimer _engineHealthTimer;
+    private bool _engineHealthProbeInFlight;
     private bool _setupCompleteBeforeWizard;
     private string? _preferredEngineProfileId;
     private string? _preferredEngineEndpoint;
@@ -135,6 +141,12 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
     [ObservableProperty]
     private string _contextHintText = "F3 grid · F4 search · Ctrl+N logger · Alt+A card · F1 help";
 
+    [ObservableProperty]
+    private bool _isEngineUnreachable;
+
+    [ObservableProperty]
+    private string _engineUnreachableMessage = string.Empty;
+
     internal MainWindowViewModel(EngineTargetProfile engineProfile, string endpoint)
     {
         ArgumentNullException.ThrowIfNull(engineProfile);
@@ -154,6 +166,8 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
         _rigTimer.Tick += OnRigTimerTick;
         _spaceWeatherTimer = new DispatcherTimer { Interval = SpaceWeatherRefreshInterval };
         _spaceWeatherTimer.Tick += OnSpaceWeatherTimerTick;
+        _engineHealthTimer = new DispatcherTimer { Interval = EngineHealthPollInterval };
+        _engineHealthTimer.Tick += OnEngineHealthTimerTick;
     }
 
     internal MainWindowViewModel(IEngineClient engine)
@@ -183,6 +197,8 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
         _rigTimer.Tick += OnRigTimerTick;
         _spaceWeatherTimer = new DispatcherTimer { Interval = SpaceWeatherRefreshInterval };
         _spaceWeatherTimer.Tick += OnSpaceWeatherTimerTick;
+        _engineHealthTimer = new DispatcherTimer { Interval = EngineHealthPollInterval };
+        _engineHealthTimer.Tick += OnEngineHealthTimerTick;
     }
 
     public RecentQsoListViewModel RecentQsos { get; }
@@ -255,10 +271,14 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
 
             Dispatcher.UIThread.Post(UpdateAvailableEngineSummary, DispatcherPriority.Background);
             GuiPerformanceTrace.Write(nameof(CheckFirstRunAsync) + ".complete");
+            MarkEngineReachable();
+            StartEngineHealthTimer();
         }
-        catch (Grpc.Core.RpcException)
+        catch (RpcException)
         {
             StatusMessage = "Engine unavailable";
+            MarkEngineUnreachable();
+            StartEngineHealthTimer();
         }
     }
 
@@ -300,10 +320,12 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
             var down = response.DownloadedRecords;
             SyncStatusText = $"Synced: \u2191{up} \u2193{down}";
             await RecentQsos.RefreshAsync();
+            MarkEngineReachable();
         }
         catch (Grpc.Core.RpcException ex)
         {
             SyncStatusText = $"Sync failed: {ex.Status.Detail}";
+            MarkEngineUnreachable();
         }
         finally
         {
@@ -320,6 +342,14 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
         SyncNowCommand.NotifyCanExecuteChanged();
         SwitchToRustEngineCommand.NotifyCanExecuteChanged();
         SwitchToDotNetEngineCommand.NotifyCanExecuteChanged();
+        if (value)
+        {
+            _engineHealthTimer.Stop();
+        }
+        else if (!_engineHealthTimer.IsEnabled)
+        {
+            _engineHealthTimer.Start();
+        }
     }
 
     [RelayCommand(CanExecute = nameof(CanSwitchEngines))]
@@ -768,10 +798,12 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
         try
         {
             await RecentQsos.RefreshAsync();
+            MarkEngineReachable();
         }
         catch (Grpc.Core.RpcException)
         {
             StatusMessage = "Ready (refresh failed)";
+            MarkEngineUnreachable();
         }
         catch (ObjectDisposedException)
         {
@@ -811,6 +843,7 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
         catch (Grpc.Core.RpcException)
         {
             RigStatusText = "Rig: error";
+            MarkEngineUnreachable();
         }
         catch (ObjectDisposedException)
         {
@@ -833,6 +866,7 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
         catch (Grpc.Core.RpcException)
         {
             // Transient network failure — keep existing weather data.
+            MarkEngineUnreachable();
         }
         catch (InvalidOperationException)
         {
@@ -873,6 +907,7 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
         catch (Grpc.Core.RpcException) when (!preserveOnFailure)
         {
             SpaceWeatherText = "Weather: error";
+            MarkEngineUnreachable();
         }
     }
 
@@ -939,6 +974,9 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
 
         _spaceWeatherTimer.Stop();
         _spaceWeatherTimer.Tick -= OnSpaceWeatherTimerTick;
+
+        _engineHealthTimer.Stop();
+        _engineHealthTimer.Tick -= OnEngineHealthTimerTick;
 
         if (_switchableEngine is not null)
         {
@@ -1056,10 +1094,12 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
         try
         {
             ApplySetupContext((await _engine.GetSetupStatusAsync()).Status);
+            MarkEngineReachable();
         }
         catch (Grpc.Core.RpcException)
         {
             StatusMessage = "Engine unavailable";
+            MarkEngineUnreachable();
         }
     }
 
@@ -1138,6 +1178,82 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
         catch (Grpc.Core.RpcException)
         {
             // Sync status unavailable — leave current text unchanged.
+            MarkEngineUnreachable();
+        }
+    }
+
+    private string BuildEngineUnreachableMessage()
+    {
+        var endpoint = _switchableEngine?.CurrentEndpoint;
+        if (string.IsNullOrWhiteSpace(endpoint))
+        {
+            return "QsoRipper engine unreachable. Make sure the engine is running.";
+        }
+
+        return $"QsoRipper engine unreachable at {endpoint}. Make sure the engine is running.";
+    }
+
+    private void MarkEngineUnreachable()
+    {
+        EngineUnreachableMessage = BuildEngineUnreachableMessage();
+        IsEngineUnreachable = true;
+    }
+
+    private void MarkEngineReachable()
+    {
+        if (IsEngineUnreachable)
+        {
+            IsEngineUnreachable = false;
+        }
+    }
+
+    private void StartEngineHealthTimer()
+    {
+        if (IsWizardOpen || _engineHealthTimer.IsEnabled)
+        {
+            return;
+        }
+
+        _engineHealthTimer.Start();
+    }
+
+    private async void OnEngineHealthTimerTick(object? sender, EventArgs e)
+    {
+        if (_engineHealthProbeInFlight || IsWizardOpen)
+        {
+            return;
+        }
+
+        _engineHealthProbeInFlight = true;
+        using var cts = new CancellationTokenSource(EngineHealthProbeTimeout);
+        try
+        {
+            await _engine.GetSyncStatusAsync(cts.Token);
+            MarkEngineReachable();
+        }
+        catch (RpcException)
+        {
+            MarkEngineUnreachable();
+        }
+        catch (HttpRequestException)
+        {
+            MarkEngineUnreachable();
+        }
+        catch (IOException)
+        {
+            MarkEngineUnreachable();
+        }
+        catch (OperationCanceledException)
+        {
+            MarkEngineUnreachable();
+        }
+        catch (ObjectDisposedException)
+        {
+            // Engine being torn down; leave state unchanged.
+        }
+        finally
+        {
+            _engineHealthProbeInFlight = false;
         }
     }
 }

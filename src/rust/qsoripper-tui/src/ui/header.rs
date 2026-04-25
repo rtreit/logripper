@@ -8,44 +8,53 @@ use ratatui::{
     Frame,
 };
 
-use crate::app::App;
+use crate::app::{App, EngineStatus};
 
 /// Render the header bar into `area`.
 pub(super) fn render(app: &App, frame: &mut Frame, area: Rect) {
     let cols = Layout::horizontal([
+        Constraint::Length(13),
         Constraint::Fill(1),
-        Constraint::Length(32),
-        Constraint::Length(36),
         Constraint::Length(28),
+        Constraint::Length(30),
+        Constraint::Length(26),
     ])
     .split(area);
 
     let title_area = cols.first().copied().unwrap_or(area);
-    let rig_area = cols.get(1).copied().unwrap_or(area);
-    let sw_area = cols.get(2).copied().unwrap_or(area);
-    let clock_area = cols.get(3).copied().unwrap_or(area);
+    let engine_area = cols.get(1).copied().unwrap_or(area);
+    let rig_area = cols.get(2).copied().unwrap_or(area);
+    let sw_area = cols.get(3).copied().unwrap_or(area);
+    let clock_area = cols.get(4).copied().unwrap_or(area);
 
-    // Title
+    // Title.
     let title_block = Block::default()
         .borders(Borders::TOP | Borders::LEFT | Borders::BOTTOM)
         .border_style(Style::default().fg(Color::Cyan));
-    let title_text = Line::from(vec![
-        Span::styled(
-            " QsoRipper ",
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            "— ham radio QSO logger",
-            Style::default().fg(Color::DarkGray),
-        ),
-    ]);
+    let title_text = Line::from(vec![Span::styled(
+        " QsoRipper ",
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD),
+    )]);
     frame.render_widget(
         Paragraph::new(title_text)
             .block(title_block)
             .alignment(Alignment::Left),
         title_area,
+    );
+
+    // Engine reachability — sits next to the rig status so a downed server is
+    // impossible to miss.
+    let engine_block = Block::default()
+        .borders(Borders::TOP | Borders::BOTTOM)
+        .border_style(Style::default().fg(Color::Cyan));
+    let engine_line = Line::from(engine_status_spans(app));
+    frame.render_widget(
+        Paragraph::new(engine_line)
+            .block(engine_block)
+            .alignment(Alignment::Left),
+        engine_area,
     );
 
     // Rig control
@@ -205,4 +214,115 @@ fn rig_status_line(app: &App) -> Line<'static> {
         Span::raw(" "),
         Span::styled(mode.to_string(), Style::default().fg(Color::Cyan)),
     ])
+}
+
+/// Build the engine reachability spans rendered next to the title.
+///
+/// Returns spans (rather than a full `Line`) so the caller can append them to
+/// the existing title content without owning a separate header column.
+fn engine_status_spans(app: &App) -> Vec<Span<'static>> {
+    match &app.engine_status {
+        EngineStatus::Connected => vec![
+            Span::styled(
+                "●",
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(" "),
+            Span::styled("engine", Style::default().fg(Color::Green)),
+        ],
+        EngineStatus::Unreachable { .. } => vec![
+            Span::styled(
+                "✖",
+                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(" "),
+            Span::styled(
+                format!("engine unreachable @ {}", app.endpoint),
+                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+            ),
+        ],
+        EngineStatus::Unknown => vec![
+            Span::styled("○", Style::default().fg(Color::DarkGray)),
+            Span::raw(" "),
+            Span::styled("engine ...", Style::default().fg(Color::DarkGray)),
+        ],
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use ratatui::{backend::TestBackend, layout::Rect, style::Color, Terminal};
+
+    use super::{engine_status_spans, render};
+    use crate::app::{App, EngineStatus};
+
+    fn make_app() -> App {
+        App::new("http://127.0.0.1:50051".to_string())
+    }
+
+    fn header_text(app: &App) -> String {
+        let backend = TestBackend::new(160, 3);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| render(app, f, Rect::new(0, 0, 160, 3)))
+            .unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        let mut out = String::new();
+        for y in 0..buffer.area.height {
+            for x in 0..buffer.area.width {
+                out.push_str(buffer[(x, y)].symbol());
+            }
+            out.push('\n');
+        }
+        out
+    }
+
+    #[test]
+    fn engine_unreachable_renders_red_message_with_endpoint() {
+        let mut app = make_app();
+        app.engine_status = EngineStatus::Unreachable {
+            message: "transport error".to_string(),
+        };
+        let text = header_text(&app);
+        assert!(
+            text.contains("engine unreachable @ http://127.0.0.1:50051"),
+            "expected unreachable banner with endpoint, got:\n{text}"
+        );
+        assert!(text.contains('✖'), "expected red ✖ glyph, got:\n{text}");
+
+        let spans = engine_status_spans(&app);
+        assert!(spans.iter().any(|s| s.style.fg == Some(Color::Red)));
+    }
+
+    #[test]
+    fn engine_connected_renders_green_indicator() {
+        let mut app = make_app();
+        app.engine_status = EngineStatus::Connected;
+        let text = header_text(&app);
+        assert!(text.contains('●'), "expected green ● glyph, got:\n{text}");
+        assert!(
+            text.contains("engine"),
+            "expected 'engine' label, got:\n{text}"
+        );
+
+        let spans = engine_status_spans(&app);
+        assert!(spans.iter().any(|s| s.style.fg == Some(Color::Green)));
+    }
+
+    #[test]
+    fn engine_unknown_renders_dim_indicator() {
+        let app = make_app();
+        let text = header_text(&app);
+        assert!(text.contains('○'), "expected dim ○ glyph, got:\n{text}");
+        assert!(
+            text.contains("engine ..."),
+            "expected 'engine ...' placeholder, got:\n{text}"
+        );
+
+        let spans = engine_status_spans(&app);
+        assert!(spans.iter().any(|s| s.style.fg == Some(Color::DarkGray)));
+    }
 }

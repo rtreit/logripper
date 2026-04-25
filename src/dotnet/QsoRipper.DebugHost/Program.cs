@@ -24,6 +24,8 @@ builder.Services.AddScoped<SetupWorkbenchService>();
 builder.Services.AddScoped<StationProfileWorkbenchService>();
 builder.Services.AddScoped<RigControlWorkbenchService>();
 builder.Services.AddScoped<DebugCommandService>();
+builder.Services.AddSingleton<EngineConnectivityWatcher>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<EngineConnectivityWatcher>());
 
 var app = builder.Build();
 
