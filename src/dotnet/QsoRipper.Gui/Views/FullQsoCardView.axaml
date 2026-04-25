@@ -162,12 +162,40 @@
 
                 <StackPanel>
                   <TextBlock Classes="fieldLabel" Text="Comment" />
-                  <TextBox Text="{Binding Comment, Mode=TwoWay}" AcceptsReturn="True" Height="88" TextWrapping="Wrap" />
+                  <TextBox Text="{Binding Comment, Mode=TwoWay}" AcceptsReturn="True" Height="56" TextWrapping="Wrap" />
                 </StackPanel>
 
                 <StackPanel>
                   <TextBlock Classes="fieldLabel" Text="Notes" />
-                  <TextBox Text="{Binding Notes, Mode=TwoWay}" AcceptsReturn="True" Height="140" TextWrapping="Wrap" />
+                  <TextBox Text="{Binding Notes, Mode=TwoWay}" AcceptsReturn="True" Height="92" TextWrapping="Wrap" />
+                </StackPanel>
+
+                <StackPanel>
+                  <TextBlock Classes="fieldLabel" Text="CW decode (RX)" />
+                  <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="10" RowDefinitions="Auto,Auto" RowSpacing="6">
+                    <StackPanel Grid.Column="0" Grid.Row="0" Width="96">
+                      <TextBlock Classes="fieldLabel" Text="WPM" Opacity="0.72" />
+                      <TextBox Text="{Binding CwDecodeRxWpmText, Mode=TwoWay}"
+                               PlaceholderText="auto" />
+                    </StackPanel>
+                    <StackPanel Grid.Column="1" Grid.Row="0" VerticalAlignment="Bottom">
+                      <TextBlock Text="{Binding CwTranscriptSummary}"
+                                 FontSize="11"
+                                 Opacity="0.72"
+                                 TextTrimming="CharacterEllipsis" />
+                      <TextBlock Text="{Binding CwTranscriptPreview}"
+                                 FontSize="11.5"
+                                 Classes="mono"
+                                 TextWrapping="NoWrap"
+                                 TextTrimming="CharacterEllipsis"
+                                 IsVisible="{Binding HasCwTranscriptContent}" />
+                    </StackPanel>
+                    <Button Grid.Column="2" Grid.Row="0"
+                            Content="Open transcript &#x2192;"
+                            VerticalAlignment="Bottom"
+                            Command="{Binding ShowTranscriptTabCommand}"
+                            ToolTip.Tip="Jump to the Transcript tab (Alt+6)" />
+                  </Grid>
                 </StackPanel>
               </StackPanel>
             </Grid>
@@ -556,7 +584,59 @@
           </ScrollViewer>
         </TabItem>
 
-        <TabItem Header="6 Metadata">
+        <TabItem Header="6 Transcript">
+          <ScrollViewer VerticalScrollBarVisibility="Auto">
+            <StackPanel Spacing="14" Margin="0,8,0,0">
+
+              <Border Classes="infoPanel">
+                <Grid RowDefinitions="Auto,Auto,*" RowSpacing="6">
+                  <Grid Grid.Row="0" ColumnDefinitions="*,Auto" ColumnSpacing="10">
+                    <TextBlock Grid.Column="0"
+                               Text="{Binding CwTranscriptSourceBadge}"
+                               FontWeight="SemiBold"
+                               FontSize="13"
+                               VerticalAlignment="Center" />
+                    <StackPanel Grid.Column="1"
+                                Orientation="Horizontal"
+                                Spacing="8"
+                                VerticalAlignment="Center">
+                      <TextBlock Classes="fieldLabel" Text="WPM" />
+                      <TextBox Text="{Binding CwDecodeRxWpmText, Mode=TwoWay}"
+                               Width="80"
+                               PlaceholderText="auto" />
+                    </StackPanel>
+                  </Grid>
+
+                  <TextBlock Grid.Row="1"
+                             Text="Auto-filled from the live CW decoder. Edits here are saved with the QSO; the captured WPM and transcript are a lossy snapshot of the decoder output."
+                             FontSize="11"
+                             Opacity="0.65"
+                             TextWrapping="Wrap" />
+
+                  <TextBox Grid.Row="2"
+                           x:Name="CwTranscriptBox"
+                           Text="{Binding CwDecodeTranscript, Mode=TwoWay}"
+                           AcceptsReturn="True"
+                           AcceptsTab="False"
+                           TextWrapping="Wrap"
+                           Classes="mono"
+                           MinHeight="380"
+                           VerticalContentAlignment="Top"
+                           PlaceholderText="No CW transcript captured yet. Type a callsign while the CW decoder is locked to start collecting decoded text." />
+                </Grid>
+              </Border>
+
+              <!--
+                Future-proofing: voice STT (SSB/FM) transcripts will appear here as a sibling
+                section with the same shape (header strip + multi-line editable monospace box).
+                See docs/architecture/engine-specification.md for the planned proto contract.
+              -->
+
+            </StackPanel>
+          </ScrollViewer>
+        </TabItem>
+
+        <TabItem Header="7 Metadata">
           <ScrollViewer VerticalScrollBarVisibility="Auto">
             <Grid ColumnDefinitions="320,*" ColumnSpacing="18" Margin="0,8,0,0">
               <StackPanel Spacing="10">

@@ -26,5 +26,6 @@ internal enum RecentQsoGridColumn
     RstReceived,
     State,
     County,
-    Comment
+    Comment,
+    RxWpm
 }

@@ -1200,6 +1200,8 @@ When DXCC data is available, cascade zone information onto the lookup result if 
    - `QSO_COMPLETE` → `qso_complete` (`Y`/`N`/`NIL`/`?` → `QsoCompletion` enum)
    - `MY_ALTITUDE` → `station_snapshot.altitude_meters`
    - `MY_GRIDSQUARE_EXT` → `station_snapshot.gridsquare_ext`
+   - `APP_QSORIPPER_RX_WPM` → `cw_decode_rx_wpm` (parsed as unsigned integer; non-numeric values fall back to `extra_fields`)
+   - `APP_QSORIPPER_CW_TRANSCRIPT` → `cw_decode_transcript` (decoded CW transcript snapshot for the QSO; empty values are dropped)
    Unrecognized values (e.g., malformed LAT, unknown `QSO_COMPLETE` literal) fall back to `extra_fields` under the original key.
 5. Preserve any other unrecognized ADIF fields in the `extra_fields` map for lossless round-trip.
 6. Generate a `local_id` for each imported record.
@@ -1216,7 +1218,7 @@ See `docs/integrations/adif-specification.md` for the authoritative field-name t
    - `qrz_logid` → `APP_QRZLOG_LOGID`
    - `qrz_bookid` → `APP_QRZLOG_QSO_ID`
    When iterating `extra_fields`, skip keys already covered by these dedicated emissions (`APP_QRZLOG_LOGID`, `APP_QRZ_LOGID`, `APP_QRZLOG_QSO_ID`, `APP_QRZ_BOOKID`) to avoid duplicate ADIF fields.
-4. Emit the normalized ADIF fields from their dedicated proto slots whenever populated (`BAND_RX`, `FREQ_RX`, `LAT`, `LON`, `ALTITUDE`, `GRIDSQUARE_EXT`, `OWNER_CALLSIGN`, `QSO_COMPLETE`, `MY_ALTITUDE`, `MY_GRIDSQUARE_EXT`). When iterating `extra_fields`, skip these same keys so the dedicated proto value always wins and the ADIF output never contains the same field twice.
+4. Emit the normalized ADIF fields from their dedicated proto slots whenever populated (`BAND_RX`, `FREQ_RX`, `LAT`, `LON`, `ALTITUDE`, `GRIDSQUARE_EXT`, `OWNER_CALLSIGN`, `QSO_COMPLETE`, `MY_ALTITUDE`, `MY_GRIDSQUARE_EXT`, `APP_QSORIPPER_RX_WPM`, `APP_QSORIPPER_CW_TRANSCRIPT`). When iterating `extra_fields`, skip these same keys so the dedicated proto value always wins and the ADIF output never contains the same field twice. Engines MUST sanitize `cw_decode_transcript` to printable ASCII (plus CR/LF/tab) before emitting `APP_QSORIPPER_CW_TRANSCRIPT` so the .NET char-count length and Rust byte-count length agree across runtimes.
 5. Include other `extra_fields` to preserve data from previous imports.
 6. Output records delimited by `<eor>`.
 

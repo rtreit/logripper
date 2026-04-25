@@ -125,6 +125,120 @@ public sealed class QsoLoggerEnrichmentTests
     }
 
     [Fact]
+    public void EnrichFromCwDecoderFillsTranscriptForCwQsoWhenFragmentsPresent()
+    {
+        using var src = new CwSampleHarness();
+        using var transcriptAgg = new CwQsoTranscriptAggregator(src);
+
+        var start = DateTimeOffset.UtcNow.AddSeconds(-2);
+
+        transcriptAgg.IngestForTest("{\"type\":\"char\",\"ch\":\"C\"}");
+        transcriptAgg.IngestForTest("{\"type\":\"char\",\"ch\":\"Q\"}");
+        transcriptAgg.IngestForTest("{\"type\":\"word\"}");
+        transcriptAgg.IngestForTest("{\"type\":\"char\",\"ch\":\"K\"}");
+
+        var logger = new QsoLoggerViewModel(new FakeEngineClient(), cwWpmAggregator: null);
+        logger.AttachCwTranscriptAggregator(transcriptAgg);
+
+        var qso = new QsoRecord { WorkedCallsign = "K7DOE", Mode = Mode.Cw };
+
+        logger.EnrichFromCwDecoder(qso, start, DateTimeOffset.UtcNow.AddSeconds(2));
+
+        Assert.True(qso.HasCwDecodeTranscript);
+        Assert.Equal("CQ K", qso.CwDecodeTranscript);
+    }
+
+    [Fact]
+    public void EnrichFromCwDecoderPreservesOperatorTypedTranscript()
+    {
+        using var src = new CwSampleHarness();
+        using var transcriptAgg = new CwQsoTranscriptAggregator(src);
+        transcriptAgg.IngestForTest("{\"type\":\"char\",\"ch\":\"X\"}");
+
+        var logger = new QsoLoggerViewModel(new FakeEngineClient(), cwWpmAggregator: null);
+        logger.AttachCwTranscriptAggregator(transcriptAgg);
+
+        var qso = new QsoRecord
+        {
+            WorkedCallsign = "K7DOE",
+            Mode = Mode.Cw,
+            CwDecodeTranscript = "operator typed",
+        };
+
+        logger.EnrichFromCwDecoder(qso, DateTimeOffset.UtcNow.AddSeconds(-2), DateTimeOffset.UtcNow.AddSeconds(2));
+
+        Assert.Equal("operator typed", qso.CwDecodeTranscript);
+    }
+
+    [Fact]
+    public void EnrichFromCwDecoderClearsCwFieldsWhenModeIsNotCw()
+    {
+        using var src = new CwSampleHarness();
+        using var wpm = new CwQsoWpmAggregator(src);
+        using var transcriptAgg = new CwQsoTranscriptAggregator(src);
+        src.Emit(new CwWpmSample(DateTimeOffset.UtcNow, 25.0, Epoch: 1));
+        transcriptAgg.IngestForTest("{\"type\":\"char\",\"ch\":\"Y\"}");
+
+        var logger = new QsoLoggerViewModel(new FakeEngineClient(), wpm);
+        logger.AttachCwTranscriptAggregator(transcriptAgg);
+
+        var qso = new QsoRecord
+        {
+            WorkedCallsign = "K7DOE",
+            Mode = Mode.Ssb,
+            CwDecodeRxWpm = 30,
+            CwDecodeTranscript = "stale auto-fill",
+        };
+
+        logger.EnrichFromCwDecoder(qso, DateTimeOffset.UtcNow.AddSeconds(-30), DateTimeOffset.UtcNow);
+
+        Assert.False(qso.HasCwDecodeRxWpm);
+        Assert.False(qso.HasCwDecodeTranscript);
+    }
+
+    [Fact]
+    public void EnrichFromCwDecoderTranscriptIsNoOpWhenAggregatorMissing()
+    {
+        var logger = new QsoLoggerViewModel(new FakeEngineClient());
+        var qso = new QsoRecord { WorkedCallsign = "K7DOE", Mode = Mode.Cw };
+
+        logger.EnrichFromCwDecoder(qso, DateTimeOffset.UtcNow.AddSeconds(-30), DateTimeOffset.UtcNow);
+
+        Assert.False(qso.HasCwDecodeTranscript);
+    }
+
+    [Fact]
+    public void EnrichFromCwDecoderFillsBothWpmAndTranscriptForCwQso()
+    {
+        using var src = new CwSampleHarness();
+        using var wpm = new CwQsoWpmAggregator(src, maxSampleHoldDuration: TimeSpan.FromSeconds(60));
+        using var transcriptAgg = new CwQsoTranscriptAggregator(src);
+
+        var start = new DateTimeOffset(2024, 6, 1, 12, 0, 0, TimeSpan.Zero);
+        var end = start.AddSeconds(20);
+
+        src.Emit(new CwWpmSample(start, 24.0, Epoch: 1));
+        src.Emit(new CwWpmSample(start.AddSeconds(10), 24.0, Epoch: 1));
+        transcriptAgg.IngestForTest("{\"type\":\"char\",\"ch\":\"R\"}");
+
+        var logger = new QsoLoggerViewModel(new FakeEngineClient(), wpm);
+        logger.AttachCwTranscriptAggregator(transcriptAgg);
+
+        var qso = new QsoRecord { WorkedCallsign = "K7DOE", Mode = Mode.Cw };
+        logger.EnrichFromCwDecoder(qso, start, end);
+
+        // wpm aggregator queries on a window in the past; transcript
+        // aggregator timestamps fragments at ingest-time using
+        // DateTimeOffset.UtcNow, so use a wide window for transcript here
+        // by re-running with a wide window:
+        logger.EnrichFromCwDecoder(qso, DateTimeOffset.UtcNow.AddSeconds(-5), DateTimeOffset.UtcNow.AddSeconds(5));
+
+        Assert.True(qso.HasCwDecodeRxWpm);
+        Assert.Equal(24u, qso.CwDecodeRxWpm);
+        Assert.Equal("R", qso.CwDecodeTranscript);
+    }
+
+    [Fact]
     public void EnrichFromLookupWithNullRecordLeavesQsoUnchanged()
     {
         var qso = new QsoRecord { WorkedCallsign = "W1AW" };

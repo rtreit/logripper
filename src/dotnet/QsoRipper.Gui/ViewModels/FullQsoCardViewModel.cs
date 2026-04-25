@@ -38,7 +38,7 @@ internal sealed partial class FullQsoCardViewModel : ObservableObject, IDisposab
         .ToArray();
 
     private static readonly string[] QslStatusLabels = ["-", "No", "Yes", "Requested", "Queued", "Ignore"];
-    private const string SectionHintText = "Ctrl+Tab / Ctrl+Shift+Tab or Alt+1..6 to switch sections";
+    private const string SectionHintText = "Ctrl+Tab / Ctrl+Shift+Tab or Alt+1..7 to switch sections";
 
     private readonly IEngineClient _engine;
     private readonly QsoLoggerViewModel? _logger;
@@ -233,6 +233,12 @@ internal sealed partial class FullQsoCardViewModel : ObservableObject, IDisposab
     private string _comment = string.Empty;
 
     [ObservableProperty]
+    private string _cwDecodeRxWpmText = string.Empty;
+
+    [ObservableProperty]
+    private string _cwDecodeTranscript = string.Empty;
+
+    [ObservableProperty]
     private string _snapshotProfileName = string.Empty;
 
     [ObservableProperty]
@@ -322,6 +328,90 @@ internal sealed partial class FullQsoCardViewModel : ObservableObject, IDisposab
         }
     }
 
+    partial void OnCwDecodeRxWpmTextChanged(string value)
+    {
+        OnPropertyChanged(nameof(CwTranscriptSummary));
+        OnPropertyChanged(nameof(CwTranscriptSourceBadge));
+    }
+
+    partial void OnCwDecodeTranscriptChanged(string value)
+    {
+        OnPropertyChanged(nameof(CwTranscriptSummary));
+        OnPropertyChanged(nameof(CwTranscriptPreview));
+        OnPropertyChanged(nameof(HasCwTranscriptContent));
+    }
+
+    /// <summary>
+    /// True when CW WPM or transcript is populated. Used to show a "no data" state in the
+    /// Transcript tab without hiding the editable fields.
+    /// </summary>
+    public bool HasCwTranscriptContent =>
+        !string.IsNullOrWhiteSpace(CwDecodeTranscript) || !string.IsNullOrWhiteSpace(CwDecodeRxWpmText);
+
+    /// <summary>
+    /// Compact summary line shown on the Core tab so the operator can see at-a-glance whether
+    /// CW decoder data is captured without leaving the section.
+    /// </summary>
+    public string CwTranscriptSummary
+    {
+        get
+        {
+            var hasWpm = !string.IsNullOrWhiteSpace(CwDecodeRxWpmText);
+            var hasText = !string.IsNullOrWhiteSpace(CwDecodeTranscript);
+            if (!hasWpm && !hasText)
+            {
+                return "No CW decoder data captured.";
+            }
+
+            var parts = new List<string>(2);
+            if (hasWpm)
+            {
+                parts.Add(string.Concat(CwDecodeRxWpmText.Trim(), " WPM"));
+            }
+
+            if (hasText)
+            {
+                parts.Add(string.Concat(
+                    CwDecodeTranscript.Length.ToString(CultureInfo.InvariantCulture),
+                    " chars"));
+            }
+
+            return string.Join(" \u00B7 ", parts);
+        }
+    }
+
+    /// <summary>
+    /// First ~80 characters of the CW transcript with newlines collapsed, for the Core tab preview.
+    /// </summary>
+    public string CwTranscriptPreview
+    {
+        get
+        {
+            if (string.IsNullOrWhiteSpace(CwDecodeTranscript))
+            {
+                return string.Empty;
+            }
+
+            var collapsed = CwDecodeTranscript.Replace('\n', ' ').Replace('\r', ' ').Trim();
+            return collapsed.Length <= 80 ? collapsed : string.Concat(collapsed.AsSpan(0, 79), "\u2026");
+        }
+    }
+
+    /// <summary>
+    /// Source-and-metric badge shown atop each transcript section in the Transcript tab.
+    /// Designed to be reused for future voice STT sections (e.g. "Voice STT \u00B7 Whisper").
+    /// </summary>
+    public string CwTranscriptSourceBadge =>
+        string.IsNullOrWhiteSpace(CwDecodeRxWpmText)
+            ? "CW decoder (RX)"
+            : string.Concat("CW decoder (RX) \u00B7 ", CwDecodeRxWpmText.Trim(), " WPM");
+
+    [RelayCommand]
+    private void ShowTranscriptTab()
+    {
+        SelectedTabIndex = 5;
+    }
+
     [RelayCommand]
     private void Close()
     {
@@ -355,6 +445,14 @@ internal sealed partial class FullQsoCardViewModel : ObservableObject, IDisposab
             }
             else
             {
+                // Auto-fill CW WPM/transcript from the live decoder if the
+                // operator hasn't typed values manually. Mirrors the
+                // simple-logger path so QSOs logged via the full card
+                // get the same CW enrichment.
+                var cwStart = qso.UtcTimestamp?.ToDateTimeOffset() ?? DateTimeOffset.UtcNow;
+                var cwEnd = qso.UtcEndTimestamp?.ToDateTimeOffset() ?? DateTimeOffset.UtcNow;
+                _logger?.EnrichFromCwDecoder(qso, cwStart, cwEnd);
+
                 var response = await _engine.LogQsoAsync(qso);
                 LocalId = response.LocalId;
                 StatusText = $"Logged {qso.WorkedCallsign}.";
@@ -538,6 +636,10 @@ internal sealed partial class FullQsoCardViewModel : ObservableObject, IDisposab
         SatMode = qso.SatMode ?? string.Empty;
         Notes = qso.Notes ?? string.Empty;
         Comment = qso.Comment ?? string.Empty;
+        CwDecodeRxWpmText = qso.HasCwDecodeRxWpm
+            ? qso.CwDecodeRxWpm.ToString(CultureInfo.InvariantCulture)
+            : string.Empty;
+        CwDecodeTranscript = qso.HasCwDecodeTranscript ? (qso.CwDecodeTranscript ?? string.Empty) : string.Empty;
         LocalId = qso.LocalId;
         SyncStatusText = BuildSyncStatus(qso.SyncStatus);
         CreatedAtText = FormatTimestamp(qso.CreatedAt);
@@ -890,6 +992,15 @@ internal sealed partial class FullQsoCardViewModel : ObservableObject, IDisposab
         ApplyOptionalString(SatMode, value => working.SatMode = value, working.ClearSatMode, uppercase: true);
         ApplyOptionalString(Notes, value => working.Notes = value, working.ClearNotes);
         ApplyOptionalString(Comment, value => working.Comment = value, working.ClearComment);
+        ApplyOptionalString(CwDecodeTranscript, value => working.CwDecodeTranscript = value, working.ClearCwDecodeTranscript);
+        if (uint.TryParse(CwDecodeRxWpmText, NumberStyles.None, CultureInfo.InvariantCulture, out var parsedRxWpm) && parsedRxWpm > 0)
+        {
+            working.CwDecodeRxWpm = parsedRxWpm;
+        }
+        else
+        {
+            working.ClearCwDecodeRxWpm();
+        }
 
         working.QslSentStatus = ParseQslStatus(SelectedQslSentStatus);
         working.QslReceivedStatus = ParseQslStatus(SelectedQslReceivedStatus);
