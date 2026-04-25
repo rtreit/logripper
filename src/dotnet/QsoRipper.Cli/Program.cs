@@ -77,9 +77,7 @@ try
 }
 catch (RpcException ex) when (ex.StatusCode == StatusCode.Unavailable)
 {
-    Console.Error.WriteLine(
-        $"Could not connect to {arguments.EngineProfile.DisplayName} at {arguments.Endpoint}");
-    Console.Error.WriteLine("Make sure the engine is running.");
+    Console.Error.WriteLine(EngineReachability.FormatUnreachableMessage(arguments.EngineProfile, arguments.Endpoint));
     return 1;
 }
 catch (RpcException ex)

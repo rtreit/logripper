@@ -6,11 +6,17 @@ use tokio::sync::{mpsc, watch};
 use tokio::time;
 use tonic::transport::Channel;
 
-use crate::app::{CallsignInfo, RecentQso, RigInfo, SpaceWeatherInfo};
+use qsoripper_core::proto::qsoripper::services::{
+    logbook_service_client::LogbookServiceClient, GetSyncStatusRequest,
+};
+
+use crate::app::{CallsignInfo, EngineStatus, RecentQso, RigInfo, SpaceWeatherInfo};
 use crate::grpc;
 
 const SPACE_WEATHER_REFRESH_INTERVAL: Duration = Duration::from_secs(60 * 60);
 const RIG_POLL_INTERVAL: Duration = Duration::from_millis(500);
+const ENGINE_HEALTH_INTERVAL: Duration = Duration::from_secs(5);
+const ENGINE_HEALTH_TIMEOUT: Duration = Duration::from_millis(1500);
 
 /// Events produced by background tasks and forwarded to the main event loop.
 pub(crate) enum AppEvent {
@@ -49,6 +55,8 @@ pub(crate) enum AppEvent {
         /// Operator name from the lookup cache.
         name: String,
     },
+    /// Periodic engine reachability snapshot from the health probe task.
+    EngineHealth(EngineStatus),
 }
 
 /// Spawn a blocking OS thread that reads crossterm key events and forwards them to `tx`.
@@ -177,4 +185,46 @@ pub(crate) fn spawn_rig_poll_task(
             }
         }
     });
+}
+
+/// Probe the engine's `get_sync_status` RPC once and classify the outcome.
+///
+/// Used both by the startup probe and by the periodic health task. A short
+/// per-call timeout is applied so the TUI never stalls waiting on a dead engine.
+pub(crate) async fn probe_engine_health(channel: Channel) -> EngineStatus {
+    let mut client = LogbookServiceClient::new(channel);
+    let mut request = tonic::Request::new(GetSyncStatusRequest {});
+    request.set_timeout(ENGINE_HEALTH_TIMEOUT);
+    match client.get_sync_status(request).await {
+        Ok(_) => EngineStatus::Connected,
+        Err(status) => EngineStatus::Unreachable {
+            message: status.message().to_string(),
+        },
+    }
+}
+
+/// Spawn a background task that probes engine reachability every
+/// [`ENGINE_HEALTH_INTERVAL`]. Sends [`AppEvent::EngineHealth`] on every
+/// iteration so the UI can flip between Connected/Unreachable states.
+pub(crate) fn spawn_engine_health_task(
+    channel: Channel,
+    event_tx: mpsc::UnboundedSender<AppEvent>,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut interval = time::interval(ENGINE_HEALTH_INTERVAL);
+        // Skip the immediate first tick — `main` already runs a synchronous
+        // startup probe, so the first periodic update should fire one interval
+        // later instead of racing the startup probe.
+        interval.tick().await;
+        loop {
+            interval.tick().await;
+            if event_tx.is_closed() {
+                break;
+            }
+            let status = probe_engine_health(channel.clone()).await;
+            if event_tx.send(AppEvent::EngineHealth(status)).is_err() {
+                break;
+            }
+        }
+    })
 }

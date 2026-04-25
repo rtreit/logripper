@@ -207,6 +207,20 @@
                  Margin="0,0,12,0" />
       </Panel>
 
+    <Border DockPanel.Dock="Top"
+            x:Name="EngineUnreachableBanner"
+            AutomationProperties.AutomationId="EngineUnreachableBanner"
+            Background="#B00020"
+            Padding="12,6"
+            Focusable="False"
+            IsHitTestVisible="False"
+            IsVisible="{Binding IsEngineUnreachable}">
+      <TextBlock Text="{Binding EngineUnreachableMessage}"
+                 Foreground="White"
+                 FontWeight="SemiBold"
+                 TextWrapping="Wrap" />
+    </Border>
+
     <Panel>
       <Grid RowDefinitions="Auto,Auto,*,Auto"
             IsEnabled="{Binding !IsWizardOpen}">
