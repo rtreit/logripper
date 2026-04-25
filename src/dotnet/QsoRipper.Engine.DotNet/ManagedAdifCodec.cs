@@ -439,6 +439,17 @@ internal static class ManagedAdifCodec
                     }
 
                     break;
+                case "APP_QSORIPPER_RX_WPM":
+                    if (uint.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var rxWpm))
+                    {
+                        qso.CwDecodeRxWpm = rxWpm;
+                    }
+                    else
+                    {
+                        qso.ExtraFields[key] = value;
+                    }
+
+                    break;
                 case "COUNTRY":
                     qso.WorkedCountry = value;
                     break;
@@ -806,6 +817,11 @@ internal static class ManagedAdifCodec
         if (TryFormatQsoCompletion(qso.QsoComplete, out var qsoCompleteOut))
         {
             fields.Add(new KeyValuePair<string, string>("QSO_COMPLETE", qsoCompleteOut));
+        }
+
+        if (qso.HasCwDecodeRxWpm)
+        {
+            fields.Add(new KeyValuePair<string, string>("APP_QSORIPPER_RX_WPM", qso.CwDecodeRxWpm.ToString(CultureInfo.InvariantCulture)));
         }
 
         AddOptionalStringField(fields, "COUNTRY", qso.WorkedCountry);
@@ -1462,6 +1478,7 @@ internal static class ManagedAdifCodec
             : key.Equals("GRIDSQUARE_EXT", StringComparison.OrdinalIgnoreCase) ? !string.IsNullOrWhiteSpace(qso.WorkedGridsquareExt)
             : key.Equals("OWNER_CALLSIGN", StringComparison.OrdinalIgnoreCase) ? !string.IsNullOrWhiteSpace(qso.OwnerCallsign)
             : key.Equals("QSO_COMPLETE", StringComparison.OrdinalIgnoreCase) ? qso.QsoComplete != QsoCompletion.Unspecified
+            : key.Equals("APP_QSORIPPER_RX_WPM", StringComparison.OrdinalIgnoreCase) ? qso.HasCwDecodeRxWpm
             : key.Equals("MY_ALTITUDE", StringComparison.OrdinalIgnoreCase) ? stationSnapshot is not null && stationSnapshot.HasAltitudeMeters
             : key.Equals("MY_GRIDSQUARE_EXT", StringComparison.OrdinalIgnoreCase) ? !string.IsNullOrWhiteSpace(stationSnapshot?.GridsquareExt)
             : (key.Equals("QSO_DATE_OFF", StringComparison.OrdinalIgnoreCase) || key.Equals("TIME_OFF", StringComparison.OrdinalIgnoreCase)) && qso.UtcEndTimestamp is not null;

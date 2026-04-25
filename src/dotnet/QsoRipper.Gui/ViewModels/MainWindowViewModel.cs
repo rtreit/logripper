@@ -28,6 +28,9 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
     private readonly DispatcherTimer _utcTimer;
     private readonly DispatcherTimer _rigTimer;
     private readonly DispatcherTimer _spaceWeatherTimer;
+    private CwDecoderProcessSampleSource? _cwSampleSource;
+    private CwQsoWpmAggregator? _cwAggregator;
+    private CwDiagnosticsRecorder? _cwDiagnosticsRecorder;
     private bool _setupCompleteBeforeWizard;
     private string? _preferredEngineProfileId;
     private string? _preferredEngineEndpoint;
@@ -106,6 +109,12 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
     private CallsignCardViewModel? _callsignCard;
 
     [ObservableProperty]
+    private bool _isCwStatsPaneOpen;
+
+    [ObservableProperty]
+    private CwStatsPaneViewModel? _cwStatsPane;
+
+    [ObservableProperty]
     private bool _isRigEnabled;
 
     [ObservableProperty]
@@ -133,6 +142,41 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
     private bool _isLoggerFocused;
 
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(CwDecoderStatusOpacity))]
+    private bool _isCwDecoderEnabled;
+
+    [ObservableProperty]
+    private bool _isCwDecoderLoopback;
+
+    [ObservableProperty]
+    private string _cwDecoderStatusText = "WPM: OFF";
+
+    [ObservableProperty]
+    private string _cwDecoderDeviceOverride = string.Empty;
+
+    /// <summary>
+    /// When true, the GUI mirrors all cw-decoder NDJSON events + audio to
+    /// disk under <c>%LOCALAPPDATA%\QsoRipper\diagnostics\</c> so a developer
+    /// can compare what the UX displayed vs what the decoder emitted vs
+    /// what got logged on the QSO. Off by default.
+    /// </summary>
+    [ObservableProperty]
+    private bool _isCwDiagnosticsEnabled;
+
+    /// <summary>
+    /// Whether the CW WPM live readout is shown in the status bar. Toggled
+    /// independently of <see cref="IsCwDecoderEnabled"/> so users can hide
+    /// the readout without tearing down the decoder, or reveal it as a
+    /// "(disabled)" marker as a reminder to enable the source in Settings.
+    /// </summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(CwDecoderStatusOpacity))]
+    private bool _isCwWpmStatusBarVisible;
+
+    /// <summary>Dimmed (0.4) when the source is off; full opacity when running.</summary>
+    public double CwDecoderStatusOpacity => IsCwDecoderEnabled ? 0.7 : 0.4;
+
+    [ObservableProperty]
     private string _contextHintText = "F3 grid · F4 search · Ctrl+N logger · Alt+A card · F1 help";
 
     internal MainWindowViewModel(EngineTargetProfile engineProfile, string endpoint)
@@ -147,6 +191,9 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
         Logger = new QsoLoggerViewModel(_engine);
         Logger.QsoLogged += OnQsoLogged;
         Logger.LoggerFocusRequested += OnLoggerFocusRequested;
+        Logger.CwEpisodeBoundary += OnCwEpisodeBoundary;
+        Logger.CwEpisodeStarted += OnCwEpisodeStarted;
+        Logger.CwModeChanged += OnLoggerCwModeChanged;
         ActiveEngineText = BuildEngineText(engineProfile, endpoint);
         UpdateUtcClock();
         _utcTimer = CreateUtcTimer();
@@ -167,6 +214,9 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
         Logger = new QsoLoggerViewModel(engine);
         Logger.QsoLogged += OnQsoLogged;
         Logger.LoggerFocusRequested += OnLoggerFocusRequested;
+        Logger.CwEpisodeBoundary += OnCwEpisodeBoundary;
+        Logger.CwEpisodeStarted += OnCwEpisodeStarted;
+        Logger.CwModeChanged += OnLoggerCwModeChanged;
         if (_switchableEngine is not null)
         {
             ActiveEngineText = BuildEngineText(_switchableEngine.CurrentProfile, _switchableEngine.CurrentEndpoint);
@@ -475,10 +525,19 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
     /// Creates a <see cref="SettingsViewModel"/> wired to the shared engine client.
     /// Called by the View layer when handling <see cref="SettingsRequested"/>.
     /// </summary>
-    internal SettingsViewModel CreateSettingsViewModel() => new(_engine)
+    internal SettingsViewModel CreateSettingsViewModel()
     {
-        IsSpaceWeatherVisible = IsSpaceWeatherVisible
-    };
+        var vm = new SettingsViewModel(_engine)
+        {
+            IsSpaceWeatherVisible = IsSpaceWeatherVisible,
+            IsRadioMonitorEnabled = IsCwDecoderEnabled,
+            IsCwWpmStatusBarVisible = IsCwWpmStatusBarVisible,
+            IsAdvancedDiagnosticsEnabled = IsCwDiagnosticsEnabled,
+            PendingPreselectDeviceOverride = CwDecoderDeviceOverride,
+            PendingPreselectIsLoopback = IsCwDecoderLoopback,
+        };
+        return vm;
+    }
 
     /// <summary>
     /// Called by the View layer after the Settings dialog closes.
@@ -494,11 +553,153 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
     }
 
     internal void ApplySettingsUiPreferences(bool isSpaceWeatherVisible)
+        => ApplySettingsUiPreferences(
+            isSpaceWeatherVisible,
+            IsCwDecoderEnabled,
+            IsCwWpmStatusBarVisible,
+            IsCwDecoderLoopback,
+            CwDecoderDeviceOverride,
+            IsCwDiagnosticsEnabled);
+
+    internal void ApplySettingsUiPreferences(
+        bool isSpaceWeatherVisible,
+        bool isRadioMonitorEnabled,
+        bool isCwWpmStatusBarVisible,
+        bool isCwWpmLoopback,
+        string? cwDeviceOverride)
+        => ApplySettingsUiPreferences(
+            isSpaceWeatherVisible,
+            isRadioMonitorEnabled,
+            isCwWpmStatusBarVisible,
+            isCwWpmLoopback,
+            cwDeviceOverride,
+            IsCwDiagnosticsEnabled);
+
+    internal void ApplySettingsUiPreferences(
+        bool isSpaceWeatherVisible,
+        bool isRadioMonitorEnabled,
+        bool isCwWpmStatusBarVisible,
+        bool isCwWpmLoopback,
+        string? cwDeviceOverride,
+        bool isCwDiagnosticsEnabled)
     {
         IsSpaceWeatherVisible = isSpaceWeatherVisible;
         if (IsSpaceWeatherVisible && string.IsNullOrEmpty(SpaceWeatherText))
         {
             _ = FetchSpaceWeatherAsync();
+        }
+
+        IsCwWpmStatusBarVisible = isCwWpmStatusBarVisible;
+
+        var trimmedDevice = string.IsNullOrWhiteSpace(cwDeviceOverride)
+            ? string.Empty
+            : cwDeviceOverride.Trim();
+
+        var deviceChanged = !string.Equals(trimmedDevice, CwDecoderDeviceOverride, StringComparison.Ordinal);
+        var loopbackChanged = isCwWpmLoopback != IsCwDecoderLoopback;
+        var enableChanged = isRadioMonitorEnabled != IsCwDecoderEnabled;
+        var diagnosticsChanged = isCwDiagnosticsEnabled != IsCwDiagnosticsEnabled;
+
+        CwDecoderDeviceOverride = trimmedDevice;
+        IsCwDecoderLoopback = isCwWpmLoopback;
+        IsCwDiagnosticsEnabled = isCwDiagnosticsEnabled;
+
+        if (enableChanged)
+        {
+            // ToggleCwDecoder flips the bool. With the new lifecycle policy
+            // it only arms/disarms — the actual subprocess starts when an
+            // episode begins.
+            ToggleCwDecoder();
+        }
+        else if (IsCwDecoderEnabled && (deviceChanged || loopbackChanged || diagnosticsChanged))
+        {
+            // Apply new device/loopback/diagnostics. If the decoder is
+            // currently running (active QSO episode), restart it in place
+            // to pick up the new settings; otherwise the next episode start
+            // will use them automatically.
+            if (_cwSampleSource?.IsRunning == true)
+            {
+                StopCwDecoderProcess();
+                StartCwDecoderProcessForActiveEpisode();
+            }
+        }
+
+        UpdateDisabledCwStatusText();
+    }
+
+    /// <summary>
+    /// Keyboard shortcut (Ctrl+Shift+W) — toggles whether the live CW WPM
+    /// readout is shown in the status bar. Mirrors how Ctrl+W toggles space
+    /// weather. Independent of whether the decoder is actually running.
+    /// </summary>
+    [RelayCommand]
+    private void ToggleCwWpmStatusBar()
+    {
+        IsCwWpmStatusBarVisible = !IsCwWpmStatusBarVisible;
+        UpdateDisabledCwStatusText();
+    }
+
+    /// <summary>
+    /// Keyboard shortcut (Ctrl+Alt+W) — restarts the running cw-decoder
+    /// process so the dot/dash duration estimator and confidence state
+    /// machine start fresh. Useful when the decoder has latched onto a
+    /// wrong baseline (e.g. one station finishes a slow exchange and the
+    /// next operator starts much faster, leaving the WPM estimator
+    /// "stuck" on a stale dot length). No-op when the monitor is off.
+    /// </summary>
+    [RelayCommand]
+    private void RestartCwDecoder()
+    {
+        if (!IsCwDecoderEnabled || _cwSampleSource is null)
+        {
+            return;
+        }
+
+        // Tear down any open episode + recorder so the restart begins a fresh
+        // diagnostics session aligned to the new decoder process. This avoids
+        // splicing audio across two decoder lifetimes inside one WAV file.
+        DisposeDiagnosticsRecorder();
+
+        string? recordingPath = null;
+        if (IsCwDiagnosticsEnabled)
+        {
+            try
+            {
+                StartDiagnosticsSession();
+                recordingPath = _cwDiagnosticsRecorder?.SessionWavPath;
+            }
+            catch (IOException ex)
+            {
+                CwDecoderStatusText = $"WPM: diagnostics dir error ({ex.Message})";
+                DisposeDiagnosticsRecorder();
+            }
+        }
+
+        try
+        {
+            _cwSampleSource.Start(
+                string.IsNullOrWhiteSpace(CwDecoderDeviceOverride) ? null : CwDecoderDeviceOverride.Trim(),
+                IsCwDecoderLoopback,
+                recordingPath);
+            CwDecoderStatusText = IsCwDecoderLoopback
+                ? "WPM: restarting (loopback)\u2026"
+                : "WPM: restarting\u2026";
+        }
+        catch (InvalidOperationException ex)
+        {
+            CwDecoderStatusText = $"WPM: {ex.Message}";
+        }
+        catch (System.ComponentModel.Win32Exception ex)
+        {
+            CwDecoderStatusText = $"WPM: restart failed ({ex.Message})";
+        }
+    }
+
+    private void UpdateDisabledCwStatusText()
+    {
+        if (IsCwWpmStatusBarVisible && !IsCwDecoderEnabled)
+        {
+            CwDecoderStatusText = "WPM: disabled (Settings → Display)";
         }
     }
 
@@ -549,6 +750,370 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
             RigStatusText = "Rig: OFF";
         }
     }
+
+    [RelayCommand]
+    private void ToggleCwDecoder()
+    {
+        IsCwDecoderEnabled = !IsCwDecoderEnabled;
+        if (IsCwDecoderEnabled)
+        {
+            if (CwDecoderProcessSampleSource.LocateBinary() is null)
+            {
+                IsCwDecoderEnabled = false;
+                CwDecoderStatusText = "WPM: decoder not built (see experiments/cw-decoder/README.md)";
+                return;
+            }
+
+            EnsureCwSampleSource();
+
+            // Decoder is now ARMED but not running. The cw-decoder subprocess
+            // is launched on demand when the operator begins a QSO (typing in
+            // the callsign field raises CwEpisodeStarted) AND the selected
+            // mode is CW. It is stopped on every CwEpisodeBoundary (logged /
+            // cleared / abandoned) and on mode-flips away from CW. This
+            // matches operator expectation: "type a CW callsign → CW hunts;
+            // Esc / mode swap → CW silent" and avoids the decoder reporting
+            // a stale lock on ambient noise when no CW QSO is in progress.
+            CwDecoderStatusText = Logger.IsLoggerOnCwMode
+                ? "WPM: armed"
+                : "WPM: armed (mode is not CW)";
+
+            // If the operator already has a callsign in the field when they
+            // turn the monitor on, start hunting immediately so they don't
+            // have to clear and retype to wake the decoder.
+            if (Logger.IsLoggerEpisodeActive)
+            {
+                StartCwDecoderProcessForActiveEpisode();
+            }
+        }
+        else
+        {
+            StopCwDecoderProcess();
+            CwDecoderStatusText = "WPM: OFF";
+            UpdateDisabledCwStatusText();
+        }
+    }
+
+    /// <summary>
+    /// Launches the cw-decoder subprocess with the current device/loopback/
+    /// diagnostics settings. Safe to call repeatedly — <see
+    /// cref="CwDecoderProcessSampleSource.Start"/> stops any prior instance
+    /// first. Called from <see cref="OnCwEpisodeStarted"/> when the operator
+    /// begins typing a new callsign.
+    /// </summary>
+    private void StartCwDecoderProcessForActiveEpisode()
+    {
+        if (!IsCwDecoderEnabled || _cwSampleSource is null)
+        {
+            return;
+        }
+        if (_cwSampleSource.IsRunning)
+        {
+            return;
+        }
+        if (!Logger.IsLoggerOnCwMode)
+        {
+            // Hard gate: the WPM monitor / pitch hunter only makes sense
+            // for CW QSOs. Logging an SSB or FT8 contact must not spin
+            // up the decoder subprocess, capture audio, or surface a
+            // stale lock badge. Mode flips back to CW will trigger
+            // OnLoggerCwModeChanged which calls this method again.
+            CwDecoderStatusText = "WPM: armed (mode is not CW)";
+            return;
+        }
+
+        string? recordingPath = null;
+        if (IsCwDiagnosticsEnabled)
+        {
+            try
+            {
+                StartDiagnosticsSession();
+                recordingPath = _cwDiagnosticsRecorder?.SessionWavPath;
+            }
+            catch (IOException ex)
+            {
+                CwDecoderStatusText = $"WPM: diagnostics dir error ({ex.Message})";
+                DisposeDiagnosticsRecorder();
+            }
+        }
+
+        try
+        {
+            _cwSampleSource.Start(
+                string.IsNullOrWhiteSpace(CwDecoderDeviceOverride) ? null : CwDecoderDeviceOverride.Trim(),
+                IsCwDecoderLoopback,
+                recordingPath);
+            CwDecoderStatusText = IsCwDecoderLoopback
+                ? "WPM: starting (loopback)\u2026"
+                : "WPM: starting\u2026";
+        }
+        catch (InvalidOperationException ex)
+        {
+            CwDecoderStatusText = $"WPM: {ex.Message}";
+            DisposeDiagnosticsRecorder();
+        }
+        catch (System.ComponentModel.Win32Exception ex)
+        {
+            CwDecoderStatusText = $"WPM: launch failed ({ex.Message})";
+            DisposeDiagnosticsRecorder();
+        }
+    }
+
+    /// <summary>
+    /// Stops the cw-decoder subprocess (if running) and tears down any
+    /// active diagnostics recorder. Leaves <see cref="IsCwDecoderEnabled"/>
+    /// untouched — the monitor stays armed and will relaunch when the next
+    /// QSO begins.
+    /// </summary>
+    private void StopCwDecoderProcess()
+    {
+        _cwSampleSource?.Stop();
+        DisposeDiagnosticsRecorder();
+    }
+
+    private void EnsureCwSampleSource()
+    {
+        if (_cwSampleSource is not null)
+        {
+            return;
+        }
+
+        var src = new CwDecoderProcessSampleSource();
+        src.SampleReceived += OnCwSampleReceived;
+        src.StatusChanged += OnCwSourceStatusChanged;
+        src.RawLineReceived += OnCwRawLineReceived;
+        src.LockStateChanged += OnCwLockStateChanged;
+        _cwSampleSource = src;
+        _cwAggregator = new CwQsoWpmAggregator(src);
+        Logger.AttachCwAggregator(_cwAggregator);
+    }
+
+    private void OnCwRawLineReceived(object? sender, string line)
+    {
+        // Tee to the active diagnostics recorder if one is open. Called from
+        // the source's stdout pump background thread; recorder is internally
+        // thread-safe.
+        _cwDiagnosticsRecorder?.IngestRawLine(line);
+    }
+
+    private void StartDiagnosticsSession()
+    {
+        DisposeDiagnosticsRecorder();
+        var sessionDir = BuildDiagnosticsSessionDirectory(DateTimeOffset.UtcNow);
+        var binary = CwDecoderProcessSampleSource.LocateBinary();
+        var deviceLabel = string.IsNullOrWhiteSpace(CwDecoderDeviceOverride)
+            ? "(system default)"
+            : CwDecoderDeviceOverride.Trim();
+        _cwDiagnosticsRecorder = new CwDiagnosticsRecorder(
+            sessionDir,
+            DateTimeOffset.UtcNow,
+            binary,
+            deviceLabel,
+            IsCwDecoderLoopback);
+    }
+
+    private void DisposeDiagnosticsRecorder()
+    {
+        var recorder = _cwDiagnosticsRecorder;
+        _cwDiagnosticsRecorder = null;
+        recorder?.Dispose();
+    }
+
+    private static string BuildDiagnosticsSessionDirectory(DateTimeOffset utc)
+    {
+        var localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        var stamp = utc.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture);
+        return Path.Combine(localAppData, "QsoRipper", "diagnostics", $"session-{stamp}");
+    }
+
+    private void OnCwEpisodeStarted(object? sender, CwEpisodeStartedEventArgs e)
+    {
+        _cwDiagnosticsRecorder?.BeginEpisode(e.UtcStart);
+
+        // Operator has begun a new QSO by typing into the callsign field.
+        // If the radio monitor is armed AND the operator-selected mode is
+        // CW, launch the cw-decoder subprocess so the WPM readout / F9
+        // stats reflect *this* contact rather than ambient noise from
+        // before the operator started typing. No-op when monitor is OFF,
+        // mode isn't CW, or the process is already running.
+        Dispatcher.UIThread.Post(StartCwDecoderProcessForActiveEpisode);
+    }
+
+    /// <summary>
+    /// Operator changed the mode picker (e.g. cycled away from CW or onto
+    /// CW mid-episode). Bring the cw-decoder lifecycle in line with the
+    /// new mode without waiting for a save/clear: stop on leave, start on
+    /// entry if a callsign is already in the field. This avoids the
+    /// "WPM: locked" indicator burning while logging a non-CW QSO and
+    /// avoids missing the start of CW copy when the operator only
+    /// realises the radio is on CW after typing the callsign.
+    /// </summary>
+    private void OnLoggerCwModeChanged(object? sender, EventArgs e)
+    {
+        Dispatcher.UIThread.Post(() =>
+        {
+            if (!IsCwDecoderEnabled)
+            {
+                return;
+            }
+
+            if (Logger.IsLoggerOnCwMode)
+            {
+                if (Logger.IsLoggerEpisodeActive)
+                {
+                    StartCwDecoderProcessForActiveEpisode();
+                }
+                else
+                {
+                    CwDecoderStatusText = "WPM: armed";
+                }
+            }
+            else
+            {
+                if (_cwSampleSource?.IsRunning ?? false)
+                {
+                    StopCwDecoderProcess();
+                }
+                CwStatsPane?.Reset();
+                CwDecoderStatusText = "WPM: armed (mode is not CW)";
+            }
+        });
+    }
+
+    private void OnCwEpisodeBoundary(object? sender, CwEpisodeBoundaryEventArgs e)
+    {
+        // The QSO entry just ended (logged, cleared via Esc, or abandoned by
+        // emptying the callsign field). Tear down the cw-decoder subprocess
+        // so we go fully silent until the operator begins another QSO. This
+        // is the deliberate lifecycle policy: the monitor is *armed* via
+        // Settings → Radio Monitor, but only *runs* during an active episode.
+        // Without this, the decoder would keep reporting a stale lock on
+        // ambient noise (or on a still-transmitting station) while the
+        // operator stared at a blank form, which is what users were seeing
+        // as "F9 says LOCKED even though I cleared the field".
+        var wasRunning = _cwSampleSource?.IsRunning ?? false;
+        if (wasRunning)
+        {
+            StopCwDecoderProcess();
+        }
+
+        // Always reset the F9 pane's per-episode state (decoded text, last
+        // garbled, WPM display) on QSO save/clear/abandoned so the next
+        // QSO doesn't inherit a stale smear from the previous one.
+        Dispatcher.UIThread.Post(() =>
+        {
+            CwStatsPane?.Reset();
+            // Update the main status bar to reflect the new lifecycle. With
+            // the decoder stopped, fall back to the armed/idle/disabled text
+            // so the operator gets unambiguous feedback that nothing is
+            // listening anymore until they start the next QSO.
+            if (!IsCwDecoderEnabled)
+            {
+                CwDecoderStatusText = "WPM: OFF";
+                UpdateDisabledCwStatusText();
+            }
+            else if (wasRunning)
+            {
+                CwDecoderStatusText = Logger.IsLoggerOnCwMode
+                    ? "WPM: armed"
+                    : "WPM: armed (mode is not CW)";
+            }
+            else if (_cwSampleSource is not null)
+            {
+                CwDecoderStatusText = _cwSampleSource.CurrentLockState switch
+                {
+                    CwLockState.Locked => "WPM: locked",
+                    CwLockState.Probation => "WPM: probation",
+                    CwLockState.Hunting => "WPM: hunting",
+                    _ => "WPM: armed",
+                };
+            }
+        });
+
+        var recorder = _cwDiagnosticsRecorder;
+        if (recorder is null)
+        {
+            return;
+        }
+
+        var samples = _cwAggregator?.GetSamplesInWindow(e.UtcStart, e.UtcEnd)
+            ?? Array.Empty<CwWpmSample>();
+        var aggregateMean = _cwAggregator?.GetMeanWpm(e.UtcStart, e.UtcEnd);
+        var displayedWpm = _cwSampleSource?.LatestSample?.Wpm;
+        var displayedStatus = CwDecoderStatusText;
+
+        recorder.FinalizeEpisode(
+            e.Reason,
+            e.Qso,
+            displayedWpm,
+            displayedStatus,
+            aggregateMean,
+            samples,
+            e.UtcStart,
+            e.UtcEnd);
+    }
+
+    private void OnCwSampleReceived(object? sender, CwWpmSample sample)
+    {
+        Dispatcher.UIThread.Post(() =>
+        {
+            // Only display WPM as live when the decoder is locked.
+            // The decoder gates wpm emission on confidence, but the
+            // user's status bar is the most-glanced surface and must
+            // never show a stale value alongside an unlocked state.
+            if (_cwSampleSource?.CurrentLockState == CwLockState.Locked)
+            {
+                CwDecoderStatusText = string.Create(
+                    CultureInfo.InvariantCulture,
+                    $"WPM: {sample.Wpm:F1}");
+            }
+        });
+    }
+
+    private void OnCwLockStateChanged(object? sender, CwLockState newState)
+    {
+        Dispatcher.UIThread.Post(() =>
+        {
+            if (!IsCwDecoderEnabled || _cwSampleSource is null)
+            {
+                return;
+            }
+            CwDecoderStatusText = newState switch
+            {
+                CwLockState.Locked => "WPM: locking…",
+                CwLockState.Probation => "WPM: probation",
+                CwLockState.Hunting => "WPM: hunting",
+                _ => "WPM: idle",
+            };
+        });
+    }
+
+    private void OnCwSourceStatusChanged(object? sender, EventArgs e)
+    {
+        if (_cwSampleSource is null)
+        {
+            return;
+        }
+
+        var running = _cwSampleSource.IsRunning;
+        var lastErr = _cwSampleSource.LastStderrLine;
+        Dispatcher.UIThread.Post(() =>
+        {
+            if (!IsCwDecoderEnabled)
+            {
+                CwDecoderStatusText = "WPM: OFF";
+            }
+            else if (!running)
+            {
+                CwDecoderStatusText = string.IsNullOrWhiteSpace(lastErr)
+                    ? "WPM: stopped"
+                    : $"WPM: stopped — {Truncate(lastErr, 120)}";
+            }
+        });
+    }
+
+    private static string Truncate(string text, int maxLength)
+        => text.Length <= maxLength ? text : text[..(maxLength - 1)] + "…";
 
     [RelayCommand]
     private void ToggleSpaceWeather()
@@ -722,6 +1287,34 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
     {
         Logger.AcceptLookupRecord(record);
     }
+
+    [RelayCommand]
+    private void ToggleCwStatsPane()
+    {
+        if (IsCwStatsPaneOpen)
+        {
+            CloseCwStatsPane();
+            return;
+        }
+
+        var vm = new CwStatsPaneViewModel(_cwSampleSource);
+        vm.CloseRequested += OnCwStatsPaneCloseRequested;
+        CwStatsPane = vm;
+        IsCwStatsPaneOpen = true;
+    }
+
+    private void CloseCwStatsPane()
+    {
+        if (CwStatsPane is { } pane)
+        {
+            pane.CloseRequested -= OnCwStatsPaneCloseRequested;
+            pane.Dispose();
+        }
+        IsCwStatsPaneOpen = false;
+        CwStatsPane = null;
+    }
+
+    private void OnCwStatsPaneCloseRequested(object? sender, EventArgs e) => CloseCwStatsPane();
 
     private void CloseHelp()
     {
@@ -940,6 +1533,22 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
         _spaceWeatherTimer.Stop();
         _spaceWeatherTimer.Tick -= OnSpaceWeatherTimerTick;
 
+        if (_cwSampleSource is not null)
+        {
+            _cwSampleSource.SampleReceived -= OnCwSampleReceived;
+            _cwSampleSource.StatusChanged -= OnCwSourceStatusChanged;
+            _cwSampleSource.RawLineReceived -= OnCwRawLineReceived;
+            _cwSampleSource.LockStateChanged -= OnCwLockStateChanged;
+            _cwSampleSource.Stop();
+            _cwSampleSource.Dispose();
+            _cwSampleSource = null;
+        }
+        _cwAggregator?.Dispose();
+        _cwAggregator = null;
+        DisposeDiagnosticsRecorder();
+        CwStatsPane?.Dispose();
+        CwStatsPane = null;
+
         if (_switchableEngine is not null)
         {
             _switchableEngine.Dispose();
@@ -982,6 +1591,22 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
         _preferredEngineEndpoint = string.IsNullOrWhiteSpace(prefs.EngineEndpoint)
             ? null
             : prefs.EngineEndpoint.Trim();
+
+        if (!string.IsNullOrWhiteSpace(prefs.CwDecoderDeviceOverride))
+        {
+            CwDecoderDeviceOverride = prefs.CwDecoderDeviceOverride.Trim();
+        }
+
+        IsCwDecoderLoopback = prefs.IsCwDecoderLoopback;
+        IsCwWpmStatusBarVisible = prefs.IsCwWpmStatusBarVisible;
+        IsCwDiagnosticsEnabled = prefs.IsCwDiagnosticsEnabled;
+
+        if (prefs.IsCwDecoderEnabled)
+        {
+            ToggleCwDecoder();
+        }
+
+        UpdateDisabledCwStatusText();
     }
 
     /// <summary>
@@ -994,6 +1619,13 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
         IsInspectorOpen = IsInspectorOpen,
         EngineProfileId = _switchableEngine?.CurrentProfile.ProfileId,
         EngineEndpoint = _switchableEngine?.CurrentEndpoint,
+        IsCwDecoderEnabled = IsCwDecoderEnabled,
+        IsCwDecoderLoopback = IsCwDecoderLoopback,
+        IsCwWpmStatusBarVisible = IsCwWpmStatusBarVisible,
+        IsCwDiagnosticsEnabled = IsCwDiagnosticsEnabled,
+        CwDecoderDeviceOverride = string.IsNullOrWhiteSpace(CwDecoderDeviceOverride)
+            ? null
+            : CwDecoderDeviceOverride.Trim(),
     };
 
     private async Task ActivateDashboardAsync(bool focusSearch, Task? recentQsoRefreshTask = null)

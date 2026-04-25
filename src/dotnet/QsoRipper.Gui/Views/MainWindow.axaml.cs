@@ -127,6 +127,13 @@ internal sealed partial class MainWindow : Window
             return;
         }
 
+        if (_viewModel.IsCwStatsPaneOpen)
+        {
+            _viewModel.ToggleCwStatsPaneCommand.Execute(null);
+            e.Handled = true;
+            return;
+        }
+
         if (_viewModel.IsInspectorOpen)
         {
             _viewModel.ToggleInspectorCommand.Execute(null);
@@ -309,6 +316,13 @@ internal sealed partial class MainWindow : Window
             if (_viewModel.IsCallsignCardOpen)
             {
                 _viewModel.CloseCallsignCardCommand.Execute(null);
+                e.Handled = true;
+                return;
+            }
+
+            if (_viewModel.IsCwStatsPaneOpen)
+            {
+                _viewModel.ToggleCwStatsPaneCommand.Execute(null);
                 e.Handled = true;
                 return;
             }
@@ -894,7 +908,13 @@ internal sealed partial class MainWindow : Window
         await dialog.ShowDialog(this);
         if (settingsVm.DidSave)
         {
-            _viewModel.ApplySettingsUiPreferences(settingsVm.IsSpaceWeatherVisible);
+            _viewModel.ApplySettingsUiPreferences(
+                settingsVm.IsSpaceWeatherVisible,
+                settingsVm.IsRadioMonitorEnabled,
+                settingsVm.IsCwWpmStatusBarVisible,
+                settingsVm.ResolvedIsLoopback,
+                settingsVm.ResolvedCaptureDevice,
+                settingsVm.IsAdvancedDiagnosticsEnabled);
             SavePreferences();
         }
 

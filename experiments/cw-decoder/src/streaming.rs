@@ -57,6 +57,40 @@ const PITCH_REEVAL_MIN_DELTA_HZ: f32 = 30.0;
 /// re-eval period plus the `PITCH_REEVAL_MIN_DELTA_HZ` gate above
 /// prevent ping-ponging on noise-induced wobble.
 const PITCH_REEVAL_FISHER_RATIO: f32 = 1.2;
+/// Relaxed margin applied when the current lock's Fisher has already
+/// fallen below `MIN_HOLD_FISHER` — i.e. we'd otherwise drop the lock
+/// in another check or two. In that regime ping-pong is not a concern
+/// (the alternative is the full hunt+re-acquire gap, which loses ~3 s
+/// of copy on RELOCK_SECONDS plus a probation cycle), so any candidate
+/// that is even slightly better and itself clears `MIN_HOLD_FISHER` is
+/// worth handing off to. Tuned for the "second station comes back on a
+/// 30–100 Hz different tone" case visible in live diagnostics, where
+/// the current-pitch Fisher collapses to ~0.7–1.5 because the buffer
+/// straddles two pitches but a candidate centered on the new station
+/// produces Fisher ≥ MIN_HOLD_FISHER cleanly.
+const PITCH_SWITCH_FAILING_RATIO: f32 = 1.05;
+/// Minimum pitch delta required to switch when the current lock is already
+/// failing. Looser than `PITCH_REEVAL_MIN_DELTA_HZ` (which guards the
+/// healthy-lock case against ping-pong) because, when failing, even a
+/// small pitch nudge to follow operator drift / QSB / a slightly off-tone
+/// second station is far cheaper than dropping and re-acquiring. Floored
+/// just above the Goertzel bin spacing so we still reject sub-Hz noise.
+const PITCH_SWITCH_FAILING_MIN_DELTA_HZ: f32 = 8.0;
+/// Step size used by the watchdog inline-switch coarse Fisher sweep across
+/// the search band (`±PITCH_REEVAL_SEARCH_HALF_HZ`). Picked so the total
+/// number of `trial_decode_score` evaluations per failed watchdog tick
+/// stays modest (~25) while still resolving close-by candidate tones.
+const PITCH_SWITCH_SCAN_STEP_HZ: f32 = 10.0;
+/// Absolute minimum trial-decode Fisher an alternative-pitch candidate
+/// must reach before the watchdog inline-switch path will hand off to
+/// it. Set noticeably higher than `MIN_HOLD_FISHER` so we don't switch
+/// onto a marginal candidate during a QSB fade — when the original
+/// signal has just dipped below the hold threshold but a noisy
+/// neighbouring bin happens to score > 2 momentarily. Real second-
+/// station tones in live diagnostics consistently score 5–10 even when
+/// the original is collapsing, so this gate filters QSB-induced false
+/// switches without missing genuine handoffs.
+const PITCH_SWITCH_MIN_FISHER: f32 = 4.0;
 /// Absolute minimum trial-decode Fisher a candidate must reach before we
 /// consider switching to it. Even if the ratio test passes, a candidate
 /// with Fisher < this is still in the "ambiguous window" band (see
@@ -123,6 +157,22 @@ const DEBOUNCE_FRAC: f32 = 0.3;
 const PRIME_INTERVALS: usize = 8;
 /// EMA smoothing factor for post-bootstrap dit-length updates.
 const DIT_EMA_ALPHA: f32 = 0.15;
+/// Number of recent raw `current_wpm()` samples used to compute the
+/// median that drives `current_wpm_smoothed()`. A small odd window
+/// rejects single degenerate calibration windows without lagging real
+/// keying-speed changes.
+const WPM_SMOOTH_WINDOW: usize = 7;
+/// Maximum fractional change in emitted WPM per `WpmUpdate`. Caps
+/// sustained drift driven by `dot_len` calibration degrading under a
+/// weakening signal. Real operators cannot physically alter keying
+/// speed faster than this between adjacent character emits; anything
+/// larger is the calibration tracking the noise instead of the
+/// operator. With ~3 emits/sec at 18 WPM, 3% per emit lets a genuine
+/// 5 WPM change converge in ~3 s while a 40% calibration crash gets
+/// stretched across ~17 emits — long enough for the pitch-quality
+/// watchdog to drop the lock before the displayed WPM collapses.
+/// See QsoRipper issue #326.
+const WPM_MAX_REL_DELTA_PER_EMIT: f32 = 0.03;
 /// Hard sanity gate on ON-interval duration in dot units. Anything
 /// shorter than `MIN_ON_DOT_FRAC` cannot be a real dit; anything longer
 /// than `MAX_ON_DOT_FRAC` cannot be a real dah and is treated as bad
@@ -1306,6 +1356,19 @@ struct Decoder {
     single_element_rescue_suppressed: u64,
     chars_emitted: u64,
     garbled_emitted: u64,
+
+    /// Recent raw `current_wpm()` observations, newest at the back.
+    /// Capped at `WPM_SMOOTH_WINDOW`. Drives `current_wpm_smoothed()`,
+    /// which is what the streaming layer emits in `WpmUpdate` events
+    /// so a single bad calibration window can't yank the displayed
+    /// speed (issue #326).
+    wpm_history: VecDeque<f32>,
+    /// Last value returned by `current_wpm_smoothed()`. Used to
+    /// rate-limit emitted WPM so a sustained calibration drift
+    /// (signal degrading over several seconds) cannot pull the
+    /// displayed speed in half before the pitch-quality watchdog
+    /// notices and drops the lock.
+    last_smoothed_wpm: Option<f32>,
 }
 
 impl Decoder {
@@ -1344,6 +1407,8 @@ impl Decoder {
             single_element_rescue_suppressed: 0,
             chars_emitted: 0,
             garbled_emitted: 0,
+            wpm_history: VecDeque::with_capacity(WPM_SMOOTH_WINDOW),
+            last_smoothed_wpm: None,
         }
     }
 
@@ -1458,6 +1523,51 @@ impl Decoder {
         Some(1200.0 / dot_ms)
     }
 
+    /// Outlier-resistant, rate-limited WPM emitted in
+    /// `StreamEvent::WpmUpdate`.
+    ///
+    /// Two-stage filter on top of the raw `current_wpm()`:
+    ///
+    /// 1. **Median over `WPM_SMOOTH_WINDOW` raw samples.** Rejects
+    ///    single degenerate calibration windows (one mis-classified
+    ///    character producing a wild dot-length estimate). This alone
+    ///    is not enough — a sustained signal degradation produces a
+    ///    monotonically drifting raw stream whose median tracks right
+    ///    along with it.
+    /// 2. **Rate cap of `WPM_MAX_REL_DELTA_PER_EMIT`** vs the previous
+    ///    smoothed value. Real operators cannot physically alter
+    ///    keying speed faster than this between adjacent character
+    ///    emits, so anything larger is the dit-cluster calibration
+    ///    chasing noise. Genuine WPM changes converge in ~1 s; a
+    ///    crashing calibration gets stretched out far enough that the
+    ///    pitch-quality watchdog drops the lock first (which clears
+    ///    the smoother by reconstructing the inner `Decoder`).
+    ///
+    /// Returns `None` only while no `dot_len` estimate exists. Pure
+    /// callers that want the raw instantaneous value (final-summary
+    /// output, end-of-run JSON) keep using [`Self::current_wpm`].
+    fn current_wpm_smoothed(&mut self) -> Option<f32> {
+        let raw = self.current_wpm()?;
+        if self.wpm_history.len() == WPM_SMOOTH_WINDOW {
+            self.wpm_history.pop_front();
+        }
+        self.wpm_history.push_back(raw);
+        let mut sorted: Vec<f32> = self.wpm_history.iter().copied().collect();
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let median = sorted[sorted.len() / 2];
+
+        let rate_limited = match self.last_smoothed_wpm {
+            Some(prev) if prev > 0.0 => {
+                let max_delta = prev * WPM_MAX_REL_DELTA_PER_EMIT;
+                let delta = (median - prev).clamp(-max_delta, max_delta);
+                prev + delta
+            }
+            _ => median,
+        };
+        self.last_smoothed_wpm = Some(rate_limited);
+        Some(rate_limited)
+    }
+
     fn classify_letter(&mut self, pitch_hz: Option<f32>) -> Option<StreamEvent> {
         if self.current_letter.is_empty() {
             return None;
@@ -1528,8 +1638,10 @@ impl Decoder {
             }
             // WPM is a "decoder is alive" indicator. Always emit when we have
             // a tempo estimate, so the operator can see the decoder is still
-            // tracking even when the rhythm gate is briefly closed.
-            if let Some(w) = self.current_wpm() {
+            // tracking even when the rhythm gate is briefly closed. We emit
+            // the median-smoothed value (issue #326) so a single degenerate
+            // calibration window can't yank the displayed speed in half.
+            if let Some(w) = self.current_wpm_smoothed() {
                 events.push(StreamEvent::WpmUpdate { wpm: w });
             }
         } else if len_norm > LETTER_SPACE_BOUNDARY {
@@ -1665,7 +1777,7 @@ impl Decoder {
                 && self.dah_len.is_some()
                 && self.bootstrap.len() >= PRIME_INTERVALS;
             if have_contrast {
-                if let Some(w) = self.current_wpm() {
+                if let Some(w) = self.current_wpm_smoothed() {
                     events.push(StreamEvent::WpmUpdate { wpm: w });
                 }
                 let buffered = std::mem::take(&mut self.bootstrap);
@@ -1990,6 +2102,149 @@ impl StreamingDecoder {
         }
     }
 
+    /// Atomically re-target the existing pitch lock at `new_pitch` without
+    /// going through the drop+hunt+re-acquire path. Used when the watchdog
+    /// or periodic re-eval finds a meaningfully better candidate within the
+    /// re-eval search window: the most common cause is a second station
+    /// coming back on a 30–150 Hz different tone in the same QSO. Doing the
+    /// switch in place preserves the dit/dah aggregator (so WPM continues
+    /// without re-priming) and avoids the ~3 s RELOCK_SECONDS gap during
+    /// which characters are otherwise lost.
+    ///
+    /// Emits `PitchLost { reason }` followed by `PitchUpdate { pitch_hz }`
+    /// so existing UI listeners observe the same handoff event sequence as
+    /// a hunt-driven re-acquire and can update the badge / status text
+    /// accordingly. The decoder remains in `Probation` until the next
+    /// quality check confirms the new lock is healthy, at which point it
+    /// promotes back to `Locked`.
+    fn switch_pitch_lock_in_place(
+        &mut self,
+        new_pitch: f32,
+        reason: String,
+        events: &mut Vec<StreamEvent>,
+    ) {
+        let win_size = (TARGET_RATE as f32 * GOERTZEL_WIN_MS / 1000.0) as usize;
+        let step = (win_size / 4).max(1);
+        self.pitch_locked = Some(new_pitch);
+        self.goertzel = Some(Goertzel::new(new_pitch, TARGET_RATE, win_size, step));
+        self.rebuild_wide_bins(new_pitch, win_size, step);
+        self.noise_bins.clear();
+        for &off in NOISE_OFFSETS_HZ {
+            let lo = new_pitch - off;
+            let hi = new_pitch + off;
+            if lo >= FREQ_MIN_HZ {
+                self.noise_bins
+                    .push(Goertzel::new(lo, TARGET_RATE, win_size, step));
+            }
+            if hi <= FREQ_MAX_HZ {
+                self.noise_bins
+                    .push(Goertzel::new(hi, TARGET_RATE, win_size, step));
+            }
+        }
+        // Power-smoothing buffers and the recent-quality buffer are
+        // referenced to the *old* pitch's envelope; clear them so the
+        // next quality check evaluates a window made entirely of audio
+        // observed after the switch.
+        self.smooth_buf.clear();
+        self.smooth_sum = 0.0;
+        self.noise_smooth_buf.clear();
+        self.noise_smooth_sum = 0.0;
+        self.power_emit_accum = 0.0;
+        self.quality_buf.clear();
+        self.samples_since_pitch_eval = 0;
+        self.samples_since_quality_check = 0;
+        self.quality_failed_consecutive = 0;
+        self.quality_checks_since_healthy = 0;
+        // Treat the new lock the same way `try_acquire_pitch_lock` treats
+        // a fresh acquire: mark just_locked so the next watchdog check
+        // runs the probation gate, and require it to pass before any
+        // held characters flush. This is the safety net against a bad
+        // switch.
+        self.just_locked = true;
+        self.had_pitch_loss = true;
+        events.push(StreamEvent::PitchLost { reason });
+        events.push(StreamEvent::PitchUpdate {
+            pitch_hz: new_pitch,
+        });
+        self.set_confidence(ConfidenceState::Probation, events);
+    }
+
+    /// Search `quality_buf`-equivalent audio for a candidate pitch within
+    /// the periodic re-eval window that beats the current lock by enough
+    /// margin to justify a switch. Returns `Some((new_pitch, candidate_fisher))`
+    /// when the watchdog should hand off in place; `None` otherwise.
+    ///
+    /// The margin gate is tighter (`PITCH_REEVAL_FISHER_RATIO`) when the
+    /// current lock is still healthy, and looser
+    /// (`PITCH_SWITCH_FAILING_RATIO`) when the current lock is already
+    /// failing — in the failing case the only alternative is a hunt+
+    /// re-acquire round-trip that costs ~3 s of copy.
+    fn try_pitch_switch_candidate(
+        &self,
+        buf: &[f32],
+        current_pitch: f32,
+        current_fisher: f32,
+    ) -> Option<(f32, f32)> {
+        let lo = (current_pitch - PITCH_REEVAL_SEARCH_HALF_HZ).max(FREQ_MIN_HZ);
+        let hi = (current_pitch + PITCH_REEVAL_SEARCH_HALF_HZ).min(FREQ_MAX_HZ);
+        if lo >= hi {
+            return None;
+        }
+        let is_failing = current_fisher < MIN_HOLD_FISHER;
+        let min_delta = if is_failing {
+            PITCH_SWITCH_FAILING_MIN_DELTA_HZ
+        } else {
+            PITCH_REEVAL_MIN_DELTA_HZ
+        };
+        // Coarse Fisher sweep across the search band. We can't reuse
+        // detect_pitch directly here because it gates candidates at
+        // Fisher >= 5.0 internally — far stricter than the
+        // PITCH_REEVAL_MIN_FISHER (= MIN_HOLD_FISHER = 2.0) bar we're
+        // willing to accept for an in-place handoff. Sweeping
+        // trial_decode_score on a coarse grid is cheap (~25 evaluations
+        // for ±120 Hz at 10 Hz step) and lets us find a sub-detect_pitch
+        // candidate that still clears the watchdog hold threshold —
+        // exactly the regime where the original lock collapsed.
+        let step_hz = PITCH_SWITCH_SCAN_STEP_HZ;
+        let mut best: Option<(f32, f32)> = None;
+        let mut hz = lo;
+        while hz <= hi {
+            if (hz - current_pitch).abs() >= min_delta {
+                let f = trial_decode_score(buf, TARGET_RATE, hz);
+                if best.map(|(_, bf)| f > bf).unwrap_or(true) {
+                    best = Some((hz, f));
+                }
+            }
+            hz += step_hz;
+        }
+        let (candidate, candidate_fisher) = best?;
+        if candidate_fisher < PITCH_SWITCH_MIN_FISHER {
+            return None;
+        }
+        let required_ratio = if is_failing {
+            PITCH_SWITCH_FAILING_RATIO
+        } else {
+            PITCH_REEVAL_FISHER_RATIO
+        };
+        if candidate_fisher > current_fisher * required_ratio {
+            // Refine: re-evaluate Fisher at ±step/2 around the coarse
+            // peak to nudge to the spectral max we just bracketed.
+            let mut refined = (candidate, candidate_fisher);
+            for &dx in &[-step_hz * 0.5, step_hz * 0.5] {
+                let p = candidate + dx;
+                if p > FREQ_MIN_HZ && p < FREQ_MAX_HZ && (p - current_pitch).abs() >= min_delta {
+                    let f = trial_decode_score(buf, TARGET_RATE, p);
+                    if f > refined.1 {
+                        refined = (p, f);
+                    }
+                }
+            }
+            Some(refined)
+        } else {
+            None
+        }
+    }
+
     /// Install a forced pitch lock at exactly `pitch_hz`, bypassing
     /// detect_pitch entirely. Used by `feed` when
     /// `DecoderConfig::force_pitch_hz` is set so the decoder operates
@@ -2154,22 +2409,51 @@ impl StreamingDecoder {
                             events.push(StreamEvent::PitchLost { reason });
                             self.set_confidence(ConfidenceState::Hunting, &mut events);
                         } else if fisher < MIN_HOLD_FISHER {
-                            self.quality_failed_consecutive += 1;
-                            self.quality_checks_since_healthy += 1;
-                            if self.quality_failed_consecutive >= QUALITY_DROP_CONSECUTIVE {
+                            // Before counting this as a failed check, look
+                            // for a meaningfully better candidate pitch in
+                            // the same buffer. The dominant real-world
+                            // failure mode here is "second station came
+                            // back on a different tone within the QSO";
+                            // hunting for a better candidate now and
+                            // switching atomically preserves copy through
+                            // the handoff instead of dropping the lock,
+                            // burning RELOCK_SECONDS on re-acquire, then
+                            // missing characters during probation.
+                            let switch_attempt =
+                                self.try_pitch_switch_candidate(&buf, pitch, fisher);
+                            if let Some((new_pitch, candidate_fisher)) = switch_attempt {
                                 let reason = format!(
-                                "quality watchdog: Fisher {:.2} < {:.1} for {} consecutive checks",
-                                fisher, MIN_HOLD_FISHER, self.quality_failed_consecutive
-                            );
-                                let preserve_pre_lock_buf =
-                                    self.seed_fast_relock_from_recent_audio(&buf);
-                                self.drop_pitch_lock(preserve_pre_lock_buf);
-                                events.push(StreamEvent::PitchLost { reason });
-                                self.set_confidence(ConfidenceState::Hunting, &mut events);
-                            } else if in_probation {
-                                // Borderline lock during probation: don't
-                                // promote yet, wait for the next check.
-                                // Held chars stay buffered.
+                                    "watchdog inline switch: {pitch:.1} Hz (fisher {fisher:.2}) -> {new_pitch:.1} Hz (fisher {candidate_fisher:.2})"
+                                );
+                                self.switch_pitch_lock_in_place(new_pitch, reason, &mut events);
+                                // Skip the failure accounting for this
+                                // check — we've moved to a fresh pitch
+                                // and the next watchdog tick will judge
+                                // it on its own merits. Continue feed()
+                                // so the rest of the audio chunk goes
+                                // through filter_for_confidence (which
+                                // now holds chars while we're back in
+                                // Probation) and the periodic re-eval
+                                // block (which is a no-op because the
+                                // switch reset samples_since_pitch_eval).
+                            } else {
+                                self.quality_failed_consecutive += 1;
+                                self.quality_checks_since_healthy += 1;
+                                if self.quality_failed_consecutive >= QUALITY_DROP_CONSECUTIVE {
+                                    let reason = format!(
+                                    "quality watchdog: Fisher {:.2} < {:.1} for {} consecutive checks",
+                                    fisher, MIN_HOLD_FISHER, self.quality_failed_consecutive
+                                );
+                                    let preserve_pre_lock_buf =
+                                        self.seed_fast_relock_from_recent_audio(&buf);
+                                    self.drop_pitch_lock(preserve_pre_lock_buf);
+                                    events.push(StreamEvent::PitchLost { reason });
+                                    self.set_confidence(ConfidenceState::Hunting, &mut events);
+                                } else if in_probation {
+                                    // Borderline lock during probation: don't
+                                    // promote yet, wait for the next check.
+                                    // Held chars stay buffered.
+                                }
                             }
                         } else {
                             // Lock is healthy. Clear hysteresis. If we're
@@ -3603,5 +3887,123 @@ mod min_pulse_filter_tests {
             "expected at least one short blip to be filtered out \
              (ungated={chars_ungated}, gated={chars_gated})"
         );
+    }
+}
+
+#[cfg(test)]
+mod wpm_smoothing_tests {
+    use super::*;
+
+    /// Force a sequence of raw `current_wpm()` observations through
+    /// the inner `Decoder` and confirm that `current_wpm_smoothed()`
+    /// returns the median of the last `WPM_SMOOTH_WINDOW` samples.
+    /// This is the regression guard for QsoRipper issue #326: a
+    /// degraded calibration window can briefly halve the raw value;
+    /// smoothing must hold the displayed WPM steady.
+    fn force_dot_for_wpm(decoder: &mut Decoder, target_wpm: f32) {
+        // current_wpm = 1200 / dot_ms = 1200 / ((dot/power_rate) * 1000)
+        // => dot = (1200 / target_wpm / 1000) * power_rate
+        let dot_ms = 1200.0 / target_wpm;
+        decoder.dot_len = Some((dot_ms / 1000.0) * decoder.power_rate);
+    }
+
+    #[test]
+    fn smoothed_wpm_rejects_a_single_outlier() {
+        let mut decoder = Decoder::new(400.0);
+
+        // Steady-state run at 18 WPM long enough to fill the window.
+        for _ in 0..WPM_SMOOTH_WINDOW {
+            force_dot_for_wpm(&mut decoder, 18.0);
+            let w = decoder.current_wpm_smoothed().expect("wpm");
+            assert!(
+                (w - 18.0).abs() < 0.5,
+                "steady-state should report ~18 WPM, got {w}"
+            );
+        }
+
+        // One degenerate calibration window halves the raw WPM.
+        force_dot_for_wpm(&mut decoder, 6.0);
+        let w_after_outlier = decoder.current_wpm_smoothed().expect("wpm");
+        assert!(
+            w_after_outlier > 14.0,
+            "single-outlier observation must not pull the emitted WPM \
+             below the operator-plausible range; got {w_after_outlier}"
+        );
+    }
+
+    /// Regression for QsoRipper #326: a sustained calibration drift
+    /// (real captured failure: 11.3 WPM -> 6.75 WPM over ~6 s) must be
+    /// rate-limited so the displayed value cannot collapse before the
+    /// pitch watchdog has a chance to drop the lock.
+    #[test]
+    fn smoothed_wpm_rate_caps_a_sustained_calibration_crash() {
+        let mut decoder = Decoder::new(400.0);
+
+        // Establish a stable 13 WPM lock.
+        for _ in 0..WPM_SMOOTH_WINDOW * 2 {
+            force_dot_for_wpm(&mut decoder, 13.0);
+            let _ = decoder.current_wpm_smoothed();
+        }
+        let baseline = decoder.current_wpm_smoothed().expect("wpm");
+        assert!((baseline - 13.0).abs() < 0.5, "baseline {baseline} != 13");
+
+        // Simulate the captured #326 trajectory: monotonic decay from
+        // 11.3 down to 6.75 over 14 raw observations (matches the
+        // session-events.ndjson timeline at t=35..41).
+        let trajectory = [
+            11.33, 11.22, 11.03, 10.81, 9.81, 8.87, 8.08, 7.54, 7.15, 6.97, 6.75, 6.75, 6.75, 6.75,
+        ];
+        let mut last_emitted = baseline;
+        for &raw_wpm in &trajectory {
+            force_dot_for_wpm(&mut decoder, raw_wpm);
+            let emitted = decoder.current_wpm_smoothed().expect("wpm");
+            let drop_frac = (last_emitted - emitted) / last_emitted;
+            assert!(
+                drop_frac <= WPM_MAX_REL_DELTA_PER_EMIT + 1e-3,
+                "single-emit drop {drop_frac:.3} exceeded cap \
+                 {WPM_MAX_REL_DELTA_PER_EMIT} (prev={last_emitted}, now={emitted})"
+            );
+            last_emitted = emitted;
+        }
+        // After 14 capped emits at 3% each, the worst-case floor is
+        // baseline * 0.97^14 ≈ 0.65 * baseline ≈ 8.5. The displayed
+        // WPM must not have collapsed all the way to 6.75 (the raw
+        // floor) over this window — that would mean the cap is doing
+        // nothing.
+        assert!(
+            last_emitted > 8.0,
+            "rate cap should keep displayed WPM above 8.0 across the \
+             #326 trajectory, got {last_emitted}"
+        );
+    }
+
+    #[test]
+    fn smoothed_wpm_tracks_a_real_speed_change() {
+        // If the operator (or the upstream decoder genuinely tracking
+        // a real change) sustains a new tempo for long enough, the
+        // smoothed value must converge to it. Otherwise the rate cap
+        // would mask real WPM changes. With WPM_MAX_REL_DELTA_PER_EMIT
+        // = 0.03, going 18 -> 28 (~+55%) takes ~15 emits to converge;
+        // 40 emits is comfortably enough.
+        let mut decoder = Decoder::new(400.0);
+        for _ in 0..WPM_SMOOTH_WINDOW {
+            force_dot_for_wpm(&mut decoder, 18.0);
+            let _ = decoder.current_wpm_smoothed();
+        }
+        for _ in 0..40 {
+            force_dot_for_wpm(&mut decoder, 28.0);
+            let _ = decoder.current_wpm_smoothed();
+        }
+        let w = decoder.current_wpm_smoothed().expect("wpm");
+        assert!(
+            (w - 28.0).abs() < 0.5,
+            "sustained speed change should converge under the rate cap, got {w}"
+        );
+    }
+
+    #[test]
+    fn smoothed_wpm_returns_none_before_any_dot_estimate() {
+        let mut decoder = Decoder::new(400.0);
+        assert!(decoder.current_wpm_smoothed().is_none());
     }
 }

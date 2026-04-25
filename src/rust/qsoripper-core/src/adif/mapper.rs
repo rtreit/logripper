@@ -168,6 +168,13 @@ impl AdifMapper {
                         qso.qso_complete = parsed.into();
                     }
                 }
+                "APP_QSORIPPER_RX_WPM" => {
+                    if let Ok(wpm) = value_str.parse::<u32>() {
+                        qso.cw_decode_rx_wpm = Some(wpm);
+                    } else {
+                        qso.extra_fields.insert(key_upper, value_str.to_owned());
+                    }
+                }
                 "COUNTRY" => qso.worked_country = Some(value_str.to_owned()),
                 "DXCC" => {
                     if let Ok(code) = value_str.parse::<u32>() {
@@ -553,6 +560,9 @@ impl AdifMapper {
             QsoCompletion::try_from(qso.qso_complete).unwrap_or(QsoCompletion::Unspecified),
         ) {
             push_field(&mut fields, "QSO_COMPLETE", s);
+        }
+        if let Some(wpm) = qso.cw_decode_rx_wpm {
+            push_field(&mut fields, "APP_QSORIPPER_RX_WPM", wpm.to_string());
         }
         if let Some(v) = qso.worked_country.as_deref() {
             push_field(&mut fields, "COUNTRY", v);
@@ -1120,6 +1130,8 @@ fn field_is_overridden(
     } else if key.eq_ignore_ascii_case("QSO_COMPLETE") {
         QsoCompletion::try_from(qso.qso_complete).unwrap_or(QsoCompletion::Unspecified)
             != QsoCompletion::Unspecified
+    } else if key.eq_ignore_ascii_case("APP_QSORIPPER_RX_WPM") {
+        qso.cw_decode_rx_wpm.is_some()
     } else if key.eq_ignore_ascii_case("MY_ALTITUDE") {
         station_snapshot
             .and_then(|snapshot| snapshot.altitude_meters)
@@ -2223,6 +2235,66 @@ mod tests {
             qso.extra_fields.get("QSO_COMPLETE").map(String::as_str),
             Some("MAYBE")
         );
+    }
+
+    #[test]
+    fn cw_decode_rx_wpm_round_trips_via_app_qsoripper_rx_wpm() {
+        let qso = QsoRecord {
+            worked_callsign: "K1ABC".to_string(),
+            cw_decode_rx_wpm: Some(28),
+            ..Default::default()
+        };
+
+        let fields = AdifMapper::qso_to_adif_fields(&qso);
+        assert_eq!(count_field(&fields, "APP_QSORIPPER_RX_WPM"), 1);
+        assert_eq!(field_value(&fields, "APP_QSORIPPER_RX_WPM"), Some("28"));
+
+        let mut rec = Record::new();
+        rec.insert("CALL", "K1ABC").unwrap();
+        rec.insert("APP_QSORIPPER_RX_WPM", "28").unwrap();
+        let parsed = AdifMapper::record_to_qso(&rec);
+        assert_eq!(parsed.cw_decode_rx_wpm, Some(28));
+        assert!(!parsed.extra_fields.contains_key("APP_QSORIPPER_RX_WPM"));
+    }
+
+    #[test]
+    fn cw_decode_rx_wpm_unset_emits_no_field() {
+        let qso = QsoRecord {
+            worked_callsign: "K1ABC".to_string(),
+            ..Default::default()
+        };
+        let fields = AdifMapper::qso_to_adif_fields(&qso);
+        assert_eq!(count_field(&fields, "APP_QSORIPPER_RX_WPM"), 0);
+    }
+
+    #[test]
+    fn cw_decode_rx_wpm_invalid_value_falls_back_to_extra_fields() {
+        let mut rec = Record::new();
+        rec.insert("CALL", "K1ABC").unwrap();
+        rec.insert("APP_QSORIPPER_RX_WPM", "not-a-number").unwrap();
+        let parsed = AdifMapper::record_to_qso(&rec);
+        assert_eq!(parsed.cw_decode_rx_wpm, None);
+        assert_eq!(
+            parsed
+                .extra_fields
+                .get("APP_QSORIPPER_RX_WPM")
+                .map(String::as_str),
+            Some("not-a-number")
+        );
+    }
+
+    #[test]
+    fn cw_decode_rx_wpm_extra_fields_does_not_shadow_typed_value() {
+        let mut qso = QsoRecord {
+            worked_callsign: "K1ABC".to_string(),
+            cw_decode_rx_wpm: Some(25),
+            ..Default::default()
+        };
+        qso.extra_fields
+            .insert("APP_QSORIPPER_RX_WPM".to_string(), "stale".to_string());
+        let fields = AdifMapper::qso_to_adif_fields(&qso);
+        assert_eq!(count_field(&fields, "APP_QSORIPPER_RX_WPM"), 1);
+        assert_eq!(field_value(&fields, "APP_QSORIPPER_RX_WPM"), Some("25"));
     }
 
     #[test]

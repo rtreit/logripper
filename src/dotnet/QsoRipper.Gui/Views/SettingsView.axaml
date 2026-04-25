@@ -225,6 +225,57 @@
                     AutomationProperties.AutomationId="SettingsSpaceWeatherVisibleCheckBox"
                     Content="Show space weather in the status bar"
                     IsChecked="{Binding IsSpaceWeatherVisible, Mode=TwoWay}" />
+
+          <Separator Margin="0,8,0,8" />
+
+          <TextBlock Classes="settingsSectionHeader" Text="Monitor radio" />
+          <TextBlock Classes="settingsSectionHint"
+                     Text="Listen to the radio's audio (or your system speakers via loopback) so QsoRipper can auto-fill CW WPM on logged QSOs and power future audio features. Requires the cw-decoder binary built once from experiments\cw-decoder (cargo build --release)." />
+
+          <CheckBox x:Name="SettingsRadioMonitorEnabledCheckBox"
+                    AutomationProperties.AutomationId="SettingsRadioMonitorEnabledCheckBox"
+                    Content="Enable radio monitor (auto-fills CW WPM on logged QSOs)"
+                    IsChecked="{Binding IsRadioMonitorEnabled, Mode=TwoWay}" />
+
+          <CheckBox x:Name="SettingsCwWpmStatusBarCheckBox"
+                    AutomationProperties.AutomationId="SettingsCwWpmStatusBarCheckBox"
+                    Content="Show CW WPM in the status bar (Ctrl+Shift+W)"
+                    IsChecked="{Binding IsCwWpmStatusBarVisible, Mode=TwoWay}" />
+
+          <CheckBox x:Name="SettingsAdvancedDiagnosticsCheckBox"
+                    AutomationProperties.AutomationId="SettingsAdvancedDiagnosticsCheckBox"
+                    Content="Advanced diagnostics (record audio + decoder events to %LOCALAPPDATA%\QsoRipper\diagnostics)"
+                    IsChecked="{Binding IsAdvancedDiagnosticsEnabled, Mode=TwoWay}"
+                    IsEnabled="{Binding IsRadioMonitorEnabled}" />
+
+          <Grid ColumnDefinitions="180,*,Auto"
+                IsEnabled="{Binding IsRadioMonitorEnabled}">
+            <TextBlock Grid.Column="0"
+                       Text="Capture device:"
+                       VerticalAlignment="Center" />
+            <ComboBox x:Name="SettingsRadioMonitorDeviceCombo"
+                      AutomationProperties.AutomationId="SettingsRadioMonitorDeviceCombo"
+                      Grid.Column="1"
+                      HorizontalAlignment="Stretch"
+                      ItemsSource="{Binding RadioMonitorDevices}"
+                      SelectedItem="{Binding SelectedRadioMonitorDevice, Mode=TwoWay}">
+              <ComboBox.ItemTemplate>
+                <DataTemplate>
+                  <TextBlock Text="{Binding DisplayName}" />
+                </DataTemplate>
+              </ComboBox.ItemTemplate>
+            </ComboBox>
+            <Button Grid.Column="2"
+                    Margin="8,0,0,0"
+                    Content="Refresh"
+                    Command="{Binding RefreshRadioMonitorDevicesCommand}"
+                    AutomationProperties.AutomationId="SettingsRadioMonitorRefreshButton" />
+          </Grid>
+
+          <TextBlock Classes="settingsSectionHint"
+                     Margin="0,4,0,0"
+                     Text="{Binding RadioMonitorBinaryStatus}"
+                     IsVisible="{Binding RadioMonitorBinaryStatus, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
         </StackPanel>
       </TabItem>
 
