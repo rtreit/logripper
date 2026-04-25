@@ -45,6 +45,7 @@ void qsr_test_invoke_log_qso(void);
 void qsr_test_invoke_load_selected_qso(void);
 void qsr_test_invoke_delete_selected_qso(void);
 void qsr_test_invoke_fetch_space_weather(void);
+int qsr_test_qso_duration_seconds(const char *time_on, const char *time_off);
 
 static HANDLE g_log_entered = NULL;
 static HANDLE g_release_log = NULL;
@@ -308,6 +309,41 @@ static int test_issue_263_fetch_space_weather_is_non_blocking(void)
     return 0;
 }
 
+static int test_issue_329_qso_duration_uses_time_off(void)
+{
+    /* Normal case: 03:04 -> 03:19 = 15 minutes */
+    int d = qsr_test_qso_duration_seconds("03:04", "03:19");
+    if (d != 15 * 60) {
+        return fail("duration for 03:04 -> 03:19 was not 15 minutes");
+    }
+
+    /* Same minute */
+    d = qsr_test_qso_duration_seconds("12:30", "12:30");
+    if (d != 0) {
+        return fail("duration for identical times was not zero");
+    }
+
+    /* Wrap across midnight: 23:55 -> 00:05 = 10 minutes */
+    d = qsr_test_qso_duration_seconds("23:55", "00:05");
+    if (d != 10 * 60) {
+        return fail("duration that crosses midnight was not 10 minutes");
+    }
+
+    /* Empty / unset time_off should report no duration */
+    d = qsr_test_qso_duration_seconds("12:00", "");
+    if (d != -1) {
+        return fail("missing time_off should yield -1");
+    }
+
+    /* Malformed input should report no duration */
+    d = qsr_test_qso_duration_seconds("12:00", "bogus");
+    if (d != -1) {
+        return fail("malformed time_off should yield -1");
+    }
+
+    return 0;
+}
+
 int main(void)
 {
     int failures = 0;
@@ -317,6 +353,7 @@ int main(void)
     if (test_issue_263_load_selected_qso_is_non_blocking() != 0) failures++;
     if (test_issue_263_delete_selected_qso_is_non_blocking() != 0) failures++;
     if (test_issue_263_fetch_space_weather_is_non_blocking() != 0) failures++;
+    if (test_issue_329_qso_duration_uses_time_off() != 0) failures++;
     if (failures != 0) {
         fprintf(stderr, "FAIL: %d regression test(s) failed\n", failures);
         return 1;
