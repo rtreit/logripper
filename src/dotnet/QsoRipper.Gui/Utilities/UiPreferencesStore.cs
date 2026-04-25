@@ -72,4 +72,21 @@ internal sealed class UiPreferences
     public string? EngineProfileId { get; set; }
 
     public string? EngineEndpoint { get; set; }
+
+    public bool IsCwDecoderEnabled { get; set; }
+
+    public string? CwDecoderDeviceOverride { get; set; }
+
+    public bool IsCwDecoderLoopback { get; set; }
+
+    public bool IsCwWpmStatusBarVisible { get; set; }
+
+    /// <summary>
+    /// When true, the GUI mirrors all cw-decoder audio + NDJSON events to disk
+    /// under <c>%LOCALAPPDATA%\QsoRipper\diagnostics\session-&lt;utc&gt;\</c> so a
+    /// developer can compare what was displayed in the UX vs. what the decoder
+    /// emitted vs. what gets logged on the QSO. See
+    /// <c>experiments/cw-decoder/README.md</c>.
+    /// </summary>
+    public bool IsCwDiagnosticsEnabled { get; set; }
 }
