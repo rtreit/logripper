@@ -57,6 +57,40 @@ const PITCH_REEVAL_MIN_DELTA_HZ: f32 = 30.0;
 /// re-eval period plus the `PITCH_REEVAL_MIN_DELTA_HZ` gate above
 /// prevent ping-ponging on noise-induced wobble.
 const PITCH_REEVAL_FISHER_RATIO: f32 = 1.2;
+/// Relaxed margin applied when the current lock's Fisher has already
+/// fallen below `MIN_HOLD_FISHER` — i.e. we'd otherwise drop the lock
+/// in another check or two. In that regime ping-pong is not a concern
+/// (the alternative is the full hunt+re-acquire gap, which loses ~3 s
+/// of copy on RELOCK_SECONDS plus a probation cycle), so any candidate
+/// that is even slightly better and itself clears `MIN_HOLD_FISHER` is
+/// worth handing off to. Tuned for the "second station comes back on a
+/// 30–100 Hz different tone" case visible in live diagnostics, where
+/// the current-pitch Fisher collapses to ~0.7–1.5 because the buffer
+/// straddles two pitches but a candidate centered on the new station
+/// produces Fisher ≥ MIN_HOLD_FISHER cleanly.
+const PITCH_SWITCH_FAILING_RATIO: f32 = 1.05;
+/// Minimum pitch delta required to switch when the current lock is already
+/// failing. Looser than `PITCH_REEVAL_MIN_DELTA_HZ` (which guards the
+/// healthy-lock case against ping-pong) because, when failing, even a
+/// small pitch nudge to follow operator drift / QSB / a slightly off-tone
+/// second station is far cheaper than dropping and re-acquiring. Floored
+/// just above the Goertzel bin spacing so we still reject sub-Hz noise.
+const PITCH_SWITCH_FAILING_MIN_DELTA_HZ: f32 = 8.0;
+/// Step size used by the watchdog inline-switch coarse Fisher sweep across
+/// the search band (`±PITCH_REEVAL_SEARCH_HALF_HZ`). Picked so the total
+/// number of `trial_decode_score` evaluations per failed watchdog tick
+/// stays modest (~25) while still resolving close-by candidate tones.
+const PITCH_SWITCH_SCAN_STEP_HZ: f32 = 10.0;
+/// Absolute minimum trial-decode Fisher an alternative-pitch candidate
+/// must reach before the watchdog inline-switch path will hand off to
+/// it. Set noticeably higher than `MIN_HOLD_FISHER` so we don't switch
+/// onto a marginal candidate during a QSB fade — when the original
+/// signal has just dipped below the hold threshold but a noisy
+/// neighbouring bin happens to score > 2 momentarily. Real second-
+/// station tones in live diagnostics consistently score 5–10 even when
+/// the original is collapsing, so this gate filters QSB-induced false
+/// switches without missing genuine handoffs.
+const PITCH_SWITCH_MIN_FISHER: f32 = 4.0;
 /// Absolute minimum trial-decode Fisher a candidate must reach before we
 /// consider switching to it. Even if the ratio test passes, a candidate
 /// with Fisher < this is still in the "ambiguous window" band (see
@@ -2068,6 +2102,149 @@ impl StreamingDecoder {
         }
     }
 
+    /// Atomically re-target the existing pitch lock at `new_pitch` without
+    /// going through the drop+hunt+re-acquire path. Used when the watchdog
+    /// or periodic re-eval finds a meaningfully better candidate within the
+    /// re-eval search window: the most common cause is a second station
+    /// coming back on a 30–150 Hz different tone in the same QSO. Doing the
+    /// switch in place preserves the dit/dah aggregator (so WPM continues
+    /// without re-priming) and avoids the ~3 s RELOCK_SECONDS gap during
+    /// which characters are otherwise lost.
+    ///
+    /// Emits `PitchLost { reason }` followed by `PitchUpdate { pitch_hz }`
+    /// so existing UI listeners observe the same handoff event sequence as
+    /// a hunt-driven re-acquire and can update the badge / status text
+    /// accordingly. The decoder remains in `Probation` until the next
+    /// quality check confirms the new lock is healthy, at which point it
+    /// promotes back to `Locked`.
+    fn switch_pitch_lock_in_place(
+        &mut self,
+        new_pitch: f32,
+        reason: String,
+        events: &mut Vec<StreamEvent>,
+    ) {
+        let win_size = (TARGET_RATE as f32 * GOERTZEL_WIN_MS / 1000.0) as usize;
+        let step = (win_size / 4).max(1);
+        self.pitch_locked = Some(new_pitch);
+        self.goertzel = Some(Goertzel::new(new_pitch, TARGET_RATE, win_size, step));
+        self.rebuild_wide_bins(new_pitch, win_size, step);
+        self.noise_bins.clear();
+        for &off in NOISE_OFFSETS_HZ {
+            let lo = new_pitch - off;
+            let hi = new_pitch + off;
+            if lo >= FREQ_MIN_HZ {
+                self.noise_bins
+                    .push(Goertzel::new(lo, TARGET_RATE, win_size, step));
+            }
+            if hi <= FREQ_MAX_HZ {
+                self.noise_bins
+                    .push(Goertzel::new(hi, TARGET_RATE, win_size, step));
+            }
+        }
+        // Power-smoothing buffers and the recent-quality buffer are
+        // referenced to the *old* pitch's envelope; clear them so the
+        // next quality check evaluates a window made entirely of audio
+        // observed after the switch.
+        self.smooth_buf.clear();
+        self.smooth_sum = 0.0;
+        self.noise_smooth_buf.clear();
+        self.noise_smooth_sum = 0.0;
+        self.power_emit_accum = 0.0;
+        self.quality_buf.clear();
+        self.samples_since_pitch_eval = 0;
+        self.samples_since_quality_check = 0;
+        self.quality_failed_consecutive = 0;
+        self.quality_checks_since_healthy = 0;
+        // Treat the new lock the same way `try_acquire_pitch_lock` treats
+        // a fresh acquire: mark just_locked so the next watchdog check
+        // runs the probation gate, and require it to pass before any
+        // held characters flush. This is the safety net against a bad
+        // switch.
+        self.just_locked = true;
+        self.had_pitch_loss = true;
+        events.push(StreamEvent::PitchLost { reason });
+        events.push(StreamEvent::PitchUpdate {
+            pitch_hz: new_pitch,
+        });
+        self.set_confidence(ConfidenceState::Probation, events);
+    }
+
+    /// Search `quality_buf`-equivalent audio for a candidate pitch within
+    /// the periodic re-eval window that beats the current lock by enough
+    /// margin to justify a switch. Returns `Some((new_pitch, candidate_fisher))`
+    /// when the watchdog should hand off in place; `None` otherwise.
+    ///
+    /// The margin gate is tighter (`PITCH_REEVAL_FISHER_RATIO`) when the
+    /// current lock is still healthy, and looser
+    /// (`PITCH_SWITCH_FAILING_RATIO`) when the current lock is already
+    /// failing — in the failing case the only alternative is a hunt+
+    /// re-acquire round-trip that costs ~3 s of copy.
+    fn try_pitch_switch_candidate(
+        &self,
+        buf: &[f32],
+        current_pitch: f32,
+        current_fisher: f32,
+    ) -> Option<(f32, f32)> {
+        let lo = (current_pitch - PITCH_REEVAL_SEARCH_HALF_HZ).max(FREQ_MIN_HZ);
+        let hi = (current_pitch + PITCH_REEVAL_SEARCH_HALF_HZ).min(FREQ_MAX_HZ);
+        if lo >= hi {
+            return None;
+        }
+        let is_failing = current_fisher < MIN_HOLD_FISHER;
+        let min_delta = if is_failing {
+            PITCH_SWITCH_FAILING_MIN_DELTA_HZ
+        } else {
+            PITCH_REEVAL_MIN_DELTA_HZ
+        };
+        // Coarse Fisher sweep across the search band. We can't reuse
+        // detect_pitch directly here because it gates candidates at
+        // Fisher >= 5.0 internally — far stricter than the
+        // PITCH_REEVAL_MIN_FISHER (= MIN_HOLD_FISHER = 2.0) bar we're
+        // willing to accept for an in-place handoff. Sweeping
+        // trial_decode_score on a coarse grid is cheap (~25 evaluations
+        // for ±120 Hz at 10 Hz step) and lets us find a sub-detect_pitch
+        // candidate that still clears the watchdog hold threshold —
+        // exactly the regime where the original lock collapsed.
+        let step_hz = PITCH_SWITCH_SCAN_STEP_HZ;
+        let mut best: Option<(f32, f32)> = None;
+        let mut hz = lo;
+        while hz <= hi {
+            if (hz - current_pitch).abs() >= min_delta {
+                let f = trial_decode_score(buf, TARGET_RATE, hz);
+                if best.map(|(_, bf)| f > bf).unwrap_or(true) {
+                    best = Some((hz, f));
+                }
+            }
+            hz += step_hz;
+        }
+        let (candidate, candidate_fisher) = best?;
+        if candidate_fisher < PITCH_SWITCH_MIN_FISHER {
+            return None;
+        }
+        let required_ratio = if is_failing {
+            PITCH_SWITCH_FAILING_RATIO
+        } else {
+            PITCH_REEVAL_FISHER_RATIO
+        };
+        if candidate_fisher > current_fisher * required_ratio {
+            // Refine: re-evaluate Fisher at ±step/2 around the coarse
+            // peak to nudge to the spectral max we just bracketed.
+            let mut refined = (candidate, candidate_fisher);
+            for &dx in &[-step_hz * 0.5, step_hz * 0.5] {
+                let p = candidate + dx;
+                if p > FREQ_MIN_HZ && p < FREQ_MAX_HZ && (p - current_pitch).abs() >= min_delta {
+                    let f = trial_decode_score(buf, TARGET_RATE, p);
+                    if f > refined.1 {
+                        refined = (p, f);
+                    }
+                }
+            }
+            Some(refined)
+        } else {
+            None
+        }
+    }
+
     /// Install a forced pitch lock at exactly `pitch_hz`, bypassing
     /// detect_pitch entirely. Used by `feed` when
     /// `DecoderConfig::force_pitch_hz` is set so the decoder operates
@@ -2232,22 +2409,51 @@ impl StreamingDecoder {
                             events.push(StreamEvent::PitchLost { reason });
                             self.set_confidence(ConfidenceState::Hunting, &mut events);
                         } else if fisher < MIN_HOLD_FISHER {
-                            self.quality_failed_consecutive += 1;
-                            self.quality_checks_since_healthy += 1;
-                            if self.quality_failed_consecutive >= QUALITY_DROP_CONSECUTIVE {
+                            // Before counting this as a failed check, look
+                            // for a meaningfully better candidate pitch in
+                            // the same buffer. The dominant real-world
+                            // failure mode here is "second station came
+                            // back on a different tone within the QSO";
+                            // hunting for a better candidate now and
+                            // switching atomically preserves copy through
+                            // the handoff instead of dropping the lock,
+                            // burning RELOCK_SECONDS on re-acquire, then
+                            // missing characters during probation.
+                            let switch_attempt =
+                                self.try_pitch_switch_candidate(&buf, pitch, fisher);
+                            if let Some((new_pitch, candidate_fisher)) = switch_attempt {
                                 let reason = format!(
-                                "quality watchdog: Fisher {:.2} < {:.1} for {} consecutive checks",
-                                fisher, MIN_HOLD_FISHER, self.quality_failed_consecutive
-                            );
-                                let preserve_pre_lock_buf =
-                                    self.seed_fast_relock_from_recent_audio(&buf);
-                                self.drop_pitch_lock(preserve_pre_lock_buf);
-                                events.push(StreamEvent::PitchLost { reason });
-                                self.set_confidence(ConfidenceState::Hunting, &mut events);
-                            } else if in_probation {
-                                // Borderline lock during probation: don't
-                                // promote yet, wait for the next check.
-                                // Held chars stay buffered.
+                                    "watchdog inline switch: {pitch:.1} Hz (fisher {fisher:.2}) -> {new_pitch:.1} Hz (fisher {candidate_fisher:.2})"
+                                );
+                                self.switch_pitch_lock_in_place(new_pitch, reason, &mut events);
+                                // Skip the failure accounting for this
+                                // check — we've moved to a fresh pitch
+                                // and the next watchdog tick will judge
+                                // it on its own merits. Continue feed()
+                                // so the rest of the audio chunk goes
+                                // through filter_for_confidence (which
+                                // now holds chars while we're back in
+                                // Probation) and the periodic re-eval
+                                // block (which is a no-op because the
+                                // switch reset samples_since_pitch_eval).
+                            } else {
+                                self.quality_failed_consecutive += 1;
+                                self.quality_checks_since_healthy += 1;
+                                if self.quality_failed_consecutive >= QUALITY_DROP_CONSECUTIVE {
+                                    let reason = format!(
+                                    "quality watchdog: Fisher {:.2} < {:.1} for {} consecutive checks",
+                                    fisher, MIN_HOLD_FISHER, self.quality_failed_consecutive
+                                );
+                                    let preserve_pre_lock_buf =
+                                        self.seed_fast_relock_from_recent_audio(&buf);
+                                    self.drop_pitch_lock(preserve_pre_lock_buf);
+                                    events.push(StreamEvent::PitchLost { reason });
+                                    self.set_confidence(ConfidenceState::Hunting, &mut events);
+                                } else if in_probation {
+                                    // Borderline lock during probation: don't
+                                    // promote yet, wait for the next check.
+                                    // Held chars stay buffered.
+                                }
                             }
                         } else {
                             // Lock is healthy. Clear hysteresis. If we're
