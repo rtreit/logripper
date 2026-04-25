@@ -81,6 +81,50 @@ public sealed class QsoLoggerEpisodeLifecycleTests
         Assert.Equal(string.Empty, logger.Callsign);
     }
 
+    [Fact]
+    public void NewLoggerDefaultsToNonCwMode()
+    {
+        // Default selected mode index is 0 = SSB (see ctor). The cw-decoder
+        // host uses IsLoggerOnCwMode to decide whether to spin up the
+        // cw-decoder subprocess; it must report false until the operator
+        // explicitly switches to CW.
+        var logger = new QsoLoggerViewModel(new MinimalEngineClient());
+
+        Assert.False(logger.IsLoggerOnCwMode);
+    }
+
+    [Fact]
+    public void SwitchingToCwModeRaisesCwModeChangedAndExposesIsLoggerOnCwMode()
+    {
+        var logger = new QsoLoggerViewModel(new MinimalEngineClient());
+        Assert.False(logger.IsLoggerOnCwMode);
+        var modeChangedCount = 0;
+        logger.CwModeChanged += (_, _) => modeChangedCount++;
+
+        // Find CW in the static catalog so the test doesn't depend on the
+        // ordering of OperatorOptions.Modes.
+        var cwIndex = Array.FindIndex(QsoLoggerViewModel.ModeOptions, m => m.ProtoMode == Mode.Cw);
+        Assert.True(cwIndex >= 0, "CW must be in the mode catalog");
+
+        logger.SelectedModeIndex = cwIndex;
+
+        Assert.True(logger.IsLoggerOnCwMode);
+        Assert.Equal(1, modeChangedCount);
+
+        // Switching between two non-CW modes must NOT raise the event —
+        // the gate only cares about CW vs not-CW transitions.
+        var ssbIndex = Array.FindIndex(QsoLoggerViewModel.ModeOptions, m => m.ProtoMode == Mode.Ssb);
+        Assert.True(ssbIndex >= 0);
+        logger.SelectedModeIndex = ssbIndex;
+        Assert.Equal(2, modeChangedCount); // CW -> SSB also flips the gate
+
+        var ft8Index = Array.FindIndex(QsoLoggerViewModel.ModeOptions, m => m.ProtoMode == Mode.Ft8);
+        Assert.True(ft8Index >= 0);
+        logger.SelectedModeIndex = ft8Index;
+        Assert.Equal(2, modeChangedCount); // SSB -> FT8 does NOT flip the gate
+        Assert.False(logger.IsLoggerOnCwMode);
+    }
+
     private sealed class MinimalEngineClient : IEngineClient
     {
         public Task<GetSetupWizardStateResponse> GetWizardStateAsync(CancellationToken ct = default) => throw new NotImplementedException();

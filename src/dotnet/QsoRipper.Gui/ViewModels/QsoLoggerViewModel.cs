@@ -132,6 +132,25 @@ internal sealed partial class QsoLoggerViewModel : ObservableObject
     /// </summary>
     internal bool IsLoggerEpisodeActive => _timerRunning;
 
+    /// <summary>
+    /// True when the active operator-selected mode is CW. Consumed by
+    /// <c>MainWindowViewModel</c> together with
+    /// <see cref="IsLoggerEpisodeActive"/> to gate the cw-decoder
+    /// subprocess on actual CW QSOs — there's no value in hunting for
+    /// keying on an SSB or FT8 contact and a stale lock from CW spillover
+    /// would just noise up the WPM badge.
+    /// </summary>
+    internal bool IsLoggerOnCwMode => SelectedMode.ProtoMode == Mode.Cw;
+
+    /// <summary>
+    /// Raised when <see cref="IsLoggerOnCwMode"/> changes — i.e. the
+    /// operator selected a different mode from the picker. The host uses
+    /// this to start/stop the cw-decoder mid-episode without waiting for
+    /// the current QSO to end. Fires before
+    /// <see cref="ObservableObject.PropertyChanged"/> for SelectedMode.
+    /// </summary>
+    public event EventHandler? CwModeChanged;
+
     // ── Events ───────────────────────────────────────────────────────────
 
     /// <summary>Raised after a QSO is successfully logged.</summary>
@@ -220,19 +239,31 @@ internal sealed partial class QsoLoggerViewModel : ObservableObject
         }
     }
 
-    partial void OnSelectedModeIndexChanged(int value)
+    partial void OnSelectedModeIndexChanged(int oldValue, int newValue)
     {
-        if (value < 0 || value >= OperatorOptions.Modes.Length)
+        if (newValue < 0 || newValue >= OperatorOptions.Modes.Length)
             return;
 
         OnPropertyChanged(nameof(SelectedMode));
         OnPropertyChanged(nameof(ModeLabel));
+        OnPropertyChanged(nameof(IsLoggerOnCwMode));
 
         if (!_rstManuallySet)
         {
-            var defaultRst = OperatorOptions.Modes[value].DefaultRst;
+            var defaultRst = OperatorOptions.Modes[newValue].DefaultRst;
             RstSent = defaultRst;
             RstRcvd = defaultRst;
+        }
+
+        // Fire CwModeChanged whenever the CW-vs-not-CW classification
+        // flips so the host can start/stop the cw-decoder subprocess
+        // without waiting for the next episode boundary.
+        var oldIsCw = oldValue >= 0 && oldValue < OperatorOptions.Modes.Length
+            && OperatorOptions.Modes[oldValue].ProtoMode == Mode.Cw;
+        var newIsCw = OperatorOptions.Modes[newValue].ProtoMode == Mode.Cw;
+        if (oldIsCw != newIsCw)
+        {
+            CwModeChanged?.Invoke(this, EventArgs.Empty);
         }
     }
 

@@ -193,6 +193,7 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
         Logger.LoggerFocusRequested += OnLoggerFocusRequested;
         Logger.CwEpisodeBoundary += OnCwEpisodeBoundary;
         Logger.CwEpisodeStarted += OnCwEpisodeStarted;
+        Logger.CwModeChanged += OnLoggerCwModeChanged;
         ActiveEngineText = BuildEngineText(engineProfile, endpoint);
         UpdateUtcClock();
         _utcTimer = CreateUtcTimer();
@@ -215,6 +216,7 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
         Logger.LoggerFocusRequested += OnLoggerFocusRequested;
         Logger.CwEpisodeBoundary += OnCwEpisodeBoundary;
         Logger.CwEpisodeStarted += OnCwEpisodeStarted;
+        Logger.CwModeChanged += OnLoggerCwModeChanged;
         if (_switchableEngine is not null)
         {
             ActiveEngineText = BuildEngineText(_switchableEngine.CurrentProfile, _switchableEngine.CurrentEndpoint);
@@ -766,12 +768,15 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
 
             // Decoder is now ARMED but not running. The cw-decoder subprocess
             // is launched on demand when the operator begins a QSO (typing in
-            // the callsign field raises CwEpisodeStarted). It is stopped on
-            // every CwEpisodeBoundary (logged / cleared / abandoned). This
-            // matches operator expectation: "type a callsign → CW hunts; Esc
-            // → CW silent" and avoids the decoder reporting a stale lock on
-            // ambient noise when no QSO is in progress.
-            CwDecoderStatusText = "WPM: armed";
+            // the callsign field raises CwEpisodeStarted) AND the selected
+            // mode is CW. It is stopped on every CwEpisodeBoundary (logged /
+            // cleared / abandoned) and on mode-flips away from CW. This
+            // matches operator expectation: "type a CW callsign → CW hunts;
+            // Esc / mode swap → CW silent" and avoids the decoder reporting
+            // a stale lock on ambient noise when no CW QSO is in progress.
+            CwDecoderStatusText = Logger.IsLoggerOnCwMode
+                ? "WPM: armed"
+                : "WPM: armed (mode is not CW)";
 
             // If the operator already has a callsign in the field when they
             // turn the monitor on, start hunting immediately so they don't
@@ -804,6 +809,16 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
         }
         if (_cwSampleSource.IsRunning)
         {
+            return;
+        }
+        if (!Logger.IsLoggerOnCwMode)
+        {
+            // Hard gate: the WPM monitor / pitch hunter only makes sense
+            // for CW QSOs. Logging an SSB or FT8 contact must not spin
+            // up the decoder subprocess, capture audio, or surface a
+            // stale lock badge. Mode flips back to CW will trigger
+            // OnLoggerCwModeChanged which calls this method again.
+            CwDecoderStatusText = "WPM: armed (mode is not CW)";
             return;
         }
 
@@ -916,12 +931,53 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
         _cwDiagnosticsRecorder?.BeginEpisode(e.UtcStart);
 
         // Operator has begun a new QSO by typing into the callsign field.
-        // If the radio monitor is armed but the cw-decoder subprocess is not
-        // yet running, launch it now so the WPM readout / F9 stats reflect
-        // *this* contact rather than ambient noise from before the operator
-        // started typing. No-op when monitor is OFF or the process is
-        // already running (e.g. operator armed mid-QSO).
+        // If the radio monitor is armed AND the operator-selected mode is
+        // CW, launch the cw-decoder subprocess so the WPM readout / F9
+        // stats reflect *this* contact rather than ambient noise from
+        // before the operator started typing. No-op when monitor is OFF,
+        // mode isn't CW, or the process is already running.
         Dispatcher.UIThread.Post(StartCwDecoderProcessForActiveEpisode);
+    }
+
+    /// <summary>
+    /// Operator changed the mode picker (e.g. cycled away from CW or onto
+    /// CW mid-episode). Bring the cw-decoder lifecycle in line with the
+    /// new mode without waiting for a save/clear: stop on leave, start on
+    /// entry if a callsign is already in the field. This avoids the
+    /// "WPM: locked" indicator burning while logging a non-CW QSO and
+    /// avoids missing the start of CW copy when the operator only
+    /// realises the radio is on CW after typing the callsign.
+    /// </summary>
+    private void OnLoggerCwModeChanged(object? sender, EventArgs e)
+    {
+        Dispatcher.UIThread.Post(() =>
+        {
+            if (!IsCwDecoderEnabled)
+            {
+                return;
+            }
+
+            if (Logger.IsLoggerOnCwMode)
+            {
+                if (Logger.IsLoggerEpisodeActive)
+                {
+                    StartCwDecoderProcessForActiveEpisode();
+                }
+                else
+                {
+                    CwDecoderStatusText = "WPM: armed";
+                }
+            }
+            else
+            {
+                if (_cwSampleSource?.IsRunning ?? false)
+                {
+                    StopCwDecoderProcess();
+                }
+                CwStatsPane?.Reset();
+                CwDecoderStatusText = "WPM: armed (mode is not CW)";
+            }
+        });
     }
 
     private void OnCwEpisodeBoundary(object? sender, CwEpisodeBoundaryEventArgs e)
@@ -958,7 +1014,9 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
             }
             else if (wasRunning)
             {
-                CwDecoderStatusText = "WPM: armed";
+                CwDecoderStatusText = Logger.IsLoggerOnCwMode
+                    ? "WPM: armed"
+                    : "WPM: armed (mode is not CW)";
             }
             else if (_cwSampleSource is not null)
             {
