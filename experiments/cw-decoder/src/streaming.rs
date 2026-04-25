@@ -33,6 +33,37 @@ const GOERTZEL_WIN_MS: f32 = 25.0;
 const POWER_SMOOTH_MS: f32 = 20.0;
 const PITCH_LOCK_SECONDS: f32 = 6.0;
 const PITCH_REEVAL_SECONDS: f32 = 8.0;
+/// Half-width (Hz) of the search window used by the periodic mid-stream
+/// pitch re-evaluation. Wide enough to catch a second station running on
+/// a slightly different tone (typical loopback / acoustic / cross-band
+/// scenarios put two operators 50–100 Hz apart) but narrow enough that
+/// we won't jump to an unrelated CW signal elsewhere in the passband.
+const PITCH_REEVAL_SEARCH_HALF_HZ: f32 = 120.0;
+/// Minimum pitch separation (Hz) between the current lock and a candidate
+/// for the candidate to be considered "different". Smaller than this is
+/// in the noise of `detect_pitch`'s centroid refinement (the FFT bin
+/// resolution at 4096/12000 is ~2.9 Hz, but real keying jitter on a
+/// stable carrier can shift the apparent centroid by ~10–20 Hz between
+/// windows). 30 Hz is well outside that and well inside one Goertzel
+/// bin width (40 Hz at the default 25 ms window).
+const PITCH_REEVAL_MIN_DELTA_HZ: f32 = 30.0;
+/// Multiplicative margin a candidate's trial-decode Fisher must beat the
+/// current pitch's Fisher by, before we drop+relock. We require the
+/// candidate to be measurably better, but not by a huge factor — both
+/// the current and candidate Goertzel bins see the same on/off keying
+/// envelope (just attenuated by the inter-bin sinc rolloff for the
+/// loser), so on a clean signal the Fisher scores end up surprisingly
+/// close even when one bin is clearly the dominant carrier. The 8 s
+/// re-eval period plus the `PITCH_REEVAL_MIN_DELTA_HZ` gate above
+/// prevent ping-ponging on noise-induced wobble.
+const PITCH_REEVAL_FISHER_RATIO: f32 = 1.2;
+/// Absolute minimum trial-decode Fisher a candidate must reach before we
+/// consider switching to it. Even if the ratio test passes, a candidate
+/// with Fisher < this is still in the "ambiguous window" band (see
+/// `MIN_HOLD_FISHER`) and not worth abandoning a lock for. Set to
+/// `MIN_HOLD_FISHER` so we never re-lock onto something the watchdog
+/// would immediately mark as borderline.
+const PITCH_REEVAL_MIN_FISHER: f32 = MIN_HOLD_FISHER;
 /// Quality watchdog: rolling Fisher check on this many seconds of recent
 /// post-lock audio. Long enough to span character/word gaps, short
 /// enough to react when conditions go bad.
@@ -2235,14 +2266,86 @@ impl StreamingDecoder {
             }
         }
         // --- Periodic pitch re-eval (with hysteresis) ------------------
+        //
+        // The locked-pitch quality watchdog above only catches a *failing*
+        // lock — Fisher dropping below MIN_HOLD_FISHER. It cannot detect
+        // the case where the locked pitch is still "OK" (Fisher > 2)
+        // but a different pitch in the same band would be MUCH better.
+        // That happens when:
+        //   * a second station comes back on a slightly different tone
+        //     (typical for loopback monitoring / cross-band repeaters /
+        //     acoustic re-capture where the two stations are 50–150 Hz
+        //     apart) and our lock straddles them, picking up some
+        //     dits/dahs from each and emitting nothing coherent.
+        //   * very slow drift on a noisy receiver pulls the real signal
+        //     a bin away from where we locked.
+        //
+        // We re-search the audio in `quality_buf` for a better pitch
+        // within ±PITCH_REEVAL_SEARCH_HALF_HZ of the current lock. If
+        // detect_pitch finds something materially different AND its
+        // trial-decode Fisher is meaningfully higher than the current
+        // pitch's, we drop the lock and re-acquire on the new pitch.
         self.samples_since_pitch_eval += filtered.len();
         if self.samples_since_pitch_eval >= self.pitch_reeval_threshold {
             self.samples_since_pitch_eval = 0;
-            // Use the active power history window's audio time to test.
-            // We don't keep raw audio history, so just trust the locked pitch unless
-            // ditdah detects a strongly different one in fresh post-lock audio.
-            // (For PoC simplicity, we skip mid-stream re-lock; pitch tends to be very
-            // stable for a single QSO/channel.)
+            if self.config.force_pitch_hz.is_none()
+                && self.quality_buf.len() >= self.quality_buf_capacity
+            {
+                if let Some(current_pitch) = self.pitch_locked {
+                    let buf: Vec<f32> = self.quality_buf.iter().copied().collect();
+                    let mean_sq: f64 = buf.iter().map(|&s| (s as f64) * (s as f64)).sum::<f64>()
+                        / buf.len().max(1) as f64;
+                    let rms = mean_sq.sqrt() as f32;
+                    if rms >= QUALITY_SILENCE_RMS {
+                        let lo = (current_pitch - PITCH_REEVAL_SEARCH_HALF_HZ).max(FREQ_MIN_HZ);
+                        let hi = (current_pitch + PITCH_REEVAL_SEARCH_HALF_HZ).min(FREQ_MAX_HZ);
+                        let search_bounds = if lo < hi { Some((lo, hi)) } else { None };
+                        if let Ok(candidate) = detect_pitch(
+                            &buf,
+                            TARGET_RATE,
+                            self.config.pitch_min_snr_linear(),
+                            search_bounds,
+                        ) {
+                            let delta = (candidate - current_pitch).abs();
+                            let debug = std::env::var("CW_PITCH_DEBUG").is_ok();
+                            if delta >= PITCH_REEVAL_MIN_DELTA_HZ {
+                                let current_fisher =
+                                    trial_decode_score(&buf, TARGET_RATE, current_pitch);
+                                let candidate_fisher =
+                                    trial_decode_score(&buf, TARGET_RATE, candidate);
+                                if debug {
+                                    eprintln!(
+                                        "[cw-decoder reeval] current={current_pitch:.1} Hz fisher={current_fisher:.2}, candidate={candidate:.1} Hz fisher={candidate_fisher:.2} (delta={delta:.1} Hz)"
+                                    );
+                                }
+                                if candidate_fisher >= PITCH_REEVAL_MIN_FISHER
+                                    && candidate_fisher > current_fisher * PITCH_REEVAL_FISHER_RATIO
+                                {
+                                    let reason = format!(
+                                        "pitch re-eval: switching {current_pitch:.1} Hz (fisher {current_fisher:.2}) -> {candidate:.1} Hz (fisher {candidate_fisher:.2})"
+                                    );
+                                    // Seed the next acquire with the recent
+                                    // post-filter audio so we re-lock on
+                                    // the candidate within ~RELOCK_SECONDS
+                                    // instead of waiting a full
+                                    // PITCH_LOCK_SECONDS for fresh audio.
+                                    let keep = self.pitch_lock_samples_needed().max(4096);
+                                    let start = buf.len().saturating_sub(keep);
+                                    self.pre_lock_buf.clear();
+                                    self.pre_lock_buf.extend_from_slice(&buf[start..]);
+                                    self.drop_pitch_lock(true);
+                                    events.push(StreamEvent::PitchLost { reason });
+                                    self.set_confidence(ConfidenceState::Hunting, &mut events);
+                                }
+                            } else if debug {
+                                eprintln!(
+                                    "[cw-decoder reeval] current={current_pitch:.1} Hz, candidate={candidate:.1} Hz (delta={delta:.1} Hz < {PITCH_REEVAL_MIN_DELTA_HZ:.1}); holding lock"
+                                );
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         Ok(self.filter_for_confidence(events))
@@ -3206,6 +3309,115 @@ mod lock_behavior_tests {
             "tone-purity gate should suppress impulse-driven chars (gated={chars_gated}, \
              ungated={chars_ungated})"
         );
+    }
+}
+
+#[cfg(test)]
+mod pitch_reeval_tests {
+    use super::trial_decode_tests::synth_paris;
+    use super::*;
+
+    /// Build a two-station QSO: clean PARIS at `tone_a_hz` for
+    /// `seconds_a` seconds, a brief silent turnover gap, then PARIS
+    /// at `tone_b_hz` for `seconds_b` seconds. The gap lets the
+    /// 600 Hz Goertzel's quality buffer drop its trial-decode Fisher
+    /// the way it does on a real QSO turnover, which is what
+    /// triggers the re-eval on the new station's tone.
+    fn synth_two_station(
+        sr: u32,
+        tone_a_hz: f32,
+        seconds_a: f32,
+        tone_b_hz: f32,
+        seconds_b: f32,
+    ) -> Vec<f32> {
+        let mut out = synth_paris(sr, tone_a_hz, 20.0, seconds_a);
+        out.extend(vec![0.0_f32; (sr as f32 * 1.0) as usize]);
+        out.extend(synth_paris(sr, tone_b_hz, 20.0, seconds_b));
+        out
+    }
+
+    fn run_with_reeval(audio: &[f32], sr: u32) -> (Vec<f32>, usize) {
+        // Returns (pitches_observed_in_order, char_count).
+        let mut dec = StreamingDecoder::new(sr).expect("decoder");
+        let chunk = (sr / 10) as usize;
+        let mut pitches = Vec::new();
+        let mut chars = 0usize;
+        for c in audio.chunks(chunk) {
+            for ev in dec.feed(c).expect("feed") {
+                match ev {
+                    StreamEvent::PitchUpdate { pitch_hz } => pitches.push(pitch_hz),
+                    StreamEvent::Char { .. } => chars += 1,
+                    _ => {}
+                }
+            }
+        }
+        for ev in dec.flush() {
+            if let StreamEvent::Char { .. } = ev {
+                chars += 1;
+            }
+        }
+        (pitches, chars)
+    }
+
+    /// Regression for the loopback-QSO bug: when a QSO partner comes
+    /// back on a tone ~80 Hz away from the original station, the
+    /// streaming decoder must not stay forever locked on the first
+    /// pitch. The mid-stream pitch re-eval should detect that the new
+    /// tone has a meaningfully better trial-decode Fisher and re-lock
+    /// to it.
+    #[test]
+    fn reeval_relocks_when_second_station_takes_over() {
+        let sr = 16_000u32;
+        // 16 s at tone A is enough to fill the 8 s quality buffer
+        // and run at least one steady-state quality check, then 16 s
+        // at tone B is long enough for the periodic re-eval (every
+        // 8 s of audio) to see a much better candidate and trigger
+        // the relock + re-acquire.
+        let audio = synth_two_station(sr, 600.0, 16.0, 700.0, 24.0);
+        let (pitches, chars) = run_with_reeval(&audio, sr);
+        assert!(
+            pitches.len() >= 2,
+            "expected at least two PitchUpdate events (initial lock + re-eval relock), \
+             got {pitches:?}"
+        );
+        let first = pitches.first().copied().unwrap();
+        let last = pitches.last().copied().unwrap();
+        assert!(
+            (first - 600.0).abs() < 30.0,
+            "first lock should be near tone A (600 Hz), got {first:.1}"
+        );
+        assert!(
+            (last - 700.0).abs() < 30.0,
+            "final lock should be near tone B (700 Hz), got {last:.1}"
+        );
+        assert!(
+            chars >= 5,
+            "expected several decoded chars across both stations, got {chars}"
+        );
+    }
+
+    /// Hysteresis check: a single steady-pitch transmission must not
+    /// trigger the re-eval relock just because `detect_pitch`'s
+    /// centroid wobbles by a few Hz between runs.
+    #[test]
+    fn reeval_does_not_relock_on_single_steady_tone() {
+        let sr = 16_000u32;
+        let audio = synth_paris(sr, 700.0, 20.0, 30.0);
+        let (pitches, _chars) = run_with_reeval(&audio, sr);
+        // Tolerate the initial PitchUpdate plus possibly one more if
+        // detect_pitch's centroid refinement returns a slightly
+        // different value on the second window — but never two
+        // *separated* relocks.
+        assert!(
+            pitches.len() <= 2,
+            "steady tone should not produce repeated relocks, got pitches={pitches:?}"
+        );
+        for &p in &pitches {
+            assert!(
+                (p - 700.0).abs() < 30.0,
+                "all locks should stay near 700 Hz on a steady tone, got {p:.1}"
+            );
+        }
     }
 }
 
