@@ -1,0 +1,66 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:ctrl="using:QsoRipper.Gui.Controls"
+        x:Class="QsoRipper.Gui.Views.MapPopoutWindow"
+        Title="Azimuthal Map"
+        Width="780" Height="820"
+        MinWidth="420" MinHeight="460"
+        Background="#0a1424"
+        WindowStartupLocation="CenterOwner">
+
+  <Window.Styles>
+    <Style Selector="Button.toolbar">
+      <Setter Property="Background" Value="#1a2840" />
+      <Setter Property="Foreground" Value="#cfd8e6" />
+      <Setter Property="BorderBrush" Value="#2a3e5a" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="Padding" Value="10,4" />
+      <Setter Property="MinWidth" Value="64" />
+    </Style>
+    <Style Selector="TextBlock.dim">
+      <Setter Property="Foreground" Value="#7088a8" />
+      <Setter Property="FontSize" Value="11" />
+    </Style>
+  </Window.Styles>
+
+  <Grid RowDefinitions="Auto,*,Auto" Margin="12">
+    <!-- Header -->
+    <Grid Grid.Row="0" ColumnDefinitions="*,Auto" Margin="0,0,0,8">
+      <StackPanel Grid.Column="0" Spacing="2">
+        <TextBlock x:Name="TitleText" Text="Azimuthal Map" FontWeight="SemiBold" FontSize="14" Foreground="#e6ecf5" />
+        <TextBlock x:Name="SubtitleText" Classes="dim" />
+      </StackPanel>
+      <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6">
+        <Button Classes="toolbar" Content="− Zoom Out" Click="OnZoomOut" ToolTip.Tip="Zoom out (-)" />
+        <Button Classes="toolbar" Content="+ Zoom In" Click="OnZoomIn" ToolTip.Tip="Zoom in (+)" />
+        <Button Classes="toolbar" Content="Reset" Click="OnResetView" ToolTip.Tip="Reset view (R)" />
+        <Button Classes="toolbar" Content="Close" Click="OnClose" ToolTip.Tip="Close (Esc)" />
+      </StackPanel>
+    </Grid>
+
+    <!-- Map -->
+    <Border Grid.Row="1"
+            Background="#0a1424"
+            BorderBrush="#1a2a44"
+            BorderThickness="1"
+            CornerRadius="4">
+      <ctrl:AzimuthalMapControl x:Name="Map"
+                                IsInteractive="True"
+                                HorizontalAlignment="Stretch"
+                                VerticalAlignment="Stretch" />
+    </Border>
+
+    <!-- Footer -->
+    <StackPanel Grid.Row="2"
+                Orientation="Horizontal"
+                Spacing="14"
+                HorizontalAlignment="Center"
+                Margin="0,8,0,0">
+      <TextBlock Classes="dim" Text="Wheel: zoom" />
+      <TextBlock Classes="dim" Text="Drag: pan" />
+      <TextBlock Classes="dim" Text="R: reset" />
+      <TextBlock Classes="dim" Text="Esc: close" />
+      <TextBlock x:Name="ScaleText" Classes="dim" />
+    </StackPanel>
+  </Grid>
+</Window>

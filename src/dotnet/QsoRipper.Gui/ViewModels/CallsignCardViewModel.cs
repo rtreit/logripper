@@ -235,7 +235,19 @@ internal sealed partial class CallsignCardViewModel : ObservableObject
         CloseRequested?.Invoke(this, EventArgs.Empty);
     }
 
+    [RelayCommand]
+    private void ExpandMap()
+    {
+        if (!IsMapAvailable)
+        {
+            return;
+        }
+        ExpandMapRequested?.Invoke(this, EventArgs.Empty);
+    }
+
     internal event EventHandler? CloseRequested;
+
+    internal event EventHandler? ExpandMapRequested;
 
     /// <summary>
     /// Raised when a callsign record is successfully loaded, carrying the

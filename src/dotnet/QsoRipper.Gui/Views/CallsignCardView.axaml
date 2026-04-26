@@ -6,6 +6,10 @@
              x:Class="QsoRipper.Gui.Views.CallsignCardView"
              x:DataType="vm:CallsignCardViewModel">
 
+  <UserControl.KeyBindings>
+    <KeyBinding Gesture="Ctrl+M" Command="{Binding ExpandMapCommand}" />
+  </UserControl.KeyBindings>
+
   <UserControl.Styles>
     <Style Selector="TextBlock.cardLabel">
       <Setter Property="FontSize" Value="11" />
@@ -226,7 +230,20 @@
 
           <!-- Azimuthal Map Section -->
           <Border Classes="sectionDivider" IsVisible="{Binding IsMapAvailable}" />
-          <TextBlock Classes="sectionHeader" Text="AZIMUTHAL MAP" IsVisible="{Binding IsMapAvailable}" />
+          <Grid ColumnDefinitions="*,Auto" IsVisible="{Binding IsMapAvailable}">
+            <TextBlock Grid.Column="0" Classes="sectionHeader" Text="AZIMUTHAL MAP" />
+            <Button Grid.Column="1"
+                    Padding="6,2"
+                    Background="Transparent"
+                    BorderBrush="#3a5078"
+                    BorderThickness="1"
+                    CornerRadius="3"
+                    Foreground="#aaaacc"
+                    FontSize="11"
+                    Content="⤢ Pop out"
+                    Command="{Binding ExpandMapCommand}"
+                    ToolTip.Tip="Open larger map (Ctrl+M)" />
+          </Grid>
           <StackPanel Spacing="6" IsVisible="{Binding IsMapAvailable}">
             <Border HorizontalAlignment="Center"
                     Background="#101c30"

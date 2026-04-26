@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Input;
 using Avalonia.Media;
 using Avalonia.Platform;
 using QsoRipper.Domain;
@@ -37,11 +38,23 @@ internal sealed class AzimuthalMapControl : Control
     public static readonly StyledProperty<double> ScaleKmProperty =
         AvaloniaProperty.Register<AzimuthalMapControl, double>(nameof(ScaleKm), MaxRadiusKm);
 
+    public static readonly StyledProperty<double> ZoomProperty =
+        AvaloniaProperty.Register<AzimuthalMapControl, double>(nameof(Zoom), 1.0);
+
+    public static readonly StyledProperty<double> PanXProperty =
+        AvaloniaProperty.Register<AzimuthalMapControl, double>(nameof(PanX), 0.0);
+
+    public static readonly StyledProperty<double> PanYProperty =
+        AvaloniaProperty.Register<AzimuthalMapControl, double>(nameof(PanY), 0.0);
+
     static AzimuthalMapControl()
     {
         AffectsRender<AzimuthalMapControl>(PathProperty);
         AffectsRender<AzimuthalMapControl>(CountryLabelProperty);
         AffectsRender<AzimuthalMapControl>(ScaleKmProperty);
+        AffectsRender<AzimuthalMapControl>(ZoomProperty);
+        AffectsRender<AzimuthalMapControl>(PanXProperty);
+        AffectsRender<AzimuthalMapControl>(PanYProperty);
     }
 
     public GreatCirclePath? Path
@@ -66,6 +79,109 @@ internal sealed class AzimuthalMapControl : Control
         set => SetValue(ScaleKmProperty, value);
     }
 
+    /// <summary>User-controlled zoom multiplier. Effective scale = ScaleKm / Zoom.</summary>
+    public double Zoom
+    {
+        get => GetValue(ZoomProperty);
+        set => SetValue(ZoomProperty, value);
+    }
+
+    /// <summary>Horizontal pan in pixels (user drag offset).</summary>
+    public double PanX
+    {
+        get => GetValue(PanXProperty);
+        set => SetValue(PanXProperty, value);
+    }
+
+    /// <summary>Vertical pan in pixels (user drag offset).</summary>
+    public double PanY
+    {
+        get => GetValue(PanYProperty);
+        set => SetValue(PanYProperty, value);
+    }
+
+    public void ResetView()
+    {
+        Zoom = 1.0;
+        PanX = 0.0;
+        PanY = 0.0;
+    }
+
+    /// <summary>Enables mouse wheel zoom and click-drag pan. Off by default.</summary>
+    public bool IsInteractive { get; set; }
+
+    private Point? _dragStart;
+    private double _dragStartPanX;
+    private double _dragStartPanY;
+
+    public AzimuthalMapControl()
+    {
+        ClipToBounds = true;
+    }
+
+    protected override void OnPointerWheelChanged(PointerWheelEventArgs e)
+    {
+        base.OnPointerWheelChanged(e);
+        if (!IsInteractive)
+        {
+            return;
+        }
+        var factor = e.Delta.Y > 0 ? 1.2 : 1.0 / 1.2;
+        var newZoom = Math.Clamp(Zoom * factor, 1.0, 32.0);
+        if (Math.Abs(newZoom - Zoom) > 1e-4)
+        {
+            Zoom = newZoom;
+        }
+        e.Handled = true;
+    }
+
+    protected override void OnPointerPressed(PointerPressedEventArgs e)
+    {
+        base.OnPointerPressed(e);
+        if (!IsInteractive)
+        {
+            return;
+        }
+        var props = e.GetCurrentPoint(this).Properties;
+        if (props.IsLeftButtonPressed)
+        {
+            _dragStart = e.GetPosition(this);
+            _dragStartPanX = PanX;
+            _dragStartPanY = PanY;
+            e.Pointer.Capture(this);
+            e.Handled = true;
+        }
+        else if (props.IsRightButtonPressed)
+        {
+            ResetView();
+            e.Handled = true;
+        }
+    }
+
+    protected override void OnPointerMoved(PointerEventArgs e)
+    {
+        base.OnPointerMoved(e);
+        if (!IsInteractive || _dragStart is null)
+        {
+            return;
+        }
+        var p = e.GetPosition(this);
+        PanX = _dragStartPanX + (p.X - _dragStart.Value.X);
+        PanY = _dragStartPanY + (p.Y - _dragStart.Value.Y);
+        e.Handled = true;
+    }
+
+    protected override void OnPointerReleased(PointerReleasedEventArgs e)
+    {
+        base.OnPointerReleased(e);
+        if (_dragStart is not null)
+        {
+            _dragStart = null;
+            e.Pointer.Capture(null);
+            e.Handled = true;
+        }
+    }
+
     protected override Size MeasureOverride(Size availableSize)
     {
         var w = double.IsFinite(availableSize.Width) ? availableSize.Width : 240;
@@ -83,9 +199,11 @@ internal sealed class AzimuthalMapControl : Control
             return;
         }
 
-        var center = new Point(bounds.Width / 2.0, bounds.Height / 2.0);
+        var center = new Point((bounds.Width / 2.0) + PanX, (bounds.Height / 2.0) + PanY);
         var radius = (size / 2.0) - 6.0;
-        var scaleKm = Math.Clamp(ScaleKm > 0 ? ScaleKm : MaxRadiusKm, 100.0, MaxRadiusKm);
+        var zoom = Math.Clamp(double.IsFinite(Zoom) && Zoom > 0 ? Zoom : 1.0, 0.25, 64.0);
+        var baseScale = ScaleKm > 0 ? ScaleKm : MaxRadiusKm;
+        var scaleKm = Math.Clamp(baseScale / zoom, 25.0, MaxRadiusKm);
 
         var diskBrush = new RadialGradientBrush
         {
@@ -146,12 +264,15 @@ internal sealed class AzimuthalMapControl : Control
             projected.Add(ProjectPoint(origin, sample, center, radius, scaleKm));
         }
 
-        var glowPen = new Pen(new SolidColorBrush(Color.FromArgb(0x55, 0x00, 0xd4, 0xff)), 5.0)
+        var lineThickness = Math.Max(0.9, radius / 130.0);
+        var pathBrush = new SolidColorBrush(Color.FromArgb(0xe0, 0x6b, 0xe6, 0xff));
+        var pathPen = new Pen(pathBrush, lineThickness)
         {
             LineCap = PenLineCap.Round,
             LineJoin = PenLineJoin.Round,
+            DashStyle = new DashStyle(new double[] { 5, 3 }, 0),
         };
-        var corePen = new Pen(new SolidColorBrush(Color.Parse("#00d4ff")), 1.8)
+        var glowPen = new Pen(new SolidColorBrush(Color.FromArgb(0x35, 0x00, 0xd4, 0xff)), lineThickness * 2.4)
         {
             LineCap = PenLineCap.Round,
             LineJoin = PenLineJoin.Round,
@@ -167,22 +288,25 @@ internal sealed class AzimuthalMapControl : Control
             ctx.EndFigure(false);
         }
         context.DrawGeometry(Brushes.Transparent, glowPen, geometry);
-        context.DrawGeometry(Brushes.Transparent, corePen, geometry);
+        context.DrawGeometry(Brushes.Transparent, pathPen, geometry);
+
+        var dotCore = Math.Max(1.6, radius / 85.0);
+        var dotHalo = dotCore * 2.4;
 
         var stationFill = new SolidColorBrush(Color.Parse("#ffcc44"));
         context.DrawEllipse(
-            new SolidColorBrush(Color.FromArgb(0x55, 0xff, 0xcc, 0x44)),
+            new SolidColorBrush(Color.FromArgb(0x40, 0xff, 0xcc, 0x44)),
             new Pen(Brushes.Transparent),
-            center, 9.0, 9.0);
-        context.DrawEllipse(stationFill, new Pen(stationFill), center, 4.5, 4.5);
+            center, dotHalo, dotHalo);
+        context.DrawEllipse(stationFill, null, center, dotCore, dotCore);
 
         var contactPoint = projected[^1];
         var contactFill = new SolidColorBrush(Color.Parse("#ff5577"));
         context.DrawEllipse(
-            new SolidColorBrush(Color.FromArgb(0x66, 0xff, 0x55, 0x77)),
+            new SolidColorBrush(Color.FromArgb(0x4a, 0xff, 0x55, 0x77)),
             new Pen(Brushes.Transparent),
-            contactPoint, 9.0, 9.0);
-        context.DrawEllipse(contactFill, new Pen(contactFill), contactPoint, 4.5, 4.5);
+            contactPoint, dotHalo, dotHalo);
+        context.DrawEllipse(contactFill, null, contactPoint, dotCore, dotCore);
     }
 
     private static Point ProjectPoint(GeoPoint origin, GeoPoint sample, Point center, double radius, double scaleKm)
