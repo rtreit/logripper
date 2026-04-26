@@ -69,6 +69,10 @@ internal sealed partial class MapPopoutWindow : Window
 
     private void OnResetView(object? sender, RoutedEventArgs e) => GetMap()?.ResetView();
 
+    private void OnRotateLeft(object? sender, RoutedEventArgs e) => GetMap()?.Rotate(-15.0);
+
+    private void OnRotateRight(object? sender, RoutedEventArgs e) => GetMap()?.Rotate(15.0);
+
     private void OnClose(object? sender, RoutedEventArgs e) => Close();
 
     private void OnWindowKeyDown(object? sender, KeyEventArgs e)
@@ -87,6 +91,14 @@ internal sealed partial class MapPopoutWindow : Window
             case Key.OemMinus:
             case Key.Subtract:
                 OnZoomOut(this, new RoutedEventArgs());
+                e.Handled = true;
+                break;
+            case Key.Q:
+                OnRotateLeft(this, new RoutedEventArgs());
+                e.Handled = true;
+                break;
+            case Key.E:
+                OnRotateRight(this, new RoutedEventArgs());
                 e.Handled = true;
                 break;
             case Key.R:

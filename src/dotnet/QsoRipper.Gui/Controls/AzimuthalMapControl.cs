@@ -47,6 +47,9 @@ internal sealed class AzimuthalMapControl : Control
     public static readonly StyledProperty<double> PanYProperty =
         AvaloniaProperty.Register<AzimuthalMapControl, double>(nameof(PanY), 0.0);
 
+    public static readonly StyledProperty<double> RotationDegProperty =
+        AvaloniaProperty.Register<AzimuthalMapControl, double>(nameof(RotationDeg), 0.0);
+
     static AzimuthalMapControl()
     {
         AffectsRender<AzimuthalMapControl>(PathProperty);
@@ -55,6 +58,7 @@ internal sealed class AzimuthalMapControl : Control
         AffectsRender<AzimuthalMapControl>(ZoomProperty);
         AffectsRender<AzimuthalMapControl>(PanXProperty);
         AffectsRender<AzimuthalMapControl>(PanYProperty);
+        AffectsRender<AzimuthalMapControl>(RotationDegProperty);
     }
 
     public GreatCirclePath? Path
@@ -100,11 +104,33 @@ internal sealed class AzimuthalMapControl : Control
         set => SetValue(PanYProperty, value);
     }
 
+    /// <summary>Rotation of the projection in degrees clockwise. 0 = North up.</summary>
+    public double RotationDeg
+    {
+        get => GetValue(RotationDegProperty);
+        set => SetValue(RotationDegProperty, value);
+    }
+
     public void ResetView()
     {
         Zoom = 1.0;
         PanX = 0.0;
         PanY = 0.0;
+        RotationDeg = 0.0;
+    }
+
+    public void Rotate(double deltaDeg)
+    {
+        var v = (RotationDeg + deltaDeg) % 360.0;
+        if (v < -180)
+        {
+            v += 360;
+        }
+        if (v > 180)
+        {
+            v -= 360;
+        }
+        RotationDeg = v;
     }
 
     /// <summary>Enables mouse wheel zoom and click-drag pan. Off by default.</summary>
@@ -124,6 +150,12 @@ internal sealed class AzimuthalMapControl : Control
         base.OnPointerWheelChanged(e);
         if (!IsInteractive)
         {
+            return;
+        }
+        if ((e.KeyModifiers & KeyModifiers.Shift) != 0)
+        {
+            Rotate(e.Delta.Y > 0 ? -10.0 : 10.0);
+            e.Handled = true;
             return;
         }
         var factor = e.Delta.Y > 0 ? 1.2 : 1.0 / 1.2;
@@ -204,6 +236,8 @@ internal sealed class AzimuthalMapControl : Control
         var zoom = Math.Clamp(double.IsFinite(Zoom) && Zoom > 0 ? Zoom : 1.0, 0.25, 64.0);
         var baseScale = ScaleKm > 0 ? ScaleKm : MaxRadiusKm;
         var scaleKm = Math.Clamp(baseScale / zoom, 25.0, MaxRadiusKm);
+        var rotationDeg = double.IsFinite(RotationDeg) ? RotationDeg : 0.0;
+        var rotRad = rotationDeg * Math.PI / 180.0;
 
         var diskBrush = new RadialGradientBrush
         {
@@ -236,19 +270,29 @@ internal sealed class AzimuthalMapControl : Control
         DrawRingLabel(context, FormatKm(scaleKm), new Point(center.X + 3, center.Y - radius - 1));
 
         var crosshairPen = new Pen(new SolidColorBrush(Color.Parse("#1f324a")), 1.0);
-        context.DrawLine(crosshairPen, new Point(center.X - radius, center.Y), new Point(center.X + radius, center.Y));
-        context.DrawLine(crosshairPen, new Point(center.X, center.Y - radius), new Point(center.X, center.Y + radius));
-        DrawCardinalLabel(context, "N", new Point(center.X, center.Y - radius - 12), TextAlignment.Center);
-        DrawCardinalLabel(context, "S", new Point(center.X, center.Y + radius + 2), TextAlignment.Center);
-        DrawCardinalLabel(context, "E", new Point(center.X + radius + 4, center.Y - 7), TextAlignment.Left);
-        DrawCardinalLabel(context, "W", new Point(center.X - radius - 12, center.Y - 7), TextAlignment.Left);
+        // Crosshair rotates with the projection so it stays aligned with cardinal axes.
+        var ch1 = RotateAround(new Point(center.X - radius, center.Y), center, rotRad);
+        var ch2 = RotateAround(new Point(center.X + radius, center.Y), center, rotRad);
+        var ch3 = RotateAround(new Point(center.X, center.Y - radius), center, rotRad);
+        var ch4 = RotateAround(new Point(center.X, center.Y + radius), center, rotRad);
+        context.DrawLine(crosshairPen, ch1, ch2);
+        context.DrawLine(crosshairPen, ch3, ch4);
+
+        var nPos = RotateAround(new Point(center.X, center.Y - radius - 12), center, rotRad);
+        var sPos = RotateAround(new Point(center.X, center.Y + radius + 2), center, rotRad);
+        var ePos = RotateAround(new Point(center.X + radius + 4, center.Y - 7), center, rotRad);
+        var wPos = RotateAround(new Point(center.X - radius - 12, center.Y - 7), center, rotRad);
+        DrawCardinalLabel(context, "N", nPos, TextAlignment.Center);
+        DrawCardinalLabel(context, "S", sPos, TextAlignment.Center);
+        DrawCardinalLabel(context, "E", ePos, TextAlignment.Left);
+        DrawCardinalLabel(context, "W", wPos, TextAlignment.Left);
 
         var path = Path;
         if (path?.Origin is { } mapOrigin)
         {
-            DrawPolylineLayer(context, BorderLines, mapOrigin, center, radius, scaleKm,
+            DrawPolylineLayer(context, BorderLines, mapOrigin, center, radius, scaleKm, rotRad,
                 Color.FromArgb(0x55, 0x6a, 0x86, 0xb4), 0.7);
-            DrawPolylineLayer(context, CoastlineLines, mapOrigin, center, radius, scaleKm,
+            DrawPolylineLayer(context, CoastlineLines, mapOrigin, center, radius, scaleKm, rotRad,
                 Color.FromArgb(0xc8, 0x88, 0xb4, 0xe0), 0.95);
         }
 
@@ -261,7 +305,7 @@ internal sealed class AzimuthalMapControl : Control
         var projected = new List<Point>(path.Samples.Count);
         foreach (var sample in path.Samples)
         {
-            projected.Add(ProjectPoint(origin, sample, center, radius, scaleKm));
+            projected.Add(ProjectPoint(origin, sample, center, radius, scaleKm, rotRad));
         }
 
         var lineThickness = Math.Max(0.9, radius / 130.0);
@@ -309,15 +353,28 @@ internal sealed class AzimuthalMapControl : Control
         context.DrawEllipse(contactFill, null, contactPoint, dotCore, dotCore);
     }
 
-    private static Point ProjectPoint(GeoPoint origin, GeoPoint sample, Point center, double radius, double scaleKm)
+    private static Point ProjectPoint(GeoPoint origin, GeoPoint sample, Point center, double radius, double scaleKm, double rotationRad)
     {
         var distance = HaversineKm(origin, sample);
         var bearing = InitialBearingDeg(origin, sample);
         var rNorm = Math.Min(1.0, distance / scaleKm);
-        var angleRad = bearing.HasValue ? bearing.Value * Math.PI / 180.0 : 0.0;
+        var angleRad = (bearing.HasValue ? bearing.Value * Math.PI / 180.0 : 0.0) + rotationRad;
         var x = center.X + (radius * rNorm * Math.Sin(angleRad));
         var y = center.Y - (radius * rNorm * Math.Cos(angleRad));
         return new Point(x, y);
+    }
+
+    private static Point RotateAround(Point p, Point center, double rotationRad)
+    {
+        if (Math.Abs(rotationRad) < 1e-6)
+        {
+            return p;
+        }
+        var dx = p.X - center.X;
+        var dy = p.Y - center.Y;
+        var c = Math.Cos(rotationRad);
+        var s = Math.Sin(rotationRad);
+        return new Point(center.X + (dx * c) - (dy * s), center.Y + (dx * s) + (dy * c));
     }
 
     private static List<double> ChooseRingSteps(double scaleKm)
@@ -385,6 +442,7 @@ internal sealed class AzimuthalMapControl : Control
         Point center,
         double radius,
         double scaleKm,
+        double rotationRad,
         Color color,
         double thickness)
     {
@@ -417,13 +475,13 @@ internal sealed class AzimuthalMapControl : Control
         {
             foreach (var polyline in lines)
             {
-                ProjectPolylineInto(ctx, polyline, origin, center, radius, scaleKm);
+                ProjectPolylineInto(ctx, polyline, origin, center, radius, scaleKm, rotationRad);
             }
         }
         context.DrawGeometry(Brushes.Transparent, pen, geometry);
     }
 
-    private static void ProjectPolylineInto(StreamGeometryContext ctx, IReadOnlyList<GeoPoint> polyline, GeoPoint origin, Point center, double radius, double scaleKm)
+    private static void ProjectPolylineInto(StreamGeometryContext ctx, IReadOnlyList<GeoPoint> polyline, GeoPoint origin, Point center, double radius, double scaleKm, double rotationRad)
     {
         if (polyline.Count < 2)
         {
@@ -456,7 +514,7 @@ internal sealed class AzimuthalMapControl : Control
 
             if (!penDown)
             {
-                ctx.BeginFigure(ProjectPoint(origin, prev, center, radius, scaleKm), false);
+                ctx.BeginFigure(ProjectPoint(origin, prev, center, radius, scaleKm, rotationRad), false);
                 penDown = true;
             }
 
@@ -464,7 +522,7 @@ internal sealed class AzimuthalMapControl : Control
             {
                 var t = (double)s / steps;
                 var sub = steps == 1 ? curr : Slerp(prev, curr, t);
-                ctx.LineTo(ProjectPoint(origin, sub, center, radius, scaleKm));
+                ctx.LineTo(ProjectPoint(origin, sub, center, radius, scaleKm, rotationRad));
             }
 
             prev = curr;

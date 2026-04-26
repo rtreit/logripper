@@ -31,6 +31,8 @@
         <TextBlock x:Name="SubtitleText" Classes="dim" />
       </StackPanel>
       <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6">
+        <Button Classes="toolbar" Content="↺ Spin" Click="OnRotateLeft" ToolTip.Tip="Rotate counter-clockwise (Q)" />
+        <Button Classes="toolbar" Content="Spin ↻" Click="OnRotateRight" ToolTip.Tip="Rotate clockwise (E)" />
         <Button Classes="toolbar" Content="− Zoom Out" Click="OnZoomOut" ToolTip.Tip="Zoom out (-)" />
         <Button Classes="toolbar" Content="+ Zoom In" Click="OnZoomIn" ToolTip.Tip="Zoom in (+)" />
         <Button Classes="toolbar" Content="Reset" Click="OnResetView" ToolTip.Tip="Reset view (R)" />
@@ -57,6 +59,7 @@
                 HorizontalAlignment="Center"
                 Margin="0,8,0,0">
       <TextBlock Classes="dim" Text="Wheel: zoom" />
+      <TextBlock Classes="dim" Text="Shift+wheel / Q E: spin" />
       <TextBlock Classes="dim" Text="Drag: pan" />
       <TextBlock Classes="dim" Text="R: reset" />
       <TextBlock Classes="dim" Text="Esc: close" />
