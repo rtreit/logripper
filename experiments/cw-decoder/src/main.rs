@@ -1785,8 +1785,12 @@ fn run_stream_file(
 
         if let Some(rx) = cfg_channel.as_ref() {
             let mut latest: Option<streaming::DecoderConfig> = None;
-            while let Ok(c) = rx.try_recv() {
-                latest = Some(c);
+            let mut reset_lock = false;
+            while let Ok(msg) = rx.try_recv() {
+                match msg {
+                    StdinControlMessage::Config(c) => latest = Some(c),
+                    StdinControlMessage::ResetLock => reset_lock = true,
+                }
             }
             if let Some(c) = latest {
                 decoder.set_config(c);
@@ -1801,6 +1805,14 @@ fn run_stream_file(
                             "auto_threshold": c.auto_threshold,
                         }),
                     );
+                }
+            }
+            if reset_lock {
+                let evs = decoder.force_reset_lock();
+                if let Some(em) = emitter.as_mut() {
+                    for ev in &evs {
+                        em.emit_event(t_in_audio, ev);
+                    }
                 }
             }
         }
@@ -2563,8 +2575,12 @@ fn run_stream_live(
 
         if let Some(rx) = cfg_channel.as_ref() {
             let mut latest: Option<streaming::DecoderConfig> = None;
-            while let Ok(c) = rx.try_recv() {
-                latest = Some(c);
+            let mut reset_lock = false;
+            while let Ok(msg) = rx.try_recv() {
+                match msg {
+                    StdinControlMessage::Config(c) => latest = Some(c),
+                    StdinControlMessage::ResetLock => reset_lock = true,
+                }
             }
             if let Some(c) = latest {
                 decoder.set_config(c);
@@ -2579,6 +2595,15 @@ fn run_stream_live(
                             "auto_threshold": c.auto_threshold,
                         }),
                     );
+                }
+            }
+            if reset_lock {
+                let evs = decoder.force_reset_lock();
+                if let Some(em) = emitter.as_mut() {
+                    let t = started.elapsed().as_secs_f32();
+                    for ev in &evs {
+                        em.emit_event(t, ev);
+                    }
                 }
             }
         }
@@ -2699,20 +2724,35 @@ fn ctrlc_setup<F: FnMut() + Send + 'static>(_f: F) {
     // Best-effort: no ctrlc crate, rely on terminal interrupt for now.
 }
 
-/// Spawn a background thread that reads NDJSON config-update lines from
-/// stdin and forwards parsed [`streaming::DecoderConfig`] values to the
-/// returned receiver. Lines that don't parse as a config command are
+/// Control messages produced by [`spawn_stdin_config_channel`] for the
+/// streaming-decoder consumer loops. Either a runtime config update or
+/// an operator-driven force-reset of the current pitch lock (used by
+/// the GUI's "new QSO" / F7 binding).
+#[derive(Debug, Clone)]
+pub enum StdinControlMessage {
+    /// Live decoder configuration update.
+    Config(streaming::DecoderConfig),
+    /// Drop the active pitch lock and resume hunting. Triggered by an
+    /// `{"type":"reset_lock"}` line on stdin.
+    ResetLock,
+}
+
+/// Spawn a background thread that reads NDJSON control lines from stdin
+/// and forwards parsed [`StdinControlMessage`] values to the returned
+/// receiver. Lines that don't parse as a recognized command are
 /// silently ignored so unknown messages don't crash the decoder.
 ///
 /// Wire format (one JSON object per line):
 ///   {"type":"config","min_snr_db":6.0,"pitch_min_snr_db":8.0,"threshold_scale":1.0}
+///   {"type":"reset_lock"}
 ///
-/// Any field may be omitted; omitted fields keep their previous value.
+/// For `config`, any field may be omitted; omitted fields keep their
+/// previous value.
 fn spawn_stdin_config_channel(
     stop_on_eof: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
-) -> std::sync::mpsc::Receiver<streaming::DecoderConfig> {
+) -> std::sync::mpsc::Receiver<StdinControlMessage> {
     use std::io::BufRead;
-    let (tx, rx) = std::sync::mpsc::channel::<streaming::DecoderConfig>();
+    let (tx, rx) = std::sync::mpsc::channel::<StdinControlMessage>();
     std::thread::spawn(move || {
         let stdin = std::io::stdin();
         let mut state = streaming::DecoderConfig::defaults();
@@ -2725,8 +2765,15 @@ fn spawn_stdin_config_channel(
                 Ok(v) => v,
                 Err(_) => continue,
             };
-            if v.get("type").and_then(|t| t.as_str()) != Some("config") {
-                continue;
+            match v.get("type").and_then(|t| t.as_str()) {
+                Some("reset_lock") => {
+                    if tx.send(StdinControlMessage::ResetLock).is_err() {
+                        break;
+                    }
+                    continue;
+                }
+                Some("config") => {}
+                _ => continue,
             }
             if let Some(x) = v.get("min_snr_db").and_then(|x| x.as_f64()) {
                 state.min_snr_db = x as f32;
@@ -2774,7 +2821,7 @@ fn spawn_stdin_config_channel(
             if let Some(x) = v.get("hysteresis_fraction").and_then(|x| x.as_f64()) {
                 state.hysteresis_fraction = x.max(0.0) as f32;
             }
-            if tx.send(state).is_err() {
+            if tx.send(StdinControlMessage::Config(state)).is_err() {
                 break;
             }
         }

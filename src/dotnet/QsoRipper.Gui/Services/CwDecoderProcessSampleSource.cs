@@ -232,6 +232,34 @@ internal sealed class CwDecoderProcessSampleSource : ICwWpmSampleSource
 
     public void Dispose() => Stop();
 
+    /// <summary>
+    /// Send a "reset_lock" command to the running decoder. The decoder
+    /// drops its current pitch lock and resumes hunting so the next
+    /// QSO does not inherit the previous station's tone/timing state.
+    /// No-op if the decoder is not running. Best-effort: pipe write
+    /// failures during shutdown are swallowed.
+    /// </summary>
+    public void ResetLock()
+    {
+        Process? proc;
+        lock (_stateLock)
+        {
+            proc = _proc;
+        }
+        if (proc is null || proc.HasExited)
+        {
+            return;
+        }
+        try
+        {
+            proc.StandardInput.WriteLine("{\"type\":\"reset_lock\"}");
+            proc.StandardInput.Flush();
+        }
+        catch (IOException) { /* best effort */ }
+        catch (ObjectDisposedException) { /* best effort */ }
+        catch (InvalidOperationException) { /* best effort */ }
+    }
+
     private async Task PumpStdoutAsync(Process p, long epoch, CancellationToken ct)
     {
         try

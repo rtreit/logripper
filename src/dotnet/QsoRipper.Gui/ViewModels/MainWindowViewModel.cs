@@ -919,6 +919,7 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
         _cwTranscriptAggregator = new CwQsoTranscriptAggregator(src);
         Logger.AttachCwAggregator(_cwAggregator);
         Logger.AttachCwTranscriptAggregator(_cwTranscriptAggregator);
+        Logger.AttachCwResetLockHandler(src.ResetLock);
     }
 
     private void OnCwRawLineReceived(object? sender, string line)

@@ -2102,6 +2102,29 @@ impl StreamingDecoder {
         }
     }
 
+    /// Force the decoder to release its current pitch lock and resume
+    /// hunting. Called when the operator starts a new QSO so the next
+    /// contact does not inherit the previous station's tone/timing
+    /// state. Returns events that should be relayed to subscribers
+    /// (`PitchLost` + `Confidence(Hunting)` when a lock was active).
+    /// Always clears the symbol/decoder state so partial morse from the
+    /// previous QSO does not bleed into the new one.
+    pub fn force_reset_lock(&mut self) -> Vec<StreamEvent> {
+        let mut events = Vec::new();
+        let was_locked = self.pitch_locked.is_some();
+        self.drop_pitch_lock(false);
+        if was_locked {
+            events.push(StreamEvent::PitchLost {
+                reason: "operator_reset".to_string(),
+            });
+        }
+        // Always re-announce hunting so the GUI clears any stale lock UI
+        // even if we were already hunting (e.g. partial state from a
+        // glitchy previous QSO).
+        self.set_confidence(ConfidenceState::Hunting, &mut events);
+        events
+    }
+
     /// Atomically re-target the existing pitch lock at `new_pitch` without
     /// going through the drop+hunt+re-acquire path. Used when the watchdog
     /// or periodic re-eval finds a meaningfully better candidate within the
@@ -3422,6 +3445,70 @@ mod lock_behavior_tests {
             dec.pre_lock_buf.len(),
             before,
             "drop_pitch_lock should keep the seeded relock buffer intact"
+        );
+    }
+
+    #[test]
+    fn force_reset_lock_drops_active_pitch_lock_and_returns_hunting() {
+        // Run a clean PARIS stream through the decoder until it locks,
+        // then force a reset and assert: pitch_locked clears,
+        // PitchLost(operator_reset) is emitted, and confidence reverts
+        // to Hunting.
+        let sr = TARGET_RATE;
+        let audio = synth_paris(sr, 700.0, 20.0, 8.0);
+        let mut dec = StreamingDecoder::new(sr).expect("decoder");
+        let chunk = (sr / 10) as usize;
+        for c in audio.chunks(chunk) {
+            let _ = dec.feed(c).expect("feed");
+        }
+        assert!(
+            dec.pitch_locked.is_some(),
+            "test setup expects pitch lock acquired on clean PARIS"
+        );
+
+        let events = dec.force_reset_lock();
+
+        assert!(
+            dec.pitch_locked.is_none(),
+            "force_reset_lock must drop the pitch lock"
+        );
+        let saw_pitch_lost = events.iter().any(|e| {
+            matches!(
+                e,
+                StreamEvent::PitchLost { reason } if reason == "operator_reset"
+            )
+        });
+        assert!(
+            saw_pitch_lost,
+            "force_reset_lock must emit PitchLost with reason=operator_reset when a lock was active, got: {events:?}"
+        );
+        assert!(
+            matches!(dec.confidence, ConfidenceState::Hunting),
+            "force_reset_lock must transition confidence to Hunting"
+        );
+    }
+
+    #[test]
+    fn force_reset_lock_is_safe_when_no_lock_is_active() {
+        // Calling reset before the decoder ever locks must be a no-op
+        // for PitchLost (no spurious event) and must leave the decoder
+        // in a clean Hunting state ready for the next QSO.
+        let sr = TARGET_RATE;
+        let mut dec = StreamingDecoder::new(sr).expect("decoder");
+        assert!(dec.pitch_locked.is_none(), "fresh decoder is unlocked");
+
+        let events = dec.force_reset_lock();
+
+        let saw_pitch_lost = events
+            .iter()
+            .any(|e| matches!(e, StreamEvent::PitchLost { .. }));
+        assert!(
+            !saw_pitch_lost,
+            "force_reset_lock must not emit PitchLost when no lock was active"
+        );
+        assert!(
+            matches!(dec.confidence, ConfidenceState::Hunting),
+            "decoder must remain in Hunting after a no-op reset"
         );
     }
 
