@@ -1,8 +1,10 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Media;
+using Avalonia.Platform;
 using QsoRipper.Domain;
 
 namespace QsoRipper.Gui.Controls;
@@ -16,19 +18,38 @@ namespace QsoRipper.Gui.Controls;
 internal sealed class AzimuthalMapControl : Control
 {
     private const double MaxRadiusKm = 20015.0;
+    private const double AntipodeCullKm = 19500.0;
+    private const double SubdivideThresholdKm = 600.0;
+    private const int MaxSubdivisionSteps = 12;
+
+    private static readonly Lazy<List<IReadOnlyList<GeoPoint>>> CoastlineLines =
+        new(() => LoadPolylineResource("avares://QsoRipper.Gui/Assets/coastlines-110m.txt"), isThreadSafe: true);
+
+    private static readonly Lazy<List<IReadOnlyList<GeoPoint>>> BorderLines =
+        new(() => LoadPolylineResource("avares://QsoRipper.Gui/Assets/borders-110m.txt"), isThreadSafe: true);
 
     public static readonly StyledProperty<GreatCirclePath?> PathProperty =
         AvaloniaProperty.Register<AzimuthalMapControl, GreatCirclePath?>(nameof(Path));
 
+    public static readonly StyledProperty<string?> CountryLabelProperty =
+        AvaloniaProperty.Register<AzimuthalMapControl, string?>(nameof(CountryLabel));
+
     static AzimuthalMapControl()
     {
         AffectsRender<AzimuthalMapControl>(PathProperty);
+        AffectsRender<AzimuthalMapControl>(CountryLabelProperty);
     }
 
     public GreatCirclePath? Path
     {
         get => GetValue(PathProperty);
         set => SetValue(PathProperty, value);
+    }
+
+    public string? CountryLabel
+    {
+        get => GetValue(CountryLabelProperty);
+        set => SetValue(CountryLabelProperty, value);
     }
 
     protected override Size MeasureOverride(Size availableSize)
@@ -83,6 +104,14 @@ internal sealed class AzimuthalMapControl : Control
         DrawCardinalLabel(context, "W", new Point(center.X - radius - 12, center.Y - 7), TextAlignment.Left);
 
         var path = Path;
+        if (path?.Origin is { } mapOrigin)
+        {
+            DrawPolylineLayer(context, BorderLines, mapOrigin, center, radius,
+                Color.FromArgb(0x55, 0x6a, 0x86, 0xb4), 0.7);
+            DrawPolylineLayer(context, CoastlineLines, mapOrigin, center, radius,
+                Color.FromArgb(0xc8, 0x88, 0xb4, 0xe0), 0.95);
+        }
+
         if (path is null || path.Origin is null || path.Target is null || path.Samples.Count < 2)
         {
             return;
@@ -132,6 +161,51 @@ internal sealed class AzimuthalMapControl : Control
             new Pen(Brushes.Transparent),
             contactPoint, 9.0, 9.0);
         context.DrawEllipse(contactFill, new Pen(contactFill), contactPoint, 4.5, 4.5);
+
+        DrawCountryLabel(context, contactPoint, center, bounds);
+    }
+
+    private void DrawCountryLabel(DrawingContext context, Point contactPoint, Point center, Rect bounds)
+    {
+        var label = CountryLabel;
+        if (string.IsNullOrWhiteSpace(label))
+        {
+            return;
+        }
+
+        var formatted = new FormattedText(
+            label.ToUpperInvariant(),
+            System.Globalization.CultureInfo.InvariantCulture,
+            FlowDirection.LeftToRight,
+            new Typeface(FontFamily.Default, FontStyle.Normal, FontWeight.SemiBold),
+            10.5,
+            new SolidColorBrush(Color.Parse("#ffd6e0")));
+
+        var width = formatted.Width;
+        var height = formatted.Height;
+
+        var dx = contactPoint.X - center.X;
+        var dy = contactPoint.Y - center.Y;
+        var len = Math.Sqrt((dx * dx) + (dy * dy));
+        var ux = len > 1e-3 ? dx / len : 0.0;
+        var uy = len > 1e-3 ? dy / len : -1.0;
+
+        var offset = 14.0;
+        var x = contactPoint.X + (ux * offset) - (width / 2.0);
+        var y = contactPoint.Y + (uy * offset) - (height / 2.0);
+
+        x = Math.Max(4, Math.Min(bounds.Width - width - 4, x));
+        y = Math.Max(2, Math.Min(bounds.Height - height - 2, y));
+
+        var pad = 4.0;
+        var bgRect = new Rect(x - pad, y - 1, width + (pad * 2), height + 2);
+        context.DrawRectangle(
+            new SolidColorBrush(Color.FromArgb(0xc0, 0x10, 0x1c, 0x30)),
+            new Pen(new SolidColorBrush(Color.FromArgb(0x90, 0xff, 0x55, 0x77)), 0.8),
+            bgRect,
+            3.0,
+            3.0);
+        context.DrawText(formatted, new Point(x, y));
     }
 
     private static Point ProjectPoint(GeoPoint origin, GeoPoint sample, Point center, double radius)
@@ -143,6 +217,175 @@ internal sealed class AzimuthalMapControl : Control
         var x = center.X + (radius * rNorm * Math.Sin(angleRad));
         var y = center.Y - (radius * rNorm * Math.Cos(angleRad));
         return new Point(x, y);
+    }
+
+    private static void DrawPolylineLayer(
+        DrawingContext context,
+        Lazy<List<IReadOnlyList<GeoPoint>>> source,
+        GeoPoint origin,
+        Point center,
+        double radius,
+        Color color,
+        double thickness)
+    {
+        List<IReadOnlyList<GeoPoint>> lines;
+        try
+        {
+            lines = source.Value;
+        }
+        catch (IOException)
+        {
+            return;
+        }
+        catch (UriFormatException)
+        {
+            return;
+        }
+        if (lines.Count == 0)
+        {
+            return;
+        }
+
+        var pen = new Pen(new SolidColorBrush(color), thickness)
+        {
+            LineCap = PenLineCap.Round,
+            LineJoin = PenLineJoin.Round,
+        };
+
+        var geometry = new StreamGeometry();
+        using (var ctx = geometry.Open())
+        {
+            foreach (var polyline in lines)
+            {
+                ProjectPolylineInto(ctx, polyline, origin, center, radius);
+            }
+        }
+        context.DrawGeometry(Brushes.Transparent, pen, geometry);
+    }
+
+    private static void DrawCoastlines(DrawingContext context, GeoPoint origin, Point center, double radius)
+    {
+        DrawPolylineLayer(context, CoastlineLines, origin, center, radius,
+            Color.FromArgb(0xc8, 0x88, 0xb4, 0xe0), 0.95);
+    }
+
+    private static void ProjectPolylineInto(StreamGeometryContext ctx, IReadOnlyList<GeoPoint> polyline, GeoPoint origin, Point center, double radius)
+    {
+        if (polyline.Count < 2)
+        {
+            return;
+        }
+
+        var penDown = false;
+        var prev = polyline[0];
+        var prevDist = HaversineKm(origin, prev);
+        for (var i = 1; i < polyline.Count; i++)
+        {
+            var curr = polyline[i];
+            var currDist = HaversineKm(origin, curr);
+
+            if (prevDist >= AntipodeCullKm && currDist >= AntipodeCullKm)
+            {
+                penDown = false;
+                prev = curr;
+                prevDist = currDist;
+                continue;
+            }
+
+            var segDist = HaversineKm(prev, curr);
+            var steps = segDist > SubdivideThresholdKm
+                ? Math.Min(MaxSubdivisionSteps, (int)Math.Ceiling(segDist / SubdivideThresholdKm))
+                : 1;
+
+            if (!penDown)
+            {
+                ctx.BeginFigure(ProjectPoint(origin, prev, center, radius), false);
+                penDown = true;
+            }
+
+            for (var s = 1; s <= steps; s++)
+            {
+                var t = (double)s / steps;
+                var sub = steps == 1 ? curr : Slerp(prev, curr, t);
+                ctx.LineTo(ProjectPoint(origin, sub, center, radius));
+            }
+
+            prev = curr;
+            prevDist = currDist;
+        }
+        if (penDown)
+        {
+            ctx.EndFigure(false);
+        }
+    }
+
+    private static GeoPoint Slerp(GeoPoint a, GeoPoint b, double t)
+    {
+        var lat1 = a.Latitude * Math.PI / 180.0;
+        var lon1 = a.Longitude * Math.PI / 180.0;
+        var lat2 = b.Latitude * Math.PI / 180.0;
+        var lon2 = b.Longitude * Math.PI / 180.0;
+        var dLat = (lat2 - lat1) / 2.0;
+        var dLon = (lon2 - lon1) / 2.0;
+        var hav = (Math.Sin(dLat) * Math.Sin(dLat))
+            + (Math.Cos(lat1) * Math.Cos(lat2) * Math.Sin(dLon) * Math.Sin(dLon));
+        var d = 2.0 * Math.Atan2(Math.Sqrt(hav), Math.Sqrt(1.0 - hav));
+        if (d < 1e-9)
+        {
+            return new GeoPoint { Latitude = a.Latitude, Longitude = a.Longitude };
+        }
+        var aSin = Math.Sin((1 - t) * d) / Math.Sin(d);
+        var bSin = Math.Sin(t * d) / Math.Sin(d);
+        var x = (aSin * Math.Cos(lat1) * Math.Cos(lon1)) + (bSin * Math.Cos(lat2) * Math.Cos(lon2));
+        var y = (aSin * Math.Cos(lat1) * Math.Sin(lon1)) + (bSin * Math.Cos(lat2) * Math.Sin(lon2));
+        var z = (aSin * Math.Sin(lat1)) + (bSin * Math.Sin(lat2));
+        var lat = Math.Atan2(z, Math.Sqrt((x * x) + (y * y)));
+        var lon = Math.Atan2(y, x);
+        return new GeoPoint
+        {
+            Latitude = lat * 180.0 / Math.PI,
+            Longitude = lon * 180.0 / Math.PI,
+        };
+    }
+
+    private static List<IReadOnlyList<GeoPoint>> LoadPolylineResource(string assetUri)
+    {
+        var uri = new Uri(assetUri);
+        using var stream = AssetLoader.Open(uri);
+        using var reader = new StreamReader(stream);
+        var lines = new List<IReadOnlyList<GeoPoint>>(160);
+        string? raw;
+        while ((raw = reader.ReadLine()) is not null)
+        {
+            if (raw.Length == 0)
+            {
+                continue;
+            }
+            var parts = raw.Split(';');
+            var pts = new List<GeoPoint>(parts.Length);
+            foreach (var part in parts)
+            {
+                var commaIdx = part.IndexOf(',', StringComparison.Ordinal);
+                if (commaIdx <= 0 || commaIdx == part.Length - 1)
+                {
+                    continue;
+                }
+                if (!double.TryParse(part.AsSpan(0, commaIdx), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var lat))
+                {
+                    continue;
+                }
+                if (!double.TryParse(part.AsSpan(commaIdx + 1), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var lon))
+                {
+                    continue;
+                }
+                pts.Add(new GeoPoint { Latitude = lat, Longitude = lon });
+            }
+            if (pts.Count >= 2)
+            {
+                lines.Add(pts);
+            }
+        }
+        return lines;
     }
 
     private static double HaversineKm(GeoPoint a, GeoPoint b)

@@ -2,6 +2,7 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="using:QsoRipper.Gui.ViewModels"
              xmlns:ctrl="using:QsoRipper.Gui.Controls"
+             xmlns:auto="using:Avalonia.Automation"
              x:Class="QsoRipper.Gui.Views.CallsignCardView"
              x:DataType="vm:CallsignCardViewModel">
 
@@ -227,9 +228,12 @@
           <Border Classes="sectionDivider" IsVisible="{Binding IsMapAvailable}" />
           <TextBlock Classes="sectionHeader" Text="AZIMUTHAL MAP" IsVisible="{Binding IsMapAvailable}" />
           <StackPanel Spacing="6" IsVisible="{Binding IsMapAvailable}">
-            <ctrl:AzimuthalMapControl Path="{Binding MapPath}"
-                                      Width="240"
-                                      Height="240"
+            <ctrl:AzimuthalMapControl Name="AzimuthalMap"
+                                      auto:AutomationProperties.AutomationId="AzimuthalMap"
+                                      Path="{Binding MapPath}"
+                                      CountryLabel="{Binding MapCountryLabel}"
+                                      Width="280"
+                                      Height="280"
                                       HorizontalAlignment="Center" />
             <Grid ColumnDefinitions="Auto,*,Auto" Margin="0,4,0,0">
               <TextBlock Grid.Column="0"

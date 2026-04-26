@@ -12,6 +12,8 @@
 
   <ItemGroup>
     <AvaloniaResource Include="Assets\qsoripper.ico" />
+    <AvaloniaResource Include="Assets\coastlines-110m.txt" />
+    <AvaloniaResource Include="Assets\borders-110m.txt" />
   </ItemGroup>
 
   <ItemGroup>

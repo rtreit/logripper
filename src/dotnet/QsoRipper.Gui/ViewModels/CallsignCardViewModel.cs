@@ -136,6 +136,9 @@ internal sealed partial class CallsignCardViewModel : ObservableObject
     [ObservableProperty]
     private bool _isMapLoading;
 
+    [ObservableProperty]
+    private string _mapCountryLabel = string.Empty;
+
     public CallsignCardViewModel(IEngineClient engine)
     {
         _engine = engine;
@@ -284,6 +287,9 @@ internal sealed partial class CallsignCardViewModel : ObservableObject
         MapPath = null;
         MapDistanceText = string.Empty;
         MapBearingText = string.Empty;
+        MapCountryLabel = !string.IsNullOrWhiteSpace(record.DxccCountryName)
+            ? record.DxccCountryName!
+            : (record.Country ?? string.Empty);
         try
         {
             var target = BuildTargetReference(record);
