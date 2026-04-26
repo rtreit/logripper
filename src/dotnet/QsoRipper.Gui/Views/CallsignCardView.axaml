@@ -1,8 +1,14 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="using:QsoRipper.Gui.ViewModels"
+             xmlns:ctrl="using:QsoRipper.Gui.Controls"
+             xmlns:auto="using:Avalonia.Automation"
              x:Class="QsoRipper.Gui.Views.CallsignCardView"
              x:DataType="vm:CallsignCardViewModel">
+
+  <UserControl.KeyBindings>
+    <KeyBinding Gesture="Ctrl+M" Command="{Binding ExpandMapCommand}" />
+  </UserControl.KeyBindings>
 
   <UserControl.Styles>
     <Style Selector="TextBlock.cardLabel">
@@ -221,6 +227,62 @@
             <TextBlock Classes="cardValue" Grid.Row="3" Grid.Column="1" Text="{Binding Email}"
                        IsVisible="{Binding HasEmail}" />
           </Grid>
+
+          <!-- Azimuthal Map Section -->
+          <Border Classes="sectionDivider" IsVisible="{Binding IsMapAvailable}" />
+          <Grid ColumnDefinitions="*,Auto" IsVisible="{Binding IsMapAvailable}">
+            <TextBlock Grid.Column="0" Classes="sectionHeader" Text="AZIMUTHAL MAP" />
+            <Button Grid.Column="1"
+                    Padding="6,2"
+                    Background="Transparent"
+                    BorderBrush="#3a5078"
+                    BorderThickness="1"
+                    CornerRadius="3"
+                    Foreground="#aaaacc"
+                    FontSize="11"
+                    Content="⤢ Pop out"
+                    Command="{Binding ExpandMapCommand}"
+                    ToolTip.Tip="Open larger map (Ctrl+M)" />
+          </Grid>
+          <StackPanel Spacing="6" IsVisible="{Binding IsMapAvailable}">
+            <Border HorizontalAlignment="Center"
+                    Background="#101c30"
+                    BorderBrush="#80ff5577"
+                    BorderThickness="1"
+                    CornerRadius="3"
+                    Padding="8,2"
+                    IsVisible="{Binding MapCountryLabel, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+              <TextBlock Text="{Binding MapCountryLabel}"
+                         FontSize="11"
+                         FontWeight="SemiBold"
+                         Foreground="#ffd6e0" />
+            </Border>
+            <ctrl:AzimuthalMapControl Name="AzimuthalMap"
+                                      auto:AutomationProperties.AutomationId="AzimuthalMap"
+                                      Path="{Binding MapPath}"
+                                      ScaleKm="{Binding MapScaleKm}"
+                                      Width="280"
+                                      Height="280"
+                                      HorizontalAlignment="Center" />
+            <Grid ColumnDefinitions="Auto,*,Auto" Margin="0,4,0,0">
+              <TextBlock Grid.Column="0"
+                         Classes="cardLabel"
+                         Text="Distance" />
+              <TextBlock Grid.Column="0"
+                         Margin="64,0,0,0"
+                         Classes="cardValue"
+                         FontWeight="SemiBold"
+                         Text="{Binding MapDistanceText}" />
+              <TextBlock Grid.Column="2"
+                         Classes="cardValue"
+                         Foreground="#aaaacc"
+                         Text="{Binding MapBearingText}" />
+            </Grid>
+            <TextBlock HorizontalAlignment="Center"
+                       FontSize="9.5"
+                       Foreground="#7088a8"
+                       Text="{Binding MapScaleText}" />
+          </StackPanel>
 
         </StackPanel>
       </ScrollViewer>

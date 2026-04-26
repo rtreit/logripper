@@ -20,6 +20,8 @@ internal sealed class EngineGrpcService : IEngineClient, IDisposable
     private readonly LookupService.LookupServiceClient _lookupClient;
     private readonly RigControlService.RigControlServiceClient _rigClient;
     private readonly SpaceWeatherService.SpaceWeatherServiceClient _spaceWeatherClient;
+    private readonly GreatCircleService.GreatCircleServiceClient _greatCircleClient;
+    private readonly StationProfileService.StationProfileServiceClient _stationProfileClient;
 
     public EngineGrpcService(GrpcChannel channel)
     {
@@ -29,6 +31,8 @@ internal sealed class EngineGrpcService : IEngineClient, IDisposable
         _lookupClient = new LookupService.LookupServiceClient(channel);
         _rigClient = new RigControlService.RigControlServiceClient(channel);
         _spaceWeatherClient = new SpaceWeatherService.SpaceWeatherServiceClient(channel);
+        _greatCircleClient = new GreatCircleService.GreatCircleServiceClient(channel);
+        _stationProfileClient = new StationProfileService.StationProfileServiceClient(channel);
     }
 
     public async Task<GetSetupWizardStateResponse> GetWizardStateAsync(CancellationToken ct = default)
@@ -226,6 +230,20 @@ internal sealed class EngineGrpcService : IEngineClient, IDisposable
     {
         return await _spaceWeatherClient.GetCurrentSpaceWeatherAsync(
             new GetCurrentSpaceWeatherRequest(), cancellationToken: ct);
+    }
+
+    public async Task<ComputeGreatCircleResponse> ComputeGreatCircleAsync(
+        ComputeGreatCircleRequest request,
+        CancellationToken ct = default)
+    {
+        return await _greatCircleClient.ComputeGreatCircleAsync(
+            request, cancellationToken: ct);
+    }
+
+    public async Task<GetActiveStationContextResponse> GetActiveStationContextAsync(CancellationToken ct = default)
+    {
+        return await _stationProfileClient.GetActiveStationContextAsync(
+            new GetActiveStationContextRequest(), cancellationToken: ct);
     }
 
     public void Dispose()

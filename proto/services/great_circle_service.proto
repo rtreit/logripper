@@ -1,0 +1,19 @@
+syntax = "proto3";
+
+package qsoripper.services;
+
+option csharp_namespace = "QsoRipper.Services";
+
+import "services/compute_great_circle_request.proto";
+import "services/compute_great_circle_response.proto";
+
+// Pure-geometry service for great-circle / azimuthal-projection support
+// shared by every QsoRipper client (Avalonia GUI, Win32, TUI, DebugHost).
+// Stateless: no auth required, no side effects.
+service GreatCircleService {
+  // Compute the spherical-Earth geodesic between two points.
+  // Origin and target may be supplied as decimal-degree coordinates or
+  // as Maidenhead locators; the engine resolves grids to the locator's
+  // center point.
+  rpc ComputeGreatCircle(ComputeGreatCircleRequest) returns (ComputeGreatCircleResponse);
+}

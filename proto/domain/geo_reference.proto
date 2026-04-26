@@ -1,0 +1,18 @@
+syntax = "proto3";
+
+package qsoripper.domain;
+
+option csharp_namespace = "QsoRipper.Domain";
+
+import "domain/geo_point.proto";
+
+// A geographic reference that engines resolve to coordinates.
+// At least one of `coordinates` or `maidenhead` must be set.
+// When both are present, `coordinates` wins.
+// `maidenhead` accepts 4, 6, or 8-character Maidenhead locators
+// (case-insensitive, e.g. "CN87", "CN87wn", "CN87wn46"); engines resolve
+// to the locator's center point.
+message GeoReference {
+  optional GeoPoint coordinates = 1;
+  optional string maidenhead = 2;
+}

@@ -659,7 +659,50 @@ Temporarily overrides the active station profile for the current session.
 
 Removes the session override, reverting to the base active profile.
 
-### 3.8 DeveloperControlService
+### 3.9 GreatCircleService
+
+**Proto file:** `proto/services/great_circle_service.proto`
+
+Computes great-circle geodesics (distance, bearing, sample arc) between two
+points on the sphere. Used by clients to render azimuthal map projections,
+beam-heading indicators, and contact-distance displays.
+
+#### RPCs
+
+| RPC | Request | Response | Mode |
+|---|---|---|---|
+| `ComputeGreatCircle` | `ComputeGreatCircleRequest` | `ComputeGreatCircleResponse` | Unary |
+
+#### ComputeGreatCircle
+
+Computes the great-circle path from `origin` to `target`.
+
+**Request fields:**
+- `GeoReference origin` — required; must contain `coordinates` or `maidenhead`.
+- `GeoReference target` — required; same constraint.
+- `uint32 sample_count` — `0` selects the engine default (64); valid range is `2..=512`; values of `1` or `> 512` are rejected.
+
+**`GeoReference` resolution:**
+- If `coordinates` is present, it is used directly.
+- Otherwise the engine resolves `maidenhead` (4, 6, or 8-character locator, case-insensitive) to the locator's center coordinates.
+- If neither is set, `INVALID_ARGUMENT` is returned.
+
+**Response fields:**
+- `GreatCirclePath path`:
+  - `GeoPoint origin`, `target` — resolved coordinates (after Maidenhead → lat/lon expansion).
+  - `double distance_km` — great-circle distance using a spherical Earth model with `R = 6371.0088 km`.
+  - `optional double initial_bearing_deg`, `final_bearing_deg` — true-north bearings in `[0, 360)`. Both are absent when origin and target are the same point or antipodal (the great circle is non-unique in those cases).
+  - `repeated GeoPoint samples` — `sample_count` evenly-spaced points along the geodesic, including both endpoints.
+
+**Error semantics:**
+- `INVALID_ARGUMENT` — missing reference, unresolvable Maidenhead locator, latitude/longitude out of range, NaN/Inf, or `sample_count` out of range.
+
+**Behavior:**
+- Computation is purely deterministic: identical inputs return bit-identical outputs across engine restarts and across the Rust and .NET implementations within `~1e-3` km / `~1e-3°`.
+- No external I/O; the RPC must complete entirely from in-process math.
+- This service is required, not optional. Engines that lack the math should still expose the RPC and return `UNIMPLEMENTED`, but the reference Rust and .NET engines both implement it.
+
+### 3.10 DeveloperControlService
 
 **Proto file:** `proto/services/developer_control_service.proto`
 
@@ -703,7 +746,7 @@ Resets all runtime configuration to environment/default values.
 - Reload configuration from environment variables and defaults.
 - Return the reset configuration snapshot.
 
-### 3.9 StressControlService (Optional)
+### 3.11 StressControlService (Optional)
 
 **Proto file:** `proto/services/stress_control_service.proto`
 

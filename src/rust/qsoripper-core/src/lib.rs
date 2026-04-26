@@ -9,6 +9,8 @@ pub mod application;
 pub mod domain;
 /// FFI boundary for DSP helpers.
 pub mod ffi;
+/// Spherical-Earth geodesy: distance, bearing, sampling, Maidenhead resolution.
+pub mod geodesy;
 /// Lookup orchestration, providers, and cache policy.
 pub mod lookup;
 /// Generated protobuf and gRPC bindings.

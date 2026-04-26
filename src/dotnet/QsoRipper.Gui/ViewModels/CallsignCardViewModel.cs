@@ -9,6 +9,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using QsoRipper.Domain;
 using QsoRipper.Gui.Services;
+using QsoRipper.Services;
 
 namespace QsoRipper.Gui.ViewModels;
 
@@ -119,6 +120,31 @@ internal sealed partial class CallsignCardViewModel : ObservableObject
     [ObservableProperty]
     private string _latencyText = string.Empty;
 
+    // Azimuthal map (engine-computed great-circle path).
+    [ObservableProperty]
+    private GreatCirclePath? _mapPath;
+
+    [ObservableProperty]
+    private string _mapDistanceText = string.Empty;
+
+    [ObservableProperty]
+    private string _mapBearingText = string.Empty;
+
+    [ObservableProperty]
+    private bool _isMapAvailable;
+
+    [ObservableProperty]
+    private bool _isMapLoading;
+
+    [ObservableProperty]
+    private string _mapCountryLabel = string.Empty;
+
+    [ObservableProperty]
+    private double _mapScaleKm = 20015.0;
+
+    [ObservableProperty]
+    private string _mapScaleText = string.Empty;
+
     public CallsignCardViewModel(IEngineClient engine)
     {
         _engine = engine;
@@ -172,6 +198,9 @@ internal sealed partial class CallsignCardViewModel : ObservableObject
 
                 IsLoaded = true;
                 RecordLoaded?.Invoke(this, record);
+
+                // Fire-and-forget map load (separate try/catch; never blocks UI).
+                _ = LoadMapAsync(record);
             }
             else if (result.State == LookupState.NotFound)
             {
@@ -206,7 +235,19 @@ internal sealed partial class CallsignCardViewModel : ObservableObject
         CloseRequested?.Invoke(this, EventArgs.Empty);
     }
 
+    [RelayCommand]
+    private void ExpandMap()
+    {
+        if (!IsMapAvailable)
+        {
+            return;
+        }
+        ExpandMapRequested?.Invoke(this, EventArgs.Empty);
+    }
+
     internal event EventHandler? CloseRequested;
+
+    internal event EventHandler? ExpandMapRequested;
 
     /// <summary>
     /// Raised when a callsign record is successfully loaded, carrying the
@@ -255,6 +296,139 @@ internal sealed partial class CallsignCardViewModel : ObservableObject
         OnPropertyChanged(nameof(HasEmail));
         OnPropertyChanged(nameof(HasCounty));
         OnPropertyChanged(nameof(HasTimeZone));
+    }
+
+    private async Task LoadMapAsync(CallsignRecord record)
+    {
+        IsMapLoading = true;
+        IsMapAvailable = false;
+        MapPath = null;
+        MapDistanceText = string.Empty;
+        MapBearingText = string.Empty;
+        MapCountryLabel = !string.IsNullOrWhiteSpace(record.DxccCountryName)
+            ? record.DxccCountryName!
+            : (record.Country ?? string.Empty);
+        try
+        {
+            var target = BuildTargetReference(record);
+            if (target is null)
+            {
+                return;
+            }
+
+            var contextResponse = await _engine.GetActiveStationContextAsync();
+            var origin = BuildOriginReference(contextResponse?.Context);
+            if (origin is null)
+            {
+                return;
+            }
+
+            var request = new ComputeGreatCircleRequest
+            {
+                Origin = origin,
+                Target = target,
+                SampleCount = 96,
+            };
+            var response = await _engine.ComputeGreatCircleAsync(request);
+            var path = response?.Path;
+            if (path is null || path.Origin is null || path.Target is null || path.Samples.Count < 2)
+            {
+                return;
+            }
+
+            MapPath = path;
+            MapDistanceText = $"{path.DistanceKm:N0} km";
+            MapBearingText = path.HasInitialBearingDeg
+                ? $"{path.InitialBearingDeg:F0}° from station"
+                : string.Empty;
+            var scaleKm = ChooseMapScaleKm(path.DistanceKm);
+            MapScaleKm = scaleKm;
+            MapScaleText = $"scale ~{FormatScaleKm(scaleKm)}";
+            IsMapAvailable = true;
+        }
+        catch (Grpc.Core.RpcException)
+        {
+            // Engine unreachable / great-circle service unavailable — hide the map silently.
+        }
+        catch (InvalidOperationException)
+        {
+            // Engine client mis-configured — hide the map silently.
+        }
+        catch (NotImplementedException)
+        {
+            // Test or stub engine client without map support — hide the map.
+        }
+        finally
+        {
+            IsMapLoading = false;
+        }
+    }
+
+    private static double ChooseMapScaleKm(double distanceKm)
+    {
+        const double maxScale = 20015.0;
+        if (distanceKm <= 0 || double.IsNaN(distanceKm))
+        {
+            return maxScale;
+        }
+        var target = Math.Max(200.0, distanceKm * 1.35);
+        double[] steps = { 250, 500, 750, 1_000, 1_500, 2_000, 3_000, 5_000, 7_500, 10_000, 15_000, maxScale };
+        foreach (var s in steps)
+        {
+            if (target <= s)
+            {
+                return s;
+            }
+        }
+        return maxScale;
+    }
+
+    private static string FormatScaleKm(double km) =>
+        km >= 1000 ? $"{km / 1000:0.#}k km" : $"{km:F0} km";
+
+    private static GeoReference? BuildTargetReference(CallsignRecord record)
+    {
+        if (record.HasLatitude && record.HasLongitude)
+        {
+            return new GeoReference
+            {
+                Coordinates = new GeoPoint
+                {
+                    Latitude = record.Latitude,
+                    Longitude = record.Longitude,
+                },
+            };
+        }
+        if (!string.IsNullOrWhiteSpace(record.GridSquare))
+        {
+            return new GeoReference { Maidenhead = record.GridSquare };
+        }
+        return null;
+    }
+
+    private static GeoReference? BuildOriginReference(ActiveStationContext? context)
+    {
+        var profile = context?.EffectiveActiveProfile;
+        if (profile is null)
+        {
+            return null;
+        }
+        if (profile.HasLatitude && profile.HasLongitude)
+        {
+            return new GeoReference
+            {
+                Coordinates = new GeoPoint
+                {
+                    Latitude = profile.Latitude,
+                    Longitude = profile.Longitude,
+                },
+            };
+        }
+        if (!string.IsNullOrWhiteSpace(profile.Grid))
+        {
+            return new GeoReference { Maidenhead = profile.Grid };
+        }
+        return null;
     }
 
     private async Task LoadImageAsync(string url)

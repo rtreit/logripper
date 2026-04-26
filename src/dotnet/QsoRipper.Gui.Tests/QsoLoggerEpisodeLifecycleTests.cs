@@ -143,6 +143,8 @@ public sealed class QsoLoggerEpisodeLifecycleTests
         public Task<GetRigSnapshotResponse> GetRigSnapshotAsync(CancellationToken ct = default) => throw new NotImplementedException();
         public Task<GetRigStatusResponse> GetRigStatusAsync(CancellationToken ct = default) => throw new NotImplementedException();
         public Task<GetCurrentSpaceWeatherResponse> GetCurrentSpaceWeatherAsync(CancellationToken ct = default) => throw new NotImplementedException();
+        public Task<ComputeGreatCircleResponse> ComputeGreatCircleAsync(ComputeGreatCircleRequest request, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task<GetActiveStationContextResponse> GetActiveStationContextAsync(CancellationToken ct = default) => throw new NotImplementedException();
         public Task<PurgeDeletedQsosResponse> PurgeDeletedQsosAsync(IReadOnlyList<string>? localIds = null, Timestamp? olderThan = null, bool includePendingRemoteDeletes = false, CancellationToken ct = default) => throw new NotImplementedException();
     }
 }

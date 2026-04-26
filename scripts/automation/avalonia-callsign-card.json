@@ -3,9 +3,9 @@
   "window": {
     "title": "QsoRipper",
     "x": 80,
-    "y": 80,
+    "y": 20,
     "width": 1280,
-    "height": 760
+    "height": 1100
   },
   "actions": [
     {
@@ -26,32 +26,16 @@
       "milliseconds": 300
     },
     {
-      "type": "screenshot",
-      "path": "callsign-card-row-selected.png"
-    },
-    {
       "type": "send-keys",
       "keys": "{F8}"
     },
     {
       "type": "wait",
-      "milliseconds": 1500
+      "milliseconds": 2500
     },
     {
       "type": "screenshot",
       "path": "callsign-card-open.png"
-    },
-    {
-      "type": "send-keys",
-      "keys": "{ESC}"
-    },
-    {
-      "type": "wait",
-      "milliseconds": 500
-    },
-    {
-      "type": "screenshot",
-      "path": "callsign-card-closed.png"
     }
   ]
 }
