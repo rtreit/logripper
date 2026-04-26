@@ -488,7 +488,23 @@ function Get-EngineProfiles {
         $dotnetDebugDllPath
     }
     $binaryName = if ($IsWindows) { 'qsoripper-server.exe' } else { 'qsoripper-server' }
-    $rustBinaryPath = Join-Path $PSScriptRoot 'src' | Join-Path -ChildPath 'rust' | Join-Path -ChildPath 'target' | Join-Path -ChildPath 'debug' | Join-Path -ChildPath $binaryName
+    $rustReleaseArtifactPath = Join-Path $PSScriptRoot 'artifacts' | Join-Path -ChildPath 'publish' | Join-Path -ChildPath 'qsoripper-server' | Join-Path -ChildPath 'Release' | Join-Path -ChildPath $binaryName
+    $rustReleaseTargetPath = Join-Path $PSScriptRoot 'src' | Join-Path -ChildPath 'rust' | Join-Path -ChildPath 'target' | Join-Path -ChildPath 'release' | Join-Path -ChildPath $binaryName
+    $rustDebugTargetPath = Join-Path $PSScriptRoot 'src' | Join-Path -ChildPath 'rust' | Join-Path -ChildPath 'target' | Join-Path -ChildPath 'debug' | Join-Path -ChildPath $binaryName
+    # Pick the freshest available binary so -SkipBuild after PR merges doesn't
+    # silently re-launch a stale debug build (which then 404s on new RPCs).
+    $rustCandidates = @($rustReleaseArtifactPath, $rustReleaseTargetPath, $rustDebugTargetPath) | Where-Object { Test-Path -LiteralPath $_ }
+    $rustBinaryPath = if ($rustCandidates.Count -gt 0) {
+        ($rustCandidates | Sort-Object { (Get-Item -LiteralPath $_).LastWriteTimeUtc } -Descending | Select-Object -First 1)
+    } else {
+        $rustDebugTargetPath
+    }
+
+    $dotnetReleasePublishedDllPath = Join-Path $PSScriptRoot 'artifacts' | Join-Path -ChildPath 'publish' | Join-Path -ChildPath 'qsoripper-engine-dotnet' | Join-Path -ChildPath 'Release' | Join-Path -ChildPath 'QsoRipper.Engine.DotNet.dll'
+    $dotnetCandidates = @($dotnetReleasePublishedDllPath, $dotnetReleaseDllPath, $dotnetDebugDllPath) | Where-Object { Test-Path -LiteralPath $_ }
+    if ($dotnetCandidates.Count -gt 0) {
+        $dotnetDllPath = ($dotnetCandidates | Sort-Object { (Get-Item -LiteralPath $_).LastWriteTimeUtc } -Descending | Select-Object -First 1)
+    }
 
     return @(
         [pscustomobject]@{
