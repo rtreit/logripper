@@ -34,10 +34,14 @@ internal sealed class AzimuthalMapControl : Control
     public static readonly StyledProperty<string?> CountryLabelProperty =
         AvaloniaProperty.Register<AzimuthalMapControl, string?>(nameof(CountryLabel));
 
+    public static readonly StyledProperty<double> ScaleKmProperty =
+        AvaloniaProperty.Register<AzimuthalMapControl, double>(nameof(ScaleKm), MaxRadiusKm);
+
     static AzimuthalMapControl()
     {
         AffectsRender<AzimuthalMapControl>(PathProperty);
         AffectsRender<AzimuthalMapControl>(CountryLabelProperty);
+        AffectsRender<AzimuthalMapControl>(ScaleKmProperty);
     }
 
     public GreatCirclePath? Path
@@ -50,6 +54,16 @@ internal sealed class AzimuthalMapControl : Control
     {
         get => GetValue(CountryLabelProperty);
         set => SetValue(CountryLabelProperty, value);
+    }
+
+    /// <summary>
+    /// Radial extent of the disk in kilometres. Defaults to a full hemisphere
+    /// (~20015 km). Smaller values zoom in for nearby contacts.
+    /// </summary>
+    public double ScaleKm
+    {
+        get => GetValue(ScaleKmProperty);
+        set => SetValue(ScaleKmProperty, value);
     }
 
     protected override Size MeasureOverride(Size availableSize)
@@ -71,6 +85,7 @@ internal sealed class AzimuthalMapControl : Control
 
         var center = new Point(bounds.Width / 2.0, bounds.Height / 2.0);
         var radius = (size / 2.0) - 6.0;
+        var scaleKm = Math.Clamp(ScaleKm > 0 ? ScaleKm : MaxRadiusKm, 100.0, MaxRadiusKm);
 
         var diskBrush = new RadialGradientBrush
         {
@@ -87,13 +102,20 @@ internal sealed class AzimuthalMapControl : Control
         {
             DashStyle = new DashStyle(new double[] { 2, 4 }, 0),
         };
-        foreach (var km in new[] { 5000.0, 10000.0, 15000.0 })
+        var ringSteps = ChooseRingSteps(scaleKm);
+        foreach (var ringKm in ringSteps)
         {
-            var r = radius * (km / MaxRadiusKm);
+            var r = radius * (ringKm / scaleKm);
+            if (r < 4 || r > radius - 0.5)
+            {
+                continue;
+            }
             context.DrawEllipse(Brushes.Transparent, ringPen, center, r, r);
+            DrawRingLabel(context, FormatKm(ringKm), new Point(center.X + 3, center.Y - r - 1));
         }
         var outerPen = new Pen(new SolidColorBrush(Color.Parse("#3a5078")), 1.5);
         context.DrawEllipse(Brushes.Transparent, outerPen, center, radius, radius);
+        DrawRingLabel(context, FormatKm(scaleKm), new Point(center.X + 3, center.Y - radius - 1));
 
         var crosshairPen = new Pen(new SolidColorBrush(Color.Parse("#1f324a")), 1.0);
         context.DrawLine(crosshairPen, new Point(center.X - radius, center.Y), new Point(center.X + radius, center.Y));
@@ -106,9 +128,9 @@ internal sealed class AzimuthalMapControl : Control
         var path = Path;
         if (path?.Origin is { } mapOrigin)
         {
-            DrawPolylineLayer(context, BorderLines, mapOrigin, center, radius,
+            DrawPolylineLayer(context, BorderLines, mapOrigin, center, radius, scaleKm,
                 Color.FromArgb(0x55, 0x6a, 0x86, 0xb4), 0.7);
-            DrawPolylineLayer(context, CoastlineLines, mapOrigin, center, radius,
+            DrawPolylineLayer(context, CoastlineLines, mapOrigin, center, radius, scaleKm,
                 Color.FromArgb(0xc8, 0x88, 0xb4, 0xe0), 0.95);
         }
 
@@ -121,7 +143,7 @@ internal sealed class AzimuthalMapControl : Control
         var projected = new List<Point>(path.Samples.Count);
         foreach (var sample in path.Samples)
         {
-            projected.Add(ProjectPoint(origin, sample, center, radius));
+            projected.Add(ProjectPoint(origin, sample, center, radius, scaleKm));
         }
 
         var glowPen = new Pen(new SolidColorBrush(Color.FromArgb(0x55, 0x00, 0xd4, 0xff)), 5.0)
@@ -161,62 +183,75 @@ internal sealed class AzimuthalMapControl : Control
             new Pen(Brushes.Transparent),
             contactPoint, 9.0, 9.0);
         context.DrawEllipse(contactFill, new Pen(contactFill), contactPoint, 4.5, 4.5);
-
-        DrawCountryLabel(context, contactPoint, center, bounds);
     }
 
-    private void DrawCountryLabel(DrawingContext context, Point contactPoint, Point center, Rect bounds)
-    {
-        var label = CountryLabel;
-        if (string.IsNullOrWhiteSpace(label))
-        {
-            return;
-        }
-
-        var formatted = new FormattedText(
-            label.ToUpperInvariant(),
-            System.Globalization.CultureInfo.InvariantCulture,
-            FlowDirection.LeftToRight,
-            new Typeface(FontFamily.Default, FontStyle.Normal, FontWeight.SemiBold),
-            10.5,
-            new SolidColorBrush(Color.Parse("#ffd6e0")));
-
-        var width = formatted.Width;
-        var height = formatted.Height;
-
-        var dx = contactPoint.X - center.X;
-        var dy = contactPoint.Y - center.Y;
-        var len = Math.Sqrt((dx * dx) + (dy * dy));
-        var ux = len > 1e-3 ? dx / len : 0.0;
-        var uy = len > 1e-3 ? dy / len : -1.0;
-
-        var offset = 14.0;
-        var x = contactPoint.X + (ux * offset) - (width / 2.0);
-        var y = contactPoint.Y + (uy * offset) - (height / 2.0);
-
-        x = Math.Max(4, Math.Min(bounds.Width - width - 4, x));
-        y = Math.Max(2, Math.Min(bounds.Height - height - 2, y));
-
-        var pad = 4.0;
-        var bgRect = new Rect(x - pad, y - 1, width + (pad * 2), height + 2);
-        context.DrawRectangle(
-            new SolidColorBrush(Color.FromArgb(0xc0, 0x10, 0x1c, 0x30)),
-            new Pen(new SolidColorBrush(Color.FromArgb(0x90, 0xff, 0x55, 0x77)), 0.8),
-            bgRect,
-            3.0,
-            3.0);
-        context.DrawText(formatted, new Point(x, y));
-    }
-
-    private static Point ProjectPoint(GeoPoint origin, GeoPoint sample, Point center, double radius)
+    private static Point ProjectPoint(GeoPoint origin, GeoPoint sample, Point center, double radius, double scaleKm)
     {
         var distance = HaversineKm(origin, sample);
         var bearing = InitialBearingDeg(origin, sample);
-        var rNorm = Math.Min(1.0, distance / MaxRadiusKm);
+        var rNorm = Math.Min(1.0, distance / scaleKm);
         var angleRad = bearing.HasValue ? bearing.Value * Math.PI / 180.0 : 0.0;
         var x = center.X + (radius * rNorm * Math.Sin(angleRad));
         var y = center.Y - (radius * rNorm * Math.Cos(angleRad));
         return new Point(x, y);
+    }
+
+    private static List<double> ChooseRingSteps(double scaleKm)
+    {
+        // pick a "nice" step size such that we get 2-4 rings inside the disk
+        var roughStep = scaleKm / 4.0;
+        var pow = Math.Pow(10, Math.Floor(Math.Log10(roughStep)));
+        var n = roughStep / pow;
+        double step;
+        if (n < 1.5)
+        {
+            step = pow;
+        }
+        else if (n < 3.5)
+        {
+            step = 2 * pow;
+        }
+        else if (n < 7.5)
+        {
+            step = 5 * pow;
+        }
+        else
+        {
+            step = 10 * pow;
+        }
+        var rings = new List<double>(5);
+        for (var d = step; d < scaleKm - (step * 0.1); d += step)
+        {
+            rings.Add(d);
+        }
+        return rings;
+    }
+
+    private static string FormatKm(double km)
+    {
+        if (km >= 1000)
+        {
+            var thousands = km / 1000.0;
+            return thousands >= 10
+                ? $"{thousands:F0}k"
+                : $"{thousands:0.#}k";
+        }
+        return $"{km:F0}";
+    }
+
+    private static void DrawRingLabel(DrawingContext context, string text, Point origin)
+    {
+        var formatted = new FormattedText(
+            text,
+            System.Globalization.CultureInfo.InvariantCulture,
+            FlowDirection.LeftToRight,
+            Typeface.Default,
+            8.5,
+            new SolidColorBrush(Color.FromArgb(0xb0, 0x6e, 0x88, 0xa8)))
+        {
+            TextAlignment = TextAlignment.Left,
+        };
+        context.DrawText(formatted, origin);
     }
 
     private static void DrawPolylineLayer(
@@ -225,6 +260,7 @@ internal sealed class AzimuthalMapControl : Control
         GeoPoint origin,
         Point center,
         double radius,
+        double scaleKm,
         Color color,
         double thickness)
     {
@@ -257,24 +293,21 @@ internal sealed class AzimuthalMapControl : Control
         {
             foreach (var polyline in lines)
             {
-                ProjectPolylineInto(ctx, polyline, origin, center, radius);
+                ProjectPolylineInto(ctx, polyline, origin, center, radius, scaleKm);
             }
         }
         context.DrawGeometry(Brushes.Transparent, pen, geometry);
     }
 
-    private static void DrawCoastlines(DrawingContext context, GeoPoint origin, Point center, double radius)
-    {
-        DrawPolylineLayer(context, CoastlineLines, origin, center, radius,
-            Color.FromArgb(0xc8, 0x88, 0xb4, 0xe0), 0.95);
-    }
-
-    private static void ProjectPolylineInto(StreamGeometryContext ctx, IReadOnlyList<GeoPoint> polyline, GeoPoint origin, Point center, double radius)
+    private static void ProjectPolylineInto(StreamGeometryContext ctx, IReadOnlyList<GeoPoint> polyline, GeoPoint origin, Point center, double radius, double scaleKm)
     {
         if (polyline.Count < 2)
         {
             return;
         }
+
+        var antipodeCull = Math.Min(AntipodeCullKm, scaleKm);
+        var subdivideThreshold = Math.Max(60.0, Math.Min(SubdivideThresholdKm, scaleKm / 30.0));
 
         var penDown = false;
         var prev = polyline[0];
@@ -284,7 +317,7 @@ internal sealed class AzimuthalMapControl : Control
             var curr = polyline[i];
             var currDist = HaversineKm(origin, curr);
 
-            if (prevDist >= AntipodeCullKm && currDist >= AntipodeCullKm)
+            if (prevDist >= antipodeCull && currDist >= antipodeCull)
             {
                 penDown = false;
                 prev = curr;
@@ -293,13 +326,13 @@ internal sealed class AzimuthalMapControl : Control
             }
 
             var segDist = HaversineKm(prev, curr);
-            var steps = segDist > SubdivideThresholdKm
-                ? Math.Min(MaxSubdivisionSteps, (int)Math.Ceiling(segDist / SubdivideThresholdKm))
+            var steps = segDist > subdivideThreshold
+                ? Math.Min(MaxSubdivisionSteps, (int)Math.Ceiling(segDist / subdivideThreshold))
                 : 1;
 
             if (!penDown)
             {
-                ctx.BeginFigure(ProjectPoint(origin, prev, center, radius), false);
+                ctx.BeginFigure(ProjectPoint(origin, prev, center, radius, scaleKm), false);
                 penDown = true;
             }
 
@@ -307,7 +340,7 @@ internal sealed class AzimuthalMapControl : Control
             {
                 var t = (double)s / steps;
                 var sub = steps == 1 ? curr : Slerp(prev, curr, t);
-                ctx.LineTo(ProjectPoint(origin, sub, center, radius));
+                ctx.LineTo(ProjectPoint(origin, sub, center, radius, scaleKm));
             }
 
             prev = curr;

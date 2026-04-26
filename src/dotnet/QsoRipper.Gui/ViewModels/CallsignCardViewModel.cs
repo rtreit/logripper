@@ -139,6 +139,12 @@ internal sealed partial class CallsignCardViewModel : ObservableObject
     [ObservableProperty]
     private string _mapCountryLabel = string.Empty;
 
+    [ObservableProperty]
+    private double _mapScaleKm = 20015.0;
+
+    [ObservableProperty]
+    private string _mapScaleText = string.Empty;
+
     public CallsignCardViewModel(IEngineClient engine)
     {
         _engine = engine;
@@ -323,6 +329,9 @@ internal sealed partial class CallsignCardViewModel : ObservableObject
             MapBearingText = path.HasInitialBearingDeg
                 ? $"{path.InitialBearingDeg:F0}° from station"
                 : string.Empty;
+            var scaleKm = ChooseMapScaleKm(path.DistanceKm);
+            MapScaleKm = scaleKm;
+            MapScaleText = $"scale ~{FormatScaleKm(scaleKm)}";
             IsMapAvailable = true;
         }
         catch (Grpc.Core.RpcException)
@@ -342,6 +351,28 @@ internal sealed partial class CallsignCardViewModel : ObservableObject
             IsMapLoading = false;
         }
     }
+
+    private static double ChooseMapScaleKm(double distanceKm)
+    {
+        const double maxScale = 20015.0;
+        if (distanceKm <= 0 || double.IsNaN(distanceKm))
+        {
+            return maxScale;
+        }
+        var target = Math.Max(200.0, distanceKm * 1.35);
+        double[] steps = { 250, 500, 750, 1_000, 1_500, 2_000, 3_000, 5_000, 7_500, 10_000, 15_000, maxScale };
+        foreach (var s in steps)
+        {
+            if (target <= s)
+            {
+                return s;
+            }
+        }
+        return maxScale;
+    }
+
+    private static string FormatScaleKm(double km) =>
+        km >= 1000 ? $"{km / 1000:0.#}k km" : $"{km:F0} km";
 
     private static GeoReference? BuildTargetReference(CallsignRecord record)
     {
