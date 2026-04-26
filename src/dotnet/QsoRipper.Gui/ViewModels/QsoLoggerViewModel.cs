@@ -23,6 +23,7 @@ internal sealed partial class QsoLoggerViewModel : ObservableObject
     private readonly DispatcherTimer _elapsedTimer;
     private CwQsoWpmAggregator? _cwWpmAggregator;
     private CwQsoTranscriptAggregator? _cwTranscriptAggregator;
+    private Action? _cwResetLockHandler;
     private DateTimeOffset _qsoStartTime;
     private bool _timerRunning;
     private CancellationTokenSource? _lookupCts;
@@ -414,6 +415,15 @@ internal sealed partial class QsoLoggerViewModel : ObservableObject
         => _cwTranscriptAggregator = aggregator;
 
     /// <summary>
+    /// Attach (or replace) the handler invoked from <see cref="ResetTimer"/>
+    /// (F7) to release the CW decoder's current pitch lock so the next QSO
+    /// starts hunting fresh. The handler is owned by the host (typically
+    /// MainWindowViewModel) and may be null when the decoder is disabled.
+    /// </summary>
+    internal void AttachCwResetLockHandler(Action? handler)
+        => _cwResetLockHandler = handler;
+
+    /// <summary>
     /// Auto-fills <see cref="QsoRecord.CwDecodeRxWpm"/> and
     /// <see cref="QsoRecord.CwDecodeTranscript"/> from the live CW
     /// decoder when the QSO is on CW mode and the aggregator(s) have
@@ -570,6 +580,20 @@ internal sealed partial class QsoLoggerViewModel : ObservableObject
     {
         _qsoStartTime = DateTimeOffset.UtcNow;
         ElapsedTimeText = "00:00";
+        // F7 is the operator's "starting a new QSO" signal — also drop
+        // any stale CW pitch lock from the previous contact so the
+        // decoder re-acquires for the new station instead of bleeding
+        // partial morse / WPM into the next QSO. Handler may be null
+        // when the CW decoder is disabled or unavailable.
+        try
+        {
+            _cwResetLockHandler?.Invoke();
+        }
+#pragma warning disable CA1031 // best-effort: never let a stuck child process block F7
+        catch
+        {
+        }
+#pragma warning restore CA1031
     }
 
     // ── Manual-override notifications ────────────────────────────────────
