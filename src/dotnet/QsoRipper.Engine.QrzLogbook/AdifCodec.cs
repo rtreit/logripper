@@ -91,6 +91,73 @@ internal static class AdifCodec
     }
 
     /// <summary>
+    /// QRZ Logbook rejects uploads whose <c>STATION_CALLSIGN</c> does not match
+    /// the callsign the logbook is registered to. Operators who have changed
+    /// callsigns (e.g. KB7QOP → AE7XI) keep historical QSOs locally with the
+    /// old call. Without rewriting, every such QSO fails with "wrong
+    /// station_callsign for this logbook".
+    /// <para>
+    /// Mirrors the Rust helper
+    /// <c>qsoripper-core::qrz_logbook::rewrite_station_callsign_for_book</c>.
+    /// When the book owner is known and differs (case-insensitive, trimmed)
+    /// from the QSO's <see cref="QsoRecord.StationCallsign"/>:
+    /// </para>
+    /// <list type="bullet">
+    ///   <item><description><c>StationCallsign</c> is set to the book owner.</description></item>
+    ///   <item><description>The station snapshot's <c>StationCallsign</c> is updated too
+    ///     (the snapshot is what <see cref="WriteAdifFields"/> emits).</description></item>
+    ///   <item><description>The original station callsign is preserved as <c>OPERATOR</c>
+    ///     (via <c>StationSnapshot.OperatorCallsign</c>) when no operator was recorded.</description></item>
+    /// </list>
+    /// <para>Skipped (payload left untouched) when:</para>
+    /// <list type="bullet">
+    ///   <item><description>book owner is empty/missing</description></item>
+    ///   <item><description><c>StationCallsign</c> is empty/missing</description></item>
+    ///   <item><description><c>StationCallsign</c> contains a <c>/</c> (portable / mobile /
+    ///     secondary suffix) — these typically belong to a different QRZ logbook.</description></item>
+    /// </list>
+    /// <para>
+    /// This mutates <paramref name="prepared"/> in place; callers must clone the
+    /// QSO first if local storage must remain untouched.
+    /// </para>
+    /// </summary>
+    internal static void RewriteStationCallsignForBook(QsoRecord prepared, string? bookOwner)
+    {
+        ArgumentNullException.ThrowIfNull(prepared);
+
+        if (string.IsNullOrWhiteSpace(bookOwner))
+        {
+            return;
+        }
+
+        var owner = bookOwner.Trim();
+        var original = prepared.StationCallsign?.Trim() ?? string.Empty;
+        if (string.IsNullOrEmpty(original))
+        {
+            return;
+        }
+
+        if (original.Contains('/', StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        if (string.Equals(original, owner, StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        prepared.StationCallsign = owner;
+        prepared.StationSnapshot ??= new StationSnapshot();
+        prepared.StationSnapshot.StationCallsign = owner;
+
+        if (string.IsNullOrWhiteSpace(prepared.StationSnapshot.OperatorCallsign))
+        {
+            prepared.StationSnapshot.OperatorCallsign = original;
+        }
+    }
+
+    /// <summary>
     /// Serialize multiple QSOs with an optional ADIF header.
     /// </summary>
     internal static byte[] SerializeAdif(IEnumerable<QsoRecord> qsos, bool includeHeader)

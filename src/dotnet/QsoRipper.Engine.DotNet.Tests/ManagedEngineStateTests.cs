@@ -138,7 +138,10 @@ public sealed class ManagedEngineStateTests : IDisposable
         Assert.Equal(1u, syncResult.UploadedRecords);
         Assert.True(syncResult.Complete);
         Assert.Equal(0u, afterSync.PendingUpload);
-        Assert.Equal(1u, afterSync.QrzQsoCount);
+        // STATUS is fetched once before upload (issue #337 fix), so the count
+        // it reports is the pre-upload count (0). The next sync cycle will
+        // see the post-upload count.
+        Assert.Equal(0u, afterSync.QrzQsoCount);
         Assert.Equal("K7RND", afterSync.QrzLogbookOwner);
     }
 
@@ -1201,13 +1204,13 @@ public sealed class ManagedEngineStateTests : IDisposable
         public Task<List<QsoRecord>> FetchQsosAsync(string? sinceDateYmd) =>
             Task.FromResult(new List<QsoRecord>());
 
-        public Task<string> UploadQsoAsync(QsoRecord qso)
+        public Task<string> UploadQsoAsync(QsoRecord qso, string? bookOwner = null)
         {
             var logId = $"FAKE-{Interlocked.Increment(ref _logIdCounter)}";
             return Task.FromResult(logId);
         }
 
-        public Task<string> UpdateQsoAsync(QsoRecord qso)
+        public Task<string> UpdateQsoAsync(QsoRecord qso, string? bookOwner = null)
         {
             var logId = $"FAKE-{Interlocked.Increment(ref _logIdCounter)}";
             return Task.FromResult(logId);
@@ -1224,9 +1227,9 @@ public sealed class ManagedEngineStateTests : IDisposable
         public Task<List<QsoRecord>> FetchQsosAsync(string? sinceDateYmd)
             => Task.FromResult(new List<QsoRecord> { null! });
 
-        public Task<string> UploadQsoAsync(QsoRecord qso) => Task.FromResult("FAKE-1");
+        public Task<string> UploadQsoAsync(QsoRecord qso, string? bookOwner = null) => Task.FromResult("FAKE-1");
 
-        public Task<string> UpdateQsoAsync(QsoRecord qso) => Task.FromResult("FAKE-1");
+        public Task<string> UpdateQsoAsync(QsoRecord qso, string? bookOwner = null) => Task.FromResult("FAKE-1");
 
         public Task<QrzLogbookStatus> GetStatusAsync() =>
             Task.FromResult(new QrzLogbookStatus("K7RND", 0));

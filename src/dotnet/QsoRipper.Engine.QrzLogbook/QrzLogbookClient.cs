@@ -97,11 +97,13 @@ public sealed class QrzLogbookClient : IQrzLogbookApi, IDisposable
     }
 
     /// <inheritdoc />
-    public async Task<string> UploadQsoAsync(QsoRecord qso)
+    public async Task<string> UploadQsoAsync(QsoRecord qso, string? bookOwner = null)
     {
         ArgumentNullException.ThrowIfNull(qso);
 
-        var adifRecord = AdifCodec.SerializeSingleQso(qso);
+        var prepared = qso.Clone();
+        AdifCodec.RewriteStationCallsignForBook(prepared, bookOwner);
+        var adifRecord = AdifCodec.SerializeSingleQso(prepared);
 
         var formFields = new List<KeyValuePair<string, string>>(3)
         {
@@ -123,7 +125,7 @@ public sealed class QrzLogbookClient : IQrzLogbookApi, IDisposable
     }
 
     /// <inheritdoc />
-    public async Task<string> UpdateQsoAsync(QsoRecord qso)
+    public async Task<string> UpdateQsoAsync(QsoRecord qso, string? bookOwner = null)
     {
         ArgumentNullException.ThrowIfNull(qso);
 
@@ -132,7 +134,9 @@ public sealed class QrzLogbookClient : IQrzLogbookApi, IDisposable
             throw new QrzLogbookException("REPLACE requires a QRZ LOGID but the QSO has none.");
         }
 
-        var adifRecord = AdifCodec.SerializeSingleQso(qso);
+        var prepared = qso.Clone();
+        AdifCodec.RewriteStationCallsignForBook(prepared, bookOwner);
+        var adifRecord = AdifCodec.SerializeSingleQso(prepared);
 
         // Per docs/integrations/qrz-logbook-api.md the documented way to
         // update an existing QSO is ACTION=INSERT with

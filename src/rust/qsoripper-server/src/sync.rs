@@ -57,13 +57,27 @@ pub(crate) trait QrzLogbookApi: Send + Sync {
     async fn fetch_qsos(&self, since: Option<&str>) -> Result<Vec<QsoRecord>, QrzLogbookError>;
 
     /// Upload a single QSO and return its QRZ-assigned log ID.
-    async fn upload_qso(&self, qso: &QsoRecord) -> Result<QrzUploadResult, QrzLogbookError>;
+    ///
+    /// `book_owner` is the callsign the QRZ logbook is registered to (from a
+    /// fresh `STATUS` call, falling back to cached `SyncMetadata`). When
+    /// supplied, the upload payload's `STATION_CALLSIGN` is rewritten to the
+    /// book owner if it differs (for operators with previous callsigns), so
+    /// QRZ accepts the record. See
+    /// [`crate::qrz_logbook::rewrite_station_callsign_for_book`].
+    async fn upload_qso(
+        &self,
+        qso: &QsoRecord,
+        book_owner: Option<&str>,
+    ) -> Result<QrzUploadResult, QrzLogbookError>;
 
     /// Replace an existing QSO on the remote logbook (preserves logid).
+    ///
+    /// `book_owner` has the same semantics as in [`Self::upload_qso`].
     async fn replace_qso(
         &self,
         logid: &str,
         qso: &QsoRecord,
+        book_owner: Option<&str>,
     ) -> Result<QrzUploadResult, QrzLogbookError>;
 
     /// Query the remote logbook for the current owner callsign and QSO count.
@@ -80,16 +94,21 @@ impl QrzLogbookApi for QrzLogbookClient {
         QrzLogbookClient::fetch_qsos(self, since).await
     }
 
-    async fn upload_qso(&self, qso: &QsoRecord) -> Result<QrzUploadResult, QrzLogbookError> {
-        QrzLogbookClient::upload_qso(self, qso).await
+    async fn upload_qso(
+        &self,
+        qso: &QsoRecord,
+        book_owner: Option<&str>,
+    ) -> Result<QrzUploadResult, QrzLogbookError> {
+        QrzLogbookClient::upload_qso(self, qso, book_owner).await
     }
 
     async fn replace_qso(
         &self,
         logid: &str,
         qso: &QsoRecord,
+        book_owner: Option<&str>,
     ) -> Result<QrzUploadResult, QrzLogbookError> {
-        QrzLogbookClient::replace_qso(self, logid, qso).await
+        QrzLogbookClient::replace_qso(self, logid, qso, book_owner).await
     }
 
     async fn fetch_status(&self) -> Result<QrzLogbookStatus, QrzLogbookError> {
@@ -159,11 +178,32 @@ pub(crate) async fn execute_sync(
         return;
     };
 
-    upload_phase(client, store, progress_tx, &mut counters).await;
+    let status_result = client.fetch_status().await;
+    let book_owner = match &status_result {
+        Ok(status) if !status.owner.trim().is_empty() => Some(status.owner.clone()),
+        Ok(_) => metadata.qrz_logbook_owner.clone(),
+        Err(err) => {
+            eprintln!(
+                "[sync] STATUS call failed before upload; falling back to cached owner: {err}"
+            );
+            metadata.qrz_logbook_owner.clone()
+        }
+    }
+    .map(|s| s.trim().to_owned())
+    .filter(|s| !s.is_empty());
+
+    upload_phase(
+        client,
+        store,
+        book_owner.as_deref(),
+        progress_tx,
+        &mut counters,
+    )
+    .await;
 
     push_pending_remote_deletes(client, store, progress_tx, &mut counters).await;
 
-    update_metadata(client, store, &metadata, &mut counters).await;
+    update_metadata(store, &metadata, status_result, &mut counters).await;
 
     let error_summary = if counters.errors.is_empty() {
         None
@@ -423,6 +463,7 @@ async fn insert_new_remote_qso(
 async fn upload_phase(
     client: &dyn QrzLogbookApi,
     store: &dyn LogbookStore,
+    book_owner: Option<&str>,
     progress_tx: &mpsc::Sender<Result<SyncWithQrzResponse, Status>>,
     counters: &mut SyncCounters,
 ) {
@@ -458,7 +499,7 @@ async fn upload_phase(
     );
 
     for qso in &pending_qsos {
-        match sync_single_qso(client, store, qso).await {
+        match sync_single_qso(client, store, qso, book_owner).await {
             Ok(_) => counters.uploaded += 1,
             Err(err) => {
                 eprintln!(
@@ -476,6 +517,36 @@ async fn upload_phase(
 // ---------------------------------------------------------------------------
 // Per-operation sync helper (used by Phase 2 and by per-RPC sync_to_qrz=true)
 // ---------------------------------------------------------------------------
+
+/// Resolve the QRZ logbook owner callsign to use when rewriting upload
+/// payloads.
+///
+/// QRZ Logbook rejects `STATION_CALLSIGN` mismatches against the book owner.
+/// To avoid wrongly rewriting against a stale cached owner (e.g. after the
+/// operator switched to a different logbook API key), prefer a fresh `STATUS`
+/// call. Fall back to the cached value from `SyncMetadata` only if STATUS
+/// fails (rate limit, transient network blip).
+///
+/// Returns `None` when neither source yields a non-empty owner; callers
+/// should then upload without rewriting (and let QRZ surface the error so the
+/// user gets a clear signal that their book owner is unknown).
+pub(crate) async fn resolve_book_owner_for_upload(
+    client: &dyn QrzLogbookApi,
+    cached_metadata: &SyncMetadata,
+) -> Option<String> {
+    match client.fetch_status().await {
+        Ok(status) if !status.owner.trim().is_empty() => Some(status.owner),
+        Ok(_) => cached_metadata.qrz_logbook_owner.clone(),
+        Err(err) => {
+            eprintln!(
+                "[sync] STATUS call failed while resolving book owner; falling back to cached: {err}"
+            );
+            cached_metadata.qrz_logbook_owner.clone()
+        }
+    }
+    .map(|s| s.trim().to_owned())
+    .filter(|s| !s.is_empty())
+}
 
 /// Push a single QSO to QRZ, then mirror the QRZ-assigned logid + Synced
 /// state back into local storage. Used by both bulk sync Phase 2 and the
@@ -495,12 +566,13 @@ pub(crate) async fn sync_single_qso(
     client: &dyn QrzLogbookApi,
     store: &dyn LogbookStore,
     qso: &QsoRecord,
+    book_owner: Option<&str>,
 ) -> Result<QsoRecord, String> {
     let existing_logid = qso.qrz_logid.clone().filter(|s| !s.is_empty());
 
     let result = match existing_logid.as_deref() {
-        Some(logid) => client.replace_qso(logid, qso).await,
-        None => client.upload_qso(qso).await,
+        Some(logid) => client.replace_qso(logid, qso, book_owner).await,
+        None => client.upload_qso(qso, book_owner).await,
     };
 
     let upload = result.map_err(|err| format!("QRZ upload failed: {err}"))?;
@@ -606,17 +678,19 @@ async fn push_pending_remote_deletes(
 // ---------------------------------------------------------------------------
 
 async fn update_metadata(
-    client: &dyn QrzLogbookApi,
     store: &dyn LogbookStore,
     prev_metadata: &SyncMetadata,
+    status_result: Result<QrzLogbookStatus, QrzLogbookError>,
     counters: &mut SyncCounters,
 ) {
     let now = chrono::Utc::now();
 
-    // Prefer the authoritative remote STATUS result. If QRZ's STATUS call
-    // fails (auth blip, transient network error) we fall back to estimating
-    // from local counts so metadata at least stays approximately correct.
-    let (qrz_qso_count, qrz_logbook_owner) = match client.fetch_status().await {
+    // Prefer the authoritative remote STATUS result (already fetched once
+    // before the upload phase to avoid double-billing the QRZ API). If that
+    // STATUS call failed (auth blip, transient network error) we fall back
+    // to estimating from local counts so metadata at least stays
+    // approximately correct.
+    let (qrz_qso_count, qrz_logbook_owner) = match status_result {
         Ok(status) => {
             let owner = if status.owner.is_empty() {
                 prev_metadata.qrz_logbook_owner.clone()
@@ -962,6 +1036,7 @@ mod tests {
     struct MockQrzApi {
         fetch_result: Mutex<Option<Result<Vec<QsoRecord>, QrzLogbookError>>>,
         upload_results: Mutex<Vec<Result<QrzUploadResult, QrzLogbookError>>>,
+        upload_calls: Mutex<Vec<(QsoRecord, Option<String>)>>,
         replace_calls: Mutex<Vec<(String, String)>>, // (logid, local_id)
         replace_results: Mutex<Vec<Result<QrzUploadResult, QrzLogbookError>>>,
         status_result: Mutex<Option<Result<QrzLogbookStatus, QrzLogbookError>>>,
@@ -977,6 +1052,7 @@ mod tests {
             Self {
                 fetch_result: Mutex::new(Some(fetch)),
                 upload_results: Mutex::new(uploads),
+                upload_calls: Mutex::new(Vec::new()),
                 replace_calls: Mutex::new(Vec::new()),
                 replace_results: Mutex::new(Vec::new()),
                 status_result: Mutex::new(Some(Ok(QrzLogbookStatus {
@@ -1007,7 +1083,15 @@ mod tests {
                 .unwrap_or_else(|| Ok(Vec::new()))
         }
 
-        async fn upload_qso(&self, _qso: &QsoRecord) -> Result<QrzUploadResult, QrzLogbookError> {
+        async fn upload_qso(
+            &self,
+            qso: &QsoRecord,
+            book_owner: Option<&str>,
+        ) -> Result<QrzUploadResult, QrzLogbookError> {
+            self.upload_calls
+                .lock()
+                .unwrap()
+                .push((qso.clone(), book_owner.map(str::to_owned)));
             let mut results = self.upload_results.lock().unwrap();
             if results.is_empty() {
                 Err(QrzLogbookError::ApiError(
@@ -1022,6 +1106,7 @@ mod tests {
             &self,
             logid: &str,
             qso: &QsoRecord,
+            _book_owner: Option<&str>,
         ) -> Result<QrzUploadResult, QrzLogbookError> {
             self.replace_calls
                 .lock()
@@ -1074,7 +1159,11 @@ mod tests {
             Ok(vec![])
         }
 
-        async fn upload_qso(&self, _qso: &QsoRecord) -> Result<QrzUploadResult, QrzLogbookError> {
+        async fn upload_qso(
+            &self,
+            _qso: &QsoRecord,
+            _book_owner: Option<&str>,
+        ) -> Result<QrzUploadResult, QrzLogbookError> {
             Ok(QrzUploadResult {
                 logid: "ignored".into(),
             })
@@ -1084,6 +1173,7 @@ mod tests {
             &self,
             logid: &str,
             _qso: &QsoRecord,
+            _book_owner: Option<&str>,
         ) -> Result<QrzUploadResult, QrzLogbookError> {
             Ok(QrzUploadResult {
                 logid: logid.to_string(),
@@ -1266,7 +1356,7 @@ mod tests {
             })],
         );
 
-        let synced = sync_single_qso(&api, &store, &q).await.expect("ok");
+        let synced = sync_single_qso(&api, &store, &q, None).await.expect("ok");
         assert_eq!(synced.qrz_logid.as_deref(), Some("QRZ-NEW"));
         assert_eq!(synced.sync_status, SyncStatus::Synced as i32);
 
@@ -1290,7 +1380,7 @@ mod tests {
         // defaults to echoing the logid back.
         let api = MockQrzApi::new(Ok(vec![]), vec![]);
 
-        let synced = sync_single_qso(&api, &store, &q).await.expect("ok");
+        let synced = sync_single_qso(&api, &store, &q, None).await.expect("ok");
         assert_eq!(synced.qrz_logid.as_deref(), Some("QRZ-EXISTING"));
         assert_eq!(synced.sync_status, SyncStatus::Synced as i32);
 
@@ -1316,7 +1406,7 @@ mod tests {
             vec![Err(QrzLogbookError::ApiError("boom".into()))],
         );
 
-        let err = sync_single_qso(&api, &store, &q)
+        let err = sync_single_qso(&api, &store, &q, None)
             .await
             .expect_err("should return error");
         assert!(err.contains("QRZ upload failed"), "actual error: {err}");
@@ -1326,6 +1416,90 @@ mod tests {
         let saved = store.get_qso(&q.local_id).await.unwrap().unwrap();
         assert_eq!(saved.sync_status, SyncStatus::LocalOnly as i32);
         assert!(saved.qrz_logid.is_none());
+    }
+
+    #[tokio::test]
+    async fn execute_sync_passes_book_owner_from_status_to_upload_payload() {
+        // Regression for issue #337: QSOs whose station_callsign is the
+        // operator's previous call (e.g. KB7QOP) must be uploaded with the
+        // current logbook owner callsign so QRZ accepts them.
+        let store = MemoryStorage::new();
+        let mut q = make_qso("KB7QOP", "K7ABC", Band::Band20m, Mode::Cw, 1_700_000_000);
+        q.qrz_logid = None;
+        q.sync_status = SyncStatus::LocalOnly as i32;
+        store.insert_qso(&q).await.unwrap();
+
+        let api = MockQrzApi::new(
+            Ok(vec![]),
+            vec![Ok(QrzUploadResult {
+                logid: "QRZ-NEW".into(),
+            })],
+        )
+        .with_status(Ok(QrzLogbookStatus {
+            owner: "AE7XI".into(),
+            qso_count: 0,
+        }));
+
+        let (tx, rx) = mpsc::channel(16);
+        execute_sync(&api, &store, true, ConflictPolicy::LastWriteWins, &tx).await;
+        drop(tx);
+
+        let final_msg = collect_final(rx).await;
+        assert!(final_msg.complete);
+        assert_eq!(final_msg.uploaded_records, 1, "upload must succeed");
+        assert!(final_msg.error.is_none(), "error: {:?}", final_msg.error);
+
+        let upload_calls = api.upload_calls.lock().unwrap().clone();
+        assert_eq!(upload_calls.len(), 1, "exactly one INSERT expected");
+        assert_eq!(
+            upload_calls[0].1.as_deref(),
+            Some("AE7XI"),
+            "fresh STATUS owner must reach upload_qso as book_owner"
+        );
+        // Local storage retains the historical station_callsign — only the
+        // upload payload is rewritten.
+        let saved = store.get_qso(&q.local_id).await.unwrap().unwrap();
+        assert_eq!(saved.station_callsign, "KB7QOP");
+        assert_eq!(saved.sync_status, SyncStatus::Synced as i32);
+    }
+
+    #[tokio::test]
+    async fn execute_sync_falls_back_to_cached_owner_when_status_fails() {
+        let store = MemoryStorage::new();
+        store
+            .upsert_sync_metadata(&SyncMetadata {
+                qrz_qso_count: 0,
+                last_sync: None,
+                qrz_logbook_owner: Some("AE7XI".into()),
+            })
+            .await
+            .unwrap();
+        let mut q = make_qso("KB7QOP", "K7ABC", Band::Band20m, Mode::Cw, 1_700_000_000);
+        q.qrz_logid = None;
+        q.sync_status = SyncStatus::LocalOnly as i32;
+        store.insert_qso(&q).await.unwrap();
+
+        let api = MockQrzApi::new(
+            Ok(vec![]),
+            vec![Ok(QrzUploadResult {
+                logid: "QRZ-NEW".into(),
+            })],
+        )
+        .with_status(Err(QrzLogbookError::ApiError("transient".into())));
+
+        let (tx, rx) = mpsc::channel(16);
+        execute_sync(&api, &store, true, ConflictPolicy::LastWriteWins, &tx).await;
+        drop(tx);
+
+        let _final_msg = collect_final(rx).await;
+
+        let upload_calls = api.upload_calls.lock().unwrap().clone();
+        assert_eq!(upload_calls.len(), 1);
+        assert_eq!(
+            upload_calls[0].1.as_deref(),
+            Some("AE7XI"),
+            "cached owner must be used when STATUS fails"
+        );
     }
 
     #[tokio::test]
