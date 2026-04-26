@@ -228,7 +228,18 @@ The sync follows a three-phase lifecycle:
 
 2. **Upload phase** — Find all local QSOs with `sync_status` of `SYNC_STATUS_NOT_SYNCED` or `SYNC_STATUS_MODIFIED`. For each, serialize to ADIF and upload via the QRZ logbook API. On success, update `sync_status` to `SYNC_STATUS_SYNCED` and record the `qrz_logid` returned by QRZ.
 
-3. **Metadata phase** — Update the `sync_metadata` record with the current QRZ QSO count, last sync timestamp, and logbook owner callsign.
+   **Previous-callsign rewrite (issue #337).** QRZ logbooks are bound to a single callsign and reject ADIF whose `STATION_CALLSIGN` does not match the logbook owner. Operators who have changed callsigns (e.g. KB7QOP → AE7XI) keep historical QSOs locally with the old call. To avoid those rejections, engines MUST:
+
+   - Fetch the QRZ logbook owner callsign once per sync via QRZ `STATUS` immediately after the download phase. Reuse the same result for the metadata phase below — do not call `STATUS` twice.
+   - If `STATUS` fails or returns an empty owner, fall back to the cached `sync_metadata.qrz_logbook_owner`.
+   - Per upload, when the resolved owner is non-empty and differs (case-insensitive, trimmed) from the QSO's `station_callsign`, rewrite the upload payload only:
+     - Set the payload's `station_callsign` (and `station_snapshot.station_callsign`) to the owner.
+     - If `station_snapshot.operator_callsign` is empty, set it to the original `station_callsign` so the historical operator-of-record is preserved as ADIF `OPERATOR`.
+   - The local stored row MUST NOT be modified by the rewrite. Skip the rewrite entirely when `station_callsign` contains a `/` (portable / mobile / secondary suffix); those callsigns generally belong to a different QRZ logbook.
+
+   *Known caveat:* on the next download, the merge logic for `SYNC_STATUS_SYNCED` rows is remote-wins, so the local `station_callsign` may drift to the book owner. The historical operator survives in `station_snapshot.operator_callsign`. Round-tripping the original via an `APP_QSORIPPER_ORIG_STATION_CALLSIGN` ADIF field on download is planned future work.
+
+3. **Metadata phase** — Update the `sync_metadata` record with the QRZ QSO count, last sync timestamp, and logbook owner callsign reported by the `STATUS` call already fetched in step 2. Because that `STATUS` is taken before the upload phase, the persisted `qrz_qso_count` reflects the pre-upload count; the next `SyncWithQrz` cycle naturally observes the post-upload count.
 
 Stream progress messages throughout all phases so clients can display real-time sync state.
 

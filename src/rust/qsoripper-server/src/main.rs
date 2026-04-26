@@ -359,7 +359,21 @@ impl DeveloperLogbookService {
             Err(err) => return (false, Some(err)),
         };
 
-        match sync::sync_single_qso(&client, engine.logbook_store(), stored).await {
+        let cached_metadata = engine
+            .logbook_store()
+            .get_sync_metadata()
+            .await
+            .unwrap_or_default();
+        let book_owner = sync::resolve_book_owner_for_upload(&client, &cached_metadata).await;
+
+        match sync::sync_single_qso(
+            &client,
+            engine.logbook_store(),
+            stored,
+            book_owner.as_deref(),
+        )
+        .await
+        {
             Ok(synced) => {
                 *stored = synced;
                 (true, None)
