@@ -81,6 +81,12 @@ public partial class MainWindow : Window
         await Vm.HarvestCandidatesAsync();
     }
 
+    private async void OnToggleLabelingRecordClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (Vm is null) return;
+        await Vm.ToggleLabelingRecordAsync();
+    }
+
     private async void OnPlayPreviewClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
         if (Vm is null) return;

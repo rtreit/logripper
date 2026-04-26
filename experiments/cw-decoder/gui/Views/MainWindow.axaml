@@ -519,8 +519,28 @@
       </TabItem>
       <TabItem Header="LABELING">
         <Border Classes="panel">
-          <Grid RowDefinitions="Auto,Auto,Auto,*,Auto" RowSpacing="10">
+          <Grid RowDefinitions="Auto,Auto,Auto,Auto,*,Auto" RowSpacing="10">
             <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="10">
+              <StackPanel Spacing="2">
+                <TextBlock Text="TRAINING SET (under data/cw-samples/…)" Classes="label" />
+                <TextBox Text="{Binding TrainingSetSubset, Mode=TwoWay}"
+                          Background="#0C1A28" Foreground="{StaticResource TextHi}"
+                          IsEnabled="{Binding !IsLabelingRecording}"
+                          ToolTip.Tip="Subdirectory under data/cw-samples where new clips are saved." />
+              </StackPanel>
+              <Button Grid.Column="1" Classes="primary"
+                      Content="{Binding LabelingRecordButtonLabel}"
+                      Click="OnToggleLabelingRecordClick"
+                      Margin="0,16,0,0"
+                      IsEnabled="{Binding CanToggleLabelingRecord}"
+                      ToolTip.Tip="Capture from the live audio device into a fresh WAV under the chosen training set, then auto-harvest it for labeling." />
+              <TextBlock Grid.Column="2" Text="{Binding LabelingRecordStatus}"
+                         VerticalAlignment="Center" Margin="0,16,0,0"
+                         Classes="label" Foreground="{StaticResource TextDim}"
+                         MaxWidth="280" TextWrapping="Wrap" />
+            </Grid>
+
+            <Grid Grid.Row="1" ColumnDefinitions="*,Auto,Auto" ColumnSpacing="10">
               <StackPanel Spacing="2">
                 <TextBlock Text="AUDIO FILE" Classes="label" />
                 <TextBox Text="{Binding HarvestFilePath}" IsReadOnly="True"
@@ -531,7 +551,7 @@
                       IsEnabled="{Binding CanHarvestCandidates}" />
             </Grid>
 
-            <Grid Grid.Row="1" ColumnDefinitions="2*,Auto,Auto,Auto,Auto" ColumnSpacing="10">
+            <Grid Grid.Row="2" ColumnDefinitions="2*,Auto,Auto,Auto,Auto" ColumnSpacing="10">
               <StackPanel Spacing="2">
                 <TextBlock Text="ANCHOR NEEDLES" Classes="label" />
                 <TextBox Text="{Binding HarvestNeedlesText}" Watermark="Optional filters, e.g. 5NN TU W1AW"
@@ -555,7 +575,7 @@
                       IsEnabled="{Binding CanPreviewCandidate}" />
             </Grid>
 
-            <Border Grid.Row="2" BorderBrush="{StaticResource GridLine}" BorderThickness="1" CornerRadius="2" Padding="8"
+            <Border Grid.Row="3" BorderBrush="{StaticResource GridLine}" BorderThickness="1" CornerRadius="2" Padding="8"
                     IsVisible="{Binding IsHarvestBusy}">
               <Grid ColumnDefinitions="Auto,*" ColumnSpacing="10">
                 <TextBlock Text="{Binding HarvestProgressLabel}" Classes="label" VerticalAlignment="Center" />
@@ -564,7 +584,7 @@
               </Grid>
             </Border>
 
-            <Grid Grid.Row="3" ColumnDefinitions="380,*" ColumnSpacing="12">
+            <Grid Grid.Row="4" ColumnDefinitions="380,*" ColumnSpacing="12">
               <Border BorderBrush="{StaticResource GridLine}" BorderThickness="1" CornerRadius="2" Padding="8">
                 <Grid RowDefinitions="Auto,*">
                   <Grid ColumnDefinitions="*,Auto">
@@ -678,7 +698,7 @@
               </ScrollViewer>
             </Grid>
 
-            <TextBlock Grid.Row="4" Text="{Binding AdvancedStatusText}" Classes="label" Foreground="{StaticResource TextDim}" />
+            <TextBlock Grid.Row="5" Text="{Binding AdvancedStatusText}" Classes="label" Foreground="{StaticResource TextDim}" />
           </Grid>
         </Border>
       </TabItem>
