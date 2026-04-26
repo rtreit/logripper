@@ -25,6 +25,7 @@ use qsoripper_core::proto::qsoripper::domain::{Band, ConflictPolicy, Mode};
 use qsoripper_core::proto::qsoripper::services::{
     developer_control_service_server::{DeveloperControlService, DeveloperControlServiceServer},
     engine_service_server::{EngineService, EngineServiceServer},
+    great_circle_service_server::{GreatCircleService, GreatCircleServiceServer},
     logbook_service_server::{LogbookService, LogbookServiceServer},
     lookup_service_server::{LookupService, LookupServiceServer},
     rig_control_service_server::{RigControlService, RigControlServiceServer},
@@ -32,9 +33,9 @@ use qsoripper_core::proto::qsoripper::services::{
     space_weather_service_server::{SpaceWeatherService, SpaceWeatherServiceServer},
     station_profile_service_server::StationProfileServiceServer,
     AdifChunk, ApplyRuntimeConfigRequest, ApplyRuntimeConfigResponse, BatchLookupRequest,
-    BatchLookupResponse, DeleteQsoRequest, DeleteQsoResponse,
-    DeletedRecordsFilter as ProtoDeletedRecordsFilter, EngineInfo, ExportAdifRequest,
-    ExportAdifResponse, GetCachedCallsignRequest, GetCachedCallsignResponse,
+    BatchLookupResponse, ComputeGreatCircleRequest, ComputeGreatCircleResponse, DeleteQsoRequest,
+    DeleteQsoResponse, DeletedRecordsFilter as ProtoDeletedRecordsFilter, EngineInfo,
+    ExportAdifRequest, ExportAdifResponse, GetCachedCallsignRequest, GetCachedCallsignResponse,
     GetCurrentSpaceWeatherRequest, GetCurrentSpaceWeatherResponse, GetDxccEntityRequest,
     GetDxccEntityResponse, GetEngineInfoRequest, GetEngineInfoResponse, GetQsoRequest,
     GetQsoResponse, GetRigSnapshotRequest, GetRigSnapshotResponse, GetRigStatusRequest,
@@ -113,6 +114,7 @@ where
         StationProfileControlSurface::new(setup_state.clone(), runtime_config.clone());
     let space_weather_service = SpaceWeatherControlSurface::new(runtime_config.clone());
     let rig_control_service = RigControlControlSurface::new(runtime_config.clone());
+    let great_circle_service = GreatCircleControlSurface::new();
     let active_storage_backend = runtime_config.active_storage_backend().await;
     let setup_status = setup_state.status().await;
     let setup_completion = setup_completion_label(setup_status.setup_complete);
@@ -150,6 +152,7 @@ where
         .add_service(StationProfileServiceServer::new(station_profile_service))
         .add_service(SpaceWeatherServiceServer::new(space_weather_service))
         .add_service(RigControlServiceServer::new(rig_control_service))
+        .add_service(GreatCircleServiceServer::new(great_circle_service))
         .add_service(DeveloperControlServiceServer::new(
             developer_control_service,
         ))
@@ -990,6 +993,70 @@ impl SpaceWeatherService for SpaceWeatherControlSurface {
     }
 }
 
+#[derive(Clone, Default)]
+struct GreatCircleControlSurface;
+
+impl GreatCircleControlSurface {
+    fn new() -> Self {
+        Self
+    }
+}
+
+#[tonic::async_trait]
+impl GreatCircleService for GreatCircleControlSurface {
+    async fn compute_great_circle(
+        &self,
+        request: Request<ComputeGreatCircleRequest>,
+    ) -> Result<Response<ComputeGreatCircleResponse>, Status> {
+        use qsoripper_core::geodesy::{
+            distance_km, final_bearing_deg, initial_bearing_deg, resolve_sample_count,
+            sample_great_circle, validate_point,
+        };
+        use qsoripper_core::proto::qsoripper::domain::GreatCirclePath;
+
+        let req = request.into_inner();
+        let origin = resolve_geo_reference(req.origin.as_ref(), "origin")?;
+        let target = resolve_geo_reference(req.target.as_ref(), "target")?;
+        validate_point(&origin)
+            .map_err(|err| Status::invalid_argument(format!("origin: {err}")))?;
+        validate_point(&target)
+            .map_err(|err| Status::invalid_argument(format!("target: {err}")))?;
+        let count = resolve_sample_count(req.sample_count)
+            .map_err(|err| Status::invalid_argument(err.to_string()))?;
+        let samples = sample_great_circle(&origin, &target, count);
+        let path = GreatCirclePath {
+            origin: Some(origin),
+            target: Some(target),
+            distance_km: distance_km(&origin, &target),
+            initial_bearing_deg: initial_bearing_deg(&origin, &target),
+            final_bearing_deg: final_bearing_deg(&origin, &target),
+            samples,
+        };
+        Ok(Response::new(ComputeGreatCircleResponse {
+            path: Some(path),
+        }))
+    }
+}
+
+#[allow(clippy::result_large_err)]
+fn resolve_geo_reference(
+    reference: Option<&qsoripper_core::proto::qsoripper::domain::GeoReference>,
+    label: &str,
+) -> Result<qsoripper_core::proto::qsoripper::domain::GeoPoint, Status> {
+    let reference = reference
+        .ok_or_else(|| Status::invalid_argument(format!("{label} reference is required")))?;
+    if let Some(coords) = reference.coordinates {
+        return Ok(coords);
+    }
+    if let Some(grid) = reference.maidenhead.as_deref() {
+        return qsoripper_core::geodesy::maidenhead_to_geopoint(grid)
+            .map_err(|err| Status::invalid_argument(format!("{label}: {err}")));
+    }
+    Err(Status::invalid_argument(format!(
+        "{label}: must supply coordinates or maidenhead"
+    )))
+}
+
 #[derive(Clone)]
 struct RigControlControlSurface {
     runtime_config: Arc<RuntimeConfigManager>,
@@ -1322,8 +1389,8 @@ mod tests {
         build_storage, legacy_qrz_user_agent_line_compatibility, load_dotenv_if_present,
         parse_storage_backend, run_server, sanitize_legacy_qrz_user_agent_contents,
         server_ready_message, server_starting_message, sync_scheduler, DeveloperLogbookService,
-        DeveloperLookupService, Server, ServerOptions, SpaceWeatherControlSurface,
-        StorageBackendKind, StorageOptions,
+        DeveloperLookupService, GreatCircleControlSurface, Server, ServerOptions,
+        SpaceWeatherControlSurface, StorageBackendKind, StorageOptions,
     };
     use crate::runtime_config::{
         RuntimeConfigManager, SQLITE_PATH_ENV_VAR, STATION_CALLSIGN_ENV_VAR, STATION_GRID_ENV_VAR,
@@ -1339,15 +1406,16 @@ mod tests {
     };
     use qsoripper_core::proto::qsoripper::services::{
         get_dxcc_entity_request,
+        great_circle_service_server::GreatCircleService,
         logbook_service_client::LogbookServiceClient,
         logbook_service_server::{LogbookService, LogbookServiceServer},
         lookup_service_server::LookupService,
         space_weather_service_server::SpaceWeatherService,
-        AdifChunk, BatchLookupRequest, DeleteQsoRequest, ExportAdifRequest,
-        GetCachedCallsignRequest, GetCurrentSpaceWeatherRequest, GetDxccEntityRequest,
-        GetQsoRequest, GetSyncStatusRequest, ImportAdifRequest, ImportAdifResponse,
-        ListQsosRequest, LogQsoRequest, LookupRequest, QsoSortOrder, RefreshSpaceWeatherRequest,
-        RestoreQsoRequest, StreamLookupRequest, UpdateQsoRequest,
+        AdifChunk, BatchLookupRequest, ComputeGreatCircleRequest, DeleteQsoRequest,
+        ExportAdifRequest, GetCachedCallsignRequest, GetCurrentSpaceWeatherRequest,
+        GetDxccEntityRequest, GetQsoRequest, GetSyncStatusRequest, ImportAdifRequest,
+        ImportAdifResponse, ListQsosRequest, LogQsoRequest, LookupRequest, QsoSortOrder,
+        RefreshSpaceWeatherRequest, RestoreQsoRequest, StreamLookupRequest, UpdateQsoRequest,
     };
     use tokio_stream::StreamExt;
     use tonic::transport::Channel;
@@ -2756,5 +2824,107 @@ mod tests {
 
         assert_eq!(Code::InvalidArgument, mode_error.code());
         assert_eq!("mode is required.", mode_error.message());
+    }
+
+    #[tokio::test]
+    async fn great_circle_resolves_coordinates_and_returns_path() {
+        use qsoripper_core::proto::qsoripper::domain::{GeoPoint, GeoReference};
+        let service = GreatCircleControlSurface::new();
+        let response = service
+            .compute_great_circle(Request::new(ComputeGreatCircleRequest {
+                origin: Some(GeoReference {
+                    coordinates: Some(GeoPoint {
+                        latitude: 47.45,
+                        longitude: -122.31,
+                    }),
+                    maidenhead: None,
+                }),
+                target: Some(GeoReference {
+                    coordinates: Some(GeoPoint {
+                        latitude: 51.47,
+                        longitude: -0.46,
+                    }),
+                    maidenhead: None,
+                }),
+                sample_count: 0,
+            }))
+            .await
+            .expect("compute great circle")
+            .into_inner();
+        let path = response.path.expect("path");
+        assert_eq!(64, path.samples.len());
+        assert!((path.distance_km - 7720.0).abs() < 30.0);
+        assert!(path.initial_bearing_deg.is_some());
+        assert!(path.final_bearing_deg.is_some());
+    }
+
+    #[tokio::test]
+    async fn great_circle_resolves_maidenhead_grid() {
+        use qsoripper_core::proto::qsoripper::domain::{GeoPoint, GeoReference};
+        let service = GreatCircleControlSurface::new();
+        let response = service
+            .compute_great_circle(Request::new(ComputeGreatCircleRequest {
+                origin: Some(GeoReference {
+                    coordinates: None,
+                    maidenhead: Some("CN87wn".to_string()),
+                }),
+                target: Some(GeoReference {
+                    coordinates: Some(GeoPoint {
+                        latitude: 0.0,
+                        longitude: 0.0,
+                    }),
+                    maidenhead: None,
+                }),
+                sample_count: 8,
+            }))
+            .await
+            .expect("compute great circle")
+            .into_inner();
+        let path = response.path.expect("path");
+        assert_eq!(8, path.samples.len());
+        // CN87wn is around the Seattle area; great-circle distance to (0,0)
+        // is a long way (>10000 km).
+        assert!(path.distance_km > 10000.0);
+    }
+
+    #[tokio::test]
+    async fn great_circle_rejects_missing_origin() {
+        let service = GreatCircleControlSurface::new();
+        let err = service
+            .compute_great_circle(Request::new(ComputeGreatCircleRequest {
+                origin: None,
+                target: None,
+                sample_count: 0,
+            }))
+            .await
+            .expect_err("must reject missing origin");
+        assert_eq!(Code::InvalidArgument, err.code());
+    }
+
+    #[tokio::test]
+    async fn great_circle_rejects_invalid_sample_count() {
+        use qsoripper_core::proto::qsoripper::domain::{GeoPoint, GeoReference};
+        let service = GreatCircleControlSurface::new();
+        let err = service
+            .compute_great_circle(Request::new(ComputeGreatCircleRequest {
+                origin: Some(GeoReference {
+                    coordinates: Some(GeoPoint {
+                        latitude: 0.0,
+                        longitude: 0.0,
+                    }),
+                    maidenhead: None,
+                }),
+                target: Some(GeoReference {
+                    coordinates: Some(GeoPoint {
+                        latitude: 1.0,
+                        longitude: 1.0,
+                    }),
+                    maidenhead: None,
+                }),
+                sample_count: 1024,
+            }))
+            .await
+            .expect_err("must reject high sample count");
+        assert_eq!(Code::InvalidArgument, err.code());
     }
 }

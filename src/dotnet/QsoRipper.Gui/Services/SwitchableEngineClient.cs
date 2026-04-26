@@ -226,6 +226,14 @@ internal sealed class SwitchableEngineClient : IEngineClient, IDisposable
     public Task<GetCurrentSpaceWeatherResponse> GetCurrentSpaceWeatherAsync(CancellationToken ct = default) =>
         SnapshotClient().GetCurrentSpaceWeatherAsync(ct);
 
+    public Task<ComputeGreatCircleResponse> ComputeGreatCircleAsync(
+        ComputeGreatCircleRequest request,
+        CancellationToken ct = default) =>
+        SnapshotClient().ComputeGreatCircleAsync(request, ct);
+
+    public Task<GetActiveStationContextResponse> GetActiveStationContextAsync(CancellationToken ct = default) =>
+        SnapshotClient().GetActiveStationContextAsync(ct);
+
     public void Dispose()
     {
         var disposables = new List<IDisposable>();

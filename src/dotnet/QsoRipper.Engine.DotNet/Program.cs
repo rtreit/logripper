@@ -45,6 +45,7 @@ app.MapGrpcService<ManagedLogbookGrpcService>();
 app.MapGrpcService<ManagedLookupGrpcService>();
 app.MapGrpcService<ManagedRigControlGrpcService>();
 app.MapGrpcService<ManagedSpaceWeatherGrpcService>();
+app.MapGrpcService<ManagedGreatCircleGrpcService>();
 app.MapGet("/", () => "QsoRipper .NET engine host. Use a gRPC client.");
 
 Console.WriteLine($"Starting QsoRipper .NET engine on {options.ListenAddress} using config {options.ConfigPath} (storage: {resolvedStorage.Storage.BackendName})");

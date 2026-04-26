@@ -4,12 +4,20 @@ on:
   workflow_dispatch:
   workflow_call:
   push:
+    branches:
+      - main
     paths:
       - ".github/workflows/dotnet-quality.yml"
       - "global.json"
       - "src/dotnet/**"
       - "proto/**"
   pull_request:
+
+# PR branches: only the pull_request trigger runs (no duplicate push run that
+# competes for the dotnet-quality status check). Push events still run on main.
+concurrency:
+  group: dotnet-quality-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
