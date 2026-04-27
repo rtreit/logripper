@@ -10,7 +10,7 @@ namespace QsoRipper.Gui.Services;
 
 /// <summary>
 /// Spawns the experimental <c>cw-decoder</c> Rust binary in
-/// <c>stream-live --json</c> mode and surfaces parsed <c>wpm</c>
+/// <c>stream-live-ditdah --json</c> mode and surfaces parsed <c>wpm</c>
 /// NDJSON events as <see cref="CwWpmSample"/>s.
 ///
 /// Round 1 deliberately reuses the experiment binary rather than the
@@ -114,8 +114,16 @@ internal sealed class CwDecoderProcessSampleSource : ICwWpmSampleSource
             CreateNoWindow = true,
             WorkingDirectory = Path.GetDirectoryName(exe)!,
         };
-        psi.ArgumentList.Add("stream-live");
+        psi.ArgumentList.Add("stream-live-ditdah");
         psi.ArgumentList.Add("--json");
+        psi.ArgumentList.Add("--window");
+        psi.ArgumentList.Add("6");
+        psi.ArgumentList.Add("--min-window");
+        psi.ArgumentList.Add("4");
+        psi.ArgumentList.Add("--decode-every-ms");
+        psi.ArgumentList.Add("1000");
+        psi.ArgumentList.Add("--confirmations");
+        psi.ArgumentList.Add("1");
         if (loopback)
         {
             // WASAPI loopback: capture from a system OUTPUT device so audio

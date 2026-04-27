@@ -236,6 +236,10 @@ enum Cmd {
         /// device's native sample rate). Useful for post-stop offline analysis.
         #[arg(long)]
         record: Option<PathBuf>,
+        /// Capture from a system output device using WASAPI loopback instead
+        /// of from an input device.
+        #[arg(long)]
+        loopback: bool,
         /// Emit newline-delimited JSON events for the GUI bridge.
         #[arg(long)]
         json: bool,
@@ -740,6 +744,7 @@ fn main() -> Result<()> {
             decode_every_ms,
             confirmations,
             record,
+            loopback,
             json,
         } => run_stream_live_ditdah(
             device.as_deref(),
@@ -750,6 +755,7 @@ fn main() -> Result<()> {
             decode_every_ms,
             confirmations,
             record.as_deref(),
+            loopback,
             json,
             &log_capture,
         ),
@@ -1860,7 +1866,9 @@ fn apply_input_gain(
         // 99th percentile via partial sort.
         let idx = ((abs.len() as f32) * 0.99) as usize;
         let idx = idx.min(abs.len() - 1);
-        abs.select_nth_unstable_by(idx, |a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        abs.select_nth_unstable_by(idx, |a, b| {
+            a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)
+        });
         let p99 = abs[idx].max(1e-6);
         // Allow target up to 4.0 so the tanh deliberately saturates.
         let target = auto_gain_target.max(0.05).min(4.0);
@@ -2311,6 +2319,7 @@ fn run_stream_live_ditdah(
     decode_every_ms: u32,
     required_confirmations: usize,
     record_path: Option<&std::path::Path>,
+    loopback: bool,
     json: bool,
     log_capture: &log_capture::DitdahLogCapture,
 ) -> Result<()> {
@@ -2318,7 +2327,11 @@ fn run_stream_live_ditdah(
     use std::sync::Arc;
     use std::time::{Duration, Instant};
 
-    let capture = audio::open_input_with_recording(device, 1.0, record_path)?;
+    let capture = if loopback {
+        audio::open_loopback_with_recording(device, 1.0, record_path)?
+    } else {
+        audio::open_input_with_recording(device, 1.0, record_path)?
+    };
     let baseline_cfg = ditdah_streaming::CausalBaselineConfig {
         window_seconds,
         min_window_seconds: min_window_seconds.clamp(0.1, window_seconds.max(0.5)),
@@ -2361,10 +2374,11 @@ fn run_stream_live_ditdah(
             stop.store(true, Ordering::Relaxed);
         });
     }
-    // Watch stdin for EOF or any byte — the GUI signals a graceful
-    // shutdown by writing "stop\n" and then closing our stdin. Either a
-    // successful read or EOF triggers the shutdown path so Drop runs on
-    // LiveCapture and the WAV writer flushes the data chunk + RIFF header.
+    // Watch stdin for EOF or a stop line. The GUI also sends control
+    // messages such as reset_lock; those must not terminate the rolling
+    // ditdah backend (it has no persistent pitch lock to reset anyway).
+    // EOF still triggers shutdown so Drop runs on LiveCapture and the WAV
+    // writer flushes the data chunk + RIFF header.
     // Without this, Kill leaves a header-only WAV that Replay can't read.
     //
     // NOTE: on Windows, std::io::stdin() with an anonymous pipe can fail
@@ -2373,10 +2387,15 @@ fn run_stream_live_ditdah(
     {
         let stop = Arc::clone(&stop);
         std::thread::spawn(move || {
-            use std::io::Read;
-            let mut buf = [0u8; 256];
-            let mut stdin = std::io::stdin();
-            let _ = stdin.read(&mut buf);
+            use std::io::BufRead;
+            let stdin = std::io::stdin();
+            for line in stdin.lock().lines() {
+                match line {
+                    Ok(line) if line.trim().eq_ignore_ascii_case("stop") => break,
+                    Ok(_) => continue,
+                    Err(_) => break,
+                }
+            }
             stop.store(true, Ordering::Relaxed);
         });
     }
@@ -3014,17 +3033,49 @@ fn spawn_stdin_config_channel(
 
 fn morse_for_char(c: char) -> Option<&'static str> {
     Some(match c.to_ascii_uppercase() {
-        'A' => ".-", 'B' => "-...", 'C' => "-.-.", 'D' => "-..", 'E' => ".",
-        'F' => "..-.", 'G' => "--.", 'H' => "....", 'I' => "..", 'J' => ".---",
-        'K' => "-.-", 'L' => ".-..", 'M' => "--", 'N' => "-.", 'O' => "---",
-        'P' => ".--.", 'Q' => "--.-", 'R' => ".-.", 'S' => "...", 'T' => "-",
-        'U' => "..-", 'V' => "...-", 'W' => ".--", 'X' => "-..-", 'Y' => "-.--",
+        'A' => ".-",
+        'B' => "-...",
+        'C' => "-.-.",
+        'D' => "-..",
+        'E' => ".",
+        'F' => "..-.",
+        'G' => "--.",
+        'H' => "....",
+        'I' => "..",
+        'J' => ".---",
+        'K' => "-.-",
+        'L' => ".-..",
+        'M' => "--",
+        'N' => "-.",
+        'O' => "---",
+        'P' => ".--.",
+        'Q' => "--.-",
+        'R' => ".-.",
+        'S' => "...",
+        'T' => "-",
+        'U' => "..-",
+        'V' => "...-",
+        'W' => ".--",
+        'X' => "-..-",
+        'Y' => "-.--",
         'Z' => "--..",
-        '0' => "-----", '1' => ".----", '2' => "..---", '3' => "...--",
-        '4' => "....-", '5' => ".....", '6' => "-....", '7' => "--...",
-        '8' => "---..", '9' => "----.",
-        '.' => ".-.-.-", ',' => "--..--", '?' => "..--..", '/' => "-..-.",
-        '=' => "-...-", '+' => ".-.-.", '-' => "-....-",
+        '0' => "-----",
+        '1' => ".----",
+        '2' => "..---",
+        '3' => "...--",
+        '4' => "....-",
+        '5' => ".....",
+        '6' => "-....",
+        '7' => "--...",
+        '8' => "---..",
+        '9' => "----.",
+        '.' => ".-.-.-",
+        ',' => "--..--",
+        '?' => "..--..",
+        '/' => "-..-.",
+        '=' => "-...-",
+        '+' => ".-.-.",
+        '-' => "-....-",
         _ => return None,
     })
 }
@@ -3044,7 +3095,9 @@ fn run_gen_rough_fist(
 ) -> Result<()> {
     use std::f32::consts::TAU;
     // Cheap deterministic LCG so we don't add a `rand` dep.
-    let mut rng_state = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+    let mut rng_state = seed
+        .wrapping_mul(6364136223846793005)
+        .wrapping_add(1442695040888963407);
     let mut rand_unit = || -> f32 {
         rng_state = rng_state
             .wrapping_mul(6364136223846793005)
@@ -3095,18 +3148,26 @@ fn run_gen_rough_fist(
                     samples.resize(samples.len() + n, 0.0);
                 }
                 first_elem = false;
-                let base = if el == '.' { dot_secs * dit_weight } else { dot_secs * dah_ratio };
+                let base = if el == '.' {
+                    dot_secs * dit_weight
+                } else {
+                    dot_secs * dah_ratio
+                };
                 let on_secs = jitter_mul(base, &mut rand_unit);
                 let n = (on_secs * sample_rate as f32) as usize;
                 for k in 0..n {
                     let env = {
                         let rise = if k < ramp_n {
                             0.5 * (1.0 - ((std::f32::consts::PI * k as f32) / ramp_n as f32).cos())
-                        } else { 1.0 };
+                        } else {
+                            1.0
+                        };
                         let fall = if k + ramp_n > n {
                             let kk = (n - k) as f32;
                             0.5 * (1.0 - ((std::f32::consts::PI * kk) / ramp_n as f32).cos())
-                        } else { 1.0 };
+                        } else {
+                            1.0
+                        };
                         rise.min(fall)
                     };
                     let s = (TAU * pitch_hz * (t as f32) / sample_rate as f32).sin() * 0.6 * env;
@@ -3116,7 +3177,9 @@ fn run_gen_rough_fist(
             }
         }
         if !word_chars.is_empty() {
-            if wi > 0 { canonical_text.push(' '); }
+            if wi > 0 {
+                canonical_text.push(' ');
+            }
             canonical_text.push_str(&word_chars);
         }
         if wi + 1 < words.len() && word_emitted {
