@@ -836,6 +836,10 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
         {
             if (Set(ref _useSelectedLabelFiles, value))
             {
+                if (value && EvaluateAllLabels)
+                {
+                    EvaluateAllLabels = false;
+                }
                 OnPropertyChanged(nameof(ShowSelectedLabelPicker));
                 OnPropertyChanged(nameof(SelectedLabelFilesSummary));
                 OnPropertyChanged(nameof(LabelEvaluationTargetLabel));
@@ -845,7 +849,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
         }
     }
 
-    public bool ShowSelectedLabelPicker => !EvaluateAllLabels && UseSelectedLabelFiles && AvailableLabelFiles.Count > 0;
+    public bool ShowSelectedLabelPicker => UseSelectedLabelFiles && AvailableLabelFiles.Count > 0;
     public string SelectedLabelFilesSummary
     {
         get

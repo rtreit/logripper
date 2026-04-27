@@ -104,7 +104,7 @@
             <StackPanel Orientation="Vertical" Spacing="0" IsVisible="{Binding IsV2DecoderMode}"
                         ToolTip.Tip="Pin the WPM passed to ditdah's whole-buffer decoder. 0 = auto-detect. Use this when the auto-WPM locks onto a wrong value on noisy live signals (e.g. weak DX). Takes effect on next START LIVE.">
               <TextBlock Text="PIN WPM" Classes="label" FontSize="9" />
-              <NumericUpDown Width="80" Value="{Binding PinWpm, Mode=TwoWay}" Minimum="0" Maximum="60" Increment="1"
+              <NumericUpDown Width="120" MinWidth="120" Value="{Binding PinWpm, Mode=TwoWay}" Minimum="0" Maximum="60" Increment="1"
                              FormatString="0" ShowButtonSpinner="True"
                              Background="{StaticResource BgPanel}" Foreground="{StaticResource TextHi}" />
             </StackPanel>
@@ -739,11 +739,13 @@
                       ToolTip.Tip="Run the v2 (whole-buffer ditdah) decoder against the selected labels with auto + each pin-WPM. Outputs a per-clip × strategy CER table." />
             </Grid>
 
-            <Border Grid.Row="1" BorderBrush="{StaticResource GridLine}" BorderThickness="1" CornerRadius="2" Padding="8"
+            <Border Grid.Row="1" BorderBrush="{StaticResource AccentCyan}" BorderThickness="1" CornerRadius="2" Padding="8"
                     IsVisible="{Binding ShowSelectedLabelPicker}">
-              <Grid RowDefinitions="Auto,*" RowSpacing="6">
-                <TextBlock Text="{Binding SelectedLabelFilesSummary}" Classes="label" TextWrapping="Wrap" />
-                <ScrollViewer Grid.Row="1" MaxHeight="120" HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+              <Grid RowDefinitions="Auto,Auto,*" RowSpacing="6">
+                <TextBlock Text="LABEL FILES — check the .labels.jsonl files to include in SCORE LABELS / SWEEP BASELINE / STRATEGY SWEEP"
+                           Classes="label" Foreground="{StaticResource AccentCyan}" TextWrapping="Wrap" />
+                <TextBlock Grid.Row="1" Text="{Binding SelectedLabelFilesSummary}" Classes="label" TextWrapping="Wrap" />
+                <ScrollViewer Grid.Row="2" MaxHeight="160" HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
                    <ItemsControl ItemsSource="{Binding AvailableLabelFiles}">
                      <ItemsControl.ItemTemplate>
                        <DataTemplate x:DataType="m:SelectableLabelFile">
