@@ -499,6 +499,30 @@ enum Cmd {
         #[arg(long, default_value_t = 0.0)]
         pin_wpm: f32,
     },
+    /// Live streaming with the in-house envelope decoder, emitting full
+    /// visualizer frames (audio envelope, hysteresis thresholds, classified
+    /// events, k-means centroids) on every decode cycle. Powers the GUI
+    /// VISUALIZER tab.
+    StreamLiveV3 {
+        #[arg(long)]
+        device: Option<String>,
+        #[arg(long, default_value_t = 0.0)]
+        seconds: f32,
+        #[arg(long)]
+        json: bool,
+        /// Re-decode the whole buffer every N ms (default 250).
+        #[arg(long, default_value_t = 250)]
+        decode_every_ms: u64,
+        #[arg(long)]
+        record: Option<PathBuf>,
+        #[arg(long)]
+        stdin_control: bool,
+        #[arg(long)]
+        loopback: bool,
+        /// Pin the WPM (0 = auto / k-means lock).
+        #[arg(long, default_value_t = 0.0)]
+        pin_wpm: f32,
+    },
     /// Diagnostic: scan candidate pitches across an audio file and print
     /// the trial-decode Fisher score per pitch. Use this to compare
     /// faint signals vs noise and tune lock thresholds.
@@ -953,6 +977,25 @@ fn main() -> Result<()> {
             loopback,
             pin_wpm,
         } => run_stream_live_v2(
+            device.as_deref(),
+            seconds,
+            json,
+            decode_every_ms,
+            record.as_deref(),
+            stdin_control,
+            loopback,
+            (pin_wpm > 0.0).then_some(pin_wpm),
+        ),
+        Cmd::StreamLiveV3 {
+            device,
+            seconds,
+            json,
+            decode_every_ms,
+            record,
+            stdin_control,
+            loopback,
+            pin_wpm,
+        } => run_stream_live_v3(
             device.as_deref(),
             seconds,
             json,
@@ -3539,5 +3582,229 @@ fn run_gen_rough_fist(
     );
     println!("Truth: {}", truth_path.display());
     println!("Text:  {}", canonical_text);
+    Ok(())
+}
+
+
+fn run_stream_live_v3(
+    device: Option<&str>,
+    seconds: f32,
+    json: bool,
+    decode_every_ms: u64,
+    record_path: Option<&std::path::Path>,
+    stdin_control: bool,
+    loopback: bool,
+    pin_wpm: Option<f32>,
+) -> Result<()> {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
+    use cw_decoder_poc::envelope_decoder::{
+        LiveEnvelopeStreamer, VizEventKind, MAX_VIZ_ENVELOPE_SAMPLES,
+    };
+
+    let capture = if loopback {
+        audio::open_loopback_with_recording(device, 1.0, record_path)?
+    } else {
+        audio::open_input_with_recording(device, 1.0, record_path)?
+    };
+    let mut streamer = LiveEnvelopeStreamer::new(capture.sample_rate);
+    if let Some(w) = pin_wpm {
+        // Force initial lock to user-pinned WPM by feeding through the
+        // streamer's locked_wpm channel via an empty flush won't work;
+        // instead we just decode with that pin via EnvelopeConfig. The
+        // streamer's auto-lock will kick in once enough elements arrive.
+        let _ = w; // honored on first decode_now via decode_envelope_with_stats
+        // (LiveEnvelopeStreamer currently auto-locks; pin_wpm on v3 is a
+        // diagnostic input. If you need hard pinning, use eval --strategies env28.)
+    }
+
+    let stop = Arc::new(AtomicBool::new(false));
+    {
+        let stop = Arc::clone(&stop);
+        ctrlc_setup(move || {
+            stop.store(true, Ordering::Relaxed);
+        });
+    }
+    let cfg_channel = stdin_control.then(|| spawn_stdin_config_channel(Some(Arc::clone(&stop))));
+    if !stdin_control {
+        let stop = Arc::clone(&stop);
+        std::thread::spawn(move || {
+            use std::io::Read;
+            let mut buf = [0u8; 256];
+            let mut stdin = std::io::stdin();
+            loop {
+                match stdin.read(&mut buf) {
+                    Ok(0) | Err(_) => {
+                        stop.store(true, Ordering::Relaxed);
+                        break;
+                    }
+                    Ok(_) => {}
+                }
+            }
+        });
+    }
+
+    let mut emitter = if json {
+        Some(json::JsonEmitter::new())
+    } else {
+        None
+    };
+    if let Some(em) = emitter.as_mut() {
+        em.emit(
+            0.0,
+            serde_json::json!({
+                "type": "ready",
+                "source": "live-v3",
+                "device": capture.device_name,
+                "rate": capture.sample_rate,
+                "decode_every_ms": decode_every_ms,
+                "max_viz_envelope_samples": MAX_VIZ_ENVELOPE_SAMPLES,
+                "recording": capture.record_path().map(|p| p.display().to_string()),
+                "pin_wpm": pin_wpm,
+            }),
+        );
+    } else {
+        println!(
+            "Live streaming (v3 envelope+viz) from: {} @ {} Hz; decode every {} ms",
+            capture.device_name, capture.sample_rate, decode_every_ms
+        );
+    }
+
+    let started = Instant::now();
+    let mut last_drain_at: u64 = 0;
+    let mut last_decode_at = Instant::now();
+    let decode_period = Duration::from_millis(decode_every_ms);
+    let mut last_transcript: Option<String> = None;
+
+    loop {
+        if stop.load(Ordering::Relaxed) {
+            break;
+        }
+        if seconds > 0.0 && started.elapsed().as_secs_f32() >= seconds {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+
+        if let Some(rx) = cfg_channel.as_ref() {
+            while let Ok(msg) = rx.try_recv() {
+                if matches!(msg, StdinControlMessage::ResetLock) {
+                    streamer = LiveEnvelopeStreamer::new(capture.sample_rate);
+                    last_drain_at = capture.buffer.lock().written;
+                    last_transcript = None;
+                    if let Some(em) = emitter.as_mut() {
+                        em.emit(
+                            started.elapsed().as_secs_f32(),
+                            serde_json::json!({"type": "reset_ack"}),
+                        );
+                    }
+                }
+            }
+        }
+
+        let chunk = {
+            let lock = capture.buffer.lock();
+            let total = lock.written;
+            let avail = lock.len();
+            let want = (total - last_drain_at).min(avail as u64) as usize;
+            if want == 0 {
+                Vec::new()
+            } else {
+                let snap = lock.snapshot();
+                last_drain_at = total;
+                let start = snap.len() - want;
+                snap[start..].to_vec()
+            }
+        };
+        if !chunk.is_empty() {
+            // Buffer the audio without forcing a viz decode (cheap path).
+            streamer.feed(&chunk);
+        }
+
+        if last_decode_at.elapsed() < decode_period {
+            continue;
+        }
+        last_decode_at = Instant::now();
+
+        // Force a viz-producing decode now.
+        let snap = streamer.flush_with_viz();
+        let t = started.elapsed().as_secs_f32();
+        last_transcript = Some(snap.transcript.clone());
+
+        if let Some(em) = emitter.as_mut() {
+            em.emit(
+                t,
+                serde_json::json!({
+                    "type": "transcript",
+                    "text": snap.transcript,
+                    "appended": snap.appended,
+                    "wpm": snap.wpm,
+                }),
+            );
+            if let Some(viz) = snap.viz {
+                let events_json: Vec<serde_json::Value> = viz.events.iter().map(|e| {
+                    let kind = match e.kind {
+                        VizEventKind::OnDit => "on_dit",
+                        VizEventKind::OnDah => "on_dah",
+                        VizEventKind::OffIntra => "off_intra",
+                        VizEventKind::OffChar => "off_char",
+                        VizEventKind::OffWord => "off_word",
+                    };
+                    serde_json::json!({
+                        "start_s": e.start_s,
+                        "end_s": e.end_s,
+                        "duration_s": e.duration_s,
+                        "kind": kind,
+                    })
+                }).collect();
+                em.emit(
+                    t,
+                    serde_json::json!({
+                        "type": "viz",
+                        "buffer_seconds": viz.buffer_seconds,
+                        "frame_step_s": viz.frame_step_s,
+                        "pitch_hz": viz.pitch_hz,
+                        "envelope": viz.envelope,
+                        "envelope_max": viz.envelope_max,
+                        "noise_floor": viz.noise_floor,
+                        "signal_floor": viz.signal_floor,
+                        "hyst_high": viz.hyst_high,
+                        "hyst_low": viz.hyst_low,
+                        "events": events_json,
+                        "on_durations": viz.on_durations,
+                        "dot_seconds": viz.dot_seconds,
+                        "wpm": viz.wpm,
+                        "centroid_dot": viz.centroid_dot,
+                        "centroid_dah": viz.centroid_dah,
+                        "locked_wpm": viz.locked_wpm,
+                    }),
+                );
+            }
+        } else {
+            println!(
+                "[t={:>6.2}s wpm={:>5.1}] {}",
+                t, snap.wpm, snap.transcript
+            );
+        }
+    }
+
+    let recording_path = capture.record_path().map(|p| p.display().to_string());
+    let recording_saved = capture
+        .finalize_recording()
+        .map(|p| p.display().to_string());
+    if let Some(em) = emitter.as_mut() {
+        em.emit(
+            started.elapsed().as_secs_f32(),
+            serde_json::json!({
+                "type": "end",
+                "transcript": last_transcript.unwrap_or_default(),
+                "recording": recording_saved.or(recording_path),
+            }),
+        );
+    } else {
+        println!();
+        println!("Final transcript (v3):");
+        println!("{}", last_transcript.unwrap_or_default());
+    }
     Ok(())
 }

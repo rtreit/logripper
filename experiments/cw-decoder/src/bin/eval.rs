@@ -857,6 +857,11 @@ enum Strategy {
     EnvelopeAuto,
     /// Alternate envelope decoder with pinned WPM driving the dot length.
     EnvelopePin(f32),
+    /// Live streaming wrapper around the envelope decoder. Feeds the
+    /// labeled audio chunk-by-chunk to LiveEnvelopeStreamer simulating
+    /// live capture, returns the final transcript. Auto WPM with
+    /// k-means lock after enough elements are seen.
+    LiveEnvelopeAuto,
 }
 
 fn parse_strategy_list(args: &[String]) -> Vec<Strategy> {
@@ -880,6 +885,8 @@ fn parse_strategy_list(args: &[String]) -> Vec<Strategy> {
             }
         } else if t.eq_ignore_ascii_case("envelope") || t.eq_ignore_ascii_case("env") {
             out.push(Strategy::EnvelopeAuto);
+        } else if t.eq_ignore_ascii_case("live-env") || t.eq_ignore_ascii_case("liveenv") || t.eq_ignore_ascii_case("live") {
+            out.push(Strategy::LiveEnvelopeAuto);
         } else if let Some(rest) = t
             .strip_prefix("envelope:")
             .or_else(|| t.strip_prefix("envelope"))
@@ -972,6 +979,22 @@ fn score_labels_strategy(
                         &cw_decoder_poc::envelope_decoder::EnvelopeConfig { pin_wpm: pin },
                     )
                 }
+                Strategy::LiveEnvelopeAuto => {
+                    let (start, end) = expanded_sample_bounds(audio, example, score_cfg);
+                    let samples = if end > start { &audio.samples[start..end] } else { &[][..] };
+                    let mut streamer = cw_decoder_poc::envelope_decoder::LiveEnvelopeStreamer::new(
+                        audio.sample_rate,
+                    );
+                    // Feed in 100 ms chunks to simulate a live capture path.
+                    let chunk = (audio.sample_rate as usize) / 10;
+                    let mut i = 0;
+                    while i < samples.len() {
+                        let end_i = (i + chunk).min(samples.len());
+                        streamer.feed(&samples[i..end_i]);
+                        i = end_i;
+                    }
+                    streamer.flush().transcript
+                }
             };
             build_label_score(example, &decoded)
         })
@@ -1042,6 +1065,7 @@ fn strategy_label(strategy: Strategy) -> String {
         Strategy::RegionPin(w) => format!("region{:.0}", w),
         Strategy::EnvelopeAuto => "env".to_string(),
         Strategy::EnvelopePin(w) => format!("env{:.0}", w),
+        Strategy::LiveEnvelopeAuto => "live-env".to_string(),
     }
 }
 
