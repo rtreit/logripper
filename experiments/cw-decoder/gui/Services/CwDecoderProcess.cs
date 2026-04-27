@@ -391,6 +391,27 @@ internal sealed class CwDecoderProcess : IDisposable
             ?? throw new InvalidOperationException("Failed to parse label sweep output.");
     }
 
+    public async Task<StrategySweepResult> RunStrategySweepAsync(
+        bool allLabels,
+        IReadOnlyList<string>? labelPaths,
+        IReadOnlyList<string>? strategies,
+        CancellationToken ct = default)
+    {
+        var psi = CreateEvalStartInfo();
+        AddLabelSelectionArguments(psi, allLabels, labelPaths);
+        psi.ArgumentList.Add("--json");
+        psi.ArgumentList.Add("--strategy-sweep");
+        if (strategies is { Count: > 0 })
+        {
+            psi.ArgumentList.Add("--strategies");
+            psi.ArgumentList.Add(string.Join(",", strategies));
+        }
+
+        var stdout = await RunOneShotAsync(psi, ct).ConfigureAwait(false);
+        return JsonSerializer.Deserialize<StrategySweepResult>(stdout)
+            ?? throw new InvalidOperationException("Failed to parse strategy sweep output.");
+    }
+
     public static string[] ListAvailableLabelFiles()
     {
         try

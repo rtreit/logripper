@@ -15,6 +15,7 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 use cw_decoder_poc::audio;
+use cw_decoder_poc::decoder::{decode_text, decode_text_pinned};
 use cw_decoder_poc::ditdah_streaming::{
     run_causal_baseline, run_causal_baseline_trace, CausalBaselineConfig, CausalBaselineTrace,
 };
@@ -110,6 +111,10 @@ fn main() -> Result<()> {
             streaming_cfg: parse_streaming_decoder_config(&args),
         };
         let top = arg_value_usize(&args, "--top").unwrap_or(10);
+        if args.iter().any(|a| a == "--strategy-sweep") {
+            let strategies = parse_strategy_list(&args);
+            return run_strategy_sweep(&label_files, &strategies, score_cfg, json_mode);
+        }
         if args.iter().any(|a| a == "--sweep-ditdah") {
             let wide = args.iter().any(|a| a == "--wide-sweep");
             return run_label_sweep(&label_files, top, wide, score_cfg, json_mode);
@@ -835,6 +840,201 @@ fn score_labels_full_stream_streaming(
             build_label_score(example, &decoded)
         })
         .collect()
+}
+
+fn parse_strategy_list(args: &[String]) -> Vec<Option<f32>> {
+    let raw = arg_value_string(args, "--strategies").unwrap_or_else(|| "auto,22,25,28".to_string());
+    let mut out = Vec::new();
+    for tok in raw.split(',') {
+        let t = tok.trim();
+        if t.is_empty() {
+            continue;
+        }
+        if t.eq_ignore_ascii_case("auto") || t == "0" {
+            out.push(None);
+        } else if let Ok(v) = t.parse::<f32>() {
+            if v > 0.0 {
+                out.push(Some(v));
+            }
+        }
+    }
+    if out.is_empty() {
+        out.push(None);
+    }
+    out
+}
+
+fn arg_value_string(args: &[String], name: &str) -> Option<String> {
+    args.windows(2)
+        .find(|w| w[0] == name)
+        .map(|w| w[1].clone())
+}
+
+fn score_labels_v2_pinned(
+    labels: &[LabelExample],
+    audio_cache: &HashMap<PathBuf, audio::DecodedAudio>,
+    score_cfg: LabelScoreConfig,
+    pin_wpm: Option<f32>,
+) -> Vec<LabelScore> {
+    labels
+        .iter()
+        .map(|example| {
+            let audio = audio_cache
+                .get(&example.source)
+                .expect("audio cache missing source");
+            let (start, end) = expanded_sample_bounds(audio, example, score_cfg);
+            let samples = if end > start {
+                &audio.samples[start..end]
+            } else {
+                &[][..]
+            };
+            let decoded = match pin_wpm {
+                Some(w) => decode_text_pinned(samples, audio.sample_rate, w),
+                None => decode_text(samples, audio.sample_rate),
+            };
+            build_label_score(example, &decoded)
+        })
+        .collect()
+}
+
+fn strategy_label(strategy: Option<f32>) -> String {
+    match strategy {
+        None => "auto".to_string(),
+        Some(w) => format!("pin{:.0}", w),
+    }
+}
+
+fn run_strategy_sweep(
+    label_files: &[PathBuf],
+    strategies: &[Option<f32>],
+    score_cfg: LabelScoreConfig,
+    json_mode: bool,
+) -> Result<()> {
+    let labels = load_label_examples(label_files)?;
+    if labels.is_empty() {
+        return Err(anyhow::anyhow!("no labels found"));
+    }
+    let audio_cache = load_audio_cache(&labels)?;
+
+    // strategy -> per-label scores (parallel)
+    let per_strategy: Vec<(String, Vec<LabelScore>)> = strategies
+        .par_iter()
+        .map(|s| {
+            let label = strategy_label(*s);
+            let scores = score_labels_v2_pinned(&labels, &audio_cache, score_cfg, *s);
+            (label, scores)
+        })
+        .collect();
+
+    if json_mode {
+        let mut clip_rows = Vec::with_capacity(labels.len());
+        for (li, label) in labels.iter().enumerate() {
+            let mut cells = serde_json::Map::new();
+            for (sname, scores) in &per_strategy {
+                let s = &scores[li];
+                cells.insert(
+                    sname.clone(),
+                    serde_json::json!({
+                        "decoded": s.decoded,
+                        "distance": s.distance,
+                        "cer": s.cer,
+                        "exact": s.exact,
+                    }),
+                );
+            }
+            clip_rows.push(serde_json::json!({
+                "name": label.name,
+                "source": label.source.display().to_string(),
+                "truth": label.truth,
+                "truth_len": label.truth.chars().count(),
+                "strategies": cells,
+            }));
+        }
+
+        let mut summary_rows = Vec::with_capacity(per_strategy.len());
+        for (sname, scores) in &per_strategy {
+            let total_truth: usize = scores.iter().map(|s| s.example.truth.chars().count()).sum();
+            let total_distance: usize = scores.iter().map(|s| s.distance).sum();
+            let exact: usize = scores.iter().filter(|s| s.exact).count();
+            let mean_cer: f32 =
+                scores.iter().map(|s| s.cer).sum::<f32>() / scores.len().max(1) as f32;
+            let weighted_cer = if total_truth == 0 {
+                0.0
+            } else {
+                total_distance as f32 / total_truth as f32
+            };
+            summary_rows.push(serde_json::json!({
+                "strategy": sname,
+                "exact": exact,
+                "total_distance": total_distance,
+                "total_truth_chars": total_truth,
+                "mean_cer": mean_cer,
+                "weighted_cer": weighted_cer,
+            }));
+        }
+
+        let out = serde_json::json!({
+            "labels": labels.len(),
+            "strategies": strategies.iter().map(|s| strategy_label(*s)).collect::<Vec<_>>(),
+            "clips": clip_rows,
+            "summary": summary_rows,
+        });
+        println!("{}", serde_json::to_string(&out)?);
+    } else {
+        println!(
+            "STRATEGY SWEEP  ({} labels, {} strategies)",
+            labels.len(),
+            per_strategy.len()
+        );
+        println!("{}", "=".repeat(96));
+        let header_strategies: String = per_strategy
+            .iter()
+            .map(|(name, _)| format!("{:>10}", name))
+            .collect::<Vec<_>>()
+            .join(" ");
+        println!("{:30} {:>4}  {}", "clip", "len", header_strategies);
+        for (li, label) in labels.iter().enumerate() {
+            let cells: String = per_strategy
+                .iter()
+                .map(|(_, scores)| format!("{:>10.2}", scores[li].cer))
+                .collect::<Vec<_>>()
+                .join(" ");
+            println!(
+                "{:30} {:>4}  {}",
+                truncate(&label.name, 30),
+                label.truth.chars().count(),
+                cells
+            );
+        }
+        println!("{}", "-".repeat(96));
+        let summary: String = per_strategy
+            .iter()
+            .map(|(_, scores)| {
+                let total_truth: usize =
+                    scores.iter().map(|s| s.example.truth.chars().count()).sum();
+                let total_distance: usize = scores.iter().map(|s| s.distance).sum();
+                let weighted = if total_truth == 0 {
+                    0.0
+                } else {
+                    total_distance as f32 / total_truth as f32
+                };
+                format!("{:>10.2}", weighted)
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+        println!("{:30} {:>4}  {}", "WEIGHTED CER", "", summary);
+    }
+    Ok(())
+}
+
+fn truncate(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        s.to_string()
+    } else {
+        let mut out: String = s.chars().take(max - 1).collect();
+        out.push('…');
+        out
+    }
 }
 
 fn build_label_score(example: &LabelExample, decoded: &str) -> LabelScore {

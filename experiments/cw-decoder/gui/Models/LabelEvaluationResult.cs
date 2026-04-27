@@ -70,3 +70,38 @@ public sealed class LabelSweepRowResult
     [JsonPropertyName("decode_every_ms")] public int DecodeEveryMs { get; set; }
     [JsonPropertyName("required_confirmations")] public int RequiredConfirmations { get; set; }
 }
+
+public sealed class StrategySweepResult
+{
+    [JsonPropertyName("labels")] public int Labels { get; set; }
+    [JsonPropertyName("strategies")] public string[] Strategies { get; set; } = [];
+    [JsonPropertyName("clips")] public StrategySweepClip[] Clips { get; set; } = [];
+    [JsonPropertyName("summary")] public StrategySweepStrategySummary[] Summary { get; set; } = [];
+}
+
+public sealed class StrategySweepClip
+{
+    [JsonPropertyName("name")] public string Name { get; set; } = "";
+    [JsonPropertyName("source")] public string Source { get; set; } = "";
+    [JsonPropertyName("truth")] public string Truth { get; set; } = "";
+    [JsonPropertyName("truth_len")] public int TruthLen { get; set; }
+    [JsonPropertyName("strategies")] public System.Collections.Generic.Dictionary<string, StrategySweepCell> Strategies { get; set; } = new();
+}
+
+public sealed class StrategySweepCell
+{
+    [JsonPropertyName("decoded")] public string Decoded { get; set; } = "";
+    [JsonPropertyName("distance")] public int Distance { get; set; }
+    [JsonPropertyName("cer")] public double Cer { get; set; }
+    [JsonPropertyName("exact")] public bool Exact { get; set; }
+}
+
+public sealed class StrategySweepStrategySummary
+{
+    [JsonPropertyName("strategy")] public string Strategy { get; set; } = "";
+    [JsonPropertyName("exact")] public int Exact { get; set; }
+    [JsonPropertyName("total_distance")] public int TotalDistance { get; set; }
+    [JsonPropertyName("total_truth_chars")] public int TotalTruthChars { get; set; }
+    [JsonPropertyName("mean_cer")] public double MeanCer { get; set; }
+    [JsonPropertyName("weighted_cer")] public double WeightedCer { get; set; }
+}

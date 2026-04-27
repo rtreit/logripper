@@ -153,6 +153,25 @@ public partial class MainWindow : Window
         await Vm.RunLabelSweepAsync();
     }
 
+    private async void OnRunStrategySweepClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (Vm is null) return;
+        await Vm.RunStrategySweepAsync();
+    }
+
+    private async void OnCopyStrategySweepMarkdownClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (Vm is null) return;
+        var md = Vm.BuildStrategySweepMarkdown();
+        if (string.IsNullOrEmpty(md)) return;
+        var top = Avalonia.Application.Current?.ApplicationLifetime as Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime;
+        var window = top?.MainWindow;
+        if (window?.Clipboard is { } clip)
+        {
+            await clip.SetTextAsync(md);
+        }
+    }
+
     private void OnApplyTopSweepClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
         => Vm?.ApplyTopSweepResult();
 

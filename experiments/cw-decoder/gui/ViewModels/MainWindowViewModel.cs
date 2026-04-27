@@ -2430,6 +2430,158 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
         }
     }
 
+    private string _strategySweepWpms = "22,25,28";
+    /// <summary>Comma-separated list of pin-WPM values to sweep alongside auto.
+    /// Editable by the operator. "auto" is always included.</summary>
+    public string StrategySweepWpms
+    {
+        get => _strategySweepWpms;
+        set => Set(ref _strategySweepWpms, value);
+    }
+
+    private StrategySweepResult? _strategySweepResult;
+    public StrategySweepResult? StrategySweepResult
+    {
+        get => _strategySweepResult;
+        private set
+        {
+            if (Set(ref _strategySweepResult, value))
+            {
+                OnPropertyChanged(nameof(HasStrategySweepResult));
+                OnPropertyChanged(nameof(StrategySweepSummaryText));
+                RebuildStrategySweepRows();
+            }
+        }
+    }
+
+    public bool HasStrategySweepResult => _strategySweepResult is not null;
+
+    public ObservableCollection<StrategySweepRowView> StrategySweepRows { get; } = new();
+
+    public string StrategySweepSummaryText
+    {
+        get
+        {
+            if (_strategySweepResult is null) return string.Empty;
+            var parts = _strategySweepResult.Summary.Select(s =>
+                $"{s.Strategy}: weighted CER {s.WeightedCer:F2}, exact {s.Exact}/{_strategySweepResult.Labels}");
+            return string.Join("  ·  ", parts);
+        }
+    }
+
+    private void RebuildStrategySweepRows()
+    {
+        StrategySweepRows.Clear();
+        if (_strategySweepResult is null) return;
+        foreach (var clip in _strategySweepResult.Clips)
+        {
+            var cells = _strategySweepResult.Strategies
+                .Select(name => clip.Strategies.TryGetValue(name, out var cell)
+                    ? new StrategySweepCellView(name, cell.Cer, cell.Decoded, cell.Exact)
+                    : new StrategySweepCellView(name, double.NaN, "", false))
+                .ToArray();
+            var bestCer = cells.Where(c => !double.IsNaN(c.Cer)).Select(c => c.Cer).DefaultIfEmpty(double.NaN).Min();
+            foreach (var c in cells)
+            {
+                c.IsBest = !double.IsNaN(c.Cer) && Math.Abs(c.Cer - bestCer) < 1e-9;
+            }
+            StrategySweepRows.Add(new StrategySweepRowView(clip.Name, clip.TruthLen, clip.Truth, cells));
+        }
+    }
+
+    public async Task RunStrategySweepAsync()
+    {
+        if (!TryResolveLabelEvaluationTarget(out var labelPaths))
+        {
+            return;
+        }
+
+        // Always include "auto" plus operator-supplied pin values.
+        var strategies = new List<string> { "auto" };
+        foreach (var tok in (StrategySweepWpms ?? string.Empty).Split(','))
+        {
+            var t = tok.Trim();
+            if (string.IsNullOrEmpty(t) || t.Equals("auto", StringComparison.OrdinalIgnoreCase)) continue;
+            if (double.TryParse(t, NumberStyles.Float, CultureInfo.InvariantCulture, out var v) && v > 0)
+            {
+                strategies.Add(v.ToString("0.##", CultureInfo.InvariantCulture));
+            }
+        }
+
+        CancelAndDisposeEvaluation();
+        var cts = new CancellationTokenSource();
+        _evaluationCts = cts;
+
+        try
+        {
+            IsAdvancedBusy = true;
+            IsEvaluationBusy = true;
+            LabelEvaluationStatusText = $"Running strategy sweep ({string.Join(", ", strategies)})…";
+            StrategySweepResult = null;
+            var result = await _process.RunStrategySweepAsync(
+                EvaluateAllLabels,
+                labelPaths,
+                strategies,
+                cts.Token).ConfigureAwait(true);
+            StrategySweepResult = result;
+            LabelEvaluationStatusText = $"Strategy sweep done — {result.Labels} labels × {result.Strategies.Length} strategies.";
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex)
+        {
+            LabelEvaluationStatusText = $"Strategy sweep failed: {ex.Message}";
+        }
+        finally
+        {
+            if (ReferenceEquals(_evaluationCts, cts))
+            {
+                _evaluationCts = null;
+            }
+            cts.Dispose();
+            IsEvaluationBusy = false;
+            IsAdvancedBusy = false;
+        }
+    }
+
+    public string BuildStrategySweepMarkdown()
+    {
+        if (_strategySweepResult is null) return string.Empty;
+        var sb = new StringBuilder();
+        var s = _strategySweepResult;
+        sb.Append("| clip | len |");
+        foreach (var name in s.Strategies) sb.Append(' ').Append(name).Append(" |");
+        sb.AppendLine();
+        sb.Append("|---|---:|");
+        foreach (var _ in s.Strategies) sb.Append("---:|");
+        sb.AppendLine();
+        foreach (var clip in s.Clips)
+        {
+            sb.Append("| ").Append(clip.Name).Append(" | ").Append(clip.TruthLen).Append(" |");
+            foreach (var name in s.Strategies)
+            {
+                if (clip.Strategies.TryGetValue(name, out var cell))
+                {
+                    sb.Append(' ').Append(cell.Cer.ToString("F2", CultureInfo.InvariantCulture));
+                    if (cell.Exact) sb.Append("✓");
+                    sb.Append(" |");
+                }
+                else
+                {
+                    sb.Append(" - |");
+                }
+            }
+            sb.AppendLine();
+        }
+        sb.Append("| **weighted CER** |  |");
+        foreach (var name in s.Strategies)
+        {
+            var sum = s.Summary.FirstOrDefault(x => x.Strategy == name);
+            sb.Append(' ').Append(sum?.WeightedCer.ToString("F2", CultureInfo.InvariantCulture) ?? "-").Append(" |");
+        }
+        sb.AppendLine();
+        return sb.ToString();
+    }
+
     public void ApplyTopSweepResult()
     {
         if (_topSweepResult is null)
@@ -3454,4 +3606,45 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
         double MinWindowSeconds,
         int DecodeEveryMs,
         int Confirmations);
+
+    public sealed class StrategySweepCellView
+    {
+        public StrategySweepCellView(string strategy, double cer, string decoded, bool exact)
+        {
+            Strategy = strategy;
+            Cer = cer;
+            Decoded = decoded;
+            Exact = exact;
+        }
+
+        public string Strategy { get; }
+        public double Cer { get; }
+        public string Decoded { get; }
+        public bool Exact { get; }
+        public bool IsBest { get; set; }
+        public string CerDisplay => double.IsNaN(Cer) ? "-" : Cer.ToString("F2", CultureInfo.InvariantCulture);
+    }
+
+    public sealed class StrategySweepRowView
+    {
+        public StrategySweepRowView(string clip, int truthLen, string truth, StrategySweepCellView[] cells)
+        {
+            Clip = clip;
+            TruthLen = truthLen;
+            Truth = truth;
+            Cells = cells;
+        }
+
+        public string Clip { get; }
+        public int TruthLen { get; }
+        public string Truth { get; }
+        public StrategySweepCellView[] Cells { get; }
+
+        public StrategySweepCellView? Cell0 => Cells.Length > 0 ? Cells[0] : null;
+        public StrategySweepCellView? Cell1 => Cells.Length > 1 ? Cells[1] : null;
+        public StrategySweepCellView? Cell2 => Cells.Length > 2 ? Cells[2] : null;
+        public StrategySweepCellView? Cell3 => Cells.Length > 3 ? Cells[3] : null;
+        public StrategySweepCellView? Cell4 => Cells.Length > 4 ? Cells[4] : null;
+        public StrategySweepCellView? Cell5 => Cells.Length > 5 ? Cells[5] : null;
+    }
 }
