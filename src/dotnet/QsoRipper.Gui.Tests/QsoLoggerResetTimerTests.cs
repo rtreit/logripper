@@ -11,37 +11,37 @@ namespace QsoRipper.Gui.Tests;
 public sealed class QsoLoggerResetTimerTests
 {
     [Fact]
-    public void ResetTimerCommandInvokesAttachedCwResetLockHandler()
+    public void AcknowledgeQsoStartCommandInvokesAttachedCwResetLockHandler()
     {
         var logger = new QsoLoggerViewModel(new MinimalEngineClient());
         var calls = 0;
         logger.AttachCwResetLockHandler(() => calls++);
 
-        logger.ResetTimerCommand.Execute(null);
+        logger.AcknowledgeQsoStartCommand.Execute(null);
 
         Assert.Equal(1, calls);
     }
 
     [Fact]
-    public void ResetTimerCommandIsSafeWhenNoCwResetLockHandlerIsAttached()
+    public void AcknowledgeQsoStartCommandIsSafeWhenNoCwResetLockHandlerIsAttached()
     {
         var logger = new QsoLoggerViewModel(new MinimalEngineClient());
 
         // Should not throw — handler is null when the cw-decoder is
         // disabled or unavailable.
-        logger.ResetTimerCommand.Execute(null);
+        logger.AcknowledgeQsoStartCommand.Execute(null);
 
         Assert.Equal("00:00", logger.ElapsedTimeText);
     }
 
     [Fact]
-    public void ResetTimerCommandSwallowsHandlerExceptionsSoF7NeverDeadlocks()
+    public void AcknowledgeQsoStartCommandSwallowsHandlerExceptionsSoF7NeverDeadlocks()
     {
         var logger = new QsoLoggerViewModel(new MinimalEngineClient());
         logger.AttachCwResetLockHandler(() => throw new InvalidOperationException("boom"));
 
         // F7 must keep working even if the cw-decoder pipe write throws.
-        logger.ResetTimerCommand.Execute(null);
+        logger.AcknowledgeQsoStartCommand.Execute(null);
 
         Assert.Equal("00:00", logger.ElapsedTimeText);
     }

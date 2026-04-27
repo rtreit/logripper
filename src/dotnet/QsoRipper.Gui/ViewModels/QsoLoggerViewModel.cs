@@ -316,6 +316,9 @@ internal sealed partial class QsoLoggerViewModel : ObservableObject
         var mode = SelectedMode;
         var utcNow = DateTimeOffset.UtcNow;
         var utcStart = _timerRunning ? _qsoStartTime : utcNow;
+        // Episode boundary / CW enrichment window always uses real "now" as
+        // the end. UtcEndTimestamp on the QSO itself is gated on F7 below.
+        var utcEnd = utcNow;
 
         var qso = new QsoRecord
         {
@@ -589,6 +592,12 @@ internal sealed partial class QsoLoggerViewModel : ObservableObject
         _timerRunning = true;
         _elapsedTimer.Start();
         ElapsedTimeText = "00:00";
+        // Fire the same boundary signal that the old auto-start path used,
+        // so MainWindowViewModel (or any other host) can spin up the
+        // cw-decoder subprocess on F7. Without this, IsLoggerEpisodeActive
+        // would flip to true silently and downstream consumers would never
+        // see the episode-started edge.
+        CwEpisodeStarted?.Invoke(this, new CwEpisodeStartedEventArgs(_qsoStartTime));
         // F7 is the operator's "starting a new QSO" signal — also drop
         // any stale CW pitch lock from the previous contact so the
         // decoder re-acquires for the new station instead of bleeding

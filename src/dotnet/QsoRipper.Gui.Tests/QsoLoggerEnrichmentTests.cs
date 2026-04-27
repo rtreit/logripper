@@ -391,7 +391,7 @@ public sealed class QsoLoggerEnrichmentTests
 
         // F7: operator acknowledges the QSO is underway, starting the
         // duration timer.
-        await logger.AcknowledgeQsoStartCommand.ExecuteAsync(null);
+        logger.AcknowledgeQsoStartCommand.Execute(null);
         await logger.LogQsoCommand.ExecuteAsync(null);
 
         Assert.NotNull(engine.LastLoggedQso);
