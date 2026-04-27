@@ -176,7 +176,7 @@ fn render_duration_row(frame: &mut Frame, area: Rect, app: &App) {
             ("---".to_string(), Style::default().fg(Color::DarkGray))
         }
         None => (
-            "starting\u{2026}".to_string(),
+            "Press F7 to start timer".to_string(),
             Style::default().fg(Color::DarkGray),
         ),
     };
@@ -193,6 +193,11 @@ fn render_duration_row(frame: &mut Frame, area: Rect, app: &App) {
 fn render_hints_row(frame: &mut Frame, area: Rect) {
     frame.render_widget(
         Paragraph::new(Line::from(vec![
+            Span::raw("  "),
+            Span::styled(
+                " F7 Start QSO ",
+                Style::default().fg(Color::Black).bg(Color::DarkGray),
+            ),
             Span::raw("  "),
             Span::styled(
                 " F10 Log QSO ",

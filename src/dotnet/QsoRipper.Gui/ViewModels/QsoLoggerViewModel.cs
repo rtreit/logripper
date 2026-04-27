@@ -136,13 +136,14 @@ internal sealed partial class QsoLoggerViewModel : ObservableObject
 
         UpdateLogEnabled();
 
+        // Update timer hint text
         if (!string.IsNullOrWhiteSpace(value) && !_timerRunning)
         {
-            StartTimer();
+            ElapsedTimeText = "Press F7";
         }
-        else if (string.IsNullOrWhiteSpace(value) && _timerRunning)
+        else if (string.IsNullOrWhiteSpace(value))
         {
-            StopTimer();
+            ElapsedTimeText = "---";
         }
 
         // Cancel any pending lookup
@@ -233,8 +234,8 @@ internal sealed partial class QsoLoggerViewModel : ObservableObject
 
         var band = SelectedBand;
         var mode = SelectedMode;
-        var utcEnd = DateTimeOffset.UtcNow;
-        var utcStart = _timerRunning ? _qsoStartTime : utcEnd;
+        var utcNow = DateTimeOffset.UtcNow;
+        var utcStart = _timerRunning ? _qsoStartTime : utcNow;
 
         var qso = new QsoRecord
         {
@@ -244,8 +245,13 @@ internal sealed partial class QsoLoggerViewModel : ObservableObject
             RstSent = ParseRst(RstSent.Trim()),
             RstReceived = ParseRst(RstRcvd.Trim()),
             UtcTimestamp = Timestamp.FromDateTimeOffset(utcStart),
-            UtcEndTimestamp = Timestamp.FromDateTimeOffset(utcEnd),
         };
+
+        // Only set end timestamp if timer was explicitly started via F7
+        if (_timerRunning)
+        {
+            qso.UtcEndTimestamp = Timestamp.FromDateTimeOffset(utcNow);
+        }
 
         if (!string.IsNullOrWhiteSpace(mode.Submode))
         {
@@ -389,14 +395,16 @@ internal sealed partial class QsoLoggerViewModel : ObservableObject
         SelectedModeIndex = 0;  // SSB
 
         StopTimer();
-        ElapsedTimeText = "00:00";
+        ElapsedTimeText = "---";
         UpdateLogEnabled();
     }
 
     [RelayCommand]
-    private void ResetTimer()
+    private void AcknowledgeQsoStart()
     {
         _qsoStartTime = DateTimeOffset.UtcNow;
+        _timerRunning = true;
+        _elapsedTimer.Start();
         ElapsedTimeText = "00:00";
     }
 

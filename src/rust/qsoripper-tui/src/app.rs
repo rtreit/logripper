@@ -192,8 +192,7 @@ pub(crate) struct App {
     /// Starts `false`; becomes `true` once a callsign has been stable for ~1.5 s.
     /// Cleared on form reset, Esc, and after log/update.
     pub(crate) qso_timer_active: bool,
-    /// When the callsign field was last modified; drives the debounce that starts the timer.
-    pub(crate) callsign_last_typed_at: Option<Instant>,
+
 }
 
 impl App {
@@ -220,7 +219,7 @@ impl App {
             endpoint,
             qso_started_at: Instant::now(),
             qso_timer_active: false,
-            callsign_last_typed_at: None,
+
         }
     }
 
@@ -243,8 +242,9 @@ impl App {
         self.recent_qsos.iter().find(|q| q.local_id == id)
     }
 
-    /// Reset the QSO start time to now and update the form date/time fields to match.
-    pub(crate) fn reset_qso_start_time(&mut self) {
+    /// Acknowledge that a QSO is underway: start (or restart) the duration timer
+    /// and snapshot the current UTC date/time into the form.
+    pub(crate) fn acknowledge_qso_start(&mut self) {
         let now = chrono::Utc::now();
         self.qso_started_at = Instant::now();
         self.qso_timer_active = true;
@@ -252,33 +252,10 @@ impl App {
         self.form.time = now.format("%H:%M").to_string();
     }
 
-    /// Called on each tick: activates the duration timer once the callsign has been
-    /// stable (no typing) for at least 1.5 seconds.
-    pub(crate) fn tick_debounce(&mut self) {
-        if self.qso_timer_active || self.form.callsign.is_empty() {
-            return;
-        }
-        if let Some(last) = self.callsign_last_typed_at {
-            if last.elapsed().as_millis() >= 1500 {
-                self.qso_started_at = Instant::now();
-                self.qso_timer_active = true;
-            }
-        }
-    }
-
     /// Reset all timer state — called after logging, updating, or clearing the form.
     pub(crate) fn reset_timer(&mut self) {
         self.qso_started_at = Instant::now();
         self.qso_timer_active = false;
-        self.callsign_last_typed_at = None;
-    }
-
-    /// Signal that the callsign field was just modified.
-    pub(crate) fn on_callsign_changed(&mut self) {
-        self.callsign_last_typed_at = Some(Instant::now());
-        if self.form.callsign.is_empty() {
-            self.qso_timer_active = false;
-        }
     }
 
     /// Format the elapsed QSO duration as `M:SS` (< 1 h) or `H:MM:SS`.
@@ -494,70 +471,32 @@ mod tests {
     fn reset_timer_clears_all_state() {
         let mut app = App::new("http://localhost:50051".to_string());
         app.qso_timer_active = true;
-        app.callsign_last_typed_at = Some(Instant::now());
         app.reset_timer();
         assert!(!app.qso_timer_active);
-        assert!(app.callsign_last_typed_at.is_none());
     }
 
     #[test]
-    fn on_callsign_changed_records_timestamp() {
+    fn acknowledge_qso_start_activates_timer() {
         let mut app = App::new("http://localhost:50051".to_string());
-        assert!(app.callsign_last_typed_at.is_none());
-        app.form.callsign = "K7".to_string();
-        app.on_callsign_changed();
-        assert!(app.callsign_last_typed_at.is_some());
-    }
-
-    #[test]
-    fn on_callsign_changed_clears_timer_when_empty() {
-        let mut app = App::new("http://localhost:50051".to_string());
-        app.qso_timer_active = true;
-        app.form.callsign = String::new();
-        app.on_callsign_changed();
         assert!(!app.qso_timer_active);
-    }
-
-    #[test]
-    fn tick_debounce_activates_timer_after_delay() {
-        let mut app = App::new("http://localhost:50051".to_string());
-        app.form.callsign = "K7ABC".to_string();
-        app.callsign_last_typed_at = Some(Instant::now() - Duration::from_secs(2));
-        app.tick_debounce();
+        app.acknowledge_qso_start();
         assert!(app.qso_timer_active);
     }
 
     #[test]
-    fn tick_debounce_does_nothing_when_already_active() {
+    fn acknowledge_qso_start_updates_form_time() {
         let mut app = App::new("http://localhost:50051".to_string());
-        app.qso_timer_active = true;
-        let before = app.qso_started_at;
-        app.tick_debounce();
-        assert_eq!(before, app.qso_started_at);
+        app.form.time = "00:00".to_string();
+        app.acknowledge_qso_start();
+        assert_ne!(app.form.time, "00:00");
     }
 
     #[test]
-    fn tick_debounce_does_nothing_when_callsign_empty() {
-        let mut app = App::new("http://localhost:50051".to_string());
-        app.callsign_last_typed_at = Some(Instant::now() - Duration::from_secs(2));
-        app.tick_debounce();
-        assert!(!app.qso_timer_active);
-    }
-
-    #[test]
-    fn tick_debounce_does_nothing_when_no_last_typed() {
+    fn timer_does_not_start_on_callsign_typing() {
         let mut app = App::new("http://localhost:50051".to_string());
         app.form.callsign = "K7ABC".to_string();
-        app.tick_debounce();
+        // Without calling acknowledge_qso_start, timer should remain inactive
         assert!(!app.qso_timer_active);
-    }
-
-    #[test]
-    fn reset_qso_start_time_activates_timer() {
-        let mut app = App::new("http://localhost:50051".to_string());
-        assert!(!app.qso_timer_active);
-        app.reset_qso_start_time();
-        assert!(app.qso_timer_active);
     }
 
     #[test]
