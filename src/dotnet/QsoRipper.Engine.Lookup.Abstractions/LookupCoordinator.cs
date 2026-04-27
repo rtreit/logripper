@@ -11,8 +11,11 @@ namespace QsoRipper.Engine.Lookup;
 /// </summary>
 public sealed class LookupCoordinator : ILookupCoordinator
 {
+    internal const int DefaultHistoryLimit = 25;
+
     private readonly ICallsignProvider _provider;
     private readonly ILookupSnapshotStore? _snapshotStore;
+    private readonly ILogbookStore? _logbookStore;
     private readonly TimeSpan _positiveTtl;
     private readonly TimeSpan _negativeTtl;
 
@@ -24,10 +27,12 @@ public sealed class LookupCoordinator : ILookupCoordinator
         ICallsignProvider provider,
         ILookupSnapshotStore? snapshotStore = null,
         TimeSpan? positiveTtl = null,
-        TimeSpan? negativeTtl = null)
+        TimeSpan? negativeTtl = null,
+        ILogbookStore? logbookStore = null)
     {
         _provider = provider ?? throw new ArgumentNullException(nameof(provider));
         _snapshotStore = snapshotStore;
+        _logbookStore = logbookStore;
         _positiveTtl = positiveTtl ?? TimeSpan.FromMinutes(15);
         _negativeTtl = negativeTtl ?? TimeSpan.FromMinutes(2);
     }
@@ -42,7 +47,9 @@ public sealed class LookupCoordinator : ILookupCoordinator
             var cached = GetFreshCacheEntry(normalized);
             if (cached is not null)
             {
-                return CacheEntryToResult(cached, normalized, cacheHit: true);
+                var cachedResult = CacheEntryToResult(cached, normalized, cacheHit: true);
+                await PopulateHistoryAsync(cachedResult, normalized).ConfigureAwait(false);
+                return cachedResult;
             }
         }
 
@@ -53,26 +60,34 @@ public sealed class LookupCoordinator : ILookupCoordinator
         var providerResult = await RunProviderLookupWithFallback(normalized, baseCallsign, ct).ConfigureAwait(false);
         var latencyMs = (uint)Math.Min(sw.ElapsedMilliseconds, uint.MaxValue);
 
-        return await ProviderResultToLookup(providerResult, normalized, latencyMs, ct).ConfigureAwait(false);
+        var result = await ProviderResultToLookup(providerResult, normalized, latencyMs, ct).ConfigureAwait(false);
+        await PopulateHistoryAsync(result, normalized).ConfigureAwait(false);
+        return result;
     }
 
     /// <inheritdoc/>
-    public Task<LookupResult> GetCachedAsync(string callsign)
+    public async Task<LookupResult> GetCachedAsync(string callsign)
     {
         var normalized = NormalizeCallsign(callsign);
         var cached = GetFreshCacheEntry(normalized);
+        LookupResult result;
         if (cached is not null)
         {
-            return Task.FromResult(CacheEntryToResult(cached, normalized, cacheHit: true));
+            result = CacheEntryToResult(cached, normalized, cacheHit: true);
+        }
+        else
+        {
+            result = new LookupResult
+            {
+                State = LookupState.NotFound,
+                CacheHit = false,
+                LookupLatencyMs = 0,
+                QueriedCallsign = normalized,
+            };
         }
 
-        return Task.FromResult(new LookupResult
-        {
-            State = LookupState.NotFound,
-            CacheHit = false,
-            LookupLatencyMs = 0,
-            QueriedCallsign = normalized,
-        });
+        await PopulateHistoryAsync(result, normalized).ConfigureAwait(false);
+        return result;
     }
 
     /// <inheritdoc/>
@@ -95,14 +110,17 @@ public sealed class LookupCoordinator : ILookupCoordinator
         {
             if (IsFresh(cached))
             {
-                updates.Add(CacheEntryToResult(cached, normalized, cacheHit: true));
+                var freshResult = CacheEntryToResult(cached, normalized, cacheHit: true);
+                await PopulateHistoryAsync(freshResult, normalized).ConfigureAwait(false);
+                updates.Add(freshResult);
                 return [.. updates];
             }
 
-            // Stale entry (only emit stale for Found records)
             if (cached.Record is not null)
             {
-                updates.Add(CacheEntryToResult(cached, normalized, cacheHit: true, stateOverride: LookupState.Stale));
+                var staleResult = CacheEntryToResult(cached, normalized, cacheHit: true, stateOverride: LookupState.Stale);
+                await PopulateHistoryAsync(staleResult, normalized).ConfigureAwait(false);
+                updates.Add(staleResult);
             }
         }
 
@@ -113,7 +131,9 @@ public sealed class LookupCoordinator : ILookupCoordinator
         var providerResult = await RunProviderLookupWithFallback(normalized, baseCallsign, ct).ConfigureAwait(false);
         var latencyMs = (uint)Math.Min(sw.ElapsedMilliseconds, uint.MaxValue);
 
-        updates.Add(await ProviderResultToLookup(providerResult, normalized, latencyMs, ct).ConfigureAwait(false));
+        var finalResult = await ProviderResultToLookup(providerResult, normalized, latencyMs, ct).ConfigureAwait(false);
+        await PopulateHistoryAsync(finalResult, normalized).ConfigureAwait(false);
+        updates.Add(finalResult);
         return [.. updates];
     }
 
@@ -268,6 +288,64 @@ public sealed class LookupCoordinator : ILookupCoordinator
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(callsign);
         return callsign.Trim().ToUpperInvariant();
+    }
+
+    private async Task PopulateHistoryAsync(LookupResult result, string normalizedCallsign)
+    {
+        if (_logbookStore is null || result.State == LookupState.Loading)
+        {
+            return;
+        }
+
+        try
+        {
+            var page = await _logbookStore.ListQsoHistoryAsync(normalizedCallsign, DefaultHistoryLimit)
+                .ConfigureAwait(false);
+
+            result.PriorQsos.Clear();
+            foreach (var qso in page.Entries)
+            {
+                result.PriorQsos.Add(QsoToHistoryEntry(qso));
+            }
+            result.PriorQsoTotalCount = (uint)Math.Max(0, page.Total);
+        }
+        catch (StorageException)
+        {
+            // History is best-effort; never fail the lookup itself.
+        }
+    }
+
+    private static QsoHistoryEntry QsoToHistoryEntry(QsoRecord qso)
+    {
+        var entry = new QsoHistoryEntry
+        {
+            LocalId = qso.LocalId,
+            UtcTimestamp = qso.UtcTimestamp,
+            Band = qso.Band,
+            Mode = qso.Mode,
+        };
+
+        if (!string.IsNullOrEmpty(qso.Submode))
+        {
+            entry.Submode = qso.Submode;
+        }
+
+        if (qso.HasFrequencyHz)
+        {
+            entry.FrequencyHz = qso.FrequencyHz;
+        }
+
+        if (qso.HasFrequencyRxHz)
+        {
+            entry.FrequencyRxHz = qso.FrequencyRxHz;
+        }
+
+        if (!string.IsNullOrEmpty(qso.ContestId))
+        {
+            entry.ContestId = qso.ContestId;
+        }
+
+        return entry;
     }
 
     private sealed record CacheEntry(CallsignRecord? Record, DateTimeOffset CachedAt);

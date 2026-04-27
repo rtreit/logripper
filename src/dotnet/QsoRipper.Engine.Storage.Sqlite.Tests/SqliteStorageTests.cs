@@ -874,6 +874,35 @@ public sealed class SqliteStorageTests : IDisposable
     }
 
     [Fact]
+    public async Task ListQsoHistory_exact_match_excludes_soft_deleted_and_caps_entries()
+    {
+        await _storage.Logbook.InsertQsoAsync(MakeQso("a", "K7ABC", Band._20M, Mode.Ssb, "2026-01-01T00:00:00Z"));
+        await _storage.Logbook.InsertQsoAsync(MakeQso("b", "K7ABC", Band._40M, Mode.Cw, "2026-02-01T00:00:00Z"));
+        await _storage.Logbook.InsertQsoAsync(MakeQso("c", "K7ABCD", Band._20M, Mode.Ssb, "2026-02-15T00:00:00Z"));
+        await _storage.Logbook.InsertQsoAsync(MakeQso("d", "k7abc", Band._15M, Mode.Ft8, "2026-03-01T00:00:00Z"));
+        await _storage.Logbook.SoftDeleteQsoAsync("b", DateTimeOffset.UtcNow, pendingRemoteDelete: false);
+
+        var page = await _storage.Logbook.ListQsoHistoryAsync("k7abc", limit: 10);
+        Assert.Equal(2, page.Total);
+        Assert.Equal(2, page.Entries.Count);
+        Assert.Equal("d", page.Entries[0].LocalId);
+        Assert.Equal("a", page.Entries[1].LocalId);
+
+        var limited = await _storage.Logbook.ListQsoHistoryAsync("K7ABC", limit: 1);
+        Assert.Equal(2, limited.Total);
+        Assert.Single(limited.Entries);
+        Assert.Equal("d", limited.Entries[0].LocalId);
+
+        var zero = await _storage.Logbook.ListQsoHistoryAsync("K7ABC", limit: 0);
+        Assert.Equal(2, zero.Total);
+        Assert.Empty(zero.Entries);
+
+        var none = await _storage.Logbook.ListQsoHistoryAsync("NEVER", limit: 5);
+        Assert.Equal(0, none.Total);
+        Assert.Empty(none.Entries);
+    }
+
+    [Fact]
     public async Task Migration_idempotent_when_storage_reopens_existing_file()
     {
         var path = Path.Combine(Path.GetTempPath(), $"qsoripper-soft-delete-{Guid.NewGuid():N}.db");

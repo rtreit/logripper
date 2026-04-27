@@ -1607,13 +1607,15 @@ internal sealed class ManagedEngineState
 #pragma warning restore CA2000
             _lookupCoordinator = new LookupCoordinator(
                 new Lookup.Qrz.QrzXmlProvider(httpClient, username, password, userAgent: userAgent),
-                _storage.LookupSnapshots);
+                _storage.LookupSnapshots,
+                logbookStore: _storage.Logbook);
         }
         else
         {
             _lookupCoordinator = new LookupCoordinator(
                 new Lookup.Qrz.DisabledCallsignProvider(),
-                _storage.LookupSnapshots);
+                _storage.LookupSnapshots,
+                logbookStore: _storage.Logbook);
         }
     }
 
@@ -1673,7 +1675,7 @@ internal sealed class ManagedEngineState
             provider = new Lookup.Qrz.DisabledCallsignProvider();
         }
 
-        return new LookupCoordinator(provider, storage.LookupSnapshots);
+        return new LookupCoordinator(provider, storage.LookupSnapshots, logbookStore: storage.Logbook);
     }
 
     private static List<RuntimeConfigDefinition> BuildRuntimeConfigDefinitionsNoLock()

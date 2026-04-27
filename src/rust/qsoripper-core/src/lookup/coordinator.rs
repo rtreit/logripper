@@ -15,7 +15,7 @@ use crate::{
         callsign_parser::{annotate_record, parse_callsign},
         lookup::normalize_callsign,
     },
-    proto::qsoripper::domain::{CallsignRecord, LookupResult, LookupState},
+    proto::qsoripper::domain::{CallsignRecord, LookupResult, LookupState, QsoHistoryEntry},
     storage::{EngineStorage, LookupSnapshot},
 };
 
@@ -29,6 +29,11 @@ type SharedProviderLookup = Shared<BoxFuture<'static, ProviderLookupResult>>;
 const DEFAULT_POSITIVE_CACHE_TTL: Duration = Duration::from_secs(15 * 60);
 const DEFAULT_NEGATIVE_CACHE_TTL: Duration = Duration::from_secs(2 * 60);
 const DEFAULT_MAX_CACHE_ENTRIES: NonZeroUsize = NonZeroUsize::new(1_000).unwrap();
+
+/// Maximum number of prior QSOs returned with a lookup result. Picked to
+/// cover dense pileups while staying small enough to keep responses tight
+/// (full `QsoRecord` history isn't returned — see [`qso_to_history_entry`]).
+const DEFAULT_HISTORY_LIMIT: u32 = 25;
 
 /// Lookup coordinator configuration.
 #[derive(Debug, Clone, Copy)]
@@ -182,7 +187,11 @@ impl LookupCoordinator {
         if !skip_cache {
             if let Some(entry) = self.get_cache_entry(&normalized_callsign).await {
                 if self.is_fresh(&entry) {
-                    return Self::cache_entry_to_result(&entry, &normalized_callsign, None, true);
+                    let mut result =
+                        Self::cache_entry_to_result(&entry, &normalized_callsign, None, true);
+                    self.populate_history(&normalized_callsign, &mut result)
+                        .await;
+                    return result;
                 }
             }
         }
@@ -199,8 +208,12 @@ impl LookupCoordinator {
             .run_provider_lookup_with_fallback(&normalized_callsign, base)
             .await;
         let latency_ms = duration_to_millis_u32(started_at.elapsed());
-        self.provider_result_to_lookup(provider_result, &normalized_callsign, latency_ms, &parsed)
-            .await
+        let mut result = self
+            .provider_result_to_lookup(provider_result, &normalized_callsign, latency_ms, &parsed)
+            .await;
+        self.populate_history(&normalized_callsign, &mut result)
+            .await;
+        result
     }
 
     /// Perform a streaming lookup state transition.
@@ -242,12 +255,8 @@ impl LookupCoordinator {
 
         let loading = LookupResult {
             state: LookupState::Loading as i32,
-            record: None,
-            error_message: None,
-            cache_hit: false,
-            lookup_latency_ms: 0,
             queried_callsign: normalized_callsign.clone(),
-            debug_http_exchanges: Vec::new(),
+            ..Default::default()
         };
         if sender.send(loading).is_err() {
             return;
@@ -256,19 +265,23 @@ impl LookupCoordinator {
         if !skip_cache {
             if let Some(entry) = self.get_cache_entry(&normalized_callsign).await {
                 if self.is_fresh(&entry) {
-                    let fresh =
+                    let mut fresh =
                         Self::cache_entry_to_result(&entry, &normalized_callsign, None, true);
+                    self.populate_history(&normalized_callsign, &mut fresh)
+                        .await;
                     let _ = sender.send(fresh);
                     return;
                 }
 
                 if let CachedLookup::Found(_) = entry.lookup {
-                    let stale = Self::cache_entry_to_result(
+                    let mut stale = Self::cache_entry_to_result(
                         &entry,
                         &normalized_callsign,
                         Some(LookupState::Stale),
                         true,
                     );
+                    self.populate_history(&normalized_callsign, &mut stale)
+                        .await;
                     if sender.send(stale).is_err() {
                         return;
                     }
@@ -288,8 +301,10 @@ impl LookupCoordinator {
             .run_provider_lookup_with_fallback(&normalized_callsign, base)
             .await;
         let latency_ms = duration_to_millis_u32(started_at.elapsed());
-        let final_update = self
+        let mut final_update = self
             .provider_result_to_lookup(provider_result, &normalized_callsign, latency_ms, &parsed)
+            .await;
+        self.populate_history(&normalized_callsign, &mut final_update)
             .await;
         let _ = sender.send(final_update);
     }
@@ -297,21 +312,26 @@ impl LookupCoordinator {
     /// Return a cache-only lookup result.
     pub async fn get_cached_callsign(&self, callsign: &str) -> LookupResult {
         let normalized_callsign = normalize_callsign(callsign);
-        if let Some(entry) = self.get_cache_entry(&normalized_callsign).await {
+        let mut result = if let Some(entry) = self.get_cache_entry(&normalized_callsign).await {
             if self.is_fresh(&entry) {
-                return Self::cache_entry_to_result(&entry, &normalized_callsign, None, true);
+                Self::cache_entry_to_result(&entry, &normalized_callsign, None, true)
+            } else {
+                LookupResult {
+                    state: LookupState::NotFound as i32,
+                    queried_callsign: normalized_callsign.clone(),
+                    ..Default::default()
+                }
             }
-        }
-
-        LookupResult {
-            state: LookupState::NotFound as i32,
-            record: None,
-            error_message: None,
-            cache_hit: false,
-            lookup_latency_ms: 0,
-            queried_callsign: normalized_callsign,
-            debug_http_exchanges: Vec::new(),
-        }
+        } else {
+            LookupResult {
+                state: LookupState::NotFound as i32,
+                queried_callsign: normalized_callsign.clone(),
+                ..Default::default()
+            }
+        };
+        self.populate_history(&normalized_callsign, &mut result)
+            .await;
+        result
     }
 
     async fn get_cache_entry(&self, normalized_callsign: &str) -> Option<CacheEntry> {
@@ -343,20 +363,15 @@ impl LookupCoordinator {
             CachedLookup::Found(record) => LookupResult {
                 state: state_override.unwrap_or(LookupState::Found) as i32,
                 record: Some((**record).clone()),
-                error_message: None,
                 cache_hit,
-                lookup_latency_ms: 0,
                 queried_callsign: normalized_callsign.to_string(),
-                debug_http_exchanges: Vec::new(),
+                ..Default::default()
             },
             CachedLookup::NotFound => LookupResult {
                 state: LookupState::NotFound as i32,
-                record: None,
-                error_message: None,
                 cache_hit,
-                lookup_latency_ms: 0,
                 queried_callsign: normalized_callsign.to_string(),
-                debug_http_exchanges: Vec::new(),
+                ..Default::default()
             },
         }
     }
@@ -386,11 +401,10 @@ impl LookupCoordinator {
                 LookupResult {
                     state: LookupState::Found as i32,
                     record: Some(*record),
-                    error_message: None,
-                    cache_hit: false,
                     lookup_latency_ms,
                     queried_callsign: normalized_callsign.to_string(),
                     debug_http_exchanges,
+                    ..Default::default()
                 }
             }
             Ok(ProviderLookup {
@@ -408,23 +422,46 @@ impl LookupCoordinator {
 
                 LookupResult {
                     state: LookupState::NotFound as i32,
-                    record: None,
-                    error_message: None,
-                    cache_hit: false,
                     lookup_latency_ms,
                     queried_callsign: normalized_callsign.to_string(),
                     debug_http_exchanges,
+                    ..Default::default()
                 }
             }
             Err(error) => LookupResult {
                 state: LookupState::Error as i32,
-                record: None,
                 error_message: Some(error.to_string()),
-                cache_hit: false,
                 lookup_latency_ms,
                 queried_callsign: normalized_callsign.to_string(),
                 debug_http_exchanges: error.debug_http_exchanges().to_vec(),
+                ..Default::default()
             },
+        }
+    }
+
+    /// Populate `prior_qsos` and `prior_qso_total_count` from the local
+    /// logbook. Called at every non-LOADING return path of [`Self::lookup`],
+    /// [`Self::stream_lookup_into`], [`Self::get_cached_callsign`], and the
+    /// batch fan-out so the history reflects current logbook state regardless
+    /// of cache freshness. A failed history query logs and leaves the result
+    /// untouched so a transient storage error never masks the underlying
+    /// callsign result.
+    async fn populate_history(&self, normalized_callsign: &str, result: &mut LookupResult) {
+        let Some(ref storage) = self.snapshot_storage else {
+            return;
+        };
+        match storage
+            .logbook()
+            .list_qso_history(normalized_callsign, DEFAULT_HISTORY_LIMIT)
+            .await
+        {
+            Ok(page) => {
+                result.prior_qsos = page.entries.iter().map(qso_to_history_entry).collect();
+                result.prior_qso_total_count = page.total;
+            }
+            Err(err) => {
+                eprintln!("[lookup] Failed to load QSO history for {normalized_callsign}: {err}");
+            }
         }
     }
 
@@ -607,8 +644,21 @@ fn duration_to_millis_u32(duration: Duration) -> u32 {
     }
 }
 
+fn qso_to_history_entry(qso: &crate::proto::qsoripper::domain::QsoRecord) -> QsoHistoryEntry {
+    QsoHistoryEntry {
+        local_id: qso.local_id.clone(),
+        utc_timestamp: qso.utc_timestamp,
+        band: qso.band,
+        mode: qso.mode,
+        submode: qso.submode.clone(),
+        frequency_hz: qso.frequency_hz,
+        frequency_rx_hz: qso.frequency_rx_hz,
+        contest_id: qso.contest_id.clone(),
+    }
+}
+
 #[cfg(test)]
-#[allow(clippy::expect_used, clippy::unwrap_used)]
+#[allow(clippy::expect_used, clippy::unwrap_used, clippy::indexing_slicing)]
 mod tests {
     use std::{
         collections::VecDeque,
@@ -898,27 +948,35 @@ mod tests {
 
     use crate::storage::{
         EngineStorage, LogbookCounts, LogbookStore, LookupSnapshot, LookupSnapshotStore,
-        QsoListQuery, StorageError, SyncMetadata,
+        QsoHistoryPage, QsoListQuery, StorageError, SyncMetadata,
     };
 
-    /// Minimal in-memory implementation of [`EngineStorage`] for snapshot tests.
-    /// Only the [`LookupSnapshotStore`] methods are exercised; the logbook
-    /// surface is left unimplemented.
+    /// Minimal in-memory implementation of [`EngineStorage`] for snapshot
+    /// and lookup-coordinator tests. The logbook surface stores a plain
+    /// `Vec<QsoRecord>` keyed by `local_id` so history queries can be
+    /// exercised without pulling in the storage-memory crate (which would
+    /// create a dependency cycle here).
     struct MockSnapshotStorage {
         snapshots: tokio::sync::RwLock<BTreeMap<String, LookupSnapshot>>,
+        qsos: tokio::sync::RwLock<Vec<crate::proto::qsoripper::domain::QsoRecord>>,
     }
 
     impl MockSnapshotStorage {
         fn new() -> Self {
             Self {
                 snapshots: tokio::sync::RwLock::new(BTreeMap::new()),
+                qsos: tokio::sync::RwLock::new(Vec::new()),
             }
+        }
+
+        async fn seed_qso(&self, qso: crate::proto::qsoripper::domain::QsoRecord) {
+            self.qsos.write().await.push(qso);
         }
     }
 
     impl EngineStorage for MockSnapshotStorage {
         fn logbook(&self) -> &dyn LogbookStore {
-            unimplemented!("logbook not used in snapshot tests")
+            self
         }
         fn lookup_snapshots(&self) -> &dyn LookupSnapshotStore {
             self
@@ -967,6 +1025,34 @@ mod tests {
             _query: &QsoListQuery,
         ) -> Result<Vec<crate::proto::qsoripper::domain::QsoRecord>, StorageError> {
             unimplemented!()
+        }
+        async fn list_qso_history(
+            &self,
+            worked_callsign: &str,
+            limit: u32,
+        ) -> Result<QsoHistoryPage, StorageError> {
+            let qsos = self.qsos.read().await;
+            let mut matching: Vec<_> = qsos
+                .iter()
+                .filter(|q| {
+                    q.deleted_at.is_none()
+                        && q.worked_callsign.eq_ignore_ascii_case(worked_callsign)
+                })
+                .cloned()
+                .collect();
+            let total = u32::try_from(matching.len()).unwrap_or(u32::MAX);
+            matching.sort_by(|a, b| {
+                let a_secs = a.utc_timestamp.as_ref().map_or(0, |t| t.seconds);
+                let b_secs = b.utc_timestamp.as_ref().map_or(0, |t| t.seconds);
+                b_secs
+                    .cmp(&a_secs)
+                    .then_with(|| b.local_id.cmp(&a.local_id))
+            });
+            matching.truncate(limit as usize);
+            Ok(QsoHistoryPage {
+                entries: matching,
+                total,
+            })
         }
         async fn qso_counts(&self) -> Result<LogbookCounts, StorageError> {
             unimplemented!()
@@ -1144,5 +1230,99 @@ mod tests {
         let record = result.record.expect("record should be present");
         assert_eq!(record.first_name, "Fresh");
         assert_eq!(provider.call_count(), 1, "provider should be called");
+    }
+
+    #[tokio::test]
+    async fn lookup_populates_prior_qsos_from_logbook_storage() {
+        use crate::domain::qso::QsoRecordBuilder;
+        use crate::proto::qsoripper::domain::{Band, Mode};
+
+        let storage = Arc::new(MockSnapshotStorage::new());
+        for (id, ts_secs) in [
+            ("h1", 1_700_000_000_i64),
+            ("h2", 1_700_001_000),
+            ("h3", 1_700_002_000),
+        ] {
+            let mut qso = QsoRecordBuilder::new("K7DBG", "W1AW")
+                .band(Band::Band20m)
+                .mode(Mode::Ssb)
+                .timestamp(prost_types::Timestamp {
+                    seconds: ts_secs,
+                    nanos: 0,
+                })
+                .build();
+            qso.local_id = id.to_string();
+            storage.seed_qso(qso).await;
+        }
+        // Soft-deleted row should be excluded from history.
+        let mut soft = QsoRecordBuilder::new("K7DBG", "W1AW")
+            .band(Band::Band40m)
+            .build();
+        soft.local_id = "ghost".to_string();
+        soft.deleted_at = Some(prost_types::Timestamp {
+            seconds: 1_700_999_000,
+            nanos: 0,
+        });
+        storage.seed_qso(soft).await;
+        // Loose-match decoy that must NOT appear in history.
+        let mut decoy = QsoRecordBuilder::new("K7DBG", "W1AWX").build();
+        decoy.local_id = "decoy".to_string();
+        storage.seed_qso(decoy).await;
+
+        let provider = QueueProvider::new(
+            vec![Ok(ProviderLookup::found(
+                found_record("W1AW", "Hiram"),
+                Vec::new(),
+            ))],
+            Duration::ZERO,
+        );
+        let coordinator = LookupCoordinator::with_snapshot_store(
+            Arc::new(provider),
+            LookupCoordinatorConfig::default(),
+            storage.clone() as Arc<dyn EngineStorage>,
+        );
+
+        let result = coordinator.lookup("W1AW", false).await;
+        assert_eq!(result.state, LookupState::Found as i32);
+        assert_eq!(result.prior_qso_total_count, 3);
+        assert_eq!(result.prior_qsos.len(), 3);
+        assert_eq!(result.prior_qsos[0].local_id, "h3");
+        assert_eq!(result.prior_qsos[2].local_id, "h1");
+        assert_eq!(result.prior_qsos[0].band, Band::Band20m as i32);
+        assert_eq!(result.prior_qsos[0].mode, Mode::Ssb as i32);
+
+        // Cache hit on the second call still reports history.
+        let cached = coordinator.lookup("W1AW", false).await;
+        assert!(cached.cache_hit);
+        assert_eq!(cached.prior_qso_total_count, 3);
+        assert_eq!(cached.prior_qsos.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn stream_lookup_does_not_attach_history_to_loading_state() {
+        let storage = Arc::new(MockSnapshotStorage::new());
+        let provider = QueueProvider::new(
+            vec![Ok(ProviderLookup::not_found(Vec::new()))],
+            Duration::ZERO,
+        );
+        let coordinator = LookupCoordinator::with_snapshot_store(
+            Arc::new(provider),
+            LookupCoordinatorConfig::default(),
+            storage as Arc<dyn EngineStorage>,
+        );
+
+        let updates = coordinator.stream_lookup("W1AW", false).await;
+        let loading = updates
+            .iter()
+            .find(|u| u.state == LookupState::Loading as i32)
+            .expect("loading state expected");
+        assert!(loading.prior_qsos.is_empty());
+        assert_eq!(loading.prior_qso_total_count, 0);
+
+        let final_update = updates
+            .iter()
+            .find(|u| u.state == LookupState::NotFound as i32)
+            .expect("terminal state expected");
+        assert_eq!(final_update.prior_qso_total_count, 0);
     }
 }

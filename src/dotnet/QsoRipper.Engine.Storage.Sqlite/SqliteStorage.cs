@@ -324,6 +324,57 @@ public sealed class SqliteStorage : IEngineStorage, ILogbookStore, ILookupSnapsh
     }
 
     /// <inheritdoc />
+    public ValueTask<QsoHistoryPage> ListQsoHistoryAsync(string workedCallsign, int limit)
+    {
+        ArgumentNullException.ThrowIfNull(workedCallsign);
+
+        var normalized = workedCallsign.Trim();
+        if (normalized.Length == 0)
+        {
+            return new ValueTask<QsoHistoryPage>(QsoHistoryPage.Empty);
+        }
+
+        var upper = normalized.ToUpperInvariant();
+
+        lock (_lock)
+        {
+            ThrowIfDisposed();
+
+            int total;
+            using (var countCmd = _connection.CreateCommand())
+            {
+                countCmd.CommandText =
+                    "SELECT COUNT(*) FROM qsos WHERE deleted_at_ms IS NULL AND UPPER(worked_callsign) = $worked";
+                countCmd.Parameters.AddWithValue("$worked", upper);
+                total = Convert.ToInt32(countCmd.ExecuteScalar() ?? 0, CultureInfo.InvariantCulture);
+            }
+
+            if (limit <= 0 || total == 0)
+            {
+                return new ValueTask<QsoHistoryPage>(new QsoHistoryPage(Array.Empty<QsoRecord>(), total));
+            }
+
+            using var cmd = _connection.CreateCommand();
+#pragma warning disable CA2100 // SQL is built from controlled int limit value, all user input is parameterized
+            cmd.CommandText = string.Create(
+                CultureInfo.InvariantCulture,
+                $"SELECT record FROM qsos WHERE deleted_at_ms IS NULL AND UPPER(worked_callsign) = $worked ORDER BY utc_timestamp_ms DESC, local_id DESC LIMIT {limit}");
+#pragma warning restore CA2100
+            cmd.Parameters.AddWithValue("$worked", upper);
+
+            var entries = new List<QsoRecord>();
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+            {
+                var blob = (byte[])reader["record"];
+                entries.Add(QsoRecord.Parser.ParseFrom(blob));
+            }
+
+            return new ValueTask<QsoHistoryPage>(new QsoHistoryPage(entries, total));
+        }
+    }
+
+    /// <inheritdoc />
     public ValueTask<int> PurgeDeletedQsosAsync(IReadOnlyList<string>? localIds, DateTimeOffset? olderThan)
     {
         lock (_lock)

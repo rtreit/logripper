@@ -7,6 +7,7 @@ option csharp_namespace = "QsoRipper.Domain";
 import "domain/callsign_record.proto";
 import "domain/debug_http_exchange.proto";
 import "domain/lookup_state.proto";
+import "domain/qso_history_entry.proto";
 
 // Result of a callsign lookup.
 message LookupResult {
@@ -17,4 +18,16 @@ message LookupResult {
   uint32 lookup_latency_ms = 5;  // Round-trip latency in milliseconds
   string queried_callsign = 6;  // Echo of the original requested callsign
   repeated DebugHttpExchange debug_http_exchanges = 7;  // Redacted HTTP exchanges for debug workbench inspection
+
+  // Most-recent prior QSOs with the queried callsign from the local logbook,
+  // ordered most-recent-first. Always recomputed by the engine on every
+  // lookup response (never persisted in the lookup snapshot cache) so it
+  // reflects the current logbook state. Excludes soft-deleted rows. May be
+  // capped; see prior_qso_total_count for the unbounded total.
+  repeated QsoHistoryEntry prior_qsos = 8;
+
+  // Total number of active prior QSOs with the queried callsign in the local
+  // logbook, regardless of how many are returned in prior_qsos. Lets clients
+  // display "47 prior contacts (showing 25)" without an extra call.
+  uint32 prior_qso_total_count = 9;
 }

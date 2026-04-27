@@ -87,6 +87,8 @@ pub fn placeholder_lookup_error(callsign: &str) -> LookupResult {
         lookup_latency_ms: 0,
         queried_callsign: normalized_callsign,
         debug_http_exchanges: Vec::new(),
+        prior_qsos: Vec::new(),
+        prior_qso_total_count: 0,
     }
 }
 

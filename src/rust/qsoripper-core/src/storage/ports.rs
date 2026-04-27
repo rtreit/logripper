@@ -1,7 +1,9 @@
 //! Domain-facing storage contracts implemented by persistence adapters.
 
 use crate::proto::qsoripper::domain::QsoRecord;
-use crate::storage::{LogbookCounts, LookupSnapshot, QsoListQuery, StorageError, SyncMetadata};
+use crate::storage::{
+    LogbookCounts, LookupSnapshot, QsoHistoryPage, QsoListQuery, StorageError, SyncMetadata,
+};
 
 /// Root engine-owned storage abstraction used by application services.
 pub trait EngineStorage: Send + Sync {
@@ -51,6 +53,18 @@ pub trait LogbookStore: Send + Sync {
 
     /// List QSOs using the provided query object.
     async fn list_qsos(&self, query: &QsoListQuery) -> Result<Vec<QsoRecord>, StorageError>;
+
+    /// Return prior QSOs with a worked callsign (exact match, case-insensitive),
+    /// excluding soft-deleted rows. Results are ordered most-recent-first and
+    /// capped at `limit` entries; the returned `total` reflects the unbounded
+    /// active-row count so callers can render "showing N of TOTAL" without a
+    /// second query. A `limit` of zero returns no entries but still populates
+    /// `total`.
+    async fn list_qso_history(
+        &self,
+        worked_callsign: &str,
+        limit: u32,
+    ) -> Result<QsoHistoryPage, StorageError>;
 
     /// Return aggregate counts derived from locally persisted QSOs.
     async fn qso_counts(&self) -> Result<LogbookCounts, StorageError>;

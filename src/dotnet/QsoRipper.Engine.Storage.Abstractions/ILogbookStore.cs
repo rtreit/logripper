@@ -43,6 +43,16 @@ public interface ILogbookStore
     /// <summary>Queries QSO records with optional filters, sorting, and pagination.</summary>
     ValueTask<IReadOnlyList<QsoRecord>> ListQsosAsync(QsoListQuery query);
 
+    /// <summary>
+    /// Returns prior QSOs with a worked callsign (exact match, case-insensitive),
+    /// excluding soft-deleted rows. Results are ordered most-recent-first and
+    /// capped at <paramref name="limit"/>; the returned <see cref="QsoHistoryPage.Total"/>
+    /// reflects the unbounded active-row count regardless of the limit. A
+    /// <paramref name="limit"/> of zero returns no entries but still populates
+    /// <see cref="QsoHistoryPage.Total"/>.
+    /// </summary>
+    ValueTask<QsoHistoryPage> ListQsoHistoryAsync(string workedCallsign, int limit);
+
     /// <summary>Returns aggregate counts for the logbook.</summary>
     ValueTask<LogbookCounts> GetCountsAsync();
 

@@ -1,0 +1,49 @@
+syntax = "proto3";
+
+package qsoripper.domain;
+
+option csharp_namespace = "QsoRipper.Domain";
+
+import "domain/band.proto";
+import "domain/mode.proto";
+import "google/protobuf/timestamp.proto";
+
+// Compact summary of a prior QSO with a particular worked callsign, returned
+// alongside callsign lookup results so UIs can show a "worked before"
+// indicator without an extra round-trip.
+//
+// Fields are intentionally a strict subset of QsoRecord, chosen to be
+// sufficient for both:
+//   - Normal-mode "worked before" badges (timestamp + band/mode at minimum).
+//   - Future contest-mode dupe checks: (band, mode, contest_id) covers every
+//     common contest dupe rule, and contest_id distinguishes current-contest
+//     contacts from past contacts. Contest mode is not implemented yet; this
+//     shape is forward-compatible so adding it later is purely additive.
+message QsoHistoryEntry {
+  // QsoRipper-assigned UUID of the historical QSO. Lets clients open the
+  // full record from the lookup result.
+  string local_id = 1;
+
+  // UTC timestamp of the contact.
+  google.protobuf.Timestamp utc_timestamp = 2;
+
+  // Band of the contact.
+  Band band = 3;
+
+  // Mode of the contact.
+  Mode mode = 4;
+
+  // ADIF submode string when present (e.g., "USB", "PSK31").
+  optional string submode = 5;
+
+  // Precise transmit frequency in Hz, when known.
+  optional uint64 frequency_hz = 6;
+
+  // Receiver frequency in Hz when running split, when known.
+  optional uint64 frequency_rx_hz = 7;
+
+  // Contest identifier for the contact, when logged in a contest. Empty for
+  // non-contest QSOs. Used by future contest-mode dupe logic to differentiate
+  // current-contest dupes from past-contest history.
+  optional string contest_id = 8;
+}
