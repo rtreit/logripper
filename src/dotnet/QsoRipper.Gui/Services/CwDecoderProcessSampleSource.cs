@@ -10,7 +10,7 @@ namespace QsoRipper.Gui.Services;
 
 /// <summary>
 /// Spawns the experimental <c>cw-decoder</c> Rust binary in
-/// <c>stream-live-ditdah --json</c> mode and surfaces parsed <c>wpm</c>
+/// <c>stream-live --json</c> mode and surfaces parsed <c>wpm</c>
 /// NDJSON events as <see cref="CwWpmSample"/>s.
 ///
 /// Round 1 deliberately reuses the experiment binary rather than the
@@ -18,6 +18,15 @@ namespace QsoRipper.Gui.Services;
 /// located by walking up from the GUI's BaseDirectory, looking for the
 /// experiment build output, in line with the existing experiment GUI's
 /// discovery logic.
+///
+/// History note: an earlier round shipped <c>stream-live-ditdah</c> here.
+/// Baselining against <c>data/cw-samples/training-set-a/</c> showed the
+/// vendored ditdah backend produced ~CER 0.83 on clean 30 WPM CW vs
+/// ~CER 0.17 from the legacy Goertzel <c>stream-live</c> path. The
+/// regression was severe enough on a clean studio reference that the
+/// only responsible default was to revert. The ditdah binary remains
+/// available for offline study via the eval harness; see
+/// experiments/cw-decoder/README.md for the comparison procedure.
 /// </summary>
 internal sealed class CwDecoderProcessSampleSource : ICwWpmSampleSource
 {
@@ -114,16 +123,9 @@ internal sealed class CwDecoderProcessSampleSource : ICwWpmSampleSource
             CreateNoWindow = true,
             WorkingDirectory = Path.GetDirectoryName(exe)!,
         };
-        psi.ArgumentList.Add("stream-live-ditdah");
+        psi.ArgumentList.Add("stream-live");
         psi.ArgumentList.Add("--json");
-        psi.ArgumentList.Add("--window");
-        psi.ArgumentList.Add("6");
-        psi.ArgumentList.Add("--min-window");
-        psi.ArgumentList.Add("4");
-        psi.ArgumentList.Add("--decode-every-ms");
-        psi.ArgumentList.Add("1000");
-        psi.ArgumentList.Add("--confirmations");
-        psi.ArgumentList.Add("1");
+        psi.ArgumentList.Add("--stdin-control");
         if (loopback)
         {
             // WASAPI loopback: capture from a system OUTPUT device so audio
@@ -253,14 +255,15 @@ internal sealed class CwDecoderProcessSampleSource : ICwWpmSampleSource
     }
 
     /// <summary>
-    /// Send a manual-anchor hint to the running decoder so the rolling
-    /// ditdah backend can start accepting plausible mid-QSO text even when
-    /// the operator tuned in after automatic anchors such as CQ/DE/73.
-    /// No-op if the decoder is not running.
+    /// Sends a "re-anchor from now" hint to the running decoder. With the
+    /// legacy <c>stream-live</c> backend this is mapped to
+    /// <c>reset_lock</c>, which drops the current pitch lock so the next
+    /// confident decode comes from the audio the operator is hearing right
+    /// now (useful when tuning in mid-QSO).
     /// </summary>
     public void MarkAnchorHeard()
     {
-        WriteControlLine("{\"type\":\"manual_anchor\"}");
+        WriteControlLine("{\"type\":\"reset_lock\"}");
         SetLockState(CwLockState.Probation);
     }
 
