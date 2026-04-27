@@ -44,6 +44,12 @@ enum Cmd {
         /// Hop length in seconds for sliding mode.
         #[arg(long, default_value_t = 3.0)]
         hop: f32,
+
+        /// Pin the decoder WPM (overrides ditdah's auto-detect AND its
+        /// median-element-length self-calibration). Useful when auto-WPM
+        /// locks onto a wrong value on noisy live signals. 0 = auto.
+        #[arg(long, default_value_t = 0.0)]
+        pin_wpm: f32,
     },
 
     /// List available input audio devices.
@@ -487,6 +493,11 @@ enum Cmd {
         /// Capture from a system OUTPUT device (WASAPI loopback).
         #[arg(long)]
         loopback: bool,
+        /// Pin the WPM hint passed into ditdah. Overrides auto-detect AND
+        /// the median-element-length self-calibration. Useful when auto-WPM
+        /// locks onto a wrong value on noisy live signals. 0 = auto.
+        #[arg(long, default_value_t = 0.0)]
+        pin_wpm: f32,
     },
     /// Diagnostic: scan candidate pitches across an audio file and print
     /// the trial-decode Fisher score per pitch. Use this to compare
@@ -640,7 +651,8 @@ fn main() -> Result<()> {
             sliding,
             window,
             hop,
-        } => run_file(&path, sliding, window, hop, &log_capture),
+            pin_wpm,
+        } => run_file(&path, sliding, window, hop, pin_wpm, &log_capture),
         Cmd::Devices { json } => {
             let names = audio::list_input_devices().context("listing devices")?;
             let outs = audio::list_output_devices().context("listing output devices")?;
@@ -939,6 +951,7 @@ fn main() -> Result<()> {
             record,
             stdin_control,
             loopback,
+            pin_wpm,
         } => run_stream_live_v2(
             device.as_deref(),
             seconds,
@@ -947,6 +960,7 @@ fn main() -> Result<()> {
             record.as_deref(),
             stdin_control,
             loopback,
+            (pin_wpm > 0.0).then_some(pin_wpm),
         ),
         Cmd::ProbeFisher {
             path,
@@ -1173,9 +1187,14 @@ fn run_file(
     sliding: bool,
     window: f32,
     hop: f32,
+    pin_wpm: f32,
     log_capture: &log_capture::DitdahLogCapture,
 ) -> Result<()> {
+    let pin = (pin_wpm > 0.0).then_some(pin_wpm);
     println!("Decoding: {}", path.display());
+    if let Some(w) = pin {
+        println!("  pin_wpm = {w:.1}");
+    }
     let audio = audio::decode_file(path).context("decoding audio file")?;
     let dur = audio.samples.len() as f32 / audio.sample_rate as f32;
     println!(
@@ -1186,7 +1205,7 @@ fn run_file(
     );
 
     if !sliding {
-        let out = decoder::decode_window(&audio.samples, audio.sample_rate, log_capture)?;
+        let out = decoder::decode_window_with_pin(&audio.samples, audio.sample_rate, log_capture, pin)?;
         let stats = out.stats;
         println!();
         println!("== ditdah stats ==");
@@ -1230,7 +1249,7 @@ fn run_file(
     while start + win_samples <= audio.samples.len() {
         let end = start + win_samples;
         let slice = &audio.samples[start..end];
-        let out = decoder::decode_window(slice, audio.sample_rate, log_capture)?;
+        let out = decoder::decode_window_with_pin(slice, audio.sample_rate, log_capture, pin)?;
         let t = start as f32 / audio.sample_rate as f32;
         let wpm = out
             .stats
@@ -3006,6 +3025,7 @@ fn run_stream_live_v2(
     record_path: Option<&std::path::Path>,
     stdin_control: bool,
     loopback: bool,
+    pin_wpm: Option<f32>,
 ) -> Result<()> {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
@@ -3017,6 +3037,7 @@ fn run_stream_live_v2(
         audio::open_input_with_recording(device, 1.0, record_path)?
     };
     let mut decoder = streaming_v2::WholeBufferDecoder::new(capture.sample_rate);
+    decoder.set_pin_wpm(pin_wpm);
 
     let stop = Arc::new(AtomicBool::new(false));
     {
@@ -3060,12 +3081,14 @@ fn run_stream_live_v2(
                 "decode_every_ms": decode_every_ms,
                 "min_decode_audio_secs": streaming_v2::MIN_DECODE_AUDIO_SECS,
                 "recording": capture.record_path().map(|p| p.display().to_string()),
+                "pin_wpm": pin_wpm,
             }),
         );
     } else {
         println!(
-            "Live streaming (v2) from: {} @ {} Hz; decode every {} ms",
-            capture.device_name, capture.sample_rate, decode_every_ms
+            "Live streaming (v2) from: {} @ {} Hz; decode every {} ms; pin_wpm={}",
+            capture.device_name, capture.sample_rate, decode_every_ms,
+            pin_wpm.map(|w| format!("{w:.1}")).unwrap_or_else(|| "auto".into())
         );
     }
 

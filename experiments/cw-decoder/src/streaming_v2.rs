@@ -101,6 +101,7 @@ pub struct WholeBufferDecoder {
     max_samples: usize,
     recent_wpm: VecDeque<f32>,
     last_lock: LockState,
+    pin_wpm: Option<f32>,
 }
 
 impl WholeBufferDecoder {
@@ -112,7 +113,18 @@ impl WholeBufferDecoder {
             max_samples,
             recent_wpm: VecDeque::with_capacity(LOCK_WINDOW),
             last_lock: LockState::Hunting,
+            pin_wpm: None,
         }
+    }
+
+    /// Pin the WPM hint passed into ditdah (overrides auto-detect AND the
+    /// median-element-length self-calibration in `decode_with_params`).
+    /// `None` restores auto behavior.
+    pub fn set_pin_wpm(&mut self, pin_wpm: Option<f32>) {
+        self.pin_wpm = pin_wpm.filter(|w| *w > 0.0);
+        // Pinned WPM changes the lock semantics; clear so we re-establish.
+        self.recent_wpm.clear();
+        self.last_lock = LockState::Hunting;
     }
 
     /// Append new audio samples to the buffer. Drops oldest samples when
@@ -146,7 +158,7 @@ impl WholeBufferDecoder {
         }
         let started = std::time::Instant::now();
         let (text, wpm, _threshold) =
-            ditdah::decode_samples_with_params(&self.samples, self.sample_rate, None, None)?;
+            ditdah::decode_samples_with_params(&self.samples, self.sample_rate, self.pin_wpm, None)?;
         let decode_ms = started.elapsed().as_millis();
         let pitch_hz = ditdah_estimated_pitch(&self.samples, self.sample_rate).unwrap_or(0.0);
 

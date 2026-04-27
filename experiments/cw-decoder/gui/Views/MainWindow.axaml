@@ -69,7 +69,7 @@
     </Style>
   </Window.Styles>
 
-  <Grid RowDefinitions="Auto,Auto,Auto,Auto,Auto,*,Auto">
+  <Grid RowDefinitions="Auto,Auto,*,Auto">
     <!-- Header -->
     <Border Grid.Row="0" Padding="18,14" Background="{StaticResource BgPanel}" BorderBrush="{StaticResource EdgeGlow}" BorderThickness="0,0,0,1">
       <Grid ColumnDefinitions="Auto,*,Auto">
@@ -98,8 +98,17 @@
         </StackPanel>
         <StackPanel Grid.Column="1" Orientation="Vertical" Spacing="2">
           <TextBlock Text="DECODER MODE" Classes="label" />
-          <ComboBox Width="180" ItemsSource="{Binding DecoderModes}" SelectedItem="{Binding SelectedDecoderMode}"
-                    Background="{StaticResource BgPanel}" Foreground="{StaticResource TextHi}" />
+          <StackPanel Orientation="Horizontal" Spacing="6">
+            <ComboBox Width="180" ItemsSource="{Binding DecoderModes}" SelectedItem="{Binding SelectedDecoderMode}"
+                      Background="{StaticResource BgPanel}" Foreground="{StaticResource TextHi}" />
+            <StackPanel Orientation="Vertical" Spacing="0" IsVisible="{Binding IsV2DecoderMode}"
+                        ToolTip.Tip="Pin the WPM passed to ditdah's whole-buffer decoder. 0 = auto-detect. Use this when the auto-WPM locks onto a wrong value on noisy live signals (e.g. weak DX). Takes effect on next START LIVE.">
+              <TextBlock Text="PIN WPM" Classes="label" FontSize="9" />
+              <NumericUpDown Width="80" Value="{Binding PinWpm, Mode=TwoWay}" Minimum="0" Maximum="60" Increment="1"
+                             FormatString="0" ShowButtonSpinner="True"
+                             Background="{StaticResource BgPanel}" Foreground="{StaticResource TextHi}" />
+            </StackPanel>
+          </StackPanel>
         </StackPanel>
         <StackPanel Grid.Column="2" Margin="0,16,0,0" Spacing="2" VerticalAlignment="Center">
           <TextBlock Text="OPEN FILE decodes that file immediately. START LIVE captures from the selected input device." Classes="label" TextWrapping="Wrap" MaxWidth="360" />
@@ -120,9 +129,14 @@
       </Grid>
     </Border>
 
+
+    <TabControl Grid.Row="2" Margin="14,12,14,4">
+      <TabItem Header="DECODE">
+        <Border Classes="panel">
+          <Grid RowDefinitions="Auto,Auto,Auto,Auto,*,Auto">
     <!-- Sensitivity panel: 3 sliders + signal-quality readout + reset.
           Sends config-update commands to the decoder over stdin in real time. -->
-    <Border Grid.Row="2" Padding="18,10" Background="{StaticResource BgPanel}"
+    <Border Grid.Row="0" Padding="18,10" Background="{StaticResource BgPanel}"
             BorderBrush="{StaticResource GridLine}" BorderThickness="0,0,0,1">
       <Grid>
         <StackPanel IsVisible="{Binding IsCustomDecoderMode}" Spacing="8">
@@ -245,7 +259,7 @@
     </Border>
 
     <!-- Telemetry row: signal meter + WPM panel + sparkline -->
-    <Grid Grid.Row="3" ColumnDefinitions="*,*" Margin="14,12,14,0" >
+    <Grid Grid.Row="1" ColumnDefinitions="*,*" Margin="14,12,14,0" >
       <!-- Signal strength column -->
       <Border Classes="panel" Margin="0,0,7,0">
         <Grid RowDefinitions="Auto,Auto,Auto" RowSpacing="10">
@@ -334,7 +348,7 @@
     </Grid>
 
     <!-- Transcript + review surfaces -->
-    <Border Grid.Row="4" Margin="14,12,14,0" Classes="panel"
+    <Border Grid.Row="2" Margin="14,12,14,0" Classes="panel"
             IsVisible="{Binding HasPlaybackSource}">
       <Grid RowDefinitions="Auto,Auto,Auto,Auto" RowSpacing="8">
         <Grid ColumnDefinitions="Auto,Auto,*,Auto,Auto,Auto,Auto,Auto,Auto" ColumnSpacing="10">
@@ -401,16 +415,11 @@
         </Grid>
       </Grid>
     </Border>
-
-    <TabControl Grid.Row="5" Margin="14,12,14,4">
-      <TabItem Header="DECODE">
-        <Border Classes="panel">
-          <Grid RowDefinitions="Auto,*,Auto">
-            <Grid ColumnDefinitions="*,Auto">
+            <Grid Grid.Row="3" ColumnDefinitions="*,Auto">
               <TextBlock Text="DECODED MESSAGE" Classes="label" />
               <TextBlock Grid.Column="1" Text="morse always visible · letters blur with HIDE DECODING" Classes="label" />
             </Grid>
-            <ScrollViewer Grid.Row="1" Margin="0,8,0,0" HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+            <ScrollViewer Grid.Row="4" Margin="0,8,0,0" HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
               <ItemsControl ItemsSource="{Binding Cells}" x:Name="CellsHost">
                 <ItemsControl.ItemsPanel>
                   <ItemsPanelTemplate>
@@ -458,7 +467,7 @@
                 </ItemsControl.ItemTemplate>
               </ItemsControl>
             </ScrollViewer>
-            <Border Grid.Row="2" Margin="0,8,0,0" Padding="10,8"
+            <Border Grid.Row="5" Margin="0,8,0,0" Padding="10,8"
                     Background="{StaticResource BgDeep}"
                     BorderBrush="{StaticResource GridLine}" BorderThickness="1"
                     IsVisible="{Binding HasLastRecording}">
@@ -689,9 +698,13 @@
                       <TextBlock Grid.Column="2" Text="Saved labels are exact-window truth (`label_scope = exact_window`)." Classes="label" VerticalAlignment="Center" />
                     </Grid>
                   </StackPanel>
-                  <Grid Grid.Row="5" ColumnDefinitions="*,Auto" ColumnSpacing="10">
+                  <Grid Grid.Row="5" ColumnDefinitions="*,Auto,Auto" ColumnSpacing="10">
                     <TextBlock Text="{Binding LabelFilePath}" Classes="label" TextWrapping="Wrap" />
-                    <Button Grid.Column="1" Classes="primary" Content="SAVE LABEL" Click="OnSaveLabelClick"
+                    <Button Grid.Column="1" Content="EXPORT TO TRAINING SET"
+                            Click="OnExportSelectionToTrainingSetClick"
+                            IsEnabled="{Binding CanExportSelectionToTrainingSet}"
+                            ToolTip.Tip="Slice the selected window into a fresh WAV under data/cw-samples/{TrainingSetSubset}/ with matching .labels.jsonl + .truth.txt." />
+                    <Button Grid.Column="2" Classes="primary" Content="SAVE LABEL" Click="OnSaveLabelClick"
                             IsEnabled="{Binding CanSaveLabel}" />
                   </Grid>
                 </Grid>
@@ -1008,7 +1021,7 @@
     </TabControl>
 
     <!-- Status -->
-    <Border Grid.Row="6" Padding="18,8" Background="{StaticResource BgPanel}" BorderBrush="{StaticResource EdgeGlow}" BorderThickness="0,1,0,0">
+    <Border Grid.Row="3" Padding="18,8" Background="{StaticResource BgPanel}" BorderBrush="{StaticResource EdgeGlow}" BorderThickness="0,1,0,0">
       <DockPanel LastChildFill="True">
         <Border DockPanel.Dock="Right"
                 Padding="10,3"

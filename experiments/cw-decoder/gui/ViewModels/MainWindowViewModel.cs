@@ -30,7 +30,8 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
     private SweepTopResult? _topSweepResult;
 
     private const string CustomDecoderModeLabel = "Custom streaming";
-    private const string BaselineDecoderModeLabel = "Baseline ditdah";
+    private const string BaselineDecoderModeLabel = "Baseline ditdah (rolling window)";
+    private const string V2DecoderModeLabel = "Whole-buffer ditdah (v2)";
 
     public MainWindowViewModel()
     {
@@ -38,7 +39,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
         _inputDevices = devs.Inputs;
         _outputDevices = devs.Outputs;
         Devices = new ObservableCollection<string>(_inputDevices);
-        DecoderModes = new ObservableCollection<string>(new[] { CustomDecoderModeLabel, BaselineDecoderModeLabel });
+        DecoderModes = new ObservableCollection<string>(new[] { V2DecoderModeLabel, CustomDecoderModeLabel, BaselineDecoderModeLabel });
         SelectedDevice = Devices.Count > 0 ? Devices[0] : null;
         SelectedDecoderMode = DecoderModes[0];
         Cells = new ObservableCollection<TranscriptCell>();
@@ -111,6 +112,20 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
 
     public string DeviceListLabel => _useLoopback ? "OUTPUT (loopback)" : "INPUT (mic)";
 
+    private double _pinWpm;
+    /// <summary>
+    /// Pin the WPM hint passed to ditdah's whole-buffer (v2) decoder. 0 = auto.
+    /// Only takes effect on the next live-capture start (passed via --pin-wpm).
+    /// Useful when ditdah's auto-WPM locks onto a wrong value on noisy live
+    /// signals — pinning forces theoretical dot-length timing instead of the
+    /// median-element-length self-calibration.
+    /// </summary>
+    public double PinWpm
+    {
+        get => _pinWpm;
+        set => Set(ref _pinWpm, value < 0 ? 0 : value);
+    }
+
     private string _selectedDecoderMode = CustomDecoderModeLabel;
     public string SelectedDecoderMode
     {
@@ -121,6 +136,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
             {
                 OnPropertyChanged(nameof(IsCustomDecoderMode));
                 OnPropertyChanged(nameof(IsBaselineDecoderMode));
+                OnPropertyChanged(nameof(IsV2DecoderMode));
                 OnPropertyChanged(nameof(BaselineDecoderSummary));
             }
         }
@@ -745,6 +761,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
             if (Set(ref _trainingSetSubset, sanitized))
             {
                 OnPropertyChanged(nameof(CanToggleLabelingRecord));
+                OnPropertyChanged(nameof(CanExportSelectionToTrainingSet));
             }
         }
     }
@@ -978,6 +995,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
 
     public bool IsCustomDecoderMode => string.Equals(SelectedDecoderMode, CustomDecoderModeLabel, StringComparison.Ordinal);
     public bool IsBaselineDecoderMode => string.Equals(SelectedDecoderMode, BaselineDecoderModeLabel, StringComparison.Ordinal);
+    public bool IsV2DecoderMode => string.Equals(SelectedDecoderMode, V2DecoderModeLabel, StringComparison.Ordinal);
     public string BaselineDecoderSummary => $"Baseline uses Tuning settings: {CurrentBaselineConfig().WindowSeconds:F1}s window / {CurrentBaselineConfig().MinWindowSeconds:F1}s min / {CurrentBaselineConfig().DecodeEveryMs}ms cadence / {CurrentBaselineConfig().Confirmations} confirmations.";
     public bool CanApplyTopSweep => _topSweepResult is not null && !IsEvaluationBusy;
     public string TopSweepSummary => _topSweepResult is null
@@ -995,6 +1013,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
                 OnPropertyChanged(nameof(CanHarvestCandidates));
                 OnPropertyChanged(nameof(CanPreviewCandidate));
                 OnPropertyChanged(nameof(CanSaveLabel));
+            OnPropertyChanged(nameof(CanExportSelectionToTrainingSet));
                 OnPropertyChanged(nameof(CanResetAdjustedSpan));
                 OnPropertyChanged(nameof(CanUseSuggestedSpan));
                 OnPropertyChanged(nameof(CanRunLabelScore));
@@ -1042,6 +1061,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
             {
                 OnPropertyChanged(nameof(CanPreviewCandidate));
                 OnPropertyChanged(nameof(CanSaveLabel));
+            OnPropertyChanged(nameof(CanExportSelectionToTrainingSet));
                 OnPropertyChanged(nameof(CanResetAdjustedSpan));
                 OnPropertyChanged(nameof(CanUseSuggestedSpan));
                 OnPropertyChanged(nameof(CanRunLabelScore));
@@ -1086,6 +1106,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
                 OnPropertyChanged(nameof(AdjustedRangeLabel));
                 OnPropertyChanged(nameof(CanPreviewCandidate));
                 OnPropertyChanged(nameof(CanSaveLabel));
+            OnPropertyChanged(nameof(CanExportSelectionToTrainingSet));
                 OnPropertyChanged(nameof(CanResetAdjustedSpan));
                 OnPropertyChanged(nameof(CanUseSuggestedSpan));
                 if (value is not null && !hasCachedProfile)
@@ -1105,6 +1126,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
             var normalized = (value ?? string.Empty).ToUpperInvariant();
             if (Set(ref _correctCopy, normalized))
                 OnPropertyChanged(nameof(CanSaveLabel));
+            OnPropertyChanged(nameof(CanExportSelectionToTrainingSet));
         }
     }
 
@@ -1200,6 +1222,13 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
     public bool CanSaveLabel => SelectedCandidate is not null
         && !string.IsNullOrWhiteSpace(HarvestFilePath)
         && !string.IsNullOrWhiteSpace(CorrectCopy)
+        && !IsAdvancedBusy
+        && !IsProfileBusy
+        && AdjustedEndSeconds > AdjustedStartSeconds;
+    public bool CanExportSelectionToTrainingSet => SelectedCandidate is not null
+        && !string.IsNullOrWhiteSpace(HarvestFilePath)
+        && !string.IsNullOrWhiteSpace(CorrectCopy)
+        && !string.IsNullOrWhiteSpace(TrainingSetSubset)
         && !IsAdvancedBusy
         && !IsProfileBusy
         && AdjustedEndSeconds > AdjustedStartSeconds;
@@ -1353,7 +1382,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
         ReplayStatus = null;
         ReplayCer = null;
 
-        _process.StartLive(SelectedDevice, CurrentConfig(), CurrentBaselineConfig(), IsBaselineDecoderMode, recordPath, UseLoopback);
+        _process.StartLive(SelectedDevice, CurrentConfig(), CurrentBaselineConfig(), IsBaselineDecoderMode, recordPath, UseLoopback, IsV2DecoderMode, IsV2DecoderMode ? PinWpm : 0);
         IsRunning = true;
     }
 
@@ -1803,6 +1832,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
         OnPropertyChanged(nameof(LabelEvaluationTargetLabel));
         OnPropertyChanged(nameof(CanPreviewCandidate));
         OnPropertyChanged(nameof(CanSaveLabel));
+            OnPropertyChanged(nameof(CanExportSelectionToTrainingSet));
         OnPropertyChanged(nameof(CanRunLabelScore));
         OnPropertyChanged(nameof(CanRunLabelSweep));
     }
@@ -1940,7 +1970,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
 
         try
         {
-            _process.StartLive(SelectedDevice, CurrentConfig(), CurrentBaselineConfig(), IsBaselineDecoderMode, targetPath, UseLoopback);
+            _process.StartLive(SelectedDevice, CurrentConfig(), CurrentBaselineConfig(), IsBaselineDecoderMode, targetPath, UseLoopback, IsV2DecoderMode, IsV2DecoderMode ? PinWpm : 0);
             IsRunning = true;
             IsLabelingRecording = true;
         }
@@ -2091,6 +2121,180 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
         {
             AdvancedStatusText = ex.Message;
         }
+    }
+
+    /// <summary>
+    /// One-click export of the currently-selected window to the training-set
+    /// subdirectory. Slices the source WAV between
+    /// <see cref="AdjustedStartSeconds"/> and <see cref="AdjustedEndSeconds"/>,
+    /// writes a fresh standalone WAV, and emits a sibling
+    /// <c>.labels.jsonl</c> + <c>.truth.txt</c> referencing the new clip
+    /// (start_s = 0, end_s = clip duration). The destination is
+    /// <c>data/cw-samples/{TrainingSetSubset}/</c>.
+    /// </summary>
+    public void ExportSelectionToTrainingSet()
+    {
+        if (!CanExportSelectionToTrainingSet)
+        {
+            AdvancedStatusText = "Select a candidate, type the verified copy, and set a training-set subdirectory first.";
+            return;
+        }
+
+        var sourcePath = HarvestFilePath!;
+        var startS = AdjustedStartSeconds;
+        var endS = AdjustedEndSeconds;
+        var subset = TrainingSetSubset;
+        var truth = CorrectCopy.Trim();
+
+        try
+        {
+            var targetDir = LocateTrainingSetDirectory(subset);
+            Directory.CreateDirectory(targetDir);
+
+            var srcBase = Path.GetFileNameWithoutExtension(sourcePath);
+            var startMs = (int)Math.Round(startS * 1000.0);
+            var endMs = (int)Math.Round(endS * 1000.0);
+            var clipBase = $"{srcBase}-{startMs:D6}ms-{endMs:D6}ms";
+            var clipWav = Path.Combine(targetDir, clipBase + ".wav");
+            var clipLabels = Path.Combine(targetDir, clipBase + ".labels.jsonl");
+            var clipTruth = Path.Combine(targetDir, clipBase + ".truth.txt");
+
+            var (channels, sampleRate, bitsPerSample, audioFormat, payloadBytes) = SliceWavWindow(sourcePath, startS, endS);
+            WriteWavFile(clipWav, channels, sampleRate, bitsPerSample, audioFormat, payloadBytes);
+
+            var clipDurationS = endS - startS;
+            var label = new CandidateLabel
+            {
+                // Self-referencing relative path so the labels file is portable
+                // when the directory is checked into the corpus.
+                Source = clipBase + ".wav",
+                StartSeconds = 0,
+                EndSeconds = clipDurationS,
+                HarvestStartSeconds = 0,
+                HarvestEndSeconds = clipDurationS,
+                LabelScope = CandidateLabel.ExactWindowScope,
+                CorrectCopy = truth,
+                ClipStart = ClipStart,
+                ClipEnd = ClipEnd,
+                Needles = SelectedCandidate?.MatchedNeedles ?? Array.Empty<string>(),
+                OfflineText = SelectedCandidate?.Offline.Text ?? string.Empty,
+                StreamText = SelectedCandidate?.Stream.Text ?? string.Empty,
+                OfflinePitchHz = SelectedCandidate?.Offline.PitchHz,
+                StreamPitchHz = SelectedCandidate?.Stream.PitchHz,
+                OfflineWpm = SelectedCandidate?.Offline.Wpm,
+                StreamWpm = SelectedCandidate?.Stream.Wpm,
+                SavedAtUtc = DateTime.UtcNow.ToString("O"),
+            };
+            File.WriteAllText(clipLabels, JsonSerializer.Serialize(label) + Environment.NewLine);
+            try { File.WriteAllText(clipTruth, truth); }
+            catch { /* sidecar truth is best-effort */ }
+
+            AdvancedStatusText = $"Exported {Path.GetFileName(clipWav)} ({clipDurationS:F2}s) + labels + truth to {subset}.";
+            OnPropertyChanged(nameof(CanRunLabelScore));
+            OnPropertyChanged(nameof(CanRunLabelSweep));
+            OnPropertyChanged(nameof(LabelEvaluationTargetLabel));
+        }
+        catch (Exception ex)
+        {
+            AdvancedStatusText = $"Export failed: {ex.Message}";
+        }
+    }
+
+    /// <summary>
+    /// Read a sub-window of a canonical PCM/Float WAV file into a raw
+    /// payload byte buffer (just the data chunk contents, sample-aligned).
+    /// Returns the format metadata so the caller can re-emit a self-contained
+    /// WAV. Only handles PCM (audioFormat=1) and IEEE Float (audioFormat=3).
+    /// </summary>
+    private static (short channels, int sampleRate, short bitsPerSample, short audioFormat, byte[] payload)
+        SliceWavWindow(string path, double startS, double endS)
+    {
+        using var fs = File.OpenRead(path);
+        using var br = new BinaryReader(fs);
+        if (fs.Length < 44) throw new InvalidDataException("File too small to be a WAV.");
+        var riff = new string(br.ReadChars(4));
+        if (riff != "RIFF") throw new InvalidDataException("Not a RIFF file.");
+        br.ReadInt32();
+        var wave = new string(br.ReadChars(4));
+        if (wave != "WAVE") throw new InvalidDataException("Not a WAVE file.");
+
+        short audioFormat = 0, channels = 0, bitsPerSample = 0, blockAlign = 0;
+        int sampleRate = 0;
+        long dataStart = -1;
+        int dataSize = 0;
+        while (fs.Position + 8 <= fs.Length)
+        {
+            var id = new string(br.ReadChars(4));
+            var size = br.ReadInt32();
+            if (id == "fmt ")
+            {
+                var fmtStart = fs.Position;
+                audioFormat = br.ReadInt16();
+                channels = br.ReadInt16();
+                sampleRate = br.ReadInt32();
+                br.ReadInt32(); // byteRate
+                blockAlign = br.ReadInt16();
+                bitsPerSample = br.ReadInt16();
+                fs.Position = fmtStart + size;
+            }
+            else if (id == "data")
+            {
+                dataStart = fs.Position;
+                dataSize = size;
+                break;
+            }
+            else
+            {
+                fs.Position += size;
+            }
+        }
+
+        if (dataStart < 0 || sampleRate <= 0 || blockAlign <= 0)
+            throw new InvalidDataException("Missing fmt/data chunks.");
+        if (audioFormat != 1 && audioFormat != 3)
+            throw new InvalidDataException($"Unsupported WAV audio format {audioFormat} (only PCM and IEEE Float are supported).");
+
+        var totalFrames = dataSize / blockAlign;
+        var startFrame = (long)Math.Round(startS * sampleRate);
+        var endFrame = (long)Math.Round(endS * sampleRate);
+        startFrame = Math.Max(0, Math.Min(startFrame, totalFrames));
+        endFrame = Math.Max(startFrame, Math.Min(endFrame, totalFrames));
+        var frameCount = endFrame - startFrame;
+        if (frameCount <= 0) throw new InvalidDataException("Selected window is empty.");
+
+        var payload = new byte[frameCount * blockAlign];
+        fs.Position = dataStart + startFrame * blockAlign;
+        var read = fs.Read(payload, 0, payload.Length);
+        if (read != payload.Length)
+            throw new InvalidDataException($"Short read while slicing WAV: expected {payload.Length}, got {read}.");
+
+        return (channels, sampleRate, bitsPerSample, audioFormat, payload);
+    }
+
+    /// <summary>
+    /// Write a minimal canonical WAV file (RIFF + fmt + data) given the
+    /// raw payload bytes. Matches what hound emits on the Rust side.
+    /// </summary>
+    private static void WriteWavFile(string path, short channels, int sampleRate, short bitsPerSample, short audioFormat, byte[] payload)
+    {
+        var blockAlign = (short)(channels * (bitsPerSample / 8));
+        var byteRate = sampleRate * blockAlign;
+        using var fs = File.Create(path);
+        using var bw = new BinaryWriter(fs);
+        bw.Write(System.Text.Encoding.ASCII.GetBytes("RIFF"));
+        bw.Write(36 + payload.Length);
+        bw.Write(System.Text.Encoding.ASCII.GetBytes("WAVE"));
+        bw.Write(System.Text.Encoding.ASCII.GetBytes("fmt "));
+        bw.Write(16); // fmt chunk size for PCM/Float without extension
+        bw.Write(audioFormat);
+        bw.Write(channels);
+        bw.Write(sampleRate);
+        bw.Write(byteRate);
+        bw.Write(blockAlign);
+        bw.Write(bitsPerSample);
+        bw.Write(System.Text.Encoding.ASCII.GetBytes("data"));
+        bw.Write(payload.Length);
+        bw.Write(payload);
     }
 
     public async Task RunLabelScoreAsync()
@@ -2376,6 +2580,32 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
                 break;
             case "garbled":
                 break;
+            case "transcript":
+                if (ev.Text is string txt)
+                {
+                    Cells.Clear();
+                    _liveTranscriptBuilder.Clear();
+                    foreach (var c in txt)
+                    {
+                        if (c == ' ')
+                        {
+                            Cells.Add(TranscriptCell.Word());
+                            _liveTranscriptBuilder.Append(' ');
+                        }
+                        else
+                        {
+                            Cells.Add(TranscriptCell.Char(c.ToString(), " ", null, null));
+                            _liveTranscriptBuilder.Append(c);
+                        }
+                    }
+                }
+                break;
+            case "lock":
+                if (!string.IsNullOrEmpty(ev.State))
+                {
+                    ConfidenceState = ev.State!;
+                }
+                break;
             case "power":
                 if (ev.Power is double p && ev.Threshold is double th)
                 {
@@ -2655,6 +2885,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
             OnPropertyChanged(nameof(AdjustedRangeLabel));
             OnPropertyChanged(nameof(CanPreviewCandidate));
             OnPropertyChanged(nameof(CanSaveLabel));
+            OnPropertyChanged(nameof(CanExportSelectionToTrainingSet));
             OnPropertyChanged(nameof(CanResetAdjustedSpan));
             OnPropertyChanged(nameof(CanUseSuggestedSpan));
         }

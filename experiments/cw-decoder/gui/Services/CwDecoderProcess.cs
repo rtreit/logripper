@@ -84,26 +84,43 @@ internal sealed class CwDecoderProcess : IDisposable
         catch { return (Array.Empty<string>(), Array.Empty<string>()); }
     }
 
-    public void StartLive(string? device, DecoderConfig cfg, BaselineDecoderConfig baselineCfg, bool useBaseline, string? recordPath = null, bool loopback = false)
+    public void StartLive(string? device, DecoderConfig cfg, BaselineDecoderConfig baselineCfg, bool useBaseline, string? recordPath = null, bool loopback = false, bool useV2 = false, double pinWpm = 0)
     {
         Stop();
+        // v2 (whole-buffer ditdah, default in production GUI): keep an
+        // append-only audio buffer; re-decode the entire buffer with
+        // pristine ditdah every 5s; emit a `transcript` event that
+        // REPLACES the prior text wholesale. Empirical CER ~0.06 on
+        // training-set-a vs 0.83+ for the rolling-window baseline.
+        var ic = CultureInfo.InvariantCulture;
+        var v2Args = "stream-live-v2 --json --stdin-control --decode-every-ms 5000";
+        if (pinWpm > 0)
+        {
+            v2Args += $" --pin-wpm {pinWpm.ToString(ic)}";
+        }
         // Live baseline mirrors the offline replay configuration: large
         // rolling window so consecutive snapshots overlap heavily, slow
         // enough cadence that the prefix-stabilizer's confirmation logic
         // can lock in committed text without producing duplications, but
         // fast enough that operators see chars within ~1.5s of being sent.
-        // window=20s + every=500ms means each tick slides only 2.5% of the
-        // buffer, so consecutive snapshots remain near-identical and the
-        // prefix-stabilizer can commit a growing prefix instead of dropping
-        // text off the front before it confirms.
         var liveBaselineArgs = "--window 20 --min-window 2 --decode-every-ms 500 --confirmations 3";
-        var args = useBaseline
-            ? $"stream-live-ditdah --json --chunk-ms 50 {liveBaselineArgs}"
-            : $"stream-live --json --stdin-control {cfg.ToCliArgs()}";
+        string args;
+        if (useV2)
+        {
+            args = v2Args;
+        }
+        else if (useBaseline)
+        {
+            args = $"stream-live-ditdah --json --chunk-ms 50 {liveBaselineArgs}";
+        }
+        else
+        {
+            args = $"stream-live --json --stdin-control {cfg.ToCliArgs()}";
+        }
         if (!string.IsNullOrWhiteSpace(device)) args += $" --device \"{device}\"";
         if (!string.IsNullOrWhiteSpace(recordPath)) args += $" --record \"{recordPath}\"";
-        // Loopback only applies to the custom streaming decoder (the
-        // ditdah baseline path doesn't accept --loopback today).
+        // Loopback applies to the custom streaming decoder and v2
+        // (the legacy ditdah baseline path doesn't accept --loopback).
         if (loopback && !useBaseline) args += " --loopback";
         Spawn(args);
     }

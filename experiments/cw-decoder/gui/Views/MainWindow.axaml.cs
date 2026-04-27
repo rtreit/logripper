@@ -132,6 +132,9 @@ public partial class MainWindow : Window
     private void OnSaveLabelClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
         => Vm?.SaveSelectedLabel();
 
+    private void OnExportSelectionToTrainingSetClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+        => Vm?.ExportSelectionToTrainingSet();
+
     private void OnResetAdjustedSpanClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
         => Vm?.ResetAdjustedSpan();
 

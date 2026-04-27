@@ -311,7 +311,14 @@ impl MorseDecoder {
             (None, None) => self.find_best_params(&smoothed_power, power_signal_rate)?,
         };
 
-        let text = self.decode_with_params(&smoothed_power, wpm, threshold, power_signal_rate);
+        let wpm_is_authoritative = pin_wpm.is_some();
+        let text = self.decode_with_params_inner(
+            &smoothed_power,
+            wpm,
+            threshold,
+            power_signal_rate,
+            wpm_is_authoritative,
+        );
         Ok((text, wpm, threshold))
     }
 
@@ -453,7 +460,23 @@ impl MorseDecoder {
         power_signal: &[f32],
         wpm: f32,
         threshold: f32,
-        _power_signal_rate: f32,
+        power_signal_rate: f32,
+    ) -> String {
+        self.decode_with_params_inner(power_signal, wpm, threshold, power_signal_rate, false)
+    }
+
+    /// Internal decoder body. When `wpm_is_authoritative` is true, the dot length
+    /// is taken from `wpm` (theoretical timing) instead of the median-element-length
+    /// self-calibration. The self-calibration heuristic is robust on clean studio
+    /// audio but breaks on real-world live signals where the element-length
+    /// distribution gets distorted by noise, fading, or partial elements.
+    fn decode_with_params_inner(
+        &self,
+        power_signal: &[f32],
+        wpm: f32,
+        threshold: f32,
+        power_signal_rate: f32,
+        wpm_is_authoritative: bool,
     ) -> String {
         // First pass: collect all element lengths for self-calibration
         let (on_intervals, _off_intervals) = get_raw_intervals(power_signal, threshold);
@@ -462,42 +485,45 @@ impl MorseDecoder {
             return String::new();
         }
 
-        // Self-calibrate: detect if we have mixed dots/dashes or all same type
-        let mut sorted_lengths = on_intervals.clone();
-        sorted_lengths.sort_unstable();
-
-        let min_len = sorted_lengths[0] as f32;
-        let max_len = sorted_lengths[sorted_lengths.len() - 1] as f32;
-        let length_ratio = max_len / min_len;
-
-        let actual_dot_len = if length_ratio > 2.0 {
-            // Mixed signal: use shortest elements as dots
-            let shortest_half = &sorted_lengths[0..=(sorted_lengths.len() / 2)];
-            shortest_half[shortest_half.len() / 2] as f32
+        let actual_dot_len = if wpm_is_authoritative && wpm > 0.0 {
+            // Theoretical dot length in power-signal samples for the pinned WPM.
+            (1200.0 / wpm / 1000.0) * power_signal_rate
         } else {
-            // All similar lengths: Use a simple heuristic based on absolute length
-            // This is more robust than relying on potentially inaccurate WPM estimates
-            let median_len = sorted_lengths[sorted_lengths.len() / 2] as f32;
+            // Self-calibrate: detect if we have mixed dots/dashes or all same type
+            let mut sorted_lengths = on_intervals.clone();
+            sorted_lengths.sort_unstable();
 
-            // Based on actual observed values:
-            // - EEEE (dots): median ~10 power signal samples
-            // - TTTT (dashes): median ~29 power signal samples
-            // Use a breakpoint between these ranges
-            let breakpoint = 18.0;
+            let min_len = sorted_lengths[0] as f32;
+            let max_len = sorted_lengths[sorted_lengths.len() - 1] as f32;
+            let length_ratio = max_len / min_len;
 
-            if median_len > breakpoint {
-                // Likely all dashes - use theoretical dot length
-                median_len / 3.0
+            if length_ratio > 2.0 {
+                // Mixed signal: use shortest elements as dots
+                let shortest_half = &sorted_lengths[0..=(sorted_lengths.len() / 2)];
+                shortest_half[shortest_half.len() / 2] as f32
             } else {
-                // Likely all dots
-                median_len
+                // All similar lengths: Use a simple heuristic based on absolute length
+                // This is more robust than relying on potentially inaccurate WPM estimates
+                let median_len = sorted_lengths[sorted_lengths.len() / 2] as f32;
+
+                // Based on actual observed values:
+                // - EEEE (dots): median ~10 power signal samples
+                // - TTTT (dashes): median ~29 power signal samples
+                let breakpoint = 18.0;
+
+                if median_len > breakpoint {
+                    median_len / 3.0
+                } else {
+                    median_len
+                }
             }
         };
 
         // Log calibration for debugging
         log::debug!(
-            "Self-calibration: WPM={:.1} (ignored), actual_dot_len={:.1} samples",
+            "Self-calibration: WPM={:.1} (authoritative={}), actual_dot_len={:.1} samples",
             wpm,
+            wpm_is_authoritative,
             actual_dot_len
         );
         log::debug!("Element lengths: {:?}", on_intervals);
