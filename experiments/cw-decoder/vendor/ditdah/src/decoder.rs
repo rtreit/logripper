@@ -430,7 +430,7 @@ impl MorseDecoder {
         power_signal: &[f32],
         wpm: f32,
         threshold: f32,
-        _power_signal_rate: f32,
+        power_signal_rate: f32,
     ) -> String {
         // First pass: collect all element lengths for self-calibration
         let (on_intervals, off_intervals) = get_raw_intervals(power_signal, threshold);
@@ -454,7 +454,7 @@ impl MorseDecoder {
             None
         };
 
-        let actual_dot_len = if length_ratio > 1.8 {
+        let raw_dot_len = if length_ratio > 1.8 {
             // Mixed signal: 2-means cluster the on-intervals to find the
             // dit cluster centroid. Robust against rough fists where the
             // dah/dit ratio drops below the textbook 3:1, which used to
@@ -482,23 +482,38 @@ impl MorseDecoder {
                 median_len
             }
         };
+        let theoretical_dot_len = ((1200.0 / wpm / 1000.0) * power_signal_rate).max(1.0);
+        let actual_dot_len = if length_ratio > 1.8 && raw_dot_len < theoretical_dot_len * 0.65 {
+            // A very low ON centroid usually means the tone envelope is being
+            // sliced into half-dits by threshold chatter, not that the sender
+            // suddenly doubled speed.  The WPM search has already selected a
+            // timing hypothesis from both ON and OFF intervals, so use it as a
+            // lower-bound prior for self-calibration.  Without this, long
+            // well-toned QSOs can normalize true element gaps to ~2 dots and
+            // the beam happily emits E/T-heavy fragments.
+            (raw_dot_len * theoretical_dot_len).sqrt()
+        } else {
+            raw_dot_len
+        };
 
         // Log calibration for debugging
         log::debug!(
-            "Self-calibration: WPM={:.1} (ignored), actual_dot_len={:.1} samples",
+            "Self-calibration: WPM={:.1}, raw_dot_len={:.1}, actual_dot_len={:.1}, theoretical_dot_len={:.1} samples",
             wpm,
-            actual_dot_len
+            raw_dot_len,
+            actual_dot_len,
+            theoretical_dot_len
         );
         log::debug!("Element lengths: {:?}", on_intervals);
 
         let dit_dah_boundary_norm = if length_ratio > 1.8 {
             if let Some((low, high)) = on_centroids {
-                if low > 0.0 && high > low * 1.5 {
+                if low > 0.0 && high > actual_dot_len * 1.3 {
                     // Midpoint between dit and dah centroids in normalized
                     // (dot-length) units. This adapts to rough fists where
                     // the textbook 2.0× boundary misses dahs that fall
                     // closer to 1.7..2.5 of the dit length.
-                    0.5 * (1.0 + high / low)
+                    0.5 * (1.0 + high / actual_dot_len)
                 } else {
                     DIT_DAH_BOUNDARY
                 }
@@ -529,7 +544,7 @@ impl MorseDecoder {
                     gap_centroids_norm = (c1, c2, c3);
                     // c1 = element gap, c2 = letter gap, c3 = word gap
                     let letter_b = if c2 > c1 * 1.3 {
-                        (0.5 * (c1 + c2)).clamp(1.4, 3.4)
+                        (0.5 * (c1 + c2)).clamp(1.8, 3.4)
                     } else {
                         // Bad split (clusters too close); fall back.
                         (2.0 * c1).clamp(1.7, 2.6)
@@ -567,6 +582,14 @@ impl MorseDecoder {
                 (LETTER_SPACE_BOUNDARY, WORD_SPACE_BOUNDARY)
             }
         };
+        log::debug!(
+            "Gap centroids/boundaries (dot units): c1={:.2}, c2={:.2}, c3={:.2}, letter_b={:.2}, word_b={:.2}",
+            gap_centroids_norm.0,
+            gap_centroids_norm.1,
+            gap_centroids_norm.2,
+            letter_space_norm,
+            word_space_norm
+        );
 
         let mut result = String::new();
         let mut current_letter = String::new();
@@ -583,7 +606,13 @@ impl MorseDecoder {
         );
 
         let dah_len_norm = on_centroids
-            .map(|(low, high)| if low > 0.0 { high / low } else { 3.0 })
+            .map(|(_low, high)| {
+                if actual_dot_len > 0.0 {
+                    high / actual_dot_len
+                } else {
+                    3.0
+                }
+            })
             .unwrap_or(3.0)
             .clamp(1.8, 4.5);
         let beam_result = decode_with_morse_beam(
@@ -592,6 +621,8 @@ impl MorseDecoder {
             actual_dot_len,
             dah_len_norm,
             gap_centroids_norm,
+            letter_space_norm,
+            word_space_norm,
             debounce_samples,
         );
         if !beam_result.is_empty() {
@@ -777,6 +808,8 @@ fn decode_with_morse_beam(
     dot_len: f32,
     dah_len_norm: f32,
     gap_centroids_norm: (f32, f32, f32),
+    letter_space_norm: f32,
+    word_space_norm: f32,
     debounce_samples: usize,
 ) -> String {
     if power_signal.is_empty() || dot_len <= 0.0 {
@@ -804,7 +837,14 @@ fn decode_with_morse_beam(
             }
         } else {
             for state in &beams {
-                extend_gap(&mut next, state, len_norm, gap_centroids_norm);
+                extend_gap(
+                    &mut next,
+                    state,
+                    len_norm,
+                    gap_centroids_norm,
+                    letter_space_norm,
+                    word_space_norm,
+                );
             }
         }
         beams = prune_beam(next);
@@ -860,6 +900,8 @@ fn extend_gap(
     state: &MorseBeamState,
     len_norm: f32,
     gap_centroids_norm: (f32, f32, f32),
+    letter_space_norm: f32,
+    word_space_norm: f32,
 ) {
     let (element_gap, letter_gap, word_gap) = gap_centroids_norm;
 
@@ -880,7 +922,9 @@ fn extend_gap(
         });
     }
 
-    if let Some(ch) = morse_alnum_to_char(&state.pattern) {
+    if len_norm >= letter_space_norm
+        && let Some(ch) = morse_alnum_to_char(&state.pattern)
+    {
         let mut text = state.text.clone();
         push_char(&mut text, ch);
         next.push(MorseBeamState {
@@ -889,12 +933,14 @@ fn extend_gap(
             score: state.score + morse_len_cost(len_norm, letter_gap),
         });
 
-        push_space(&mut text);
-        next.push(MorseBeamState {
-            text,
-            pattern: String::new(),
-            score: state.score + morse_len_cost(len_norm, word_gap),
-        });
+        if len_norm >= word_space_norm {
+            push_space(&mut text);
+            next.push(MorseBeamState {
+                text,
+                pattern: String::new(),
+                score: state.score + morse_len_cost(len_norm, word_gap),
+            });
+        }
     }
 }
 
@@ -975,9 +1021,22 @@ fn ordered_intervals(
     threshold: f32,
     debounce_samples: usize,
 ) -> Vec<(bool, usize)> {
-    let mut intervals = Vec::new();
+    fn push_interval(intervals: &mut Vec<(bool, usize)>, is_on: bool, len: usize) {
+        if len == 0 {
+            return;
+        }
+        if let Some((last_is_on, last_len)) = intervals.last_mut() {
+            if *last_is_on == is_on {
+                *last_len += len;
+                return;
+            }
+        }
+        intervals.push((is_on, len));
+    }
+
+    let mut raw_intervals = Vec::new();
     if power_signal.is_empty() {
-        return intervals;
+        return raw_intervals;
     }
 
     let mut current_len = 0usize;
@@ -986,15 +1045,42 @@ fn ordered_intervals(
         if (p > threshold) == is_on {
             current_len += 1;
         } else {
-            if current_len > debounce_samples {
-                intervals.push((is_on, current_len));
-            }
+            raw_intervals.push((is_on, current_len));
             is_on = !is_on;
             current_len = 1;
         }
     }
-    if current_len > debounce_samples {
-        intervals.push((is_on, current_len));
+    raw_intervals.push((is_on, current_len));
+
+    if debounce_samples == 0 {
+        return raw_intervals;
+    }
+
+    let mut intervals = Vec::with_capacity(raw_intervals.len());
+    for (idx, (run_is_on, run_len)) in raw_intervals.iter().copied().enumerate() {
+        if run_len > debounce_samples {
+            push_interval(&mut intervals, run_is_on, run_len);
+            continue;
+        }
+
+        if let Some((last_is_on, last_len)) = intervals.last_mut() {
+            // Treat sub-dwell opposite-polarity runs as threshold chatter:
+            // bridge tiny OFF holes inside key-downs and absorb tiny ON
+            // spikes inside key-up gaps, but only when a following accepted
+            // run confirms the previous state.  Trailing sub-dwell runs are
+            // dropped instead of inflating the final symbol/gap.
+            if raw_intervals
+                .iter()
+                .skip(idx + 1)
+                .find(|(_, len)| *len > debounce_samples)
+                .is_some_and(|(next_is_on, _)| next_is_on == last_is_on)
+            {
+                *last_len += run_len;
+            }
+        }
+        // If the capture starts with a tiny glitch, there is no previous
+        // accepted state. Drop it rather than emitting a standalone E/T-sized
+        // run.
     }
     intervals
 }
@@ -1086,6 +1172,52 @@ fn is_morse_alnum_prefix(s: &str) -> bool {
     MORSE_ALNUM_TABLE
         .iter()
         .any(|&(morse, _)| morse.starts_with(s))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn push_power_run(signal: &mut Vec<f32>, is_on: bool, len: usize) {
+        signal.extend(std::iter::repeat(if is_on { 1.0 } else { 0.0 }).take(len));
+    }
+
+    #[test]
+    fn ordered_intervals_bridges_sub_dwell_gaps() {
+        let mut signal = Vec::new();
+        push_power_run(&mut signal, true, 6);
+        push_power_run(&mut signal, false, 2);
+        push_power_run(&mut signal, true, 7);
+        push_power_run(&mut signal, false, 8);
+
+        let intervals = ordered_intervals(&signal, 0.5, 3);
+
+        assert_eq!(intervals, vec![(true, 15), (false, 8)]);
+    }
+
+    #[test]
+    fn ordered_intervals_absorbs_sub_dwell_on_blips() {
+        let mut signal = Vec::new();
+        push_power_run(&mut signal, false, 7);
+        push_power_run(&mut signal, true, 2);
+        push_power_run(&mut signal, false, 6);
+        push_power_run(&mut signal, true, 5);
+
+        let intervals = ordered_intervals(&signal, 0.5, 3);
+
+        assert_eq!(intervals, vec![(false, 15), (true, 5)]);
+    }
+
+    #[test]
+    fn ordered_intervals_drops_trailing_sub_dwell_runs() {
+        let mut signal = Vec::new();
+        push_power_run(&mut signal, true, 6);
+        push_power_run(&mut signal, false, 2);
+
+        let intervals = ordered_intervals(&signal, 0.5, 3);
+
+        assert_eq!(intervals, vec![(true, 6)]);
+    }
 }
 
 const MORSE_ALNUM_TABLE: &[(&str, char)] = &[
