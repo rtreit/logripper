@@ -136,6 +136,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
             {
                 OnPropertyChanged(nameof(StartStopLabel));
                 OnPropertyChanged(nameof(CurrentToneHzDisplay));
+                OnPropertyChanged(nameof(CanToggleLabelingRecord));
             }
         }
     }
@@ -729,6 +730,52 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
     private string? _harvestFilePath;
     public string? HarvestFilePath { get => _harvestFilePath; set => Set(ref _harvestFilePath, value); }
 
+    // Labeling-tab record button state.
+    private string _trainingSetSubset = "training-set-a";
+    public string TrainingSetSubset
+    {
+        get => _trainingSetSubset;
+        set
+        {
+            // Strip path separators so the user can't accidentally escape data/cw-samples.
+            var sanitized = string.IsNullOrWhiteSpace(value)
+                ? "training-set-a"
+                : new string(value.Where(c => c != '/' && c != '\\' && c != ':' && c != '*' && c != '?' && c != '"' && c != '<' && c != '>' && c != '|').ToArray()).Trim();
+            if (sanitized.Length == 0) sanitized = "training-set-a";
+            if (Set(ref _trainingSetSubset, sanitized))
+            {
+                OnPropertyChanged(nameof(CanToggleLabelingRecord));
+            }
+        }
+    }
+
+    private bool _isLabelingRecording;
+    public bool IsLabelingRecording
+    {
+        get => _isLabelingRecording;
+        private set
+        {
+            if (Set(ref _isLabelingRecording, value))
+            {
+                OnPropertyChanged(nameof(LabelingRecordButtonLabel));
+                OnPropertyChanged(nameof(CanToggleLabelingRecord));
+            }
+        }
+    }
+
+    private string _labelingRecordStatus = "Idle. Press RECORD to capture from the live audio device.";
+    public string LabelingRecordStatus { get => _labelingRecordStatus; private set => Set(ref _labelingRecordStatus, value); }
+
+    public string LabelingRecordButtonLabel => IsLabelingRecording ? "■ STOP" : "● RECORD";
+
+    public bool CanToggleLabelingRecord =>
+        // While recording: always allow stop.
+        IsLabelingRecording
+        // Otherwise: idle, with a non-empty subset, and the live decoder NOT already running.
+        || (!IsRunning && !IsAdvancedBusy && !string.IsNullOrWhiteSpace(_trainingSetSubset));
+
+    private string? _labelingRecordPath;
+
     private string _harvestNeedlesText = string.Empty;
     public string HarvestNeedlesText { get => _harvestNeedlesText; set => Set(ref _harvestNeedlesText, value); }
 
@@ -952,6 +999,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
                 OnPropertyChanged(nameof(CanUseSuggestedSpan));
                 OnPropertyChanged(nameof(CanRunLabelScore));
                 OnPropertyChanged(nameof(CanRunLabelSweep));
+                OnPropertyChanged(nameof(CanToggleLabelingRecord));
             }
         }
     }
@@ -1848,6 +1896,142 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
         }
     }
 
+    public async Task ToggleLabelingRecordAsync()
+    {
+        if (IsLabelingRecording)
+        {
+            await StopLabelingRecordAsync().ConfigureAwait(true);
+            return;
+        }
+
+        if (IsRunning)
+        {
+            LabelingRecordStatus = "Stop the live decoder on the LIVE tab before recording a labeling clip.";
+            return;
+        }
+        if (string.IsNullOrWhiteSpace(_trainingSetSubset))
+        {
+            LabelingRecordStatus = "Set a training-set subdirectory first.";
+            return;
+        }
+
+        string targetPath;
+        try
+        {
+            var targetDir = LocateTrainingSetDirectory(_trainingSetSubset);
+            Directory.CreateDirectory(targetDir);
+            targetPath = Path.Combine(targetDir, $"clip-{DateTime.Now:yyyyMMdd-HHmmss}.wav");
+        }
+        catch (Exception ex)
+        {
+            LabelingRecordStatus = $"Cannot prepare training-set directory: {ex.Message}";
+            return;
+        }
+
+        ResetDecoderSurface();
+        _liveTranscriptForReplay = null;
+        _liveTranscriptBuilder.Clear();
+        _labelingRecordPath = targetPath;
+        StatusText = "Recording labeling clip…";
+        SourceLabel = string.IsNullOrWhiteSpace(SelectedDevice)
+            ? $"LABELING · {Path.GetFileName(targetPath)}"
+            : $"LABELING · {SelectedDevice} · {Path.GetFileName(targetPath)}";
+        LabelingRecordStatus = $"Recording → {Path.Combine(_trainingSetSubset, Path.GetFileName(targetPath))}";
+
+        try
+        {
+            _process.StartLive(SelectedDevice, CurrentConfig(), CurrentBaselineConfig(), IsBaselineDecoderMode, targetPath, UseLoopback);
+            IsRunning = true;
+            IsLabelingRecording = true;
+        }
+        catch (Exception ex)
+        {
+            _labelingRecordPath = null;
+            LabelingRecordStatus = $"Failed to start capture: {ex.Message}";
+            IsRunning = false;
+            IsLabelingRecording = false;
+        }
+        await Task.CompletedTask;
+    }
+
+    private async Task StopLabelingRecordAsync()
+    {
+        var path = _labelingRecordPath;
+        IsLabelingRecording = false;
+        try
+        {
+            _liveTranscriptForReplay = _liveTranscriptBuilder.ToString();
+            _process.Stop();
+            StopPlayback();
+            IsRunning = false;
+        }
+        catch (Exception ex)
+        {
+            LabelingRecordStatus = $"Stop failed: {ex.Message}";
+            return;
+        }
+
+        if (string.IsNullOrEmpty(path))
+        {
+            LabelingRecordStatus = "Recording stopped (no file path captured).";
+            return;
+        }
+
+        // Wait for the WAV writer (Rust child Drop) to flush.
+        LabelingRecordStatus = $"Flushing {Path.GetFileName(path)}…";
+        for (var attempt = 0; attempt < 20; attempt++)
+        {
+            await Task.Delay(150).ConfigureAwait(true);
+            if (File.Exists(path) && new FileInfo(path).Length > 1024) break;
+        }
+
+        if (!File.Exists(path))
+        {
+            LabelingRecordStatus = $"Recording finished but {Path.GetFileName(path)} was not written.";
+            _labelingRecordPath = null;
+            return;
+        }
+
+        LastRecordingPath = path;
+        OnPropertyChanged(nameof(HasLastRecording));
+
+        LabelingRecordStatus = $"Saved {Path.GetFileName(path)} — harvesting…";
+        try
+        {
+            SetHarvestFile(path);
+            await HarvestCandidatesAsync().ConfigureAwait(true);
+            LabelingRecordStatus = HarvestCandidates.Count == 0
+                ? $"Saved {Path.GetFileName(path)}. No candidate windows yet — adjust harvest filters and re-run."
+                : $"Saved {Path.GetFileName(path)} and harvested {HarvestCandidates.Count} candidate(s). Ready to label.";
+        }
+        catch (Exception ex)
+        {
+            LabelingRecordStatus = $"Saved {Path.GetFileName(path)} but harvest failed: {ex.Message}";
+        }
+        finally
+        {
+            _labelingRecordPath = null;
+        }
+    }
+
+    private static string LocateTrainingSetDirectory(string subset)
+    {
+        var safeSubset = string.IsNullOrWhiteSpace(subset) ? "training-set-a" : subset.Trim();
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        for (int i = 0; dir is not null && i < 8; i++, dir = dir.Parent)
+        {
+            if (Directory.Exists(Path.Combine(dir.FullName, "data", "cw-samples")))
+            {
+                return Path.Combine(dir.FullName, "data", "cw-samples", safeSubset);
+            }
+            if (Directory.Exists(Path.Combine(dir.FullName, "experiments", "cw-decoder")))
+            {
+                return Path.Combine(dir.FullName, "data", "cw-samples", safeSubset);
+            }
+        }
+        return Path.Combine(AppContext.BaseDirectory, "cw-samples", safeSubset);
+    }
+
     public void SaveSelectedLabel()
     {
         if (SelectedCandidate is null || string.IsNullOrWhiteSpace(HarvestFilePath) || string.IsNullOrWhiteSpace(CorrectCopy))
@@ -1888,7 +2072,17 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
             File.WriteAllLines(labelPath, lines);
             _candidateDrafts[CandidateKey(SelectedCandidate)] = CandidateDraftState.FromLabel(label);
             SaveCurrentHarvestSession();
-            AdvancedStatusText = $"Saved verified copy to {Path.GetFileName(labelPath)}.";
+            // Also write a sidecar truth.txt next to the WAV so bench scripts (e.g. bench-30wpm.ps1) can pick it up.
+            var truthPath = Path.ChangeExtension(HarvestFilePath, ".truth.txt");
+            try
+            {
+                File.WriteAllText(truthPath, label.CorrectCopy);
+            }
+            catch
+            {
+                // Non-fatal — labels.jsonl is the source of truth; truth.txt is a convenience for bench tooling.
+            }
+            AdvancedStatusText = $"Saved verified copy to {Path.GetFileName(labelPath)} (+ {Path.GetFileName(truthPath)}).";
             OnPropertyChanged(nameof(CanRunLabelScore));
             OnPropertyChanged(nameof(CanRunLabelSweep));
             OnPropertyChanged(nameof(LabelEvaluationTargetLabel));
