@@ -9,10 +9,11 @@ namespace QsoRipper.Gui.Tests;
 /// <summary>
 /// Verifies the QSO-entry episode lifecycle exposed by
 /// <see cref="QsoLoggerViewModel"/>. <c>MainWindowViewModel</c> uses these
-/// signals to gate the cw-decoder subprocess, so the contract must be:
+/// signals to gate the cw-decoder subprocess. Episodes are now driven by
+/// the operator's explicit F7 acknowledgment, not by typing a callsign:
 /// <list type="bullet">
 ///   <item><c>IsLoggerEpisodeActive</c> is false on construction (no QSO).</item>
-///   <item>Typing a callsign flips it true and raises <c>CwEpisodeStarted</c> exactly once.</item>
+///   <item>F7 (<c>AcknowledgeQsoStartCommand</c>) flips it true and raises <c>CwEpisodeStarted</c> exactly once.</item>
 ///   <item>Clearing the callsign back to empty raises <c>CwEpisodeBoundary</c> with <c>"abandoned"</c>
 ///         and flips it false.</item>
 ///   <item><c>Clear()</c> raises <c>CwEpisodeBoundary</c> with <c>"cleared"</c> and flips it false.</item>
@@ -29,13 +30,18 @@ public sealed class QsoLoggerEpisodeLifecycleTests
     }
 
     [Fact]
-    public void TypingCallsignActivatesEpisodeAndRaisesEpisodeStartedOnce()
+    public void F7ActivatesEpisodeAndRaisesEpisodeStartedOnce()
     {
         var logger = new QsoLoggerViewModel(new MinimalEngineClient());
         var startedCount = 0;
         logger.CwEpisodeStarted += (_, _) => startedCount++;
 
+        // Typing a callsign no longer starts the episode — F7 does.
         logger.Callsign = "K";
+        Assert.False(logger.IsLoggerEpisodeActive);
+        Assert.Equal(0, startedCount);
+
+        logger.AcknowledgeQsoStartCommand.Execute(null);
 
         Assert.True(logger.IsLoggerEpisodeActive);
         Assert.Equal(1, startedCount);
@@ -47,10 +53,11 @@ public sealed class QsoLoggerEpisodeLifecycleTests
     }
 
     [Fact]
-    public void EmptyingCallsignRaisesAbandonedBoundaryAndDeactivatesEpisode()
+    public void EmptyingCallsignAfterF7RaisesAbandonedBoundaryAndDeactivatesEpisode()
     {
         var logger = new QsoLoggerViewModel(new MinimalEngineClient());
         logger.Callsign = "K7ABC";
+        logger.AcknowledgeQsoStartCommand.Execute(null);
         Assert.True(logger.IsLoggerEpisodeActive);
 
         CwEpisodeBoundaryEventArgs? boundary = null;
@@ -68,6 +75,7 @@ public sealed class QsoLoggerEpisodeLifecycleTests
     {
         var logger = new QsoLoggerViewModel(new MinimalEngineClient());
         logger.Callsign = "W7XYZ";
+        logger.AcknowledgeQsoStartCommand.Execute(null);
         Assert.True(logger.IsLoggerEpisodeActive);
 
         CwEpisodeBoundaryEventArgs? boundary = null;

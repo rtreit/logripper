@@ -363,7 +363,7 @@ public sealed class QsoLoggerEnrichmentTests
     }
 
     [Fact]
-    public async Task LogQsoCommandPopulatesUtcEndTimestamp()
+    public async Task LogQsoCommandLeavesUtcEndTimestampNullWithoutF7()
     {
         var engine = new FakeEngineClient();
         var logger = new QsoLoggerViewModel(engine)
@@ -371,6 +371,27 @@ public sealed class QsoLoggerEnrichmentTests
             Callsign = "KW5CW",
         };
 
+        await logger.LogQsoCommand.ExecuteAsync(null);
+
+        Assert.NotNull(engine.LastLoggedQso);
+        Assert.NotNull(engine.LastLoggedQso!.UtcTimestamp);
+        // The duration timer is no longer auto-started — operator must press
+        // F7 to acknowledge a real QSO. Without F7, no end timestamp is set.
+        Assert.Null(engine.LastLoggedQso.UtcEndTimestamp);
+    }
+
+    [Fact]
+    public async Task LogQsoCommandPopulatesUtcEndTimestampAfterF7()
+    {
+        var engine = new FakeEngineClient();
+        var logger = new QsoLoggerViewModel(engine)
+        {
+            Callsign = "KW5CW",
+        };
+
+        // F7: operator acknowledges the QSO is underway, starting the
+        // duration timer.
+        logger.AcknowledgeQsoStartCommand.Execute(null);
         await logger.LogQsoCommand.ExecuteAsync(null);
 
         Assert.NotNull(engine.LastLoggedQso);

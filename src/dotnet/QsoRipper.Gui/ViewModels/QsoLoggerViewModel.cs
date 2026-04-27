@@ -193,11 +193,12 @@ internal sealed partial class QsoLoggerViewModel : ObservableObject
 
         UpdateLogEnabled();
 
+        // Update timer hint text
         if (!string.IsNullOrWhiteSpace(value) && !_timerRunning)
         {
-            StartTimer();
+            ElapsedTimeText = "Press F7";
         }
-        else if (string.IsNullOrWhiteSpace(value) && _timerRunning)
+        else if (string.IsNullOrWhiteSpace(value))
         {
             // Operator backed out of a QSO without saving or pressing Clear.
             // Treat that the same as Clear() for episode-boundary purposes
@@ -205,6 +206,7 @@ internal sealed partial class QsoLoggerViewModel : ObservableObject
             var boundaryStart = _qsoStartTime;
             var boundaryEnd = DateTimeOffset.UtcNow;
             StopTimer();
+            ElapsedTimeText = "---";
             CwEpisodeBoundary?.Invoke(this, new CwEpisodeBoundaryEventArgs(
                 Reason: "abandoned",
                 Qso: null,
@@ -312,8 +314,11 @@ internal sealed partial class QsoLoggerViewModel : ObservableObject
 
         var band = SelectedBand;
         var mode = SelectedMode;
-        var utcEnd = DateTimeOffset.UtcNow;
-        var utcStart = _timerRunning ? _qsoStartTime : utcEnd;
+        var utcNow = DateTimeOffset.UtcNow;
+        var utcStart = _timerRunning ? _qsoStartTime : utcNow;
+        // Episode boundary / CW enrichment window always uses real "now" as
+        // the end. UtcEndTimestamp on the QSO itself is gated on F7 below.
+        var utcEnd = utcNow;
 
         var qso = new QsoRecord
         {
@@ -323,8 +328,13 @@ internal sealed partial class QsoLoggerViewModel : ObservableObject
             RstSent = ParseRst(RstSent.Trim()),
             RstReceived = ParseRst(RstRcvd.Trim()),
             UtcTimestamp = Timestamp.FromDateTimeOffset(utcStart),
-            UtcEndTimestamp = Timestamp.FromDateTimeOffset(utcEnd),
         };
+
+        // Only set end timestamp if timer was explicitly started via F7
+        if (_timerRunning)
+        {
+            qso.UtcEndTimestamp = Timestamp.FromDateTimeOffset(utcNow);
+        }
 
         if (!string.IsNullOrWhiteSpace(mode.Submode))
         {
@@ -562,7 +572,7 @@ internal sealed partial class QsoLoggerViewModel : ObservableObject
         SelectedModeIndex = 0;  // SSB
 
         StopTimer();
-        ElapsedTimeText = "00:00";
+        ElapsedTimeText = "---";
         UpdateLogEnabled();
 
         if (hadTimer)
@@ -576,10 +586,18 @@ internal sealed partial class QsoLoggerViewModel : ObservableObject
     }
 
     [RelayCommand]
-    private void ResetTimer()
+    private void AcknowledgeQsoStart()
     {
         _qsoStartTime = DateTimeOffset.UtcNow;
+        _timerRunning = true;
+        _elapsedTimer.Start();
         ElapsedTimeText = "00:00";
+        // Fire the same boundary signal that the old auto-start path used,
+        // so MainWindowViewModel (or any other host) can spin up the
+        // cw-decoder subprocess on F7. Without this, IsLoggerEpisodeActive
+        // would flip to true silently and downstream consumers would never
+        // see the episode-started edge.
+        CwEpisodeStarted?.Invoke(this, new CwEpisodeStartedEventArgs(_qsoStartTime));
         // F7 is the operator's "starting a new QSO" signal — also drop
         // any stale CW pitch lock from the previous contact so the
         // decoder re-acquires for the new station instead of bleeding

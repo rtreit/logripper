@@ -203,7 +203,6 @@ fn handle_event_with_channel(
         }
         AppEvent::Tick => {
             app.utc_now = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
-            app.tick_debounce();
         }
         AppEvent::LookupResult(result) => apply_lookup_result(app, result),
         AppEvent::SpaceWeather(sw) => {
@@ -457,8 +456,8 @@ fn handle_key_with_channel(
             app.form.prev_advanced_tab();
         }
         KeyCode::F(7) => {
-            app.reset_qso_start_time();
-            app.set_status(format!("QSO start time reset to {}", app.form.time));
+            app.acknowledge_qso_start();
+            app.set_status(format!("QSO timer started at {}", app.form.time));
         }
         KeyCode::F(10) => spawn_log_qso(app, event_tx, channel),
         KeyCode::Enter if key.modifiers.contains(KeyModifiers::ALT) => {
@@ -495,7 +494,6 @@ fn handle_key_with_channel(
             }
             if focused == Field::Callsign {
                 let callsign = app.form.callsign.clone();
-                app.on_callsign_changed();
                 let _ = lookup_tx.send(callsign);
             }
         }
@@ -733,7 +731,6 @@ fn handle_char_key(app: &mut App, c: char, lookup_tx: &watch::Sender<String>) {
                 }
             }
             if focused == Field::Callsign {
-                app.on_callsign_changed();
                 let callsign = app.form.callsign.clone();
                 let _ = lookup_tx.send(callsign);
             }
@@ -909,7 +906,7 @@ fn spawn_log_qso(
     let channel = channel.clone();
     let mut form_snap = app.form.clone();
     let editing_id = app.editing_local_id.clone();
-    if editing_id.is_none() {
+    if editing_id.is_none() && app.qso_timer_active {
         form_snap.time_off = chrono::Utc::now().format("%H:%M").to_string();
     }
     let lookup_snap = app.lookup_result.as_ref().map(|info| {

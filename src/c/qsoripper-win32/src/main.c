@@ -1367,9 +1367,9 @@ static void LogQso(void)
         return;
     }
 
-    /* Auto-fill time_off with current UTC when logging a new QSO */
+    /* Auto-fill time_off with current UTC when logging a new QSO, only if timer was started */
     int is_update = g_state.editing_local_id[0] != 0;
-    if (!is_update && !g_state.time_off[0]) {
+    if (!is_update && g_state.qso_timer_active && !g_state.time_off[0]) {
         SYSTEMTIME st;
         GetSystemTime(&st);
         snprintf(g_state.time_off, sizeof(g_state.time_off),
@@ -2399,6 +2399,8 @@ static int PaintLogForm(HDC hdc, int y_start, int w)
             secs %= 60;
             snprintf(dur, sizeof(dur), "QSO Duration: %02d:%02d", mins, secs);
             DrawText_A(hdc, pad, y + 3, CLR_GREEN, dur);
+        } else if (g_state.callsign[0] != 0) {
+            DrawText_A(hdc, pad, y + 3, CLR_DARKGRAY, "Press F7 to start timer");
         } else {
             int total = qso_duration_seconds(g_state.time_str, g_state.time_off);
             if (total >= 0) {
@@ -2407,7 +2409,7 @@ static int PaintLogForm(HDC hdc, int y_start, int w)
                 snprintf(dur, sizeof(dur), "QSO Duration: %02d:%02d", mins, secs);
                 DrawText_A(hdc, pad, y + 3, CLR_DARKGRAY, dur);
             } else {
-                DrawText_A(hdc, pad, y + 3, CLR_DARKGRAY, "QSO Duration: 00:00");
+                DrawText_A(hdc, pad, y + 3, CLR_DARKGRAY, "QSO Duration: ---");
             }
         }
     }
@@ -2884,7 +2886,7 @@ static void PaintHelp(HDC hdc, int w, int h)
         "F2              Toggle advanced view",
         "F3              Toggle QSO list focus",
         "F4              Toggle search",
-        "F7              Reset QSO timer",
+        "F7              Start QSO timer",
         "F8              Toggle rig control",
         "F5 / F6         Adv tab next/prev",
         "F10 / Alt+Enter Log QSO (or update)",
@@ -3196,7 +3198,7 @@ static void OnKeyDown(HWND hwnd, WPARAM vk, LPARAM lp)
         return;
     }
 
-    /* F7: reset QSO timer and update Time field to now */
+    /* F7: start QSO timer and update Time field to now */
     if (vk == VK_F7) {
         g_state.qso_timer_active = 1;
         g_state.qso_started_at = GetTickCount64();
@@ -3536,12 +3538,6 @@ static void OnChar(HWND hwnd, WPARAM ch)
 
     /* Normal field input */
     InsertChar(g_state.focused_field, (char)ch);
-
-    /* Start QSO timer on first callsign character */
-    if (g_state.focused_field == FIELD_CALLSIGN && !g_state.qso_timer_active) {
-        g_state.qso_timer_active = 1;
-        g_state.qso_started_at = GetTickCount64();
-    }
 
     /* Callsign lookup debounce */
     if (g_state.focused_field == FIELD_CALLSIGN) {
