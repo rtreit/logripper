@@ -2503,7 +2503,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
         }
     }
 
-    private string _strategySweepWpms = "22,25,28";
+    private string _strategySweepWpms = "auto,28,region28,env,env28";
     /// <summary>Comma-separated list of pin-WPM values to sweep alongside auto.
     /// Editable by the operator. "auto" is always included.</summary>
     public string StrategySweepWpms
