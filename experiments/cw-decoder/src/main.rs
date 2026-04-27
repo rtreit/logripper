@@ -145,6 +145,25 @@ enum Cmd {
         /// threshold under dense in-band noise (#320).
         #[arg(long, default_value_t = 0.0)]
         hysteresis_fraction: f32,
+        /// Pre-amplify input samples by this many dB before feeding the
+        /// decoder. Useful for real-radio audio that comes in well below
+        /// 0 dBFS (e.g. USB Audio Codec at default Windows mic level).
+        /// 0 = no gain. 20 dB = 10x amplitude.
+        #[arg(long, default_value_t = 0.0)]
+        input_gain_db: f32,
+        /// Automatically normalise input samples to a target peak of
+        /// `--auto-gain-target` (default 0.5). Overrides `--input-gain-db`
+        /// when set. Computes the gain from the peak of the current input
+        /// (whole-file for file mode, sliding window for live), so weak
+        /// real-radio signals get amplified up to where the decoder's
+        /// thresholds were tuned.
+        #[arg(long)]
+        auto_input_gain: bool,
+        /// Target peak amplitude (0..1) for `--auto-input-gain`. Default
+        /// 0.5 leaves headroom while pushing weak signals into the
+        /// decoder's calibrated range.
+        #[arg(long, default_value_t = 0.5)]
+        auto_gain_target: f32,
         /// Read NDJSON config-update lines from stdin while streaming.
         /// Each line: {"type":"config","min_snr_db":...,"pitch_min_snr_db":...,"threshold_scale":...}
         #[arg(long)]
@@ -178,6 +197,17 @@ enum Cmd {
         /// Emit newline-delimited JSON events for the GUI bridge.
         #[arg(long)]
         json: bool,
+        /// Pre-amplify input samples by this many dB before feeding the
+        /// decoder. See `stream-file --input-gain-db`.
+        #[arg(long, default_value_t = 0.0)]
+        input_gain_db: f32,
+        /// Auto-normalise input samples to a target RMS level (with soft
+        /// clip). See `stream-file --auto-input-gain`.
+        #[arg(long)]
+        auto_input_gain: bool,
+        /// Target RMS amplitude (0..1) for `--auto-input-gain`.
+        #[arg(long, default_value_t = 0.3)]
+        auto_gain_target: f32,
     },
 
     /// Stream live audio through the causal ditdah baseline.
@@ -206,6 +236,10 @@ enum Cmd {
         /// device's native sample rate). Useful for post-stop offline analysis.
         #[arg(long)]
         record: Option<PathBuf>,
+        /// Capture from a system output device using WASAPI loopback instead
+        /// of from an input device.
+        #[arg(long)]
+        loopback: bool,
         /// Emit newline-delimited JSON events for the GUI bridge.
         #[arg(long)]
         json: bool,
@@ -523,6 +557,43 @@ enum Cmd {
         #[arg(long, default_value_t = false)]
         json: bool,
     },
+
+    /// Generate a synthetic CW WAV with rough-fist jitter (variable
+    /// element/gap durations) and a `.truth.txt` sidecar containing the
+    /// reference text. Stress-tests adaptive dit/dah classifiers.
+    GenRoughFist {
+        /// Output WAV path. A `<basename>.truth.txt` sidecar is also written.
+        #[arg(long)]
+        output: PathBuf,
+        /// Reference text to encode (uppercased; non-Morse chars are skipped).
+        #[arg(long)]
+        text: String,
+        /// Nominal speed in WPM.
+        #[arg(long, default_value_t = 20.0)]
+        wpm: f32,
+        /// Carrier pitch in Hz.
+        #[arg(long, default_value_t = 700.0)]
+        pitch_hz: f32,
+        /// Sample rate in Hz.
+        #[arg(long, default_value_t = 12000)]
+        sample_rate: u32,
+        /// Per-element timing jitter as a fraction (e.g., 0.20 = ±20%).
+        /// Applied multiplicatively to dit, dah, and gap durations.
+        #[arg(long, default_value_t = 0.20)]
+        jitter: f32,
+        /// Dah/dit ratio (textbook is 3.0; sloppy fists often run 2.3..2.7).
+        #[arg(long, default_value_t = 3.0)]
+        dah_ratio: f32,
+        /// Multiplicative bias on dit length (e.g., 1.1 = "heavy dits").
+        #[arg(long, default_value_t = 1.0)]
+        dit_weight: f32,
+        /// Additive white-noise amplitude (0..1). 0 = clean.
+        #[arg(long, default_value_t = 0.0)]
+        noise: f32,
+        /// Random seed (for reproducible jitter).
+        #[arg(long, default_value_t = 1)]
+        seed: u64,
+    },
 }
 
 fn main() -> Result<()> {
@@ -601,6 +672,9 @@ fn main() -> Result<()> {
             min_pulse_dot_fraction,
             min_gap_dot_fraction,
             hysteresis_fraction,
+            input_gain_db,
+            auto_input_gain,
+            auto_gain_target,
             stdin_control,
         } => {
             let cfg = streaming::DecoderConfig {
@@ -620,7 +694,18 @@ fn main() -> Result<()> {
 
                 cfar_keying: false,
             };
-            run_stream_file(&path, chunk_ms, realtime, quiet, json, cfg, stdin_control)
+            run_stream_file(
+                &path,
+                chunk_ms,
+                realtime,
+                quiet,
+                json,
+                cfg,
+                stdin_control,
+                input_gain_db,
+                auto_input_gain,
+                auto_gain_target,
+            )
         }
         Cmd::StreamFileDitdah {
             path,
@@ -632,6 +717,9 @@ fn main() -> Result<()> {
             realtime,
             quiet,
             json,
+            input_gain_db,
+            auto_input_gain,
+            auto_gain_target,
         } => run_stream_file_ditdah(
             &path,
             chunk_ms,
@@ -642,6 +730,9 @@ fn main() -> Result<()> {
             realtime,
             quiet,
             json,
+            input_gain_db,
+            auto_input_gain,
+            auto_gain_target,
             &log_capture,
         ),
         Cmd::StreamLiveDitdah {
@@ -653,6 +744,7 @@ fn main() -> Result<()> {
             decode_every_ms,
             confirmations,
             record,
+            loopback,
             json,
         } => run_stream_live_ditdah(
             device.as_deref(),
@@ -663,6 +755,7 @@ fn main() -> Result<()> {
             decode_every_ms,
             confirmations,
             record.as_deref(),
+            loopback,
             json,
             &log_capture,
         ),
@@ -850,6 +943,29 @@ fn main() -> Result<()> {
             min_pulse_dot_fraction,
             cfar_keying,
             json,
+        ),
+        Cmd::GenRoughFist {
+            output,
+            text,
+            wpm,
+            pitch_hz,
+            sample_rate,
+            jitter,
+            dah_ratio,
+            dit_weight,
+            noise,
+            seed,
+        } => run_gen_rough_fist(
+            &output,
+            &text,
+            wpm,
+            pitch_hz,
+            sample_rate,
+            jitter,
+            dah_ratio,
+            dit_weight,
+            noise,
+            seed,
         ),
     }
 }
@@ -1724,6 +1840,54 @@ fn emit_decoder_events(
     }
 }
 
+/// Pre-amplify input samples in-place. Real-radio captures (USB Audio
+/// Codec mic input) routinely come in 20-30 dB below the synthetic test
+/// corpus the decoder was tuned against, so the keying threshold and
+/// SNR gate spend the whole clip on noise. Boosting brings the input
+/// back into the calibrated range. Returns the dB applied (None if
+/// no-op).
+fn apply_input_gain(
+    samples: &mut [f32],
+    input_gain_db: f32,
+    auto_input_gain: bool,
+    auto_gain_target: f32,
+) -> Option<f32> {
+    if auto_input_gain {
+        // Drive a high-percentile sample to the target ceiling, then
+        // tanh-clip. RMS-targeted gain under-amplified weak signals
+        // because the noise floor swallows the budget; peak-targeted
+        // saturation matches what manual +25..+45 dB pre-amp does for
+        // real-radio captures (and that hits ~70% LCS on labelled
+        // clips that pure RMS scaling caps at ~20%).
+        let mut abs: Vec<f32> = samples.iter().map(|s| s.abs()).collect();
+        if abs.is_empty() {
+            return None;
+        }
+        // 99th percentile via partial sort.
+        let idx = ((abs.len() as f32) * 0.99) as usize;
+        let idx = idx.min(abs.len() - 1);
+        abs.select_nth_unstable_by(idx, |a, b| {
+            a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)
+        });
+        let p99 = abs[idx].max(1e-6);
+        // Allow target up to 4.0 so the tanh deliberately saturates.
+        let target = auto_gain_target.max(0.05).min(4.0);
+        let scale = target / p99;
+        for s in samples.iter_mut() {
+            *s = (*s * scale).tanh();
+        }
+        Some(20.0 * scale.log10())
+    } else if input_gain_db.abs() > f32::EPSILON {
+        let scale = 10.0_f32.powf(input_gain_db / 20.0);
+        for s in samples.iter_mut() {
+            *s = (*s * scale).tanh();
+        }
+        Some(input_gain_db)
+    } else {
+        None
+    }
+}
+
 fn run_stream_file(
     path: &std::path::Path,
     chunk_ms: u32,
@@ -1732,9 +1896,18 @@ fn run_stream_file(
     json: bool,
     cfg: streaming::DecoderConfig,
     stdin_control: bool,
+    input_gain_db: f32,
+    auto_input_gain: bool,
+    auto_gain_target: f32,
 ) -> Result<()> {
     use std::time::Instant;
-    let audio = audio::decode_file(path).context("decoding audio file")?;
+    let mut audio = audio::decode_file(path).context("decoding audio file")?;
+    let applied_gain_db = apply_input_gain(
+        &mut audio.samples,
+        input_gain_db,
+        auto_input_gain,
+        auto_gain_target,
+    );
     let dur = audio.samples.len() as f32 / audio.sample_rate as f32;
     let mut emitter = if json {
         Some(json::JsonEmitter::new())
@@ -1755,6 +1928,7 @@ fn run_stream_file(
                     "pitch_min_snr_db": cfg.pitch_min_snr_db,
                     "threshold_scale": cfg.threshold_scale,
                     "auto_threshold": cfg.auto_threshold,
+                    "input_gain_db": applied_gain_db,
                 }),
             }),
         );
@@ -1766,6 +1940,9 @@ fn run_stream_file(
             dur,
             audio.samples.len()
         );
+        if let Some(g) = applied_gain_db {
+            println!("Input gain applied: {:+.1} dB", g);
+        }
     }
 
     let mut decoder = streaming::StreamingDecoder::new(audio.sample_rate)?;
@@ -1967,11 +2144,20 @@ fn run_stream_file_ditdah(
     realtime: bool,
     quiet: bool,
     json: bool,
+    input_gain_db: f32,
+    auto_input_gain: bool,
+    auto_gain_target: f32,
     log_capture: &log_capture::DitdahLogCapture,
 ) -> Result<()> {
     use std::time::Instant;
 
-    let audio = audio::decode_file(path).context("decoding audio file")?;
+    let mut audio = audio::decode_file(path).context("decoding audio file")?;
+    let _applied_gain_db = apply_input_gain(
+        &mut audio.samples,
+        input_gain_db,
+        auto_input_gain,
+        auto_gain_target,
+    );
     let dur = audio.samples.len() as f32 / audio.sample_rate as f32;
     let chunk_samples = (((audio.sample_rate as u64) * chunk_ms as u64) / 1000) as usize;
     let chunk_samples = chunk_samples.max(64);
@@ -2133,6 +2319,7 @@ fn run_stream_live_ditdah(
     decode_every_ms: u32,
     required_confirmations: usize,
     record_path: Option<&std::path::Path>,
+    loopback: bool,
     json: bool,
     log_capture: &log_capture::DitdahLogCapture,
 ) -> Result<()> {
@@ -2140,7 +2327,11 @@ fn run_stream_live_ditdah(
     use std::sync::Arc;
     use std::time::{Duration, Instant};
 
-    let capture = audio::open_input_with_recording(device, 1.0, record_path)?;
+    let capture = if loopback {
+        audio::open_loopback_with_recording(device, 1.0, record_path)?
+    } else {
+        audio::open_input_with_recording(device, 1.0, record_path)?
+    };
     let baseline_cfg = ditdah_streaming::CausalBaselineConfig {
         window_seconds,
         min_window_seconds: min_window_seconds.clamp(0.1, window_seconds.max(0.5)),
@@ -2177,16 +2368,18 @@ fn run_stream_live_ditdah(
     }
 
     let stop = Arc::new(AtomicBool::new(false));
+    let manual_anchor = Arc::new(AtomicBool::new(false));
     {
         let stop = Arc::clone(&stop);
         ctrlc_setup(move || {
             stop.store(true, Ordering::Relaxed);
         });
     }
-    // Watch stdin for EOF or any byte — the GUI signals a graceful
-    // shutdown by writing "stop\n" and then closing our stdin. Either a
-    // successful read or EOF triggers the shutdown path so Drop runs on
-    // LiveCapture and the WAV writer flushes the data chunk + RIFF header.
+    // Watch stdin for EOF or a stop line. The GUI also sends control
+    // messages such as reset_lock; those must not terminate the rolling
+    // ditdah backend (it has no persistent pitch lock to reset anyway).
+    // EOF still triggers shutdown so Drop runs on LiveCapture and the WAV
+    // writer flushes the data chunk + RIFF header.
     // Without this, Kill leaves a header-only WAV that Replay can't read.
     //
     // NOTE: on Windows, std::io::stdin() with an anonymous pipe can fail
@@ -2194,11 +2387,20 @@ fn run_stream_live_ditdah(
     // is the robust signal. We accept either path.
     {
         let stop = Arc::clone(&stop);
+        let manual_anchor = Arc::clone(&manual_anchor);
         std::thread::spawn(move || {
-            use std::io::Read;
-            let mut buf = [0u8; 256];
-            let mut stdin = std::io::stdin();
-            let _ = stdin.read(&mut buf);
+            use std::io::BufRead;
+            let stdin = std::io::stdin();
+            for line in stdin.lock().lines() {
+                match line {
+                    Ok(line) if line.trim().eq_ignore_ascii_case("stop") => break,
+                    Ok(line) if is_manual_anchor_command(line.trim()) => {
+                        manual_anchor.store(true, Ordering::Relaxed);
+                    }
+                    Ok(_) => continue,
+                    Err(_) => break,
+                }
+            }
             stop.store(true, Ordering::Relaxed);
         });
     }
@@ -2234,6 +2436,19 @@ fn run_stream_live_ditdah(
         }
         if seconds > 0.0 && started.elapsed().as_secs_f32() >= seconds {
             break;
+        }
+
+        if manual_anchor.swap(false, Ordering::Relaxed) {
+            streamer.force_stream_anchor();
+            if let Some(em) = emitter.as_mut() {
+                em.emit(
+                    started.elapsed().as_secs_f32(),
+                    serde_json::json!({
+                        "type": "status",
+                        "message": "Manual anchor armed",
+                    }),
+                );
+            }
         }
 
         let chunk = {
@@ -2370,6 +2585,21 @@ fn run_stream_live_ditdah(
     println!("Final transcript:");
     println!("{}", transcript.trim());
     Ok(())
+}
+
+fn is_manual_anchor_command(line: &str) -> bool {
+    if line.eq_ignore_ascii_case("anchor") || line.eq_ignore_ascii_case("manual_anchor") {
+        return true;
+    }
+
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
+        return false;
+    };
+
+    matches!(
+        v.get("type").and_then(|t| t.as_str()),
+        Some("manual_anchor") | Some("anchor")
+    )
 }
 
 fn handle_baseline_snapshot(
@@ -2832,4 +3062,210 @@ fn spawn_stdin_config_channel(
         }
     });
     rx
+}
+
+fn morse_for_char(c: char) -> Option<&'static str> {
+    Some(match c.to_ascii_uppercase() {
+        'A' => ".-",
+        'B' => "-...",
+        'C' => "-.-.",
+        'D' => "-..",
+        'E' => ".",
+        'F' => "..-.",
+        'G' => "--.",
+        'H' => "....",
+        'I' => "..",
+        'J' => ".---",
+        'K' => "-.-",
+        'L' => ".-..",
+        'M' => "--",
+        'N' => "-.",
+        'O' => "---",
+        'P' => ".--.",
+        'Q' => "--.-",
+        'R' => ".-.",
+        'S' => "...",
+        'T' => "-",
+        'U' => "..-",
+        'V' => "...-",
+        'W' => ".--",
+        'X' => "-..-",
+        'Y' => "-.--",
+        'Z' => "--..",
+        '0' => "-----",
+        '1' => ".----",
+        '2' => "..---",
+        '3' => "...--",
+        '4' => "....-",
+        '5' => ".....",
+        '6' => "-....",
+        '7' => "--...",
+        '8' => "---..",
+        '9' => "----.",
+        '.' => ".-.-.-",
+        ',' => "--..--",
+        '?' => "..--..",
+        '/' => "-..-.",
+        '=' => "-...-",
+        '+' => ".-.-.",
+        '-' => "-....-",
+        _ => return None,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_gen_rough_fist(
+    output: &std::path::Path,
+    text: &str,
+    wpm: f32,
+    pitch_hz: f32,
+    sample_rate: u32,
+    jitter: f32,
+    dah_ratio: f32,
+    dit_weight: f32,
+    noise: f32,
+    seed: u64,
+) -> Result<()> {
+    use std::f32::consts::TAU;
+    // Cheap deterministic LCG so we don't add a `rand` dep.
+    let mut rng_state = seed
+        .wrapping_mul(6364136223846793005)
+        .wrapping_add(1442695040888963407);
+    let mut rand_unit = || -> f32 {
+        rng_state = rng_state
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        let r = ((rng_state >> 33) as u32) as f32 / u32::MAX as f32;
+        // Map [0,1) -> [-1,1)
+        2.0 * r - 1.0
+    };
+    let jitter_mul = |base: f32, rng: &mut dyn FnMut() -> f32| -> f32 {
+        let factor = (1.0 + jitter * rng()).max(0.1);
+        base * factor
+    };
+
+    let dot_secs = 1.2 / wpm;
+    let ramp_n = ((sample_rate as f32) * 0.005) as usize;
+    let mut samples: Vec<f32> = Vec::new();
+    let mut t: usize = 0;
+
+    // Leading silence so the decoder has time to lock pitch.
+    let lead_n = (sample_rate as f32 * 0.5) as usize;
+    samples.resize(lead_n, 0.0);
+
+    let mut canonical_text = String::new();
+
+    let words: Vec<&str> = text.split_whitespace().collect();
+    for (wi, w) in words.iter().enumerate() {
+        let mut word_chars = String::new();
+        let mut word_emitted = false;
+        for c in w.chars() {
+            let code = match morse_for_char(c) {
+                Some(s) => s,
+                None => continue,
+            };
+            if word_emitted {
+                // Inter-character gap: 3 dot units (jittered).
+                let gap_secs = jitter_mul(dot_secs * 3.0, &mut rand_unit);
+                let n = (gap_secs * sample_rate as f32) as usize;
+                samples.resize(samples.len() + n, 0.0);
+            }
+            word_emitted = true;
+            word_chars.push(c.to_ascii_uppercase());
+
+            let mut first_elem = true;
+            for el in code.chars() {
+                if !first_elem {
+                    let gap_secs = jitter_mul(dot_secs, &mut rand_unit);
+                    let n = (gap_secs * sample_rate as f32) as usize;
+                    samples.resize(samples.len() + n, 0.0);
+                }
+                first_elem = false;
+                let base = if el == '.' {
+                    dot_secs * dit_weight
+                } else {
+                    dot_secs * dah_ratio
+                };
+                let on_secs = jitter_mul(base, &mut rand_unit);
+                let n = (on_secs * sample_rate as f32) as usize;
+                for k in 0..n {
+                    let env = {
+                        let rise = if k < ramp_n {
+                            0.5 * (1.0 - ((std::f32::consts::PI * k as f32) / ramp_n as f32).cos())
+                        } else {
+                            1.0
+                        };
+                        let fall = if k + ramp_n > n {
+                            let kk = (n - k) as f32;
+                            0.5 * (1.0 - ((std::f32::consts::PI * kk) / ramp_n as f32).cos())
+                        } else {
+                            1.0
+                        };
+                        rise.min(fall)
+                    };
+                    let s = (TAU * pitch_hz * (t as f32) / sample_rate as f32).sin() * 0.6 * env;
+                    samples.push(s);
+                    t += 1;
+                }
+            }
+        }
+        if !word_chars.is_empty() {
+            if wi > 0 {
+                canonical_text.push(' ');
+            }
+            canonical_text.push_str(&word_chars);
+        }
+        if wi + 1 < words.len() && word_emitted {
+            // Inter-word gap: 7 dot units (jittered).
+            let gap_secs = jitter_mul(dot_secs * 7.0, &mut rand_unit);
+            let n = (gap_secs * sample_rate as f32) as usize;
+            samples.resize(samples.len() + n, 0.0);
+        }
+    }
+
+    // Trailing silence.
+    let tail_n = (sample_rate as f32 * 0.5) as usize;
+    samples.resize(samples.len() + tail_n, 0.0);
+
+    if noise > 0.0 {
+        for s in samples.iter_mut() {
+            *s = (*s + noise * rand_unit()).clamp(-1.0, 1.0);
+        }
+    }
+
+    if let Some(parent) = output.parent() {
+        std::fs::create_dir_all(parent).ok();
+    }
+    let spec = hound::WavSpec {
+        channels: 1,
+        sample_rate,
+        bits_per_sample: 16,
+        sample_format: hound::SampleFormat::Int,
+    };
+    let mut writer = hound::WavWriter::create(output, spec)
+        .with_context(|| format!("creating WAV {}", output.display()))?;
+    for s in &samples {
+        let v = (s * i16::MAX as f32) as i16;
+        writer.write_sample(v).context("writing sample")?;
+    }
+    writer.finalize().context("finalising WAV")?;
+
+    let truth_path = output.with_extension("truth.txt");
+    std::fs::write(&truth_path, canonical_text.as_bytes())
+        .with_context(|| format!("writing truth {}", truth_path.display()))?;
+
+    let dur_s = samples.len() as f32 / sample_rate as f32;
+    println!(
+        "Wrote {} ({:.2}s, {} WPM, jitter±{:.0}%, dah/dit={:.2}, dit_weight={:.2}, noise={:.2})",
+        output.display(),
+        dur_s,
+        wpm,
+        jitter * 100.0,
+        dah_ratio,
+        dit_weight,
+        noise,
+    );
+    println!("Truth: {}", truth_path.display());
+    println!("Text:  {}", canonical_text);
+    Ok(())
 }

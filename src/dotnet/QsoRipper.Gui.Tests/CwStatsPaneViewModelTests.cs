@@ -17,6 +17,7 @@ public class CwStatsPaneViewModelTests
         public bool IsRunning => true;
         public CwWpmSample? LatestSample { get; private set; }
         public CwLockState CurrentLockState { get; set; } = CwLockState.Unknown;
+        public int AnchorHeardCount { get; private set; }
 
         public event EventHandler<CwWpmSample>? SampleReceived;
         public event EventHandler? StatusChanged;
@@ -38,6 +39,7 @@ public class CwStatsPaneViewModelTests
         }
 
         public void Start(string? deviceOverride) => StatusChanged?.Invoke(this, EventArgs.Empty);
+        public void MarkAnchorHeard() => AnchorHeardCount++;
         public void Stop() => StatusChanged?.Invoke(this, EventArgs.Empty);
         public void Dispose() { }
     }
@@ -145,6 +147,30 @@ public class CwStatsPaneViewModelTests
         Assert.True(vm.IsLocked);
         Assert.Equal("● LIVE", vm.LockBadgeText);
         Assert.Equal("LOCKED", vm.ConfidenceText);
+    });
+
+    [Fact]
+    public void MarkAnchorHeardCommandSendsManualAnchorAndUpdatesStatus() => OnDispatcher(() =>
+    {
+        using var src = new InMemorySource { CurrentLockState = CwLockState.Hunting };
+        using var vm = new CwStatsPaneViewModel(src);
+
+        vm.MarkAnchorHeardCommand.Execute(null);
+
+        Assert.Equal(1, src.AnchorHeardCount);
+        Assert.Equal("Manual anchor armed", vm.StatusText);
+    });
+
+    [Fact]
+    public void StatusEventUpdatesStatusText() => OnDispatcher(() =>
+    {
+        using var src = new InMemorySource { CurrentLockState = CwLockState.Hunting };
+        using var vm = new CwStatsPaneViewModel(src);
+
+        src.EmitRaw("{\"type\":\"status\",\"message\":\"Manual anchor armed\"}");
+        Pump();
+
+        Assert.Equal("Manual anchor armed", vm.StatusText);
     });
 
     [Fact]

@@ -104,6 +104,24 @@ internal sealed partial class CwStatsPaneViewModel : ObservableObject, IDisposab
     [RelayCommand]
     private void Close() => CloseRequested?.Invoke(this, EventArgs.Empty);
 
+    [RelayCommand]
+    public void MarkAnchorHeard()
+    {
+        if (_source is null)
+        {
+            StatusText = "Radio monitor is OFF";
+            return;
+        }
+        if (!_source.IsRunning)
+        {
+            StatusText = "Decoder is not running";
+            return;
+        }
+
+        _source.MarkAnchorHeard();
+        StatusText = "Manual anchor armed";
+    }
+
     /// <summary>
     /// Reset the live displays to a quiescent state. Called by
     /// <c>MainWindowViewModel</c> when a QSO episode boundary fires
@@ -244,6 +262,9 @@ internal sealed partial class CwStatsPaneViewModel : ObservableObject, IDisposab
                     break;
                 case "ready":
                     StatusText = "Decoder ready";
+                    break;
+                case "status":
+                    StatusText = TryGetString(doc.RootElement, "message") ?? StatusText;
                     break;
                 default:
                     break;

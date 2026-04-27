@@ -27,6 +27,7 @@ public sealed class CwQsoWpmAggregatorTests
         }
 
         public void Start(string? deviceOverride) => StatusChanged?.Invoke(this, EventArgs.Empty);
+        public void MarkAnchorHeard() { }
         public void Stop() => StatusChanged?.Invoke(this, EventArgs.Empty);
         public void Dispose() { }
     }

@@ -1,0 +1,26 @@
+[package]
+name = "ditdah"
+version = "0.2.0"
+edition = "2024"
+license = "MIT"
+description = "High-performance Morse code decoder with 100% test suite accuracy"
+repository = "https://github.com/yuvadm/ditdah"
+keywords = ["morse", "audio", "signal-processing", "decoder"]
+categories = ["multimedia::audio", "science"]
+
+[lib]
+name = "ditdah"
+path = "src/lib.rs"
+
+[[bin]]
+name = "ditdah"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1.0.98"
+clap = { version = "4.5.40", features = ["derive"] }
+env_logger = "0.11.8"
+hound = "3.5.1"
+log = "0.4.27"
+rubato = "0.16.2"
+rustfft = "6.4.0"

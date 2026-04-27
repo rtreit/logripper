@@ -27,6 +27,7 @@
     <KeyBinding Gesture="Alt+Enter" Command="{Binding ToggleInspectorCommand}" />
     <KeyBinding Gesture="F8" Command="{Binding OpenCallsignCardCommand}" />
     <KeyBinding Gesture="F9" Command="{Binding ToggleCwStatsPaneCommand}" />
+    <KeyBinding Gesture="Ctrl+Shift+A" Command="{Binding MarkCwAnchorHeardCommand}" />
     <KeyBinding Gesture="F6" Command="{Binding SyncNowCommand}" />
     <KeyBinding Gesture="Ctrl+Enter" Command="{Binding Logger.LogQsoCommand}" />
     <KeyBinding Gesture="F10" Command="{Binding Logger.LogQsoCommand}" />

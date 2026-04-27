@@ -148,6 +148,12 @@ const QUALITY_SILENCE_RMS: f32 = 0.01;
 const RELOCK_SECONDS: f32 = 3.0;
 const POWER_HISTORY_SECONDS: f32 = 4.0;
 const DIT_HISTORY: usize = 32;
+/// Static fallback boundary: an ON run longer than this many learned
+/// dot-lengths is classified as a dah. Used only when we have a
+/// `dot_len` estimate but no `dah_len` (early bootstrap). Once the
+/// k-means clusterer locks both centers we switch to the
+/// learned midpoint `(dot_len + dah_len) / 2.0`, which adapts to
+/// sloppy keying where dahs are not the textbook 3:1 ratio.
 const DIT_DAH_BOUNDARY: f32 = 2.0;
 const LETTER_SPACE_BOUNDARY: f32 = 2.0;
 const WORD_SPACE_BOUNDARY: f32 = 5.0;
@@ -1631,7 +1637,22 @@ impl Decoder {
         // Feed the rhythm gate first so it always sees every interval.
         self.rhythm.push(ivl, dot);
         if ivl.is_on {
-            if len_norm < DIT_DAH_BOUNDARY {
+            // Adaptive dit/dah boundary: once the k-means clusterer has
+            // locked BOTH cluster centers, classify against the midpoint
+            // of the learned `(dot_len, dah_len)` pair. Hand-sent CW
+            // commonly has dah/dit ratios down to ~2.3:1 (not the
+            // textbook 3:1), and the static `2.0 * dot_len` boundary
+            // mis-reads those dahs as dits. The learned midpoint also
+            // shifts with the operator's QRQ/QRS drift over time.
+            //
+            // While the dah cluster is unlocked (early bootstrap) we
+            // fall back to the static `DIT_DAH_BOUNDARY` so we don't
+            // need a full pair of clusters before emitting anything.
+            let boundary = match self.dah_len {
+                Some(dah) if dah > dot * 1.5 => 0.5 * (1.0 + dah / dot),
+                _ => DIT_DAH_BOUNDARY,
+            };
+            if len_norm < boundary {
                 self.current_letter.push('.');
             } else {
                 self.current_letter.push('-');

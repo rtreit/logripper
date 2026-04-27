@@ -5,7 +5,7 @@ use std::collections::VecDeque;
 use crate::decoder;
 
 pub fn normalize_snapshot_text(text: &str) -> String {
-    text.split_whitespace().collect::<Vec<_>>().join(" ")
+    repair_common_split_morse(&text.split_whitespace().collect::<Vec<_>>().join(" "))
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -177,6 +177,10 @@ impl CausalBaselineStreamer {
         self.buffer.iter().copied().collect()
     }
 
+    pub fn force_stream_anchor(&mut self) {
+        self.stabilizer.force_stream_anchor();
+    }
+
     fn decode_snapshot(&mut self) -> CausalBaselineSnapshot {
         let snapshot: Vec<f32> = self.buffer.iter().copied().collect();
         let text = decoder::decode_text(&snapshot, self.sample_rate);
@@ -194,6 +198,7 @@ pub struct PrefixStabilizer {
     recent_snapshots: VecDeque<String>,
     committed: String,
     latest_snapshot: String,
+    manual_anchor: bool,
 }
 
 impl PrefixStabilizer {
@@ -203,12 +208,33 @@ impl PrefixStabilizer {
             recent_snapshots: VecDeque::new(),
             committed: String::new(),
             latest_snapshot: String::new(),
+            manual_anchor: false,
         }
     }
 
+    pub fn force_stream_anchor(&mut self) {
+        self.manual_anchor = true;
+        self.recent_snapshots.clear();
+    }
+
     pub fn push_snapshot(&mut self, snapshot_text: &str) -> String {
-        let normalized = normalize_snapshot_text(snapshot_text);
-        if normalized.is_empty() {
+        let mut normalized = normalize_snapshot_text(snapshot_text);
+        if normalized.is_empty() || is_noise_dominated_snapshot(&normalized) {
+            return String::new();
+        }
+
+        let stream_is_active = !self.committed.is_empty() || self.manual_anchor;
+        if !stream_is_active {
+            let Some(anchored) = anchored_snapshot_text(&normalized) else {
+                return String::new();
+            };
+            normalized = anchored;
+        } else if self.manual_anchor && self.committed.is_empty() {
+            let Some(anchored) = manual_anchor_snapshot_text(&normalized) else {
+                return String::new();
+            };
+            normalized = anchored;
+        } else if !has_stream_anchor(&normalized, true) {
             return String::new();
         }
 
@@ -233,6 +259,168 @@ impl PrefixStabilizer {
     pub fn transcript(&self) -> &str {
         self.committed.trim()
     }
+}
+
+fn repair_common_split_morse(text: &str) -> String {
+    text.split_whitespace()
+        .map(|token| token.replace("GT", "Q"))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn is_noise_dominated_snapshot(text: &str) -> bool {
+    let mut alnum_count = 0usize;
+    let mut single_element_count = 0usize;
+    let mut unknown_count = 0usize;
+
+    for ch in text.chars() {
+        if ch == '?' {
+            unknown_count += 1;
+            continue;
+        }
+        if ch.is_ascii_alphanumeric() {
+            alnum_count += 1;
+            if morse_element_count(ch) == Some(1) {
+                single_element_count += 1;
+            }
+        }
+    }
+
+    if alnum_count == 0 {
+        return true;
+    }
+
+    if alnum_count > 64 {
+        return true;
+    }
+
+    let single_fraction = single_element_count as f32 / alnum_count as f32;
+    let unknown_fraction = unknown_count as f32 / (alnum_count + unknown_count).max(1) as f32;
+
+    alnum_count > 16 && (single_fraction > 0.45 || unknown_fraction > 0.15)
+}
+
+fn has_stream_anchor(text: &str, stream_is_active: bool) -> bool {
+    let normalized = text.to_ascii_uppercase();
+    let tokens: Vec<&str> = normalized.split_whitespace().collect();
+    if tokens.is_empty() {
+        return false;
+    }
+
+    if tokens.iter().any(|token| {
+        *token == "CQ"
+            || token.contains("CQ")
+            || *token == "DE"
+            || *token == "POTA"
+            || *token == "TEST"
+            || *token == "QSB"
+            || *token == "QST"
+            || *token == "73"
+    }) {
+        return true;
+    }
+
+    stream_is_active && tokens.iter().any(|token| looks_like_callsign_token(token))
+}
+
+fn anchored_snapshot_text(text: &str) -> Option<String> {
+    let tokens: Vec<&str> = text.split_whitespace().collect();
+    let idx = tokens
+        .iter()
+        .position(|token| is_stream_anchor_token(token))?;
+    Some(tokens[idx..].join(" "))
+}
+
+fn manual_anchor_snapshot_text(text: &str) -> Option<String> {
+    let tokens: Vec<&str> = text.split_whitespace().collect();
+    let idx = tokens.iter().position(|token| {
+        is_stream_anchor_token(token) || looks_like_strong_callsign_token(token)
+    })?;
+    Some(tokens[idx..].join(" "))
+}
+
+fn is_stream_anchor_token(token: &str) -> bool {
+    let token = token.to_ascii_uppercase();
+    token == "CQ"
+        || token.contains("CQ")
+        || token == "DE"
+        || token == "POTA"
+        || token == "TEST"
+        || token == "QSB"
+        || token == "QST"
+        || token == "73"
+}
+
+fn looks_like_callsign_token(token: &str) -> bool {
+    looks_like_strong_callsign_token(token)
+}
+
+fn looks_like_strong_callsign_token(token: &str) -> bool {
+    let len = token.len();
+    if !(4..=6).contains(&len) || !token.chars().all(|ch| ch.is_ascii_alphanumeric()) {
+        return false;
+    }
+
+    let chars: Vec<char> = token.chars().map(|ch| ch.to_ascii_uppercase()).collect();
+    let digit_positions: Vec<usize> = chars
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, ch)| ch.is_ascii_digit().then_some(idx))
+        .collect();
+    if digit_positions.len() != 1 {
+        return false;
+    }
+
+    let digit_idx = digit_positions[0];
+    if !(1..=2).contains(&digit_idx) {
+        return false;
+    }
+
+    let prefix = &chars[..digit_idx];
+    let suffix = &chars[digit_idx + 1..];
+    if suffix.is_empty()
+        || suffix.len() > 3
+        || !prefix.iter().all(|ch| ch.is_ascii_alphabetic())
+        || !suffix.iter().all(|ch| ch.is_ascii_alphabetic())
+    {
+        return false;
+    }
+
+    prefix.len() == 2 || matches!(prefix[0], 'A' | 'K' | 'N' | 'W')
+}
+
+fn morse_element_count(ch: char) -> Option<usize> {
+    let n = match ch.to_ascii_uppercase() {
+        'A' => 2,
+        'B' => 4,
+        'C' => 4,
+        'D' => 3,
+        'E' => 1,
+        'F' => 4,
+        'G' => 3,
+        'H' => 4,
+        'I' => 2,
+        'J' => 4,
+        'K' => 3,
+        'L' => 4,
+        'M' => 2,
+        'N' => 2,
+        'O' => 3,
+        'P' => 4,
+        'Q' => 4,
+        'R' => 3,
+        'S' => 3,
+        'T' => 1,
+        'U' => 3,
+        'V' => 4,
+        'W' => 3,
+        'X' => 4,
+        'Y' => 4,
+        'Z' => 4,
+        '1' | '2' | '3' | '4' | '5' | '6' | '7' | '8' | '9' | '0' => 5,
+        _ => return None,
+    };
+    Some(n)
 }
 
 pub fn append_snapshot_text(transcript: &mut String, snapshot_text: &str) -> String {
@@ -460,6 +648,64 @@ mod tests {
         assert_eq!(stabilizer.transcript(), "QST QST QST");
         assert_eq!(stabilizer.finalize_latest(), " DE");
         assert_eq!(stabilizer.transcript(), "QST QST QST DE");
+    }
+
+    #[test]
+    fn prefix_stabilizer_accepts_73_as_stream_anchor() {
+        let mut stabilizer = PrefixStabilizer::new(1);
+        assert_eq!(stabilizer.push_snapshot("73"), "73");
+        assert_eq!(stabilizer.transcript(), "73");
+    }
+
+    #[test]
+    fn prefix_stabilizer_rejects_weak_q_code_fragments_as_anchors() {
+        let mut stabilizer = PrefixStabilizer::new(1);
+
+        assert_eq!(stabilizer.push_snapshot("Q OEIIT OI EEE"), "");
+        assert_eq!(stabilizer.push_snapshot("SB IZ"), "");
+        assert_eq!(stabilizer.transcript(), "");
+    }
+
+    #[test]
+    fn prefix_stabilizer_accepts_complete_q_code_anchors() {
+        let mut stabilizer = PrefixStabilizer::new(1);
+
+        assert_eq!(stabilizer.push_snapshot("QSB"), "QSB");
+        assert_eq!(stabilizer.transcript(), "QSB");
+    }
+
+    #[test]
+    fn prefix_stabilizer_manual_anchor_accepts_callsign_like_mid_qso_text() {
+        let mut stabilizer = PrefixStabilizer::new(1);
+        assert_eq!(stabilizer.push_snapshot("KK6QZM"), "");
+
+        stabilizer.force_stream_anchor();
+
+        assert_eq!(stabilizer.push_snapshot("KK6QZM"), "KK6QZM");
+        assert_eq!(stabilizer.transcript(), "KK6QZM");
+    }
+
+    #[test]
+    fn prefix_stabilizer_manual_anchor_rejects_e_t_heavy_gibberish() {
+        let mut stabilizer = PrefixStabilizer::new(1);
+        stabilizer.force_stream_anchor();
+
+        assert_eq!(
+            stabilizer.push_snapshot("T R T S E4CTT TN BTE5A I NT EOTG8U EEDN"),
+            ""
+        );
+        assert_eq!(stabilizer.transcript(), "");
+    }
+
+    #[test]
+    fn prefix_stabilizer_crops_noise_before_automatic_anchor() {
+        let mut stabilizer = PrefixStabilizer::new(1);
+
+        assert_eq!(
+            stabilizer.push_snapshot("T E I CQ CQ DE K5KV"),
+            "CQ CQ DE K5KV"
+        );
+        assert_eq!(stabilizer.transcript(), "CQ CQ DE K5KV");
     }
 
     #[test]

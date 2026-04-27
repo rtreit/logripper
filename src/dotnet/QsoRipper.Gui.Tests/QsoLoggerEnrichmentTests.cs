@@ -58,6 +58,7 @@ public sealed class QsoLoggerEnrichmentTests
             SampleReceived?.Invoke(this, s);
         }
         public void Start(string? deviceOverride) => StatusChanged?.Invoke(this, EventArgs.Empty);
+        public void MarkAnchorHeard() { }
         public void Stop() => StatusChanged?.Invoke(this, EventArgs.Empty);
         public void Dispose() { }
     }

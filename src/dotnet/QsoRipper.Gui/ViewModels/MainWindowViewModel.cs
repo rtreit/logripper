@@ -1323,6 +1323,32 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
     }
 
     [RelayCommand]
+    private void MarkCwAnchorHeard()
+    {
+        if (_cwSampleSource is null)
+        {
+            CwDecoderStatusText = "WPM: disabled (Settings → Radio Monitor)";
+            return;
+        }
+        if (!_cwSampleSource.IsRunning)
+        {
+            CwDecoderStatusText = "WPM: decoder not running";
+            CwStatsPane?.MarkAnchorHeard();
+            return;
+        }
+
+        if (CwStatsPane is { } pane)
+        {
+            pane.MarkAnchorHeard();
+        }
+        else
+        {
+            _cwSampleSource.MarkAnchorHeard();
+        }
+        CwDecoderStatusText = "WPM: manual anchor armed";
+    }
+
+    [RelayCommand]
     private void ToggleCwStatsPane()
     {
         if (IsCwStatsPaneOpen)

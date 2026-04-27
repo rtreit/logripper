@@ -10,7 +10,7 @@ namespace QsoRipper.Gui.Services;
 
 /// <summary>
 /// Spawns the experimental <c>cw-decoder</c> Rust binary in
-/// <c>stream-live --json</c> mode and surfaces parsed <c>wpm</c>
+/// <c>stream-live-ditdah --json</c> mode and surfaces parsed <c>wpm</c>
 /// NDJSON events as <see cref="CwWpmSample"/>s.
 ///
 /// Round 1 deliberately reuses the experiment binary rather than the
@@ -114,8 +114,16 @@ internal sealed class CwDecoderProcessSampleSource : ICwWpmSampleSource
             CreateNoWindow = true,
             WorkingDirectory = Path.GetDirectoryName(exe)!,
         };
-        psi.ArgumentList.Add("stream-live");
+        psi.ArgumentList.Add("stream-live-ditdah");
         psi.ArgumentList.Add("--json");
+        psi.ArgumentList.Add("--window");
+        psi.ArgumentList.Add("6");
+        psi.ArgumentList.Add("--min-window");
+        psi.ArgumentList.Add("4");
+        psi.ArgumentList.Add("--decode-every-ms");
+        psi.ArgumentList.Add("1000");
+        psi.ArgumentList.Add("--confirmations");
+        psi.ArgumentList.Add("1");
         if (loopback)
         {
             // WASAPI loopback: capture from a system OUTPUT device so audio
@@ -241,6 +249,23 @@ internal sealed class CwDecoderProcessSampleSource : ICwWpmSampleSource
     /// </summary>
     public void ResetLock()
     {
+        WriteControlLine("{\"type\":\"reset_lock\"}");
+    }
+
+    /// <summary>
+    /// Send a manual-anchor hint to the running decoder so the rolling
+    /// ditdah backend can start accepting plausible mid-QSO text even when
+    /// the operator tuned in after automatic anchors such as CQ/DE/73.
+    /// No-op if the decoder is not running.
+    /// </summary>
+    public void MarkAnchorHeard()
+    {
+        WriteControlLine("{\"type\":\"manual_anchor\"}");
+        SetLockState(CwLockState.Probation);
+    }
+
+    private void WriteControlLine(string line)
+    {
         Process? proc;
         lock (_stateLock)
         {
@@ -252,7 +277,7 @@ internal sealed class CwDecoderProcessSampleSource : ICwWpmSampleSource
         }
         try
         {
-            proc.StandardInput.WriteLine("{\"type\":\"reset_lock\"}");
+            proc.StandardInput.WriteLine(line);
             proc.StandardInput.Flush();
         }
         catch (IOException) { /* best effort */ }
@@ -280,16 +305,7 @@ internal sealed class CwDecoderProcessSampleSource : ICwWpmSampleSource
 
                 if (TryParseConfidenceEvent(line, out var newState))
                 {
-                    bool changed;
-                    lock (_stateLock)
-                    {
-                        changed = _lockState != newState;
-                        _lockState = newState;
-                    }
-                    if (changed)
-                    {
-                        LockStateChanged?.Invoke(this, newState);
-                    }
+                    SetLockState(newState);
                 }
                 else if (TryParsePitchLostEvent(line))
                 {
@@ -297,16 +313,11 @@ internal sealed class CwDecoderProcessSampleSource : ICwWpmSampleSource
                     // signal; the next confidence event will follow but
                     // we surface the lock loss immediately so the GUI
                     // doesn't keep showing a stale WPM for the gap.
-                    bool changed;
-                    lock (_stateLock)
-                    {
-                        changed = _lockState != CwLockState.Hunting;
-                        _lockState = CwLockState.Hunting;
-                    }
-                    if (changed)
-                    {
-                        LockStateChanged?.Invoke(this, CwLockState.Hunting);
-                    }
+                    SetLockState(CwLockState.Hunting);
+                }
+                else if (TryParseRollingBackendState(line, out var rollingState))
+                {
+                    SetLockState(rollingState);
                 }
 
                 if (TryParseWpmEvent(line, out var wpm))
@@ -327,6 +338,20 @@ internal sealed class CwDecoderProcessSampleSource : ICwWpmSampleSource
         catch (IOException)
         {
             // Stdout pipe closed during shutdown.
+        }
+    }
+
+    private void SetLockState(CwLockState newState)
+    {
+        bool changed;
+        lock (_stateLock)
+        {
+            changed = _lockState != newState;
+            _lockState = newState;
+        }
+        if (changed)
+        {
+            LockStateChanged?.Invoke(this, newState);
         }
     }
 
@@ -405,6 +430,34 @@ internal sealed class CwDecoderProcessSampleSource : ICwWpmSampleSource
             return doc.RootElement.TryGetProperty("type", out var typeProp)
                 && typeProp.ValueKind == JsonValueKind.String
                 && string.Equals(typeProp.GetString(), "pitch_lost", StringComparison.Ordinal);
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
+    internal static bool TryParseRollingBackendState(string ndjsonLine, out CwLockState state)
+    {
+        state = CwLockState.Unknown;
+        try
+        {
+            using var doc = JsonDocument.Parse(ndjsonLine);
+            if (!doc.RootElement.TryGetProperty("type", out var typeProp)
+                || typeProp.ValueKind != JsonValueKind.String)
+            {
+                return false;
+            }
+
+            state = typeProp.GetString() switch
+            {
+                "char" or "word" => CwLockState.Locked,
+                "ready" => CwLockState.Hunting,
+                "status" => CwLockState.Probation,
+                _ => CwLockState.Unknown,
+            };
+
+            return state != CwLockState.Unknown;
         }
         catch (JsonException)
         {

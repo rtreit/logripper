@@ -19,6 +19,7 @@ public sealed class CwQsoTranscriptAggregatorTests
 
         public void Emit(string line) => RawLineReceived?.Invoke(this, line);
         public void Start(string? deviceOverride) { }
+        public void MarkAnchorHeard() { }
         public void Stop() { }
         public void Dispose() { }
     }

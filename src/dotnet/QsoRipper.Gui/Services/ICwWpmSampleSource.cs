@@ -52,6 +52,12 @@ internal interface ICwWpmSampleSource : IDisposable
     /// (null/empty = system default capture device).</summary>
     void Start(string? deviceOverride);
 
+    /// <summary>
+    /// Tell the decoder the operator has heard a CW anchor manually, allowing
+    /// rolling-stream decode to become active when tuning in mid-QSO.
+    /// </summary>
+    void MarkAnchorHeard();
+
     /// <summary>Stop the source. Safe to call when not running.</summary>
     void Stop();
 }
