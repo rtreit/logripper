@@ -45,23 +45,14 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
         Cells = new ObservableCollection<TranscriptCell>();
         WpmHistory = new ObservableCollection<double>();
         HarvestCandidates = new ObservableCollection<HarvestCandidate>();
-        AvailableLabelFiles = new ObservableCollection<SelectableLabelFile>(
-            CwDecoderProcess.ListAvailableLabelFiles().Select(path =>
-            {
-                var file = new SelectableLabelFile(path);
-                file.PropertyChanged += (_, args) =>
-                {
-                    if (string.Equals(args.PropertyName, nameof(SelectableLabelFile.IsSelected), StringComparison.Ordinal))
-                    {
-                        OnPropertyChanged(nameof(SelectedLabelFilesSummary));
-                        OnPropertyChanged(nameof(ShowSelectedLabelPicker));
-                        OnPropertyChanged(nameof(LabelEvaluationTargetLabel));
-                        OnPropertyChanged(nameof(CanRunLabelScore));
-                        OnPropertyChanged(nameof(CanRunLabelSweep));
-                    }
-                };
-                return file;
-            }));
+        AvailableLabelFiles = new ObservableCollection<SelectableLabelFile>();
+        LabelCorpusFolders = new ObservableCollection<string>();
+        ReloadLabelCorpusFolders();
+        // Default to the labeling-tab subset if it exists, else "(all)".
+        var defaultFolder = LabelCorpusFolders.FirstOrDefault(f => string.Equals(f, _trainingSetSubset, StringComparison.OrdinalIgnoreCase))
+                            ?? AllFoldersSentinel;
+        _selectedLabelCorpusFolder = defaultFolder;
+        ReloadAvailableLabelFiles();
 
         _process.EventReceived += OnEvent;
         _process.StderrLine += line => Dispatcher.UIThread.Post(() => StatusText = line);
@@ -81,6 +72,84 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
     public ObservableCollection<double> WpmHistory { get; }
     public ObservableCollection<HarvestCandidate> HarvestCandidates { get; }
     public ObservableCollection<SelectableLabelFile> AvailableLabelFiles { get; }
+
+    public const string AllFoldersSentinel = "(all)";
+    public ObservableCollection<string> LabelCorpusFolders { get; }
+
+    private string _selectedLabelCorpusFolder = AllFoldersSentinel;
+    public string SelectedLabelCorpusFolder
+    {
+        get => _selectedLabelCorpusFolder;
+        set
+        {
+            if (Set(ref _selectedLabelCorpusFolder, value ?? AllFoldersSentinel))
+            {
+                ReloadAvailableLabelFiles();
+            }
+        }
+    }
+
+    public string LabelCorpusRootPath => CwDecoderProcess.GetLabelCorpusRoot();
+
+    public void RefreshLabelCorpus()
+    {
+        ReloadLabelCorpusFolders();
+        ReloadAvailableLabelFiles();
+    }
+
+    private void ReloadLabelCorpusFolders()
+    {
+        var current = _selectedLabelCorpusFolder;
+        LabelCorpusFolders.Clear();
+        LabelCorpusFolders.Add(AllFoldersSentinel);
+        foreach (var sub in CwDecoderProcess.ListLabelCorpusSubfolders())
+        {
+            LabelCorpusFolders.Add(sub);
+        }
+        if (!LabelCorpusFolders.Contains(current))
+        {
+            _selectedLabelCorpusFolder = AllFoldersSentinel;
+        }
+        OnPropertyChanged(nameof(SelectedLabelCorpusFolder));
+    }
+
+    private void ReloadAvailableLabelFiles()
+    {
+        var root = CwDecoderProcess.GetLabelCorpusRoot();
+        var folder = string.Equals(_selectedLabelCorpusFolder, AllFoldersSentinel, StringComparison.Ordinal) || string.IsNullOrEmpty(_selectedLabelCorpusFolder)
+            ? root
+            : System.IO.Path.Combine(root, _selectedLabelCorpusFolder);
+        AvailableLabelFiles.Clear();
+        if (string.IsNullOrEmpty(root)) return;
+
+        foreach (var path in CwDecoderProcess.ListAvailableLabelFiles(folder))
+        {
+            string display;
+            try
+            {
+                display = System.IO.Path.GetRelativePath(root, path).Replace('\\', '/');
+            }
+            catch { display = System.IO.Path.GetFileName(path); }
+            var file = new SelectableLabelFile(path, display);
+            file.PropertyChanged += (_, args) =>
+            {
+                if (string.Equals(args.PropertyName, nameof(SelectableLabelFile.IsSelected), StringComparison.Ordinal))
+                {
+                    OnPropertyChanged(nameof(SelectedLabelFilesSummary));
+                    OnPropertyChanged(nameof(ShowSelectedLabelPicker));
+                    OnPropertyChanged(nameof(LabelEvaluationTargetLabel));
+                    OnPropertyChanged(nameof(CanRunLabelScore));
+                    OnPropertyChanged(nameof(CanRunLabelSweep));
+                }
+            };
+            AvailableLabelFiles.Add(file);
+        }
+        OnPropertyChanged(nameof(SelectedLabelFilesSummary));
+        OnPropertyChanged(nameof(ShowSelectedLabelPicker));
+        OnPropertyChanged(nameof(LabelEvaluationTargetLabel));
+        OnPropertyChanged(nameof(CanRunLabelScore));
+        OnPropertyChanged(nameof(CanRunLabelSweep));
+    }
 
     private string? _selectedDevice;
     public string? SelectedDevice { get => _selectedDevice; set => Set(ref _selectedDevice, value); }

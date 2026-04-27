@@ -7,10 +7,10 @@ public sealed class SelectableLabelFile : INotifyPropertyChanged
 {
     private bool _isSelected;
 
-    public SelectableLabelFile(string path)
+    public SelectableLabelFile(string path, string? displayName = null)
     {
         Path = path;
-        DisplayName = System.IO.Path.GetFileName(path);
+        DisplayName = displayName ?? System.IO.Path.GetFileName(path);
     }
 
     public string Path { get; }

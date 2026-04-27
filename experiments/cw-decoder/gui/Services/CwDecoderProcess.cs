@@ -412,13 +412,37 @@ internal sealed class CwDecoderProcess : IDisposable
             ?? throw new InvalidOperationException("Failed to parse strategy sweep output.");
     }
 
-    public static string[] ListAvailableLabelFiles()
+    public static string[] ListAvailableLabelFiles(string? folder = null)
     {
         try
         {
-            return Directory.EnumerateFiles(LocateLabelCorpusDirectory(), "*.labels.jsonl")
-                .OrderBy(Path.GetFileName, StringComparer.OrdinalIgnoreCase)
+            var dir = folder ?? LocateLabelCorpusDirectory();
+            return Directory.EnumerateFiles(dir, "*.labels.jsonl", SearchOption.AllDirectories)
+                .OrderBy(p => p, StringComparer.OrdinalIgnoreCase)
                 .ToArray();
+        }
+        catch
+        {
+            return [];
+        }
+    }
+
+    public static string GetLabelCorpusRoot()
+    {
+        try { return LocateLabelCorpusDirectory(); }
+        catch { return string.Empty; }
+    }
+
+    public static string[] ListLabelCorpusSubfolders()
+    {
+        try
+        {
+            var root = LocateLabelCorpusDirectory();
+            return Directory.EnumerateDirectories(root)
+                .Select(Path.GetFileName)
+                .Where(n => !string.IsNullOrEmpty(n))
+                .OrderBy(n => n, StringComparer.OrdinalIgnoreCase)
+                .ToArray()!;
         }
         catch
         {

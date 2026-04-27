@@ -741,11 +741,23 @@
 
             <Border Grid.Row="1" BorderBrush="{StaticResource AccentCyan}" BorderThickness="1" CornerRadius="2" Padding="8"
                     IsVisible="{Binding ShowSelectedLabelPicker}">
-              <Grid RowDefinitions="Auto,Auto,*" RowSpacing="6">
+              <Grid RowDefinitions="Auto,Auto,Auto,*" RowSpacing="6">
                 <TextBlock Text="LABEL FILES — check the .labels.jsonl files to include in SCORE LABELS / SWEEP BASELINE / STRATEGY SWEEP"
                            Classes="label" Foreground="{StaticResource AccentCyan}" TextWrapping="Wrap" />
-                <TextBlock Grid.Row="1" Text="{Binding SelectedLabelFilesSummary}" Classes="label" TextWrapping="Wrap" />
-                <ScrollViewer Grid.Row="2" MaxHeight="160" HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+                <Grid Grid.Row="1" ColumnDefinitions="Auto,Auto,Auto,Auto,*" ColumnSpacing="8">
+                  <TextBlock Text="FOLDER" Classes="label" VerticalAlignment="Center" />
+                  <ComboBox Grid.Column="1" Width="220" ItemsSource="{Binding LabelCorpusFolders}"
+                            SelectedItem="{Binding SelectedLabelCorpusFolder, Mode=TwoWay}"
+                            Background="{StaticResource BgPanel}" Foreground="{StaticResource TextHi}"
+                            ToolTip.Tip="Subfolder under data/cw-samples to scan for .labels.jsonl files. '(all)' scans the whole corpus recursively." />
+                  <Button Grid.Column="2" Content="REFRESH" Click="OnRefreshLabelCorpusClick"
+                          FontSize="11" Padding="10,4"
+                          ToolTip.Tip="Re-scan the folder and rebuild the list (pick this up after labeling new clips)." />
+                  <TextBlock Grid.Column="4" Text="{Binding LabelCorpusRootPath, StringFormat=root: {0}}"
+                             Classes="label" Foreground="{StaticResource TextDim}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                </Grid>
+                <TextBlock Grid.Row="2" Text="{Binding SelectedLabelFilesSummary}" Classes="label" TextWrapping="Wrap" />
+                <ScrollViewer Grid.Row="3" MaxHeight="180" HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
                    <ItemsControl ItemsSource="{Binding AvailableLabelFiles}">
                      <ItemsControl.ItemTemplate>
                        <DataTemplate x:DataType="m:SelectableLabelFile">

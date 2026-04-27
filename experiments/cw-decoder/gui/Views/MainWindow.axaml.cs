@@ -153,6 +153,11 @@ public partial class MainWindow : Window
         await Vm.RunLabelSweepAsync();
     }
 
+    private void OnRefreshLabelCorpusClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        Vm?.RefreshLabelCorpus();
+    }
+
     private async void OnRunStrategySweepClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
         if (Vm is null) return;
