@@ -7,7 +7,6 @@ public sealed class CwDecoderProcessSampleSourceTests
     [Theory]
     [InlineData("{\"type\":\"char\",\"ch\":\"C\"}")]
     [InlineData("{\"type\":\"word\"}")]
-    [InlineData("{\"type\":\"wpm\",\"wpm\":20.0}")]
     public void RollingBackendDecodedEventsPromoteToLocked(string line)
     {
         Assert.True(CwDecoderProcessSampleSource.TryParseRollingBackendState(line, out var state));
@@ -18,6 +17,7 @@ public sealed class CwDecoderProcessSampleSourceTests
     [InlineData("{\"type\":\"power\",\"signal\":true}")]
     [InlineData("{\"type\":\"stats\",\"wpm\":20.0}")]
     [InlineData("{\"type\":\"pitch\",\"hz\":700.0}")]
+    [InlineData("{\"type\":\"wpm\",\"wpm\":20.0}")]
     public void RollingBackendMeterEventsDoNotDemoteLockState(string line)
     {
         Assert.False(CwDecoderProcessSampleSource.TryParseRollingBackendState(line, out _));

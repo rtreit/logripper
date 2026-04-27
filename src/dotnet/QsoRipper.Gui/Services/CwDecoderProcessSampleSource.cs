@@ -451,7 +451,7 @@ internal sealed class CwDecoderProcessSampleSource : ICwWpmSampleSource
 
             state = typeProp.GetString() switch
             {
-                "char" or "word" or "wpm" => CwLockState.Locked,
+                "char" or "word" => CwLockState.Locked,
                 "ready" => CwLockState.Hunting,
                 "status" => CwLockState.Probation,
                 _ => CwLockState.Unknown,

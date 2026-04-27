@@ -218,11 +218,25 @@ impl PrefixStabilizer {
     }
 
     pub fn push_snapshot(&mut self, snapshot_text: &str) -> String {
-        let normalized = normalize_snapshot_text(snapshot_text);
+        let mut normalized = normalize_snapshot_text(snapshot_text);
         if normalized.is_empty()
             || is_noise_dominated_snapshot(&normalized)
-            || !has_stream_anchor(&normalized, !self.committed.is_empty() || self.manual_anchor)
         {
+            return String::new();
+        }
+
+        let stream_is_active = !self.committed.is_empty() || self.manual_anchor;
+        if !stream_is_active {
+            let Some(anchored) = anchored_snapshot_text(&normalized) else {
+                return String::new();
+            };
+            normalized = anchored;
+        } else if self.manual_anchor && self.committed.is_empty() {
+            let Some(anchored) = manual_anchor_snapshot_text(&normalized) else {
+                return String::new();
+            };
+            normalized = anchored;
+        } else if !has_stream_anchor(&normalized, true) {
             return String::new();
         }
 
@@ -313,12 +327,70 @@ fn has_stream_anchor(text: &str, stream_is_active: bool) -> bool {
     stream_is_active && tokens.iter().any(|token| looks_like_callsign_token(token))
 }
 
+fn anchored_snapshot_text(text: &str) -> Option<String> {
+    let tokens: Vec<&str> = text.split_whitespace().collect();
+    let idx = tokens.iter().position(|token| is_stream_anchor_token(token))?;
+    Some(tokens[idx..].join(" "))
+}
+
+fn manual_anchor_snapshot_text(text: &str) -> Option<String> {
+    let tokens: Vec<&str> = text.split_whitespace().collect();
+    let idx = tokens.iter().position(|token| {
+        is_stream_anchor_token(token) || looks_like_strong_callsign_token(token)
+    })?;
+    Some(tokens[idx..].join(" "))
+}
+
+fn is_stream_anchor_token(token: &str) -> bool {
+    let token = token.to_ascii_uppercase();
+    token == "CQ"
+        || token.contains("CQ")
+        || token == "DE"
+        || token == "POTA"
+        || token == "TEST"
+        || token == "Q"
+        || token == "SB"
+        || token == "QSB"
+        || token == "QST"
+        || token == "73"
+}
+
 fn looks_like_callsign_token(token: &str) -> bool {
+    looks_like_strong_callsign_token(token)
+}
+
+fn looks_like_strong_callsign_token(token: &str) -> bool {
     let len = token.len();
-    (4..=8).contains(&len)
-        && token.chars().any(|ch| ch.is_ascii_digit())
-        && token.chars().any(|ch| ch.is_ascii_alphabetic())
-        && token.chars().all(|ch| ch.is_ascii_alphanumeric())
+    if !(4..=6).contains(&len) || !token.chars().all(|ch| ch.is_ascii_alphanumeric()) {
+        return false;
+    }
+
+    let chars: Vec<char> = token.chars().map(|ch| ch.to_ascii_uppercase()).collect();
+    let digit_positions: Vec<usize> = chars
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, ch)| ch.is_ascii_digit().then_some(idx))
+        .collect();
+    if digit_positions.len() != 1 {
+        return false;
+    }
+
+    let digit_idx = digit_positions[0];
+    if !(1..=2).contains(&digit_idx) {
+        return false;
+    }
+
+    let prefix = &chars[..digit_idx];
+    let suffix = &chars[digit_idx + 1..];
+    if suffix.is_empty()
+        || suffix.len() > 3
+        || !prefix.iter().all(|ch| ch.is_ascii_alphabetic())
+        || !suffix.iter().all(|ch| ch.is_ascii_alphabetic())
+    {
+        return false;
+    }
+
+    prefix.len() == 2 || matches!(prefix[0], 'A' | 'K' | 'N' | 'W')
 }
 
 fn morse_element_count(ch: char) -> Option<usize> {
@@ -598,6 +670,26 @@ mod tests {
 
         assert_eq!(stabilizer.push_snapshot("KK6QZM"), "KK6QZM");
         assert_eq!(stabilizer.transcript(), "KK6QZM");
+    }
+
+    #[test]
+    fn prefix_stabilizer_manual_anchor_rejects_e_t_heavy_gibberish() {
+        let mut stabilizer = PrefixStabilizer::new(1);
+        stabilizer.force_stream_anchor();
+
+        assert_eq!(
+            stabilizer.push_snapshot("T R T S E4CTT TN BTE5A I NT EOTG8U EEDN"),
+            ""
+        );
+        assert_eq!(stabilizer.transcript(), "");
+    }
+
+    #[test]
+    fn prefix_stabilizer_crops_noise_before_automatic_anchor() {
+        let mut stabilizer = PrefixStabilizer::new(1);
+
+        assert_eq!(stabilizer.push_snapshot("T E I CQ CQ DE K5KV"), "CQ CQ DE K5KV");
+        assert_eq!(stabilizer.transcript(), "CQ CQ DE K5KV");
     }
 
     #[test]
