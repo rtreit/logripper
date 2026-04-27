@@ -437,7 +437,7 @@ internal sealed class CwDecoderProcessSampleSource : ICwWpmSampleSource
         }
     }
 
-    private static bool TryParseRollingBackendState(string ndjsonLine, out CwLockState state)
+    internal static bool TryParseRollingBackendState(string ndjsonLine, out CwLockState state)
     {
         state = CwLockState.Unknown;
         try
@@ -452,7 +452,7 @@ internal sealed class CwDecoderProcessSampleSource : ICwWpmSampleSource
             state = typeProp.GetString() switch
             {
                 "char" or "word" or "wpm" => CwLockState.Locked,
-                "ready" or "power" or "stats" or "pitch" => CwLockState.Hunting,
+                "ready" => CwLockState.Hunting,
                 "status" => CwLockState.Probation,
                 _ => CwLockState.Unknown,
             };
