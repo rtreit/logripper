@@ -134,7 +134,19 @@ internal sealed partial class CallsignCardViewModel : ObservableObject
     private bool _isMapAvailable;
 
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsMapSectionVisible))]
     private bool _isMapLoading;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsMapSectionVisible))]
+    [NotifyPropertyChangedFor(nameof(HasMapStatus))]
+    private string _mapStatusText = string.Empty;
+
+    public bool IsMapSectionVisible => IsMapAvailable || IsMapLoading || HasMapStatus;
+
+    public bool HasMapStatus => !string.IsNullOrEmpty(MapStatusText);
+
+    partial void OnIsMapAvailableChanged(bool value) => OnPropertyChanged(nameof(IsMapSectionVisible));
 
     [ObservableProperty]
     private string _mapCountryLabel = string.Empty;
@@ -305,14 +317,24 @@ internal sealed partial class CallsignCardViewModel : ObservableObject
         MapPath = null;
         MapDistanceText = string.Empty;
         MapBearingText = string.Empty;
-        MapCountryLabel = !string.IsNullOrWhiteSpace(record.DxccCountryName)
+        MapStatusText = "Loading map…";
+        var countryName = !string.IsNullOrWhiteSpace(record.DxccCountryName)
             ? record.DxccCountryName!
             : (record.Country ?? string.Empty);
+        var stateLabel = record.State?.Trim() ?? string.Empty;
+        var isUnitedStates = !string.IsNullOrEmpty(countryName) && (
+            countryName.Contains("United States", StringComparison.OrdinalIgnoreCase)
+            || countryName.Equals("USA", StringComparison.OrdinalIgnoreCase)
+            || countryName.Equals("US", StringComparison.OrdinalIgnoreCase));
+        MapCountryLabel = (isUnitedStates && stateLabel.Length > 0)
+            ? $"{stateLabel} · {countryName}"
+            : countryName;
         try
         {
             var target = BuildTargetReference(record);
             if (target is null)
             {
+                MapStatusText = "Map unavailable: target callsign has no grid or coordinates.";
                 return;
             }
 
@@ -320,6 +342,7 @@ internal sealed partial class CallsignCardViewModel : ObservableObject
             var origin = BuildOriginReference(contextResponse?.Context);
             if (origin is null)
             {
+                MapStatusText = "Map unavailable: station profile has no grid or coordinates (configure in Setup).";
                 return;
             }
 
@@ -333,6 +356,7 @@ internal sealed partial class CallsignCardViewModel : ObservableObject
             var path = response?.Path;
             if (path is null || path.Origin is null || path.Target is null || path.Samples.Count < 2)
             {
+                MapStatusText = "Map unavailable: engine returned no great-circle path.";
                 return;
             }
 
@@ -344,20 +368,30 @@ internal sealed partial class CallsignCardViewModel : ObservableObject
             var scaleKm = ChooseMapScaleKm(path.DistanceKm);
             MapScaleKm = scaleKm;
             MapScaleText = $"scale ~{FormatScaleKm(scaleKm)}";
+            MapStatusText = string.Empty;
             IsMapAvailable = true;
         }
-        catch (Grpc.Core.RpcException)
+        catch (Grpc.Core.RpcException ex)
         {
-            // Engine unreachable / great-circle service unavailable — hide the map silently.
+            MapStatusText = $"Map unavailable: engine RPC failed ({ex.Status.StatusCode}).";
+            System.Diagnostics.Trace.WriteLine($"[CallsignCard] ComputeGreatCircle RPC failed: {ex}");
         }
-        catch (InvalidOperationException)
+        catch (InvalidOperationException ex)
         {
-            // Engine client mis-configured — hide the map silently.
+            MapStatusText = "Map unavailable: engine client misconfigured.";
+            System.Diagnostics.Trace.WriteLine($"[CallsignCard] LoadMapAsync InvalidOperationException: {ex}");
         }
         catch (NotImplementedException)
         {
-            // Test or stub engine client without map support — hide the map.
+            MapStatusText = "Map unavailable: engine does not implement great-circle service.";
         }
+#pragma warning disable CA1031 // Diagnostic catch-all so the section reports failures instead of silently hiding.
+        catch (Exception ex)
+        {
+            MapStatusText = $"Map unavailable: {ex.GetType().Name}: {ex.Message}";
+            System.Diagnostics.Trace.WriteLine($"[CallsignCard] LoadMapAsync unexpected exception: {ex}");
+        }
+#pragma warning restore CA1031
         finally
         {
             IsMapLoading = false;

@@ -229,8 +229,8 @@
           </Grid>
 
           <!-- Azimuthal Map Section -->
-          <Border Classes="sectionDivider" IsVisible="{Binding IsMapAvailable}" />
-          <Grid ColumnDefinitions="*,Auto" IsVisible="{Binding IsMapAvailable}">
+          <Border Classes="sectionDivider" IsVisible="{Binding IsMapSectionVisible}" />
+          <Grid ColumnDefinitions="*,Auto" IsVisible="{Binding IsMapSectionVisible}">
             <TextBlock Grid.Column="0" Classes="sectionHeader" Text="AZIMUTHAL MAP" />
             <Button Grid.Column="1"
                     Padding="6,2"
@@ -242,8 +242,16 @@
                     FontSize="11"
                     Content="⤢ Pop out"
                     Command="{Binding ExpandMapCommand}"
+                    IsVisible="{Binding IsMapAvailable}"
                     ToolTip.Tip="Open larger map (Ctrl+M)" />
           </Grid>
+          <TextBlock HorizontalAlignment="Center"
+                     FontSize="11"
+                     Foreground="#7088a8"
+                     TextWrapping="Wrap"
+                     Margin="0,2,0,4"
+                     Text="{Binding MapStatusText}"
+                     IsVisible="{Binding HasMapStatus}" />
           <StackPanel Spacing="6" IsVisible="{Binding IsMapAvailable}">
             <Border HorizontalAlignment="Center"
                     Background="#101c30"
