@@ -909,5 +909,96 @@ public sealed class SqliteStorageTests : IDisposable
             }
         }
     }
+    [Fact]
+    public async Task Build_migrates_pre_soft_delete_database_without_throwing()
+    {
+        // Regression: a database created before PR #289 (soft-delete schema)
+        // does not have the deleted_at_ms / pending_remote_delete columns and
+        // does not have idx_qsos_deleted_at_ms. Opening it with the current
+        // SqliteStorage must run the ALTER TABLE migrations and the new
+        // index creation in the right order — historically the bootstrap
+        // SQL tried to CREATE INDEX on deleted_at_ms before the column
+        // ALTER ran, blowing up with "no such column: deleted_at_ms".
+        var dbPath = Path.Combine(Path.GetTempPath(), $"qsoripper-presoftdelete-{Guid.NewGuid():N}.db");
+        try
+        {
+            // Hand-construct the pre-soft-delete schema (the exact CREATE
+            // TABLE shipped before PR #289) plus a row that uses the old
+            // column set, so we also confirm the migration preserves data.
+            using (var bootstrap = new SqliteConnection($"Data Source={dbPath}"))
+            {
+                bootstrap.Open();
+                using var cmd = bootstrap.CreateCommand();
+                cmd.CommandText =
+                    """
+                    CREATE TABLE qsos (
+                        local_id TEXT PRIMARY KEY NOT NULL,
+                        qrz_logid TEXT,
+                        qrz_bookid TEXT,
+                        station_callsign TEXT NOT NULL,
+                        worked_callsign TEXT NOT NULL,
+                        utc_timestamp_ms INTEGER,
+                        band INTEGER NOT NULL,
+                        mode INTEGER NOT NULL,
+                        contest_id TEXT,
+                        created_at_ms INTEGER,
+                        updated_at_ms INTEGER,
+                        sync_status INTEGER NOT NULL,
+                        record BLOB NOT NULL
+                    );
+                    CREATE INDEX idx_qsos_station_callsign ON qsos (station_callsign);
+                    CREATE INDEX idx_qsos_worked_callsign ON qsos (worked_callsign);
+                    CREATE INDEX idx_qsos_utc_timestamp_ms ON qsos (utc_timestamp_ms);
+                    CREATE INDEX idx_qsos_band ON qsos (band);
+                    CREATE INDEX idx_qsos_mode ON qsos (mode);
+                    CREATE INDEX idx_qsos_contest_id ON qsos (contest_id);
+                    CREATE INDEX idx_qsos_sync_status ON qsos (sync_status);
+                    """;
+                cmd.ExecuteNonQuery();
+            }
+            SqliteConnection.ClearAllPools();
+
+            // Opening with the current SqliteStorage must succeed and the
+            // new soft-delete columns + index must be present afterwards.
+            using (var storage = new SqliteStorageBuilder().Path(dbPath).Build())
+            {
+                var qso = MakeQso("postmig", "W1AW", Band._20M, Mode.Cw, "2026-01-15T12:00:00Z");
+                await storage.Logbook.InsertQsoAsync(qso);
+
+                var loaded = await storage.Logbook.GetQsoAsync("postmig");
+                Assert.NotNull(loaded);
+                Assert.Null(loaded!.DeletedAt);
+
+                await storage.Logbook.SoftDeleteQsoAsync("postmig", DateTimeOffset.UtcNow, pendingRemoteDelete: false);
+                var afterDelete = await storage.Logbook.GetQsoAsync("postmig");
+                Assert.NotNull(afterDelete);
+                Assert.NotNull(afterDelete!.DeletedAt);
+            }
+
+            using (var verify = new SqliteConnection($"Data Source={dbPath}"))
+            {
+                verify.Open();
+                using var cmd = verify.CreateCommand();
+                cmd.CommandText =
+                    "SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_qsos_deleted_at_ms'";
+                var name = cmd.ExecuteScalar() as string;
+                Assert.Equal("idx_qsos_deleted_at_ms", name);
+            }
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            if (File.Exists(dbPath))
+            {
+                try
+                {
+                    File.Delete(dbPath);
+                }
+                catch (IOException)
+                {
+                }
+            }
+        }
+    }
 }
 #pragma warning restore CA1707

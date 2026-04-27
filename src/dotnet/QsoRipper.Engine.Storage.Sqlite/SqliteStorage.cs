@@ -40,7 +40,15 @@ public sealed class SqliteStorage : IEngineStorage, ILogbookStore, ILookupSnapsh
         CREATE INDEX IF NOT EXISTS idx_qsos_mode ON qsos (mode);
         CREATE INDEX IF NOT EXISTS idx_qsos_contest_id ON qsos (contest_id);
         CREATE INDEX IF NOT EXISTS idx_qsos_sync_status ON qsos (sync_status);
-        CREATE INDEX IF NOT EXISTS idx_qsos_deleted_at_ms ON qsos (deleted_at_ms);
+        -- NOTE: idx_qsos_deleted_at_ms is intentionally NOT created here.
+        -- On a fresh database the qsos table above already has the column,
+        -- but on a database that predates the soft-delete schema (PR #289)
+        -- the CREATE TABLE IF NOT EXISTS above is a no-op and the column
+        -- doesn't exist yet. Creating the index here would fail with
+        -- "no such column: deleted_at_ms" before ApplySoftDeleteMigration
+        -- gets a chance to ALTER TABLE the column in. The index is created
+        -- in ApplySoftDeleteMigration() instead, after the column is
+        -- guaranteed to exist.
 
         CREATE TABLE IF NOT EXISTS sync_metadata (
             id INTEGER PRIMARY KEY CHECK (id = 1),
