@@ -761,7 +761,13 @@
                    <ItemsControl ItemsSource="{Binding AvailableLabelFiles}">
                      <ItemsControl.ItemTemplate>
                        <DataTemplate x:DataType="m:SelectableLabelFile">
-                         <CheckBox Content="{Binding DisplayName}" IsChecked="{Binding IsSelected, Mode=TwoWay}" Margin="0,0,0,4" />
+                         <Grid ColumnDefinitions="Auto,*" ColumnSpacing="10" Margin="0,0,0,4">
+                           <CheckBox Content="{Binding DisplayName}" IsChecked="{Binding IsSelected, Mode=TwoWay}" MinWidth="320" />
+                           <TextBlock Grid.Column="1" Text="{Binding TruthPreview}" Foreground="{StaticResource TextDim}"
+                                      FontFamily="Consolas" FontSize="11" VerticalAlignment="Center"
+                                      TextTrimming="CharacterEllipsis"
+                                      ToolTip.Tip="{Binding TruthPreview}" />
+                         </Grid>
                        </DataTemplate>
                      </ItemsControl.ItemTemplate>
                    </ItemsControl>
