@@ -721,7 +721,8 @@
             <Grid ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto" ColumnSpacing="10">
               <TextBlock Text="LABEL EVAL / SWEEP" Classes="label" VerticalAlignment="Center" />
               <CheckBox Grid.Column="1" Content="ALL LABELS" IsChecked="{Binding EvaluateAllLabels, Mode=TwoWay}" VerticalAlignment="Center" />
-              <CheckBox Grid.Column="2" Content="FULL STREAM" IsChecked="{Binding UseFullStreamScorer, Mode=TwoWay}" VerticalAlignment="Center" />
+              <CheckBox Grid.Column="2" Content="FULL STREAM" IsChecked="{Binding UseFullStreamScorer, Mode=TwoWay}" VerticalAlignment="Center"
+                        ToolTip.Tip="SCORE LABELS scoring mode. Off = exact-window (decode just the labeled slice; measures decoder quality). On = full-stream (run the streaming decoder over the whole file and align to the label window; measures live acquisition + lock behavior — much harsher, often CER 0.8+ on the same clip)." />
               <CheckBox Grid.Column="3" Content="WIDE SWEEP" IsChecked="{Binding UseWideSweep, Mode=TwoWay}" VerticalAlignment="Center" />
               <CheckBox Grid.Column="4" Content="USE CHECKED LABELS" IsChecked="{Binding UseSelectedLabelFiles, Mode=TwoWay}" VerticalAlignment="Center" />
               <Button Grid.Column="5" Classes="primary" Content="SCORE LABELS" Click="OnRunLabelScoreClick"

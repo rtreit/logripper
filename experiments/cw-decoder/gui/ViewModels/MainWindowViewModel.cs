@@ -2538,7 +2538,8 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
             if (_strategySweepResult is null) return string.Empty;
             var parts = _strategySweepResult.Summary.Select(s =>
                 $"{s.Strategy}: weighted CER {s.WeightedCer:F2}, exact {s.Exact}/{_strategySweepResult.Labels}");
-            return string.Join("  ·  ", parts);
+            return "EXACT-WINDOW (v2 whole-buffer ditdah on the labeled audio slice — measures decode quality, not streaming acquisition)\n"
+                 + string.Join("  ·  ", parts);
         }
     }
 
