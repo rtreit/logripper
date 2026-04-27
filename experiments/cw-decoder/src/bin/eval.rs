@@ -852,6 +852,11 @@ enum Strategy {
     RegionAuto,
     /// Region-stream pipeline with pinned WPM passed to ditdah.
     RegionPin(f32),
+    /// Alternate in-Rust envelope+hysteresis decoder on the (expanded)
+    /// labeled slice. Auto element classification.
+    EnvelopeAuto,
+    /// Alternate envelope decoder with pinned WPM driving the dot length.
+    EnvelopePin(f32),
 }
 
 fn parse_strategy_list(args: &[String]) -> Vec<Strategy> {
@@ -871,6 +876,19 @@ fn parse_strategy_list(args: &[String]) -> Vec<Strategy> {
             if let Ok(v) = rest.trim().parse::<f32>() {
                 if v > 0.0 {
                     out.push(Strategy::RegionPin(v));
+                }
+            }
+        } else if t.eq_ignore_ascii_case("envelope") || t.eq_ignore_ascii_case("env") {
+            out.push(Strategy::EnvelopeAuto);
+        } else if let Some(rest) = t
+            .strip_prefix("envelope:")
+            .or_else(|| t.strip_prefix("envelope"))
+            .or_else(|| t.strip_prefix("env:"))
+            .or_else(|| t.strip_prefix("env"))
+        {
+            if let Ok(v) = rest.trim().parse::<f32>() {
+                if v > 0.0 {
+                    out.push(Strategy::EnvelopePin(v));
                 }
             }
         } else if let Ok(v) = t.parse::<f32>() {
@@ -944,6 +962,16 @@ fn score_labels_strategy(
                         .expect("region cache missing source");
                     decode_label_via_region(result, audio, example, pin)
                 }
+                Strategy::EnvelopeAuto | Strategy::EnvelopePin(_) => {
+                    let (start, end) = expanded_sample_bounds(audio, example, score_cfg);
+                    let samples = if end > start { &audio.samples[start..end] } else { &[][..] };
+                    let pin = if let Strategy::EnvelopePin(w) = strategy { Some(w) } else { None };
+                    cw_decoder_poc::envelope_decoder::decode_envelope(
+                        samples,
+                        audio.sample_rate,
+                        &cw_decoder_poc::envelope_decoder::EnvelopeConfig { pin_wpm: pin },
+                    )
+                }
             };
             build_label_score(example, &decoded)
         })
@@ -1012,6 +1040,8 @@ fn strategy_label(strategy: Strategy) -> String {
         Strategy::ExactPin(w) => format!("pin{:.0}", w),
         Strategy::RegionAuto => "region".to_string(),
         Strategy::RegionPin(w) => format!("region{:.0}", w),
+        Strategy::EnvelopeAuto => "env".to_string(),
+        Strategy::EnvelopePin(w) => format!("env{:.0}", w),
     }
 }
 

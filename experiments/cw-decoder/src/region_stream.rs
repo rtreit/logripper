@@ -109,7 +109,7 @@ pub fn decode_region_stream(
     RegionStreamResult { pitch_hz, regions: decoded, text }
 }
 
-fn estimate_dominant_pitch(samples: &[f32], sample_rate: u32, cfg: &RegionStreamConfig) -> f32 {
+pub fn estimate_dominant_pitch(samples: &[f32], sample_rate: u32, cfg: &RegionStreamConfig) -> f32 {
     let frame_len = ((cfg.frame_len_s * sample_rate as f32).round() as usize).max(64);
     let frame_step = ((cfg.frame_step_s * sample_rate as f32).round() as usize).max(8);
     if samples.len() < frame_len { return cfg.pitch_lo_hz; }
@@ -208,7 +208,7 @@ fn detect_active_regions(
     merged.into_iter().filter(|(s, e)| (e - s) >= cfg.min_region_s.max(0.0)).collect()
 }
 
-fn goertzel_power(samples: &[f32], sample_rate: u32, target_hz: f32) -> f32 {
+pub fn goertzel_power(samples: &[f32], sample_rate: u32, target_hz: f32) -> f32 {
     let omega = (2.0 * std::f32::consts::PI * target_hz) / sample_rate as f32;
     let coeff = 2.0 * omega.cos();
     let mut q1 = 0.0_f32;
@@ -221,7 +221,7 @@ fn goertzel_power(samples: &[f32], sample_rate: u32, target_hz: f32) -> f32 {
     q1 * q1 + q2 * q2 - coeff * q1 * q2
 }
 
-fn percentile_sorted(sorted: &[f32], q: f32) -> f32 {
+pub fn percentile_sorted(sorted: &[f32], q: f32) -> f32 {
     if sorted.is_empty() { return 0.0; }
     let cq = q.clamp(0.0, 1.0);
     let idx = ((sorted.len() - 1) as f32 * cq).round() as usize;
