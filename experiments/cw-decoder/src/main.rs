@@ -2368,6 +2368,7 @@ fn run_stream_live_ditdah(
     }
 
     let stop = Arc::new(AtomicBool::new(false));
+    let manual_anchor = Arc::new(AtomicBool::new(false));
     {
         let stop = Arc::clone(&stop);
         ctrlc_setup(move || {
@@ -2386,12 +2387,16 @@ fn run_stream_live_ditdah(
     // is the robust signal. We accept either path.
     {
         let stop = Arc::clone(&stop);
+        let manual_anchor = Arc::clone(&manual_anchor);
         std::thread::spawn(move || {
             use std::io::BufRead;
             let stdin = std::io::stdin();
             for line in stdin.lock().lines() {
                 match line {
                     Ok(line) if line.trim().eq_ignore_ascii_case("stop") => break,
+                    Ok(line) if is_manual_anchor_command(line.trim()) => {
+                        manual_anchor.store(true, Ordering::Relaxed);
+                    }
                     Ok(_) => continue,
                     Err(_) => break,
                 }
@@ -2431,6 +2436,19 @@ fn run_stream_live_ditdah(
         }
         if seconds > 0.0 && started.elapsed().as_secs_f32() >= seconds {
             break;
+        }
+
+        if manual_anchor.swap(false, Ordering::Relaxed) {
+            streamer.force_stream_anchor();
+            if let Some(em) = emitter.as_mut() {
+                em.emit(
+                    started.elapsed().as_secs_f32(),
+                    serde_json::json!({
+                        "type": "status",
+                        "message": "Manual anchor armed",
+                    }),
+                );
+            }
         }
 
         let chunk = {
@@ -2567,6 +2585,21 @@ fn run_stream_live_ditdah(
     println!("Final transcript:");
     println!("{}", transcript.trim());
     Ok(())
+}
+
+fn is_manual_anchor_command(line: &str) -> bool {
+    if line.eq_ignore_ascii_case("anchor") || line.eq_ignore_ascii_case("manual_anchor") {
+        return true;
+    }
+
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
+        return false;
+    };
+
+    matches!(
+        v.get("type").and_then(|t| t.as_str()),
+        Some("manual_anchor") | Some("anchor")
+    )
 }
 
 fn handle_baseline_snapshot(

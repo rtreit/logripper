@@ -177,6 +177,10 @@ impl CausalBaselineStreamer {
         self.buffer.iter().copied().collect()
     }
 
+    pub fn force_stream_anchor(&mut self) {
+        self.stabilizer.force_stream_anchor();
+    }
+
     fn decode_snapshot(&mut self) -> CausalBaselineSnapshot {
         let snapshot: Vec<f32> = self.buffer.iter().copied().collect();
         let text = decoder::decode_text(&snapshot, self.sample_rate);
@@ -194,6 +198,7 @@ pub struct PrefixStabilizer {
     recent_snapshots: VecDeque<String>,
     committed: String,
     latest_snapshot: String,
+    manual_anchor: bool,
 }
 
 impl PrefixStabilizer {
@@ -203,14 +208,20 @@ impl PrefixStabilizer {
             recent_snapshots: VecDeque::new(),
             committed: String::new(),
             latest_snapshot: String::new(),
+            manual_anchor: false,
         }
+    }
+
+    pub fn force_stream_anchor(&mut self) {
+        self.manual_anchor = true;
+        self.recent_snapshots.clear();
     }
 
     pub fn push_snapshot(&mut self, snapshot_text: &str) -> String {
         let normalized = normalize_snapshot_text(snapshot_text);
         if normalized.is_empty()
             || is_noise_dominated_snapshot(&normalized)
-            || !has_stream_anchor(&normalized, !self.committed.is_empty())
+            || !has_stream_anchor(&normalized, !self.committed.is_empty() || self.manual_anchor)
         {
             return String::new();
         }
@@ -576,6 +587,17 @@ mod tests {
         let mut stabilizer = PrefixStabilizer::new(1);
         assert_eq!(stabilizer.push_snapshot("73"), "73");
         assert_eq!(stabilizer.transcript(), "73");
+    }
+
+    #[test]
+    fn prefix_stabilizer_manual_anchor_accepts_callsign_like_mid_qso_text() {
+        let mut stabilizer = PrefixStabilizer::new(1);
+        assert_eq!(stabilizer.push_snapshot("KK6QZM"), "");
+
+        stabilizer.force_stream_anchor();
+
+        assert_eq!(stabilizer.push_snapshot("KK6QZM"), "KK6QZM");
+        assert_eq!(stabilizer.transcript(), "KK6QZM");
     }
 
     #[test]
