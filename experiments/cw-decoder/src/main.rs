@@ -8,7 +8,7 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use cw_decoder_poc::{
     audio, bench_latency, decoder, ditdah_streaming, harvest, json, log_capture, preview,
-    streaming, tui,
+    streaming, streaming_v2, tui,
 };
 
 #[derive(Parser, Debug)]
@@ -459,6 +459,35 @@ enum Cmd {
         #[arg(long)]
         loopback: bool,
     },
+    /// Round-2 live decoder: append-only audio buffer + whole-buffer
+    /// ditdah redecode. Each decode emits a full-replacement transcript
+    /// (no incremental commit). Empirically reaches CER ~0.06 vs the
+    /// rolling-window backend's 0.83-0.89 on training-set-a 30 WPM CW.
+    /// Per-decode latency stays under 100 ms even on a 3-minute buffer.
+    StreamLiveV2 {
+        #[arg(long)]
+        device: Option<String>,
+        /// How long to capture before exiting (seconds). 0 = run forever.
+        #[arg(long, default_value_t = 0.0)]
+        seconds: f32,
+        /// Emit one JSON object per event to stdout (for the Avalonia GUI bridge).
+        #[arg(long)]
+        json: bool,
+        /// How often to re-run ditdah on the buffered audio.
+        #[arg(long, default_value_t = streaming_v2::DEFAULT_DECODE_EVERY_MS)]
+        decode_every_ms: u64,
+        /// Optional WAV path to mirror raw mono samples to (16-bit PCM).
+        #[arg(long)]
+        record: Option<PathBuf>,
+        /// Read NDJSON config-update lines from stdin while streaming
+        /// (currently only `{"type":"reset_lock"}` is honored, which
+        /// resets the audio buffer).
+        #[arg(long)]
+        stdin_control: bool,
+        /// Capture from a system OUTPUT device (WASAPI loopback).
+        #[arg(long)]
+        loopback: bool,
+    },
     /// Diagnostic: scan candidate pitches across an audio file and print
     /// the trial-decode Fisher score per pitch. Use this to compare
     /// faint signals vs noise and tune lock thresholds.
@@ -902,6 +931,23 @@ fn main() -> Result<()> {
                 loopback,
             )
         }
+        Cmd::StreamLiveV2 {
+            device,
+            seconds,
+            json,
+            decode_every_ms,
+            record,
+            stdin_control,
+            loopback,
+        } => run_stream_live_v2(
+            device.as_deref(),
+            seconds,
+            json,
+            decode_every_ms,
+            record.as_deref(),
+            stdin_control,
+            loopback,
+        ),
         Cmd::ProbeFisher {
             path,
             min_hz,
@@ -2947,6 +2993,209 @@ fn run_stream_live(
     println!();
     println!("Final transcript:");
     println!("{}", transcript.trim());
+    Ok(())
+}
+
+/// Round-2 live decoder: append-only audio buffer + whole-buffer ditdah
+/// redecode. See [`streaming_v2`] for the design rationale.
+fn run_stream_live_v2(
+    device: Option<&str>,
+    seconds: f32,
+    json: bool,
+    decode_every_ms: u64,
+    record_path: Option<&std::path::Path>,
+    stdin_control: bool,
+    loopback: bool,
+) -> Result<()> {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
+
+    let capture = if loopback {
+        audio::open_loopback_with_recording(device, 1.0, record_path)?
+    } else {
+        audio::open_input_with_recording(device, 1.0, record_path)?
+    };
+    let mut decoder = streaming_v2::WholeBufferDecoder::new(capture.sample_rate);
+
+    let stop = Arc::new(AtomicBool::new(false));
+    {
+        let stop = Arc::clone(&stop);
+        ctrlc_setup(move || {
+            stop.store(true, Ordering::Relaxed);
+        });
+    }
+    let cfg_channel = stdin_control.then(|| spawn_stdin_config_channel(Some(Arc::clone(&stop))));
+    if !stdin_control {
+        let stop = Arc::clone(&stop);
+        std::thread::spawn(move || {
+            use std::io::Read;
+            let mut buf = [0u8; 256];
+            let mut stdin = std::io::stdin();
+            loop {
+                match stdin.read(&mut buf) {
+                    Ok(0) | Err(_) => {
+                        stop.store(true, Ordering::Relaxed);
+                        break;
+                    }
+                    Ok(_) => {}
+                }
+            }
+        });
+    }
+
+    let mut emitter = if json {
+        Some(json::JsonEmitter::new())
+    } else {
+        None
+    };
+    if let Some(em) = emitter.as_mut() {
+        em.emit(
+            0.0,
+            serde_json::json!({
+                "type": "ready",
+                "source": "live-v2",
+                "device": capture.device_name,
+                "rate": capture.sample_rate,
+                "decode_every_ms": decode_every_ms,
+                "min_decode_audio_secs": streaming_v2::MIN_DECODE_AUDIO_SECS,
+                "recording": capture.record_path().map(|p| p.display().to_string()),
+            }),
+        );
+    } else {
+        println!(
+            "Live streaming (v2) from: {} @ {} Hz; decode every {} ms",
+            capture.device_name, capture.sample_rate, decode_every_ms
+        );
+    }
+
+    let started = Instant::now();
+    let mut last_drain_at: u64 = 0;
+    let mut last_decode_at = Instant::now();
+    let decode_period = Duration::from_millis(decode_every_ms);
+    let mut last_transcript: Option<String> = None;
+    let mut last_wpm_emitted: Option<f32> = None;
+    let mut last_lock_emitted: Option<streaming_v2::LockState> = None;
+
+    loop {
+        if stop.load(Ordering::Relaxed) {
+            break;
+        }
+        if seconds > 0.0 && started.elapsed().as_secs_f32() >= seconds {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+
+        if let Some(rx) = cfg_channel.as_ref() {
+            // v2 currently honors only ResetLock (clears the audio
+            // buffer so the operator can start a fresh QSO). Config
+            // updates are no-ops because v2 has no per-decode tunables.
+            while let Ok(msg) = rx.try_recv() {
+                if matches!(msg, StdinControlMessage::ResetLock) {
+                    decoder.reset();
+                    last_drain_at = capture.buffer.lock().written;
+                    last_transcript = None;
+                    last_wpm_emitted = None;
+                    last_lock_emitted = None;
+                    if let Some(em) = emitter.as_mut() {
+                        em.emit(
+                            started.elapsed().as_secs_f32(),
+                            serde_json::json!({"type": "reset_ack"}),
+                        );
+                    }
+                }
+            }
+        }
+
+        let chunk = {
+            let lock = capture.buffer.lock();
+            let total = lock.written;
+            let avail = lock.len();
+            let want = (total - last_drain_at).min(avail as u64) as usize;
+            if want == 0 {
+                Vec::new()
+            } else {
+                let snap = lock.snapshot();
+                last_drain_at = total;
+                let start = snap.len() - want;
+                snap[start..].to_vec()
+            }
+        };
+        if !chunk.is_empty() {
+            decoder.feed(&chunk);
+        }
+
+        if last_decode_at.elapsed() < decode_period {
+            continue;
+        }
+        last_decode_at = Instant::now();
+
+        let snap = match decoder.decode()? {
+            Some(s) => s,
+            None => continue,
+        };
+
+        let t = started.elapsed().as_secs_f32();
+        if let Some(em) = emitter.as_mut() {
+            em.emit(
+                t,
+                serde_json::json!({
+                    "type": "transcript",
+                    "text": snap.text,
+                    "chars": snap.text.chars().count(),
+                    "wpm": snap.wpm,
+                    "decode_ms": snap.decode_ms,
+                    "audio_secs": snap.audio_secs,
+                    "lock": snap.lock.as_str(),
+                }),
+            );
+            if last_wpm_emitted
+                .map(|w| (w - snap.wpm).abs() >= 0.5)
+                .unwrap_or(true)
+            {
+                em.emit(t, serde_json::json!({"type": "wpm", "wpm": snap.wpm}));
+                last_wpm_emitted = Some(snap.wpm);
+            }
+            if last_lock_emitted != Some(snap.lock) {
+                em.emit(
+                    t,
+                    serde_json::json!({"type": "lock", "state": snap.lock.as_str()}),
+                );
+                last_lock_emitted = Some(snap.lock);
+            }
+        } else {
+            println!(
+                "[t={:>6.2}s audio={:>6.1}s decode={:>4}ms wpm={:>5.1} lock={}] {}",
+                t,
+                snap.audio_secs,
+                snap.decode_ms,
+                snap.wpm,
+                snap.lock.as_str(),
+                snap.text
+            );
+        }
+        last_transcript = Some(snap.text);
+    }
+
+    let recording_path = capture.record_path().map(|p| p.display().to_string());
+    let recording_saved = capture
+        .finalize_recording()
+        .map(|p| p.display().to_string());
+    if let Some(em) = emitter.as_mut() {
+        em.emit(
+            started.elapsed().as_secs_f32(),
+            serde_json::json!({
+                "type": "end",
+                "transcript": last_transcript.unwrap_or_default(),
+                "recording": recording_saved.or(recording_path),
+            }),
+        );
+        return Ok(());
+    }
+
+    println!();
+    println!("Final transcript (v2):");
+    println!("{}", last_transcript.unwrap_or_default());
     Ok(())
 }
 

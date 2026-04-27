@@ -14,7 +14,6 @@ const RESAMPLER_CHUNK_SIZE: usize = 1024;
 const DIT_DAH_BOUNDARY: f32 = 2.0;
 const LETTER_SPACE_BOUNDARY: f32 = 2.0; // Gaps > 2x dot length end the current letter
 const WORD_SPACE_BOUNDARY: f32 = 5.0; // Gaps > 5x dot length add word space
-const MORSE_BEAM_WIDTH: usize = 96;
 
 // --- BiquadFilter (Unchanged) ---
 #[derive(Debug, Clone, Copy)]
@@ -245,6 +244,77 @@ impl MorseDecoder {
         Ok(text)
     }
 
+    /// Like `finalize`, but returns the (text, wpm, threshold) actually used so
+    /// callers can pin parameters for subsequent decodes (streaming use case).
+    /// If `pin_wpm` is `Some`, skips the WPM grid search and uses that WPM. If
+    /// `pin_threshold` is `Some`, skips threshold re-fitting too.
+    pub fn finalize_with_params(
+        &mut self,
+        pin_wpm: Option<f32>,
+        pin_threshold: Option<f32>,
+    ) -> Result<(String, f32, f32)> {
+        if let Some(resampler) = &mut self.resampler {
+            if !self.input_buffer.is_empty() {
+                while self.input_buffer.len() < RESAMPLER_CHUNK_SIZE {
+                    self.input_buffer.push(0.0);
+                }
+                let waves_in = &[self.input_buffer.as_slice()];
+                let mut resampled = resampler.process(waves_in, None)?;
+                self.input_buffer.clear();
+                let mut processed_chunk = resampled.remove(0);
+                self.filter_hp.process(&mut processed_chunk);
+                self.filter_lp.process(&mut processed_chunk);
+                self.audio_buffer.extend(processed_chunk);
+            }
+        }
+
+        if self.audio_buffer.is_empty() {
+            bail!("Audio buffer is empty, cannot process.");
+        }
+
+        let pitch = self.detect_pitch_stft()?;
+        let goertzel_window_size = (self.target_sample_rate as f32 * 0.025) as usize;
+        let step_size = (goertzel_window_size / 4).max(1);
+        let goertzel_filter = Goertzel::new(pitch, self.target_sample_rate, goertzel_window_size);
+        let raw_power = goertzel_filter.process_decimated(&self.audio_buffer, step_size);
+        let power_signal_rate = self.target_sample_rate as f32 / step_size as f32;
+        let smooth_window = (power_signal_rate * 0.02).round() as usize;
+        let smoothed_power = moving_average(&raw_power, smooth_window.max(1));
+        if smoothed_power.is_empty() {
+            bail!("No power signal after processing");
+        }
+
+        let (wpm, threshold) = match (pin_wpm, pin_threshold) {
+            (Some(w), Some(t)) => (w, t),
+            (Some(w), None) => {
+                let mut sorted = smoothed_power.clone();
+                sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+                let n = sorted.len();
+                let p25 = sorted[n / 4];
+                let p75 = sorted[(3 * n) / 4];
+                let iqr = p75 - p25;
+                (w, p25 + iqr * 0.50)
+            }
+            (None, Some(t)) => {
+                let mut best_wpm = 20.0;
+                let mut best_cost = f32::INFINITY;
+                for wpm_int in 5..=40 {
+                    let w = wpm_int as f32;
+                    let cost = self.calculate_cost(&smoothed_power, w, t, power_signal_rate);
+                    if cost < best_cost {
+                        best_cost = cost;
+                        best_wpm = w;
+                    }
+                }
+                (best_wpm, t)
+            }
+            (None, None) => self.find_best_params(&smoothed_power, power_signal_rate)?,
+        };
+
+        let text = self.decode_with_params(&smoothed_power, wpm, threshold, power_signal_rate);
+        Ok((text, wpm, threshold))
+    }
+
     // --- The complex analysis functions below are unchanged ---
     fn detect_pitch_stft(&self) -> Result<f32> {
         let fft_size = 4096;
@@ -303,29 +373,14 @@ impl MorseDecoder {
         let p25 = sorted_power[(sorted_power.len() as f32 * 0.25) as usize];
         let p75 = sorted_power[(sorted_power.len() as f32 * 0.75) as usize];
         let iqr = p75 - p25;
-        let threshold_candidates = [
-            p25 + iqr * 0.01,
-            p25 + iqr * 0.02,
-            p25 + iqr * 0.05,
-            p25 + iqr * 0.10,
-            p25 + iqr * 0.25,
-            p25 + iqr * 0.50,
-            p25 + iqr * 0.75,
-        ];
+        let threshold_candidates = [p25 + iqr * 0.25, p25 + iqr * 0.50, p25 + iqr * 0.75];
         let mut best_cost = f32::MAX;
         let mut best_wpm = 20.0;
         let mut best_threshold = threshold_candidates[1];
         for &threshold in &threshold_candidates {
-            for wpm_int in 5..=50 {
+            for wpm_int in 5..=40 {
                 let wpm = wpm_int as f32;
-                let timing_cost =
-                    self.calculate_cost(power_signal, wpm, threshold, power_signal_rate);
-                if !timing_cost.is_finite() {
-                    continue;
-                }
-                let decoded =
-                    self.decode_with_params(power_signal, wpm, threshold, power_signal_rate);
-                let cost = timing_cost + 0.35 * decode_quality_cost(&decoded);
+                let cost = self.calculate_cost(power_signal, wpm, threshold, power_signal_rate);
                 if cost < best_cost {
                     best_cost = cost;
                     best_wpm = wpm;
@@ -373,36 +428,6 @@ impl MorseDecoder {
         if median_dot_len < 0.25 {
             return f32::MAX;
         }
-        // Reject degenerate WPM hypotheses where every on-interval falls
-        // into a single cluster (all dits or all dahs). Without this
-        // guard a wildly-wrong WPM that maps every element to "1 dot"
-        // wins because each per-element cost is small. Real Morse for
-        // anything beyond a single character has both dits and dahs;
-        // require at least one short and one long ON element relative
-        // to the median dot length, with the long cluster mean roughly
-        // 2..5 dot lengths (dah ratios in the wild fall in 2.3..3.5).
-        let on_short_n = on_norm.iter().filter(|&&l| l < 2.0).count();
-        let on_long_n = on_norm.iter().filter(|&&l| l >= 2.0).count();
-        if on_short_n == 0 || on_long_n == 0 {
-            return f32::MAX;
-        }
-        let on_long_mean: f32 =
-            on_norm.iter().filter(|&&l| l >= 2.0).copied().sum::<f32>() / on_long_n as f32;
-        let dah_ratio = on_long_mean / median_dot_len;
-        if !(2.0..=5.0).contains(&dah_ratio) {
-            return f32::MAX;
-        }
-        // Penalize WPM hypotheses where median_dot_len drifts far from 1.0.
-        // Without this, two different WPM candidates produce near-identical
-        // residual costs (the residual is shape-invariant under WPM
-        // rescaling once it's normalized by median_dot_len), so the picker
-        // would happily settle on a WPM 30..50% off the true value, which
-        // shifts both the dit/dah and letter/word boundaries enough to
-        // shred multi-element letters under high jitter. The correct WPM
-        // makes median_dot_len ≈ 1.0; deviation in either direction is bad.
-        // Use log-space distance so the penalty is symmetric for halving vs
-        // doubling.
-        let wpm_drift = median_dot_len.ln().powi(2);
         let cost_on: f32 = on_norm
             .iter()
             .map(|&len| {
@@ -420,9 +445,7 @@ impl MorseDecoder {
                     .min((len / median_dot_len - 7.0).powi(2))
             })
             .sum();
-        (cost_on / on_intervals.len() as f32)
-            + (cost_off / off_intervals.len() as f32)
-            + 0.25 * wpm_drift
+        (cost_on / on_intervals.len() as f32) + (cost_off / off_intervals.len() as f32)
     }
 
     fn decode_with_params(
@@ -430,10 +453,10 @@ impl MorseDecoder {
         power_signal: &[f32],
         wpm: f32,
         threshold: f32,
-        power_signal_rate: f32,
+        _power_signal_rate: f32,
     ) -> String {
         // First pass: collect all element lengths for self-calibration
-        let (on_intervals, off_intervals) = get_raw_intervals(power_signal, threshold);
+        let (on_intervals, _off_intervals) = get_raw_intervals(power_signal, threshold);
 
         if on_intervals.is_empty() {
             return String::new();
@@ -447,22 +470,10 @@ impl MorseDecoder {
         let max_len = sorted_lengths[sorted_lengths.len() - 1] as f32;
         let length_ratio = max_len / min_len;
 
-        let lengths_for_high: Vec<f32> = sorted_lengths.iter().map(|&x| x as f32).collect();
-        let on_centroids = if length_ratio > 1.8 {
-            kmeans_two_centroids(&lengths_for_high)
-        } else {
-            None
-        };
-
-        let raw_dot_len = if length_ratio > 1.8 {
-            // Mixed signal: 2-means cluster the on-intervals to find the
-            // dit cluster centroid. Robust against rough fists where the
-            // dah/dit ratio drops below the textbook 3:1, which used to
-            // collapse the old "median of shortest half" heuristic into
-            // a number small enough that every real dit looked like a dah.
-            on_centroids
-                .map(|(low, _high)| low)
-                .unwrap_or_else(|| sorted_lengths[sorted_lengths.len() / 4] as f32)
+        let actual_dot_len = if length_ratio > 2.0 {
+            // Mixed signal: use shortest elements as dots
+            let shortest_half = &sorted_lengths[0..=(sorted_lengths.len() / 2)];
+            shortest_half[shortest_half.len() / 2] as f32
         } else {
             // All similar lengths: Use a simple heuristic based on absolute length
             // This is more robust than relying on potentially inaccurate WPM estimates
@@ -482,114 +493,14 @@ impl MorseDecoder {
                 median_len
             }
         };
-        let theoretical_dot_len = ((1200.0 / wpm / 1000.0) * power_signal_rate).max(1.0);
-        let actual_dot_len = if length_ratio > 1.8 && raw_dot_len < theoretical_dot_len * 0.65 {
-            // A very low ON centroid usually means the tone envelope is being
-            // sliced into half-dits by threshold chatter, not that the sender
-            // suddenly doubled speed.  The WPM search has already selected a
-            // timing hypothesis from both ON and OFF intervals, so use it as a
-            // lower-bound prior for self-calibration.  Without this, long
-            // well-toned QSOs can normalize true element gaps to ~2 dots and
-            // the beam happily emits E/T-heavy fragments.
-            (raw_dot_len * theoretical_dot_len).sqrt()
-        } else {
-            raw_dot_len
-        };
 
         // Log calibration for debugging
         log::debug!(
-            "Self-calibration: WPM={:.1}, raw_dot_len={:.1}, actual_dot_len={:.1}, theoretical_dot_len={:.1} samples",
+            "Self-calibration: WPM={:.1} (ignored), actual_dot_len={:.1} samples",
             wpm,
-            raw_dot_len,
-            actual_dot_len,
-            theoretical_dot_len
+            actual_dot_len
         );
         log::debug!("Element lengths: {:?}", on_intervals);
-
-        let dit_dah_boundary_norm = if length_ratio > 1.8 {
-            if let Some((low, high)) = on_centroids {
-                if low > 0.0 && high > actual_dot_len * 1.3 {
-                    // Midpoint between dit and dah centroids in normalized
-                    // (dot-length) units. This adapts to rough fists where
-                    // the textbook 2.0× boundary misses dahs that fall
-                    // closer to 1.7..2.5 of the dit length.
-                    0.5 * (1.0 + high / actual_dot_len)
-                } else {
-                    DIT_DAH_BOUNDARY
-                }
-            } else {
-                DIT_DAH_BOUNDARY
-            }
-        } else {
-            DIT_DAH_BOUNDARY
-        };
-
-        // Adaptive letter-space and word-space boundaries via 3-means
-        // cluster on the off-interval distribution (element / letter / word
-        // gaps). Boundaries are placed at the midpoints of adjacent
-        // centroids. With heavy timing jitter the canonical (1, 3, 7) dot
-        // gaps drift enough that fixed thresholds shred letters; a 3-cluster
-        // model adapts to the actual fist while a 2-cluster fallback covers
-        // short clips with no word gaps at all.
-        let mut gap_centroids_norm = (1.0_f32, 3.0_f32, 7.0_f32);
-        let (letter_space_norm, word_space_norm) = {
-            let off_norm: Vec<f32> = off_intervals
-                .iter()
-                .map(|&s| s as f32 / actual_dot_len)
-                // Drop the trailing silence and other gross outliers.
-                .filter(|&l| l < 12.0)
-                .collect();
-            if off_norm.len() >= 6 {
-                if let Some((c1, c2, c3)) = kmeans_three_centroids(&off_norm) {
-                    gap_centroids_norm = (c1, c2, c3);
-                    // c1 = element gap, c2 = letter gap, c3 = word gap
-                    let letter_b = if c2 > c1 * 1.3 {
-                        (0.5 * (c1 + c2)).clamp(1.8, 3.4)
-                    } else {
-                        // Bad split (clusters too close); fall back.
-                        (2.0 * c1).clamp(1.7, 2.6)
-                    };
-                    let word_b = if c3 > c2 * 1.3 {
-                        (0.5 * (c2 + c3)).clamp(letter_b + 0.5, 8.0)
-                    } else {
-                        WORD_SPACE_BOUNDARY
-                    };
-                    (letter_b, word_b)
-                } else if let Some((low, _high)) = kmeans_two_centroids(&off_norm) {
-                    gap_centroids_norm = (low, (low * 3.0).max(3.0), 7.0);
-                    let letter_b = if low > 0.0 {
-                        (2.0 * low).clamp(1.7, 2.6)
-                    } else {
-                        LETTER_SPACE_BOUNDARY
-                    };
-                    (letter_b, WORD_SPACE_BOUNDARY)
-                } else {
-                    (LETTER_SPACE_BOUNDARY, WORD_SPACE_BOUNDARY)
-                }
-            } else if off_norm.len() >= 3 {
-                if let Some((low, _high)) = kmeans_two_centroids(&off_norm) {
-                    gap_centroids_norm = (low, (low * 3.0).max(3.0), 7.0);
-                    let letter_b = if low > 0.0 {
-                        (2.0 * low).clamp(1.7, 2.6)
-                    } else {
-                        LETTER_SPACE_BOUNDARY
-                    };
-                    (letter_b, WORD_SPACE_BOUNDARY)
-                } else {
-                    (LETTER_SPACE_BOUNDARY, WORD_SPACE_BOUNDARY)
-                }
-            } else {
-                (LETTER_SPACE_BOUNDARY, WORD_SPACE_BOUNDARY)
-            }
-        };
-        log::debug!(
-            "Gap centroids/boundaries (dot units): c1={:.2}, c2={:.2}, c3={:.2}, letter_b={:.2}, word_b={:.2}",
-            gap_centroids_norm.0,
-            gap_centroids_norm.1,
-            gap_centroids_norm.2,
-            letter_space_norm,
-            word_space_norm
-        );
 
         let mut result = String::new();
         let mut current_letter = String::new();
@@ -600,35 +511,6 @@ impl MorseDecoder {
         let mut is_on = power_signal[0] > threshold;
         let debounce_samples = (actual_dot_len * 0.3).round() as usize;
         log::debug!("Debounce threshold: {} samples", debounce_samples);
-        log::debug!(
-            "Dit/dah boundary (in dot units): {:.2}",
-            dit_dah_boundary_norm
-        );
-
-        let dah_len_norm = on_centroids
-            .map(|(_low, high)| {
-                if actual_dot_len > 0.0 {
-                    high / actual_dot_len
-                } else {
-                    3.0
-                }
-            })
-            .unwrap_or(3.0)
-            .clamp(1.8, 4.5);
-        let beam_result = decode_with_morse_beam(
-            power_signal,
-            threshold,
-            actual_dot_len,
-            dah_len_norm,
-            gap_centroids_norm,
-            letter_space_norm,
-            word_space_norm,
-            debounce_samples,
-        );
-        if !beam_result.is_empty() {
-            return beam_result;
-        }
-
         for &p in power_signal.iter().chain(std::iter::once(&0.0)) {
             if (p > threshold) == is_on {
                 current_len += 1;
@@ -636,14 +518,14 @@ impl MorseDecoder {
                 if current_len > debounce_samples {
                     let len_norm = current_len as f32 / actual_dot_len;
                     if is_on {
-                        if len_norm < dit_dah_boundary_norm {
+                        if len_norm < DIT_DAH_BOUNDARY {
                             current_letter.push('.');
                         } else {
                             current_letter.push('-');
                         }
                     } else {
                         // Handle gaps (off periods)
-                        if len_norm > letter_space_norm {
+                        if len_norm > LETTER_SPACE_BOUNDARY {
                             // Gap is long enough to end the current letter
                             if !current_letter.is_empty() {
                                 if let Some(c) = morse_to_char(&current_letter) {
@@ -654,7 +536,7 @@ impl MorseDecoder {
                                 current_letter.clear();
                             }
                             // If gap is also long enough for word boundary, add space
-                            if len_norm > word_space_norm && !result.ends_with(' ') {
+                            if len_norm > WORD_SPACE_BOUNDARY && !result.ends_with(' ') {
                                 result.push(' ');
                             }
                         }
@@ -680,411 +562,6 @@ impl MorseDecoder {
 }
 
 // --- Helper Functions ---
-
-/// 1-D k-means with k=2 on positive lengths. Returns `(low_centroid,
-/// high_centroid)` if the input contains at least two distinct non-empty
-/// clusters after convergence, otherwise `None`.
-fn kmeans_two_centroids(values: &[f32]) -> Option<(f32, f32)> {
-    if values.len() < 2 {
-        return None;
-    }
-    let min = values.iter().cloned().fold(f32::INFINITY, f32::min);
-    let max = values.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
-    if (max - min).abs() < f32::EPSILON {
-        return None;
-    }
-    // Seed centroids at 25th and 75th percentile (sorted assumed by caller
-    // in our usage; sort defensively otherwise).
-    let mut sorted: Vec<f32> = values.to_vec();
-    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    let mut c_low = sorted[sorted.len() / 4];
-    let mut c_high = sorted[(3 * sorted.len()) / 4];
-    if (c_high - c_low).abs() < f32::EPSILON {
-        c_low = min;
-        c_high = max;
-    }
-    for _ in 0..32 {
-        let mut sum_low = 0.0;
-        let mut n_low = 0usize;
-        let mut sum_high = 0.0;
-        let mut n_high = 0usize;
-        for &v in values {
-            if (v - c_low).abs() <= (v - c_high).abs() {
-                sum_low += v;
-                n_low += 1;
-            } else {
-                sum_high += v;
-                n_high += 1;
-            }
-        }
-        if n_low == 0 || n_high == 0 {
-            return None;
-        }
-        let new_low = sum_low / n_low as f32;
-        let new_high = sum_high / n_high as f32;
-        if (new_low - c_low).abs() < 1e-3 && (new_high - c_high).abs() < 1e-3 {
-            c_low = new_low;
-            c_high = new_high;
-            break;
-        }
-        c_low = new_low;
-        c_high = new_high;
-    }
-    if c_low > c_high {
-        std::mem::swap(&mut c_low, &mut c_high);
-    }
-    Some((c_low, c_high))
-}
-
-/// 1-D k-means with k=3 on positive lengths. Returns
-/// `(c1, c2, c3)` sorted ascending if the input partitions into three
-/// non-empty clusters, otherwise `None`. Used to split off-interval
-/// distributions into element/letter/word gap buckets.
-fn kmeans_three_centroids(values: &[f32]) -> Option<(f32, f32, f32)> {
-    if values.len() < 3 {
-        return None;
-    }
-    let mut sorted: Vec<f32> = values.to_vec();
-    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    let mut c1 = sorted[sorted.len() / 6];
-    let mut c2 = sorted[sorted.len() / 2];
-    let mut c3 = sorted[(5 * sorted.len()) / 6];
-    if (c2 - c1).abs() < f32::EPSILON || (c3 - c2).abs() < f32::EPSILON {
-        c1 = sorted[0];
-        c2 = sorted[sorted.len() / 2];
-        c3 = sorted[sorted.len() - 1];
-    }
-    if (c3 - c1).abs() < f32::EPSILON {
-        return None;
-    }
-    for _ in 0..32 {
-        let (mut s1, mut n1) = (0.0f32, 0usize);
-        let (mut s2, mut n2) = (0.0f32, 0usize);
-        let (mut s3, mut n3) = (0.0f32, 0usize);
-        for &v in values {
-            let d1 = (v - c1).abs();
-            let d2 = (v - c2).abs();
-            let d3 = (v - c3).abs();
-            if d1 <= d2 && d1 <= d3 {
-                s1 += v;
-                n1 += 1;
-            } else if d2 <= d3 {
-                s2 += v;
-                n2 += 1;
-            } else {
-                s3 += v;
-                n3 += 1;
-            }
-        }
-        if n1 == 0 || n2 == 0 || n3 == 0 {
-            return None;
-        }
-        let nc1 = s1 / n1 as f32;
-        let nc2 = s2 / n2 as f32;
-        let nc3 = s3 / n3 as f32;
-        let conv = (nc1 - c1).abs() < 1e-3 && (nc2 - c2).abs() < 1e-3 && (nc3 - c3).abs() < 1e-3;
-        c1 = nc1;
-        c2 = nc2;
-        c3 = nc3;
-        if conv {
-            break;
-        }
-    }
-    let mut sorted_c = [c1, c2, c3];
-    sorted_c.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    Some((sorted_c[0], sorted_c[1], sorted_c[2]))
-}
-
-#[derive(Clone)]
-struct MorseBeamState {
-    text: String,
-    pattern: String,
-    score: f32,
-}
-
-fn decode_with_morse_beam(
-    power_signal: &[f32],
-    threshold: f32,
-    dot_len: f32,
-    dah_len_norm: f32,
-    gap_centroids_norm: (f32, f32, f32),
-    letter_space_norm: f32,
-    word_space_norm: f32,
-    debounce_samples: usize,
-) -> String {
-    if power_signal.is_empty() || dot_len <= 0.0 {
-        return String::new();
-    }
-
-    let intervals = ordered_intervals(power_signal, threshold, debounce_samples.max(1));
-    if intervals.iter().filter(|(is_on, _)| *is_on).count() < 2 {
-        return String::new();
-    }
-
-    let mut beams = vec![MorseBeamState {
-        text: String::new(),
-        pattern: String::new(),
-        score: 0.0,
-    }];
-
-    for (is_on, len) in intervals {
-        let len_norm = len as f32 / dot_len;
-        let mut next = Vec::with_capacity(beams.len() * 4);
-        if is_on {
-            for state in &beams {
-                extend_symbol(&mut next, state, '.', len_norm, 1.0);
-                extend_symbol(&mut next, state, '-', len_norm, dah_len_norm);
-            }
-        } else {
-            for state in &beams {
-                extend_gap(
-                    &mut next,
-                    state,
-                    len_norm,
-                    gap_centroids_norm,
-                    letter_space_norm,
-                    word_space_norm,
-                );
-            }
-        }
-        beams = prune_beam(next);
-        if beams.is_empty() {
-            return String::new();
-        }
-    }
-
-    let mut finals = Vec::with_capacity(beams.len() * 2);
-    for state in beams {
-        if state.pattern.is_empty() {
-            finals.push(state);
-        } else if let Some(ch) = morse_alnum_to_char(&state.pattern) {
-            let mut emitted = state.clone();
-            push_char(&mut emitted.text, ch);
-            emitted.pattern.clear();
-            finals.push(emitted);
-        }
-    }
-
-    finals
-        .into_iter()
-        .min_by(|a, b| {
-            a.score
-                .partial_cmp(&b.score)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        })
-        .map(|state| state.text.trim().to_string())
-        .unwrap_or_default()
-}
-
-fn extend_symbol(
-    next: &mut Vec<MorseBeamState>,
-    state: &MorseBeamState,
-    symbol: char,
-    len_norm: f32,
-    target_norm: f32,
-) {
-    let mut pattern = state.pattern.clone();
-    pattern.push(symbol);
-    if pattern.len() > 5 || !is_morse_alnum_prefix(&pattern) {
-        return;
-    }
-    next.push(MorseBeamState {
-        text: state.text.clone(),
-        pattern,
-        score: state.score + morse_len_cost(len_norm, target_norm),
-    });
-}
-
-fn extend_gap(
-    next: &mut Vec<MorseBeamState>,
-    state: &MorseBeamState,
-    len_norm: f32,
-    gap_centroids_norm: (f32, f32, f32),
-    letter_space_norm: f32,
-    word_space_norm: f32,
-) {
-    let (element_gap, letter_gap, word_gap) = gap_centroids_norm;
-
-    if state.pattern.is_empty() {
-        let mut carry = state.clone();
-        if !carry.text.is_empty() && len_norm > (letter_gap + word_gap) * 0.5 {
-            push_space(&mut carry.text);
-        }
-        next.push(carry);
-        return;
-    }
-
-    if state.pattern.len() < 5 && is_morse_alnum_prefix(&state.pattern) {
-        next.push(MorseBeamState {
-            text: state.text.clone(),
-            pattern: state.pattern.clone(),
-            score: state.score + morse_len_cost(len_norm, element_gap),
-        });
-    }
-
-    if len_norm >= letter_space_norm
-        && let Some(ch) = morse_alnum_to_char(&state.pattern)
-    {
-        let mut text = state.text.clone();
-        push_char(&mut text, ch);
-        next.push(MorseBeamState {
-            text: text.clone(),
-            pattern: String::new(),
-            score: state.score + morse_len_cost(len_norm, letter_gap),
-        });
-
-        if len_norm >= word_space_norm {
-            push_space(&mut text);
-            next.push(MorseBeamState {
-                text,
-                pattern: String::new(),
-                score: state.score + morse_len_cost(len_norm, word_gap),
-            });
-        }
-    }
-}
-
-fn prune_beam(mut states: Vec<MorseBeamState>) -> Vec<MorseBeamState> {
-    states.sort_by(|a, b| {
-        a.score
-            .partial_cmp(&b.score)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
-    states.truncate(MORSE_BEAM_WIDTH);
-    states
-}
-
-fn morse_len_cost(observed: f32, target: f32) -> f32 {
-    let observed = observed.max(0.05);
-    let target = target.max(0.05);
-    let ratio = observed / target;
-    ratio.ln().powi(2)
-}
-
-fn push_char(text: &mut String, ch: char) {
-    text.push(ch);
-}
-
-fn push_space(text: &mut String) {
-    if !text.is_empty() && !text.ends_with(' ') {
-        text.push(' ');
-    }
-}
-
-fn decode_quality_cost(text: &str) -> f32 {
-    let mut alnum_count = 0usize;
-    let mut unknown_count = 0usize;
-    let mut single_element_count = 0usize;
-    let mut element_sum = 0usize;
-
-    for ch in text.chars() {
-        if ch == '?' {
-            unknown_count += 1;
-            continue;
-        }
-        if ch.is_ascii_alphanumeric() {
-            alnum_count += 1;
-            if let Some(morse) = morse_for_alnum(ch) {
-                let element_count = morse.len();
-                element_sum += element_count;
-                if element_count == 1 {
-                    single_element_count += 1;
-                }
-            }
-        }
-    }
-
-    if alnum_count == 0 {
-        return unknown_count as f32 * 2.0;
-    }
-
-    let avg_elements = element_sum as f32 / alnum_count as f32;
-    let single_fraction = single_element_count as f32 / alnum_count as f32;
-    let unknown_fraction = unknown_count as f32 / (alnum_count + unknown_count).max(1) as f32;
-
-    let complexity_penalty = (2.2 - avg_elements).max(0.0).powi(2) * 8.0;
-    let fragmentation_penalty = (single_fraction - 0.45).max(0.0).powi(2) * 10.0;
-    let unknown_penalty = unknown_fraction * 4.0;
-
-    complexity_penalty + fragmentation_penalty + unknown_penalty
-}
-
-fn morse_for_alnum(ch: char) -> Option<&'static str> {
-    let ch = ch.to_ascii_uppercase();
-    MORSE_ALNUM_TABLE
-        .iter()
-        .find_map(|&(morse, c)| (c == ch).then_some(morse))
-}
-
-fn ordered_intervals(
-    power_signal: &[f32],
-    threshold: f32,
-    debounce_samples: usize,
-) -> Vec<(bool, usize)> {
-    fn push_interval(intervals: &mut Vec<(bool, usize)>, is_on: bool, len: usize) {
-        if len == 0 {
-            return;
-        }
-        if let Some((last_is_on, last_len)) = intervals.last_mut() {
-            if *last_is_on == is_on {
-                *last_len += len;
-                return;
-            }
-        }
-        intervals.push((is_on, len));
-    }
-
-    let mut raw_intervals = Vec::new();
-    if power_signal.is_empty() {
-        return raw_intervals;
-    }
-
-    let mut current_len = 0usize;
-    let mut is_on = power_signal[0] > threshold;
-    for &p in power_signal {
-        if (p > threshold) == is_on {
-            current_len += 1;
-        } else {
-            raw_intervals.push((is_on, current_len));
-            is_on = !is_on;
-            current_len = 1;
-        }
-    }
-    raw_intervals.push((is_on, current_len));
-
-    if debounce_samples == 0 {
-        return raw_intervals;
-    }
-
-    let mut intervals = Vec::with_capacity(raw_intervals.len());
-    for (idx, (run_is_on, run_len)) in raw_intervals.iter().copied().enumerate() {
-        if run_len > debounce_samples {
-            push_interval(&mut intervals, run_is_on, run_len);
-            continue;
-        }
-
-        if let Some((last_is_on, last_len)) = intervals.last_mut() {
-            // Treat sub-dwell opposite-polarity runs as threshold chatter:
-            // bridge tiny OFF holes inside key-downs and absorb tiny ON
-            // spikes inside key-up gaps, but only when a following accepted
-            // run confirms the previous state.  Trailing sub-dwell runs are
-            // dropped instead of inflating the final symbol/gap.
-            if raw_intervals
-                .iter()
-                .skip(idx + 1)
-                .find(|(_, len)| *len > debounce_samples)
-                .is_some_and(|(next_is_on, _)| next_is_on == last_is_on)
-            {
-                *last_len += run_len;
-            }
-        }
-        // If the capture starts with a tiny glitch, there is no previous
-        // accepted state. Drop it rather than emitting a standalone E/T-sized
-        // run.
-    }
-    intervals
-}
-
 fn get_raw_intervals(power_signal: &[f32], threshold: f32) -> (Vec<usize>, Vec<usize>) {
     let mut on = Vec::new();
     let mut off = Vec::new();
@@ -1157,161 +634,43 @@ fn trace_signal(signal: &[f32], threshold: f32, wpm: f32) -> std::io::Result<()>
 }
 
 fn morse_to_char(s: &str) -> Option<char> {
-    MORSE_TABLE
-        .iter()
-        .find_map(|&(morse, ch)| (morse == s).then_some(ch))
-}
-
-fn morse_alnum_to_char(s: &str) -> Option<char> {
-    MORSE_ALNUM_TABLE
-        .iter()
-        .find_map(|&(morse, ch)| (morse == s).then_some(ch))
-}
-
-fn is_morse_alnum_prefix(s: &str) -> bool {
-    MORSE_ALNUM_TABLE
-        .iter()
-        .any(|&(morse, _)| morse.starts_with(s))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn push_power_run(signal: &mut Vec<f32>, is_on: bool, len: usize) {
-        signal.extend(std::iter::repeat(if is_on { 1.0 } else { 0.0 }).take(len));
-    }
-
-    #[test]
-    fn ordered_intervals_bridges_sub_dwell_gaps() {
-        let mut signal = Vec::new();
-        push_power_run(&mut signal, true, 6);
-        push_power_run(&mut signal, false, 2);
-        push_power_run(&mut signal, true, 7);
-        push_power_run(&mut signal, false, 8);
-
-        let intervals = ordered_intervals(&signal, 0.5, 3);
-
-        assert_eq!(intervals, vec![(true, 15), (false, 8)]);
-    }
-
-    #[test]
-    fn ordered_intervals_absorbs_sub_dwell_on_blips() {
-        let mut signal = Vec::new();
-        push_power_run(&mut signal, false, 7);
-        push_power_run(&mut signal, true, 2);
-        push_power_run(&mut signal, false, 6);
-        push_power_run(&mut signal, true, 5);
-
-        let intervals = ordered_intervals(&signal, 0.5, 3);
-
-        assert_eq!(intervals, vec![(false, 15), (true, 5)]);
-    }
-
-    #[test]
-    fn ordered_intervals_drops_trailing_sub_dwell_runs() {
-        let mut signal = Vec::new();
-        push_power_run(&mut signal, true, 6);
-        push_power_run(&mut signal, false, 2);
-
-        let intervals = ordered_intervals(&signal, 0.5, 3);
-
-        assert_eq!(intervals, vec![(true, 6)]);
+    match s {
+        ".-" => Some('A'),
+        "-..." => Some('B'),
+        "-.-." => Some('C'),
+        "-.." => Some('D'),
+        "." => Some('E'),
+        "..-." => Some('F'),
+        "--." => Some('G'),
+        "...." => Some('H'),
+        ".." => Some('I'),
+        ".---" => Some('J'),
+        "-.-" => Some('K'),
+        ".-.." => Some('L'),
+        "--" => Some('M'),
+        "-." => Some('N'),
+        "---" => Some('O'),
+        ".--." => Some('P'),
+        "--.-" => Some('Q'),
+        ".-." => Some('R'),
+        "..." => Some('S'),
+        "-" => Some('T'),
+        "..-" => Some('U'),
+        "...-" => Some('V'),
+        ".--" => Some('W'),
+        "-..-" => Some('X'),
+        "-.--" => Some('Y'),
+        "--.." => Some('Z'),
+        ".----" => Some('1'),
+        "..---" => Some('2'),
+        "...--" => Some('3'),
+        "....-" => Some('4'),
+        "....." => Some('5'),
+        "-...." => Some('6'),
+        "--..." => Some('7'),
+        "---.." => Some('8'),
+        "----." => Some('9'),
+        "-----" => Some('0'),
+        _ => None,
     }
 }
-
-const MORSE_ALNUM_TABLE: &[(&str, char)] = &[
-    (".-", 'A'),
-    ("-...", 'B'),
-    ("-.-.", 'C'),
-    ("-..", 'D'),
-    (".", 'E'),
-    ("..-.", 'F'),
-    ("--.", 'G'),
-    ("....", 'H'),
-    ("..", 'I'),
-    (".---", 'J'),
-    ("-.-", 'K'),
-    (".-..", 'L'),
-    ("--", 'M'),
-    ("-.", 'N'),
-    ("---", 'O'),
-    (".--.", 'P'),
-    ("--.-", 'Q'),
-    (".-.", 'R'),
-    ("...", 'S'),
-    ("-", 'T'),
-    ("..-", 'U'),
-    ("...-", 'V'),
-    (".--", 'W'),
-    ("-..-", 'X'),
-    ("-.--", 'Y'),
-    ("--..", 'Z'),
-    (".----", '1'),
-    ("..---", '2'),
-    ("...--", '3'),
-    ("....-", '4'),
-    (".....", '5'),
-    ("-....", '6'),
-    ("--...", '7'),
-    ("---..", '8'),
-    ("----.", '9'),
-    ("-----", '0'),
-];
-
-const MORSE_TABLE: &[(&str, char)] = &[
-    (".-", 'A'),
-    ("-...", 'B'),
-    ("-.-.", 'C'),
-    ("-..", 'D'),
-    (".", 'E'),
-    ("..-.", 'F'),
-    ("--.", 'G'),
-    ("....", 'H'),
-    ("..", 'I'),
-    (".---", 'J'),
-    ("-.-", 'K'),
-    (".-..", 'L'),
-    ("--", 'M'),
-    ("-.", 'N'),
-    ("---", 'O'),
-    (".--.", 'P'),
-    ("--.-", 'Q'),
-    (".-.", 'R'),
-    ("...", 'S'),
-    ("-", 'T'),
-    ("..-", 'U'),
-    ("...-", 'V'),
-    (".--", 'W'),
-    ("-..-", 'X'),
-    ("-.--", 'Y'),
-    ("--..", 'Z'),
-    (".----", '1'),
-    ("..---", '2'),
-    ("...--", '3'),
-    ("....-", '4'),
-    (".....", '5'),
-    ("-....", '6'),
-    ("--...", '7'),
-    ("---..", '8'),
-    ("----.", '9'),
-    ("-----", '0'),
-    (".-.-.-", '.'),
-    ("--..--", ','),
-    ("..--..", '?'),
-    (".----.", '\''),
-    ("-.-.--", '!'),
-    ("-..-.", '/'),
-    ("-.--.", '('),
-    ("-.--.-", ')'),
-    (".-...", '&'),
-    ("---...", ':'),
-    ("-.-.-.", ';'),
-    ("-...-", '='),
-    (".-.-.", '+'),
-    ("-....-", '-'),
-    ("..--.-", '_'),
-    (".-..-.", '"'),
-    ("...-..-", '$'),
-    (".--.-.", '@'),
-];
