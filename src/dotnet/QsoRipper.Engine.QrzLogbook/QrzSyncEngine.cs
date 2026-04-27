@@ -227,6 +227,37 @@ public sealed class QrzSyncEngine
         }
 
         // ---------------------------------------------------------------
+        // Phase 1.5 — Resolve the QRZ logbook owner callsign
+        // ---------------------------------------------------------------
+        // Fetch STATUS once, before upload, so we can rewrite the
+        // STATION_CALLSIGN of QSOs logged under a previous callsign
+        // (issue #337). The same result is reused in Phase 3 for metadata
+        // refresh, avoiding a second STATUS round-trip per sync.
+
+        QrzLogbookStatus? statusResult = null;
+        Exception? statusException = null;
+        try
+        {
+            statusResult = await _client.GetStatusAsync().ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            statusException = ex;
+        }
+
+        string? bookOwner = null;
+        if (statusResult is { } sr && !string.IsNullOrWhiteSpace(sr.Owner))
+        {
+            bookOwner = sr.Owner.Trim();
+        }
+        else if (!string.IsNullOrWhiteSpace(metadata.QrzLogbookOwner))
+        {
+            // STATUS failed or returned no owner — fall back to the cached
+            // owner so QSOs can still upload after a transient API hiccup.
+            bookOwner = metadata.QrzLogbookOwner;
+        }
+
+        // ---------------------------------------------------------------
         // Phase 2 — Upload pending local QSOs
         // ---------------------------------------------------------------
 
@@ -249,8 +280,8 @@ public sealed class QrzSyncEngine
             try
             {
                 var logid = qso.SyncStatus == SyncStatus.Modified && !string.IsNullOrWhiteSpace(qso.QrzLogid)
-                    ? await _client.UpdateQsoAsync(qso).ConfigureAwait(false)
-                    : await _client.UploadQsoAsync(qso).ConfigureAwait(false);
+                    ? await _client.UpdateQsoAsync(qso, bookOwner).ConfigureAwait(false)
+                    : await _client.UploadQsoAsync(qso, bookOwner).ConfigureAwait(false);
                 var synced = qso.Clone();
                 synced.QrzLogid = logid;
                 synced.SyncStatus = SyncStatus.Synced;
@@ -324,23 +355,24 @@ public sealed class QrzSyncEngine
         // ---------------------------------------------------------------
         // Phase 3 — Refresh metadata from authoritative QRZ STATUS
         // ---------------------------------------------------------------
-        // Mirrors src/rust/qsoripper-server/src/sync.rs::refresh_metadata:
-        // prefer the remote STATUS result; on failure fall back to estimating
-        // from local counts so metadata stays at least approximately correct.
+        // Reuses the STATUS call made in Phase 1.5 (so each sync makes one
+        // STATUS round-trip, not two). Mirrors
+        // src/rust/qsoripper-server/src/sync.rs::execute_sync: prefer remote
+        // STATUS; on failure fall back to estimating from local counts so
+        // metadata stays at least approximately correct.
 
         uint? remoteCount = null;
         string? remoteOwner = null;
-        try
+        if (statusResult is { } status)
         {
-            var status = await _client.GetStatusAsync().ConfigureAwait(false);
             remoteCount = status.QsoCount;
             remoteOwner = string.IsNullOrWhiteSpace(status.Owner)
                 ? metadata.QrzLogbookOwner
                 : status.Owner;
         }
-        catch (Exception ex)
+        else
         {
-            errors.Add($"STATUS refresh failed: {ex.Message}");
+            errors.Add($"STATUS refresh failed: {statusException?.Message ?? "unknown"}");
             remoteOwner = metadata.QrzLogbookOwner;
         }
 

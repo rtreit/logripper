@@ -332,10 +332,74 @@ fn is_syncable_qso(qso: &QsoRecord) -> bool {
     !qso.worked_callsign.trim().is_empty() && qso.utc_timestamp.is_some()
 }
 
-fn qso_to_qrz_adif(qso: &QsoRecord) -> String {
+fn qso_to_qrz_adif(qso: &QsoRecord, book_owner: Option<&str>) -> String {
     let mut prepared = qso.clone();
     prepared.tx_power = normalize_qrz_power(prepared.tx_power.as_deref());
+    rewrite_station_callsign_for_book(&mut prepared, book_owner);
     AdifMapper::qso_to_adi(&prepared)
+}
+
+/// QRZ Logbook rejects uploads whose `STATION_CALLSIGN` does not match the
+/// callsign the logbook is registered to. Operators who have changed callsigns
+/// (e.g. KB7QOP → AE7XI) keep historical QSOs locally with the old call as the
+/// `station_callsign`. Without rewriting, every such QSO fails with
+/// "wrong `station_callsign` for this logbook".
+///
+/// When the book owner is known and differs (case-insensitive, trimmed) from
+/// the QSO's `station_callsign`, this rewrites the upload payload so QRZ
+/// accepts it:
+///
+/// * `station_callsign` is set to the book owner.
+/// * If the QSO has a station snapshot, its `station_callsign` is updated too
+///   (the snapshot is what `AdifMapper::qso_to_adi` actually emits as
+///   `STATION_CALLSIGN` when present).
+/// * The original station callsign is preserved as the ADIF `OPERATOR`
+///   (mapped from `station_snapshot.operator_callsign`) when no operator was
+///   recorded, so the historical operator-of-record survives on QRZ.
+///
+/// Skipped (the original payload is left untouched, QRZ may still reject):
+///
+/// * Empty/missing book owner.
+/// * Empty/missing `station_callsign`.
+/// * `station_callsign` containing a `/` (portable / mobile / secondary suffix
+///   such as `KB7QOP/P`). These typically belong to a different QRZ logbook
+///   and should not be silently rewritten.
+///
+/// The local QSO is **not** modified; only the in-memory upload payload is
+/// rewritten via the cloned `prepared` value in [`qso_to_qrz_adif`].
+fn rewrite_station_callsign_for_book(prepared: &mut QsoRecord, book_owner: Option<&str>) {
+    let Some(owner) = book_owner.map(str::trim).filter(|s| !s.is_empty()) else {
+        return;
+    };
+
+    let original = prepared.station_callsign.trim().to_owned();
+    if original.is_empty() {
+        return;
+    }
+    if original.contains('/') {
+        return;
+    }
+    if original.eq_ignore_ascii_case(owner) {
+        return;
+    }
+
+    owner.clone_into(&mut prepared.station_callsign);
+
+    let snapshot = prepared
+        .station_snapshot
+        .get_or_insert_with(crate::proto::qsoripper::domain::StationSnapshot::default);
+    // The snapshot is what the ADIF mapper actually emits as
+    // STATION_CALLSIGN when present, so it must be rewritten too.
+    owner.clone_into(&mut snapshot.station_callsign);
+
+    // Preserve the historical operator-of-record on QRZ.
+    if snapshot
+        .operator_callsign
+        .as_deref()
+        .is_none_or(|op| op.trim().is_empty())
+    {
+        snapshot.operator_callsign = Some(original);
+    }
 }
 
 fn normalize_qrz_power(value: Option<&str>) -> Option<String> {
@@ -542,8 +606,12 @@ impl QrzLogbookClient {
     ///
     /// Returns an error on network failure, authentication failure, or if
     /// the QRZ API rejects the record.
-    pub async fn upload_qso(&self, qso: &QsoRecord) -> Result<QrzUploadResult, QrzLogbookError> {
-        let adif_record = qso_to_qrz_adif(qso);
+    pub async fn upload_qso(
+        &self,
+        qso: &QsoRecord,
+        book_owner: Option<&str>,
+    ) -> Result<QrzUploadResult, QrzLogbookError> {
+        let adif_record = qso_to_qrz_adif(qso, book_owner);
 
         let body = self
             .post_form(&[("ACTION", "INSERT"), ("ADIF", &adif_record)])
@@ -578,13 +646,14 @@ impl QrzLogbookClient {
         &self,
         logid: &str,
         qso: &QsoRecord,
+        book_owner: Option<&str>,
     ) -> Result<QrzUploadResult, QrzLogbookError> {
         if logid.is_empty() {
             return Err(QrzLogbookError::ParseError(
                 "replace_qso called with empty logid".to_string(),
             ));
         }
-        let adif_record = AdifMapper::qso_to_adi(qso);
+        let adif_record = qso_to_qrz_adif(qso, book_owner);
         let option = format!("REPLACE,LOGID:{logid}");
 
         let body = self
@@ -910,7 +979,7 @@ mod tests {
             worked_callsign: "W1AW".to_string(),
             ..Default::default()
         };
-        let adif = qso_to_qrz_adif(&qso);
+        let adif = qso_to_qrz_adif(&qso, None);
         assert!(adif.contains("<CALL:4>W1AW"));
         assert!(adif.contains("<eor>"));
     }
@@ -923,7 +992,7 @@ mod tests {
             ..Default::default()
         };
 
-        let adif = qso_to_qrz_adif(&qso);
+        let adif = qso_to_qrz_adif(&qso, None);
 
         assert!(adif.contains("<TX_PWR:3>100"));
     }
@@ -936,9 +1005,108 @@ mod tests {
             ..Default::default()
         };
 
-        let adif = qso_to_qrz_adif(&qso);
+        let adif = qso_to_qrz_adif(&qso, None);
 
         assert!(!adif.contains("TX_PWR"));
+    }
+
+    #[test]
+    fn upload_rewrites_station_callsign_to_book_owner_when_previous_call() {
+        let qso = QsoRecord {
+            worked_callsign: "W1AW".to_string(),
+            station_callsign: "KB7QOP".to_string(),
+            ..Default::default()
+        };
+
+        let adif = qso_to_qrz_adif(&qso, Some("AE7XI"));
+
+        assert!(
+            adif.contains("<STATION_CALLSIGN:5>AE7XI"),
+            "STATION_CALLSIGN should be rewritten to book owner; got: {adif}"
+        );
+        assert!(
+            adif.contains("<OPERATOR:6>KB7QOP"),
+            "Original station callsign should be preserved as OPERATOR; got: {adif}"
+        );
+    }
+
+    #[test]
+    fn upload_does_not_rewrite_when_station_callsign_matches_book_owner() {
+        let qso = QsoRecord {
+            worked_callsign: "W1AW".to_string(),
+            station_callsign: "AE7XI".to_string(),
+            ..Default::default()
+        };
+
+        let adif = qso_to_qrz_adif(&qso, Some("ae7xi"));
+
+        assert!(adif.contains("<STATION_CALLSIGN:5>AE7XI"));
+        assert!(
+            !adif.contains("OPERATOR"),
+            "OPERATOR should not be backfilled when calls already match; got: {adif}"
+        );
+    }
+
+    #[test]
+    fn upload_does_not_rewrite_portable_or_secondary_suffix_calls() {
+        let qso = QsoRecord {
+            worked_callsign: "W1AW".to_string(),
+            station_callsign: "KB7QOP/P".to_string(),
+            ..Default::default()
+        };
+
+        let adif = qso_to_qrz_adif(&qso, Some("AE7XI"));
+
+        assert!(
+            adif.contains("KB7QOP/P"),
+            "Slash-suffixed calls must be left alone (different QRZ logbook); got: {adif}"
+        );
+        assert!(
+            !adif.contains("AE7XI"),
+            "Should not silently rewrite slash-suffixed calls to book owner; got: {adif}"
+        );
+    }
+
+    #[test]
+    fn upload_does_not_rewrite_when_book_owner_unknown() {
+        let qso = QsoRecord {
+            worked_callsign: "W1AW".to_string(),
+            station_callsign: "KB7QOP".to_string(),
+            ..Default::default()
+        };
+
+        let adif_none = qso_to_qrz_adif(&qso, None);
+        let adif_blank = qso_to_qrz_adif(&qso, Some("   "));
+
+        assert!(adif_none.contains("KB7QOP"));
+        assert!(adif_blank.contains("KB7QOP"));
+    }
+
+    #[test]
+    fn upload_does_not_overwrite_existing_operator() {
+        use crate::proto::qsoripper::domain::StationSnapshot;
+        let qso = QsoRecord {
+            worked_callsign: "W1AW".to_string(),
+            station_callsign: "KB7QOP".to_string(),
+            station_snapshot: Some(StationSnapshot {
+                station_callsign: "KB7QOP".to_string(),
+                operator_callsign: Some("N7XYZ".to_string()),
+                ..StationSnapshot::default()
+            }),
+            ..Default::default()
+        };
+
+        let adif = qso_to_qrz_adif(&qso, Some("AE7XI"));
+
+        assert!(adif.contains("<STATION_CALLSIGN:5>AE7XI"));
+        assert!(
+            adif.contains("<OPERATOR:5>N7XYZ"),
+            "Existing OPERATOR must be preserved; got: {adif}"
+        );
+        assert!(
+            !adif.contains("KB7QOP"),
+            "Original station callsign should not appear when an operator was already set; got: {adif}"
+        );
     }
 
     #[tokio::test]
@@ -1390,7 +1558,7 @@ mod tests {
             worked_callsign: "W1AW".to_string(),
             ..Default::default()
         };
-        let result = client.upload_qso(&qso).await.expect("upload");
+        let result = client.upload_qso(&qso, None).await.expect("upload");
 
         assert_eq!(result.logid, "999888");
 
@@ -1409,7 +1577,7 @@ mod tests {
             worked_callsign: "W1AW".to_string(),
             ..Default::default()
         };
-        let err = client.upload_qso(&qso).await.unwrap_err();
+        let err = client.upload_qso(&qso, None).await.unwrap_err();
 
         assert!(
             matches!(err, QrzLogbookError::ParseError(_)),
@@ -1424,7 +1592,7 @@ mod tests {
         let client = QrzLogbookClient::new(test_config(base_url)).expect("client");
 
         let qso = QsoRecord::default();
-        let err = client.upload_qso(&qso).await.unwrap_err();
+        let err = client.upload_qso(&qso, None).await.unwrap_err();
 
         match err {
             QrzLogbookError::ApiError(reason) => assert_eq!(reason, "duplicate QSO"),
@@ -1445,7 +1613,7 @@ mod tests {
             ..Default::default()
         };
         let result = client
-            .replace_qso("555444333", &qso)
+            .replace_qso("555444333", &qso, None)
             .await
             .expect("replace");
 
@@ -1475,7 +1643,10 @@ mod tests {
         let client = QrzLogbookClient::new(test_config(base_url)).expect("client");
 
         let qso = QsoRecord::default();
-        let result = client.replace_qso("777", &qso).await.expect("replace");
+        let result = client
+            .replace_qso("777", &qso, None)
+            .await
+            .expect("replace");
         assert_eq!(result.logid, "777");
     }
 
@@ -1484,7 +1655,7 @@ mod tests {
         let client =
             QrzLogbookClient::new(test_config("http://127.0.0.1:1".to_string())).expect("client");
         let err = client
-            .replace_qso("", &QsoRecord::default())
+            .replace_qso("", &QsoRecord::default(), None)
             .await
             .unwrap_err();
         assert!(matches!(err, QrzLogbookError::ParseError(_)));

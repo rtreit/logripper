@@ -746,6 +746,104 @@ public sealed class QrzSyncEngineTests
         Assert.Equal("LOG-FAIL", all[0].QrzLogid);
     }
 
+    // -- Issue #337: previous-callsign rewrite ------------------------------
+
+    [Fact]
+    public async Task Upload_rewrites_station_callsign_to_book_owner_for_previous_call()
+    {
+        var api = new FakeQrzLogbookApi { StatusOwner = "AE7XI" };
+        var store = CreateStore();
+        var local = MakeLocalQso("K7ABC", BaseTime, Band._20M, Mode.Cw, SyncStatus.LocalOnly);
+        local.StationCallsign = "KB7QOP"; // historical previous call
+        await store.Logbook.InsertQsoAsync(local);
+
+        var engine = new QrzSyncEngine(api);
+        var result = await engine.ExecuteSyncAsync(store.Logbook, fullSync: true);
+
+        Assert.Equal(1u, result.UploadedCount);
+        Assert.Equal("AE7XI", api.LastUploadBookOwner);
+
+        var uploaded = Assert.Single(api.UploadedQsos);
+        // QrzLogbookClient (real) clones; the engine forwards the live qso.
+        // What matters is that the *bookOwner argument* is correct AND that
+        // RewriteStationCallsignForBook is what the client applies. Verify
+        // the helper directly:
+        AdifCodec.RewriteStationCallsignForBook(uploaded, api.LastUploadBookOwner);
+        Assert.Equal("AE7XI", uploaded.StationCallsign);
+        Assert.NotNull(uploaded.StationSnapshot);
+        Assert.Equal("AE7XI", uploaded.StationSnapshot!.StationCallsign);
+        Assert.Equal("KB7QOP", uploaded.StationSnapshot.OperatorCallsign);
+
+        // Local row must remain with the historical station callsign.
+        var localList = await store.Logbook.ListQsosAsync(new QsoListQuery());
+        var saved = Assert.Single(localList);
+        Assert.Equal("KB7QOP", saved.StationCallsign);
+    }
+
+    [Fact]
+    public async Task Upload_falls_back_to_cached_owner_when_status_fails()
+    {
+        var api = new FakeQrzLogbookApi
+        {
+            StatusException = new InvalidOperationException("transient"),
+        };
+        var store = CreateStore();
+        await store.Logbook.UpsertSyncMetadataAsync(new SyncMetadata { QrzLogbookOwner = "AE7XI" });
+        var local = MakeLocalQso("K7ABC", BaseTime, Band._20M, Mode.Cw, SyncStatus.LocalOnly);
+        local.StationCallsign = "KB7QOP";
+        await store.Logbook.InsertQsoAsync(local);
+
+        var engine = new QrzSyncEngine(api);
+        await engine.ExecuteSyncAsync(store.Logbook, fullSync: true);
+
+        Assert.Equal("AE7XI", api.LastUploadBookOwner);
+    }
+
+    [Fact]
+    public async Task Upload_makes_only_one_status_call_per_sync()
+    {
+        // Regression: STATUS used to be called twice (once for owner-resolution
+        // before upload, once for metadata refresh in Phase 3). Phase 3 must
+        // reuse the Phase 1.5 result so we don't double-bill the QRZ API.
+        var api = new FakeQrzLogbookApi { StatusOwner = "K7TEST" };
+        var store = CreateStore();
+        await store.Logbook.InsertQsoAsync(
+            MakeLocalQso("K7DEST", BaseTime, Band._20M, Mode.Ft8, SyncStatus.LocalOnly));
+
+        var engine = new QrzSyncEngine(api);
+        await engine.ExecuteSyncAsync(store.Logbook, fullSync: true);
+
+        Assert.Equal(1, api.StatusCallCount);
+    }
+
+    [Fact]
+    public void RewriteStationCallsignForBook_skips_slash_suffix_calls()
+    {
+        var qso = MakeLocalQso("K7ABC", BaseTime, Band._20M, Mode.Cw, SyncStatus.LocalOnly);
+        qso.StationCallsign = "KB7QOP/P";
+
+        AdifCodec.RewriteStationCallsignForBook(qso, "AE7XI");
+
+        Assert.Equal("KB7QOP/P", qso.StationCallsign);
+    }
+
+    [Fact]
+    public void RewriteStationCallsignForBook_does_not_overwrite_existing_operator()
+    {
+        var qso = MakeLocalQso("K7ABC", BaseTime, Band._20M, Mode.Cw, SyncStatus.LocalOnly);
+        qso.StationCallsign = "KB7QOP";
+        qso.StationSnapshot = new StationSnapshot
+        {
+            StationCallsign = "KB7QOP",
+            OperatorCallsign = "W1ZZZ",
+        };
+
+        AdifCodec.RewriteStationCallsignForBook(qso, "AE7XI");
+
+        Assert.Equal("AE7XI", qso.StationCallsign);
+        Assert.Equal("W1ZZZ", qso.StationSnapshot.OperatorCallsign);
+    }
+
     // -- Helpers ------------------------------------------------------------
 
     private static MemoryStorage CreateStore() => new();
@@ -801,9 +899,14 @@ public sealed class QrzSyncEngineTests
             return Task.FromResult(FetchResult);
         }
 
-        public Task<string> UploadQsoAsync(QsoRecord qso)
+        public string? LastUploadBookOwner { get; private set; }
+
+        public string? LastUpdateBookOwner { get; private set; }
+
+        public Task<string> UploadQsoAsync(QsoRecord qso, string? bookOwner = null)
         {
             UploadedQsos.Add(qso);
+            LastUploadBookOwner = bookOwner;
             if (UploadFunc is not null)
             {
                 return UploadFunc(qso);
@@ -812,9 +915,10 @@ public sealed class QrzSyncEngineTests
             return Task.FromResult(UploadLogid);
         }
 
-        public Task<string> UpdateQsoAsync(QsoRecord qso)
+        public Task<string> UpdateQsoAsync(QsoRecord qso, string? bookOwner = null)
         {
             UpdatedQsos.Add(qso);
+            LastUpdateBookOwner = bookOwner;
             return Task.FromResult(UpdateLogid);
         }
 

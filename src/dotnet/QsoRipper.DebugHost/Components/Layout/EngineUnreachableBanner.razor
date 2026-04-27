@@ -1,0 +1,57 @@
+@implements IDisposable
+@inject EngineConnectivityWatcher Watcher
+
+@if (Watcher.IsEngineUnreachable)
+{
+    <div class="text-bg-danger px-3 py-2 d-flex align-items-center gap-3 small">
+        <strong>Engine unreachable.</strong>
+        <span>Endpoint: <code class="text-bg-danger">@(Watcher.LastEndpoint ?? "(unset)")</code></span>
+        @if (!string.IsNullOrWhiteSpace(Watcher.LastError))
+        {
+            <span class="opacity-75">@Watcher.LastError</span>
+        }
+        <button type="button"
+                class="btn btn-sm btn-light ms-auto"
+                disabled="@_retrying"
+                @onclick="RetryAsync">
+            @(_retrying ? "Probing..." : "Retry probe")
+        </button>
+    </div>
+}
+
+@code {
+    private bool _retrying;
+
+    protected override void OnInitialized()
+    {
+        Watcher.StateChanged += HandleStateChanged;
+    }
+
+    public void Dispose()
+    {
+        Watcher.StateChanged -= HandleStateChanged;
+    }
+
+    private void HandleStateChanged(object? sender, EventArgs e)
+    {
+        _ = InvokeAsync(StateHasChanged);
+    }
+
+    private async Task RetryAsync()
+    {
+        if (_retrying)
+        {
+            return;
+        }
+
+        _retrying = true;
+        try
+        {
+            await Watcher.ProbeNowAsync();
+        }
+        finally
+        {
+            _retrying = false;
+        }
+    }
+}

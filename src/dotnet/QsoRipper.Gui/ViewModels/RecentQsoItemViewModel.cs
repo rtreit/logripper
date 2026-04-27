@@ -192,6 +192,19 @@ internal sealed class RecentQsoItemViewModel : ObservableObject, IEditableObject
         set => SetProperty(ref _comment, value);
     }
 
+    /// <summary>
+    /// Read-only display of the captured CW receive WPM (proto field cw_decode_rx_wpm).
+    /// Renders as an em dash when no value is present so the column reads cleanly.
+    /// </summary>
+    public string RxWpmDisplay => _sourceQso.HasCwDecodeRxWpm
+        ? _sourceQso.CwDecodeRxWpm.ToString(CultureInfo.InvariantCulture)
+        : "—";
+
+    /// <summary>
+    /// Numeric sort key for the WPM column. Missing values sort as 0 so they cluster together.
+    /// </summary>
+    public uint RxWpmSortKey => _sourceQso.HasCwDecodeRxWpm ? _sourceQso.CwDecodeRxWpm : 0u;
+
     public string UtcEndDisplay
     {
         get => _utcEndDisplay;
@@ -397,6 +410,8 @@ internal sealed class RecentQsoItemViewModel : ObservableObject, IEditableObject
         State = NoteOrNull(_sourceQso.WorkedState) ?? string.Empty;
         County = ParseCountyName(_sourceQso.WorkedCounty);
         Comment = NoteOrNull(_sourceQso.Comment) ?? string.Empty;
+        OnPropertyChanged(nameof(RxWpmDisplay));
+        OnPropertyChanged(nameof(RxWpmSortKey));
         OnPropertyChanged(nameof(DurationDisplay));
         RecomputeDirty();
     }

@@ -228,7 +228,18 @@ The sync follows a three-phase lifecycle:
 
 2. **Upload phase** — Find all local QSOs with `sync_status` of `SYNC_STATUS_NOT_SYNCED` or `SYNC_STATUS_MODIFIED`. For each, serialize to ADIF and upload via the QRZ logbook API. On success, update `sync_status` to `SYNC_STATUS_SYNCED` and record the `qrz_logid` returned by QRZ.
 
-3. **Metadata phase** — Update the `sync_metadata` record with the current QRZ QSO count, last sync timestamp, and logbook owner callsign.
+   **Previous-callsign rewrite (issue #337).** QRZ logbooks are bound to a single callsign and reject ADIF whose `STATION_CALLSIGN` does not match the logbook owner. Operators who have changed callsigns (e.g. KB7QOP → AE7XI) keep historical QSOs locally with the old call. To avoid those rejections, engines MUST:
+
+   - Fetch the QRZ logbook owner callsign once per sync via QRZ `STATUS` immediately after the download phase. Reuse the same result for the metadata phase below — do not call `STATUS` twice.
+   - If `STATUS` fails or returns an empty owner, fall back to the cached `sync_metadata.qrz_logbook_owner`.
+   - Per upload, when the resolved owner is non-empty and differs (case-insensitive, trimmed) from the QSO's `station_callsign`, rewrite the upload payload only:
+     - Set the payload's `station_callsign` (and `station_snapshot.station_callsign`) to the owner.
+     - If `station_snapshot.operator_callsign` is empty, set it to the original `station_callsign` so the historical operator-of-record is preserved as ADIF `OPERATOR`.
+   - The local stored row MUST NOT be modified by the rewrite. Skip the rewrite entirely when `station_callsign` contains a `/` (portable / mobile / secondary suffix); those callsigns generally belong to a different QRZ logbook.
+
+   *Known caveat:* on the next download, the merge logic for `SYNC_STATUS_SYNCED` rows is remote-wins, so the local `station_callsign` may drift to the book owner. The historical operator survives in `station_snapshot.operator_callsign`. Round-tripping the original via an `APP_QSORIPPER_ORIG_STATION_CALLSIGN` ADIF field on download is planned future work.
+
+3. **Metadata phase** — Update the `sync_metadata` record with the QRZ QSO count, last sync timestamp, and logbook owner callsign reported by the `STATUS` call already fetched in step 2. Because that `STATUS` is taken before the upload phase, the persisted `qrz_qso_count` reflects the pre-upload count; the next `SyncWithQrz` cycle naturally observes the post-upload count.
 
 Stream progress messages throughout all phases so clients can display real-time sync state.
 
@@ -659,7 +670,50 @@ Temporarily overrides the active station profile for the current session.
 
 Removes the session override, reverting to the base active profile.
 
-### 3.8 DeveloperControlService
+### 3.9 GreatCircleService
+
+**Proto file:** `proto/services/great_circle_service.proto`
+
+Computes great-circle geodesics (distance, bearing, sample arc) between two
+points on the sphere. Used by clients to render azimuthal map projections,
+beam-heading indicators, and contact-distance displays.
+
+#### RPCs
+
+| RPC | Request | Response | Mode |
+|---|---|---|---|
+| `ComputeGreatCircle` | `ComputeGreatCircleRequest` | `ComputeGreatCircleResponse` | Unary |
+
+#### ComputeGreatCircle
+
+Computes the great-circle path from `origin` to `target`.
+
+**Request fields:**
+- `GeoReference origin` — required; must contain `coordinates` or `maidenhead`.
+- `GeoReference target` — required; same constraint.
+- `uint32 sample_count` — `0` selects the engine default (64); valid range is `2..=512`; values of `1` or `> 512` are rejected.
+
+**`GeoReference` resolution:**
+- If `coordinates` is present, it is used directly.
+- Otherwise the engine resolves `maidenhead` (4, 6, or 8-character locator, case-insensitive) to the locator's center coordinates.
+- If neither is set, `INVALID_ARGUMENT` is returned.
+
+**Response fields:**
+- `GreatCirclePath path`:
+  - `GeoPoint origin`, `target` — resolved coordinates (after Maidenhead → lat/lon expansion).
+  - `double distance_km` — great-circle distance using a spherical Earth model with `R = 6371.0088 km`.
+  - `optional double initial_bearing_deg`, `final_bearing_deg` — true-north bearings in `[0, 360)`. Both are absent when origin and target are the same point or antipodal (the great circle is non-unique in those cases).
+  - `repeated GeoPoint samples` — `sample_count` evenly-spaced points along the geodesic, including both endpoints.
+
+**Error semantics:**
+- `INVALID_ARGUMENT` — missing reference, unresolvable Maidenhead locator, latitude/longitude out of range, NaN/Inf, or `sample_count` out of range.
+
+**Behavior:**
+- Computation is purely deterministic: identical inputs return bit-identical outputs across engine restarts and across the Rust and .NET implementations within `~1e-3` km / `~1e-3°`.
+- No external I/O; the RPC must complete entirely from in-process math.
+- This service is required, not optional. Engines that lack the math should still expose the RPC and return `UNIMPLEMENTED`, but the reference Rust and .NET engines both implement it.
+
+### 3.10 DeveloperControlService
 
 **Proto file:** `proto/services/developer_control_service.proto`
 
@@ -703,7 +757,7 @@ Resets all runtime configuration to environment/default values.
 - Reload configuration from environment variables and defaults.
 - Return the reset configuration snapshot.
 
-### 3.9 StressControlService (Optional)
+### 3.11 StressControlService (Optional)
 
 **Proto file:** `proto/services/stress_control_service.proto`
 
@@ -1200,6 +1254,8 @@ When DXCC data is available, cascade zone information onto the lookup result if 
    - `QSO_COMPLETE` → `qso_complete` (`Y`/`N`/`NIL`/`?` → `QsoCompletion` enum)
    - `MY_ALTITUDE` → `station_snapshot.altitude_meters`
    - `MY_GRIDSQUARE_EXT` → `station_snapshot.gridsquare_ext`
+   - `APP_QSORIPPER_RX_WPM` → `cw_decode_rx_wpm` (parsed as unsigned integer; non-numeric values fall back to `extra_fields`)
+   - `APP_QSORIPPER_CW_TRANSCRIPT` → `cw_decode_transcript` (decoded CW transcript snapshot for the QSO; empty values are dropped)
    Unrecognized values (e.g., malformed LAT, unknown `QSO_COMPLETE` literal) fall back to `extra_fields` under the original key.
 5. Preserve any other unrecognized ADIF fields in the `extra_fields` map for lossless round-trip.
 6. Generate a `local_id` for each imported record.
@@ -1216,7 +1272,7 @@ See `docs/integrations/adif-specification.md` for the authoritative field-name t
    - `qrz_logid` → `APP_QRZLOG_LOGID`
    - `qrz_bookid` → `APP_QRZLOG_QSO_ID`
    When iterating `extra_fields`, skip keys already covered by these dedicated emissions (`APP_QRZLOG_LOGID`, `APP_QRZ_LOGID`, `APP_QRZLOG_QSO_ID`, `APP_QRZ_BOOKID`) to avoid duplicate ADIF fields.
-4. Emit the normalized ADIF fields from their dedicated proto slots whenever populated (`BAND_RX`, `FREQ_RX`, `LAT`, `LON`, `ALTITUDE`, `GRIDSQUARE_EXT`, `OWNER_CALLSIGN`, `QSO_COMPLETE`, `MY_ALTITUDE`, `MY_GRIDSQUARE_EXT`). When iterating `extra_fields`, skip these same keys so the dedicated proto value always wins and the ADIF output never contains the same field twice.
+4. Emit the normalized ADIF fields from their dedicated proto slots whenever populated (`BAND_RX`, `FREQ_RX`, `LAT`, `LON`, `ALTITUDE`, `GRIDSQUARE_EXT`, `OWNER_CALLSIGN`, `QSO_COMPLETE`, `MY_ALTITUDE`, `MY_GRIDSQUARE_EXT`, `APP_QSORIPPER_RX_WPM`, `APP_QSORIPPER_CW_TRANSCRIPT`). When iterating `extra_fields`, skip these same keys so the dedicated proto value always wins and the ADIF output never contains the same field twice. Engines MUST sanitize `cw_decode_transcript` to printable ASCII (plus CR/LF/tab) before emitting `APP_QSORIPPER_CW_TRANSCRIPT` so the .NET char-count length and Rust byte-count length agree across runtimes.
 5. Include other `extra_fields` to preserve data from previous imports.
 6. Output records delimited by `<eor>`.
 

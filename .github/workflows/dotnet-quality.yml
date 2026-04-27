@@ -4,12 +4,20 @@ on:
   workflow_dispatch:
   workflow_call:
   push:
+    branches:
+      - main
     paths:
       - ".github/workflows/dotnet-quality.yml"
       - "global.json"
       - "src/dotnet/**"
       - "proto/**"
   pull_request:
+
+# PR branches: only the pull_request trigger runs (no duplicate push run that
+# competes for the dotnet-quality status check). Push events still run on main.
+concurrency:
+  group: dotnet-quality-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -35,7 +43,7 @@ jobs:
         run: dotnet build src/dotnet/QsoRipper.slnx
 
       - name: Run tests with coverage
-        run: dotnet test src/dotnet/QsoRipper.slnx --no-build --collect:"XPlat Code Coverage" --settings src/dotnet/CodeCoverage.runsettings --results-directory coverage
+        run: dotnet test src/dotnet/QsoRipper.slnx --no-build --collect:"XPlat Code Coverage" --settings src/dotnet/CodeCoverage.runsettings --results-directory coverage --blame-hang-timeout 3min --blame-hang-dump-type mini -- RunConfiguration.TestSessionTimeout=900000
 
       - name: Install ReportGenerator
         run: dotnet tool install -g dotnet-reportgenerator-globaltool

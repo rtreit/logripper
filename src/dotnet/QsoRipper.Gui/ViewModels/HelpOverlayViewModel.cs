@@ -41,6 +41,7 @@ internal sealed partial class HelpOverlayViewModel : ObservableObject
             new("Ctrl+D / Delete", "Delete selected QSO"),
             new("F5", "Refresh"),
             new("F8", "Callsign card"),
+            new("F9", "CW stats pane"),
             new("Alt+Enter", "Toggle inspector"),
             new("Ctrl++ / Ctrl+-", "Zoom in / out"),
             new("Ctrl+0", "Reset zoom"),

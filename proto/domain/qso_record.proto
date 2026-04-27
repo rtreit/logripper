@@ -123,4 +123,33 @@ message QsoRecord {
   optional string owner_callsign = 106;
   // ADIF QSO_COMPLETE — whether the contact was completed.
   QsoCompletion qso_complete = 107;
+
+  // --- Decoded signal characteristics ---
+  // Estimated receive-side CW sending speed in words per minute, inferred
+  // from decoded audio over the QSO's start..end window. This reflects the
+  // *worked* station's sending speed, not the local operator's transmit
+  // speed. A future `cw_decode_tx_wpm` field will carry the local sending
+  // speed (sourced from CAT keyer-speed query and/or PTT-gated sidetone
+  // decoding); ADIF `SPEED` mapping waits for that field, so this round-1
+  // RX value is exported via `APP_QSORIPPER_RX_WPM`.
+  optional uint32 cw_decode_rx_wpm = 130;
+
+  // Decoded CW transcript text from the worked station's audio over the
+  // QSO's start..end window (concatenated `char` events from the live CW
+  // decoder, with `word` boundaries rendered as spaces and unresolved
+  // symbols rendered as `?`). Auto-filled by the GUI on save when the
+  // QSO is on CW mode and the decoder produced events; otherwise unset.
+  // Editable by the operator on the QSO card so copy errors can be
+  // corrected before saving.
+  //
+  // This is an intentionally lossy "latest snapshot" cache. A future
+  // `cw_transcript_segments` table (per #321) will be the authoritative
+  // store of decoded segments with timing/pitch/lock metadata; this
+  // inline field stays as a denormalized convenience for at-a-glance
+  // display, ADIF export, and offline viewing without a join.
+  //
+  // ADIF interchange: round-trips via the application-defined field
+  // `APP_QSORIPPER_CW_TRANSCRIPT`. There is no standard ADIF field for
+  // a decoded transcript.
+  optional string cw_decode_transcript = 131;
 }

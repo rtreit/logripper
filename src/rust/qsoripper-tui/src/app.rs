@@ -15,6 +15,20 @@ pub(crate) enum RigStatus {
     Disabled,
 }
 
+/// Reachability status of the `QsoRipper` engine over gRPC.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum EngineStatus {
+    /// No probe result yet — typically only seen briefly at startup.
+    Unknown,
+    /// The engine responded successfully to the most recent health probe.
+    Connected,
+    /// The engine could not be reached; the message describes the failure.
+    Unreachable {
+        /// Human-readable failure description (tonic Status message or transport error).
+        message: String,
+    },
+}
+
 /// Display-ready rig control snapshot for the TUI.
 pub(crate) struct RigInfo {
     /// Formatted frequency string (e.g., `"14.225 MHz"`).
@@ -192,7 +206,8 @@ pub(crate) struct App {
     /// Starts `false`; becomes `true` once a callsign has been stable for ~1.5 s.
     /// Cleared on form reset, Esc, and after log/update.
     pub(crate) qso_timer_active: bool,
-
+    /// Reachability of the gRPC engine — updated by a periodic background probe.
+    pub(crate) engine_status: EngineStatus,
 }
 
 impl App {
@@ -219,7 +234,7 @@ impl App {
             endpoint,
             qso_started_at: Instant::now(),
             qso_timer_active: false,
-
+            engine_status: EngineStatus::Unknown,
         }
     }
 
@@ -579,5 +594,60 @@ mod tests {
         app.rig_control_enabled = false;
         app.toggle_rig_control();
         assert!(app.rig_control_enabled);
+    }
+
+    #[test]
+    fn new_app_has_unknown_engine_status() {
+        let app = App::new("http://localhost:50051".to_string());
+        assert_eq!(app.engine_status, EngineStatus::Unknown);
+    }
+
+    #[test]
+    fn engine_status_can_be_updated() {
+        let mut app = App::new("http://localhost:50051".to_string());
+        app.engine_status = EngineStatus::Connected;
+        assert_eq!(app.engine_status, EngineStatus::Connected);
+        app.engine_status = EngineStatus::Unreachable {
+            message: "transport error".to_string(),
+        };
+        assert_eq!(
+            app.engine_status,
+            EngineStatus::Unreachable {
+                message: "transport error".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn engine_status_unreachable_distinguishes_messages() {
+        let a = EngineStatus::Unreachable {
+            message: "timeout".to_string(),
+        };
+        let b = EngineStatus::Unreachable {
+            message: "connection refused".to_string(),
+        };
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn engine_status_unreachable_equal_for_same_message() {
+        let a = EngineStatus::Unreachable {
+            message: "timeout".to_string(),
+        };
+        let b = EngineStatus::Unreachable {
+            message: "timeout".to_string(),
+        };
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn engine_status_variants_are_distinct() {
+        assert_ne!(EngineStatus::Unknown, EngineStatus::Connected);
+        assert_ne!(
+            EngineStatus::Connected,
+            EngineStatus::Unreachable {
+                message: "x".to_string()
+            }
+        );
     }
 }

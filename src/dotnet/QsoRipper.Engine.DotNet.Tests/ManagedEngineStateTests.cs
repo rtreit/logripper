@@ -138,7 +138,10 @@ public sealed class ManagedEngineStateTests : IDisposable
         Assert.Equal(1u, syncResult.UploadedRecords);
         Assert.True(syncResult.Complete);
         Assert.Equal(0u, afterSync.PendingUpload);
-        Assert.Equal(1u, afterSync.QrzQsoCount);
+        // STATUS is fetched once before upload (issue #337 fix), so the count
+        // it reports is the pre-upload count (0). The next sync cycle will
+        // see the post-upload count.
+        Assert.Equal(0u, afterSync.QrzQsoCount);
         Assert.Equal("K7RND", afterSync.QrzLogbookOwner);
     }
 
@@ -643,6 +646,7 @@ public sealed class ManagedEngineStateTests : IDisposable
             "<BAND:3>20M<MODE:3>SSB<BAND_RX:3>40M<FREQ_RX:5>7.075" +
             "<LAT:11>N041 30.000<LON:11>W071 45.500<ALTITUDE:3>150" +
             "<GRIDSQUARE_EXT:2>ab<OWNER_CALLSIGN:4>W1AW<QSO_COMPLETE:1>Y" +
+            "<APP_QSORIPPER_RX_WPM:2>28" +
             "<MY_ALTITUDE:3>550<MY_GRIDSQUARE_EXT:2>bb<EOR>\n");
 
         var imported = state.ImportAdif(payload, refresh: false);
@@ -656,6 +660,8 @@ public sealed class ManagedEngineStateTests : IDisposable
         Assert.Equal("ab", stored.WorkedGridsquareExt);
         Assert.Equal("W1AW", stored.OwnerCallsign);
         Assert.Equal(QsoCompletion.Yes, stored.QsoComplete);
+        Assert.True(stored.HasCwDecodeRxWpm);
+        Assert.Equal(28u, stored.CwDecodeRxWpm);
         Assert.True(stored.HasWorkedLatitude);
         Assert.True(stored.HasWorkedLongitude);
         Assert.NotNull(stored.StationSnapshot);
@@ -670,6 +676,7 @@ public sealed class ManagedEngineStateTests : IDisposable
         Assert.Contains("<GRIDSQUARE_EXT:2>ab", exported, StringComparison.Ordinal);
         Assert.Contains("<OWNER_CALLSIGN:4>W1AW", exported, StringComparison.Ordinal);
         Assert.Contains("<QSO_COMPLETE:1>Y", exported, StringComparison.Ordinal);
+        Assert.Contains("<APP_QSORIPPER_RX_WPM:2>28", exported, StringComparison.Ordinal);
         Assert.Contains("<MY_ALTITUDE:3>550", exported, StringComparison.Ordinal);
         Assert.Contains("<MY_GRIDSQUARE_EXT:2>bb", exported, StringComparison.Ordinal);
         Assert.Contains("<LAT:11>N041 30.000", exported, StringComparison.Ordinal);
@@ -684,6 +691,7 @@ public sealed class ManagedEngineStateTests : IDisposable
         AssertSingleAdifField(exported, "GRIDSQUARE_EXT");
         AssertSingleAdifField(exported, "OWNER_CALLSIGN");
         AssertSingleAdifField(exported, "QSO_COMPLETE");
+        AssertSingleAdifField(exported, "APP_QSORIPPER_RX_WPM");
         AssertSingleAdifField(exported, "MY_ALTITUDE");
         AssertSingleAdifField(exported, "MY_GRIDSQUARE_EXT");
     }
@@ -1196,13 +1204,13 @@ public sealed class ManagedEngineStateTests : IDisposable
         public Task<List<QsoRecord>> FetchQsosAsync(string? sinceDateYmd) =>
             Task.FromResult(new List<QsoRecord>());
 
-        public Task<string> UploadQsoAsync(QsoRecord qso)
+        public Task<string> UploadQsoAsync(QsoRecord qso, string? bookOwner = null)
         {
             var logId = $"FAKE-{Interlocked.Increment(ref _logIdCounter)}";
             return Task.FromResult(logId);
         }
 
-        public Task<string> UpdateQsoAsync(QsoRecord qso)
+        public Task<string> UpdateQsoAsync(QsoRecord qso, string? bookOwner = null)
         {
             var logId = $"FAKE-{Interlocked.Increment(ref _logIdCounter)}";
             return Task.FromResult(logId);
@@ -1219,9 +1227,9 @@ public sealed class ManagedEngineStateTests : IDisposable
         public Task<List<QsoRecord>> FetchQsosAsync(string? sinceDateYmd)
             => Task.FromResult(new List<QsoRecord> { null! });
 
-        public Task<string> UploadQsoAsync(QsoRecord qso) => Task.FromResult("FAKE-1");
+        public Task<string> UploadQsoAsync(QsoRecord qso, string? bookOwner = null) => Task.FromResult("FAKE-1");
 
-        public Task<string> UpdateQsoAsync(QsoRecord qso) => Task.FromResult("FAKE-1");
+        public Task<string> UpdateQsoAsync(QsoRecord qso, string? bookOwner = null) => Task.FromResult("FAKE-1");
 
         public Task<QrzLogbookStatus> GetStatusAsync() =>
             Task.FromResult(new QrzLogbookStatus("K7RND", 0));

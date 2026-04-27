@@ -53,4 +53,10 @@ internal interface IEngineClient
     Task<GetRigStatusResponse> GetRigStatusAsync(CancellationToken ct = default);
 
     Task<GetCurrentSpaceWeatherResponse> GetCurrentSpaceWeatherAsync(CancellationToken ct = default);
+
+    Task<ComputeGreatCircleResponse> ComputeGreatCircleAsync(
+        ComputeGreatCircleRequest request,
+        CancellationToken ct = default);
+
+    Task<GetActiveStationContextResponse> GetActiveStationContextAsync(CancellationToken ct = default);
 }

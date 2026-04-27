@@ -19,6 +19,8 @@ public sealed class FullQsoCardNavigationTests
     [InlineData(Key.NumPad5, 4)]
     [InlineData(Key.D6, 5)]
     [InlineData(Key.NumPad6, 5)]
+    [InlineData(Key.D7, 6)]
+    [InlineData(Key.NumPad7, 6)]
     public void Alt_digit_shortcuts_jump_to_expected_section(Key key, int expectedIndex)
     {
         var handled = FullQsoCardNavigation.TryResolve(

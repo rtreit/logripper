@@ -373,6 +373,74 @@ public sealed class FullQsoCardViewModelTests
         Assert.Equal("WA", card.WorkedState);
     }
 
+    [Fact]
+    public void CwTranscriptSummaryReportsNoDataWhenBothFieldsEmpty()
+    {
+        var engine = new RecordingEngineClient();
+        var card = FullQsoCardViewModel.ForNew(engine, new QsoLoggerViewModel(engine));
+
+        Assert.False(card.HasCwTranscriptContent);
+        Assert.Equal("No CW decoder data captured.", card.CwTranscriptSummary);
+        Assert.Equal(string.Empty, card.CwTranscriptPreview);
+        Assert.Equal("CW decoder (RX)", card.CwTranscriptSourceBadge);
+    }
+
+    [Fact]
+    public void CwTranscriptSummaryCombinesWpmAndCharCount()
+    {
+        var engine = new RecordingEngineClient();
+        var card = FullQsoCardViewModel.ForNew(engine, new QsoLoggerViewModel(engine));
+
+        card.CwDecodeRxWpmText = "23";
+        card.CwDecodeTranscript = "CQ CQ DE K7RND";
+
+        Assert.True(card.HasCwTranscriptContent);
+        Assert.Equal("23 WPM \u00B7 14 chars", card.CwTranscriptSummary);
+        Assert.Equal("CW decoder (RX) \u00B7 23 WPM", card.CwTranscriptSourceBadge);
+        Assert.Equal("CQ CQ DE K7RND", card.CwTranscriptPreview);
+    }
+
+    [Fact]
+    public void CwTranscriptPreviewCollapsesNewlinesAndTruncates()
+    {
+        var engine = new RecordingEngineClient();
+        var card = FullQsoCardViewModel.ForNew(engine, new QsoLoggerViewModel(engine));
+
+        card.CwDecodeTranscript = string.Concat("line1\r\nline2 ", new string('x', 200));
+
+        var preview = card.CwTranscriptPreview;
+        Assert.Equal(80, preview.Length);
+        Assert.EndsWith("\u2026", preview, StringComparison.Ordinal);
+        Assert.DoesNotContain('\n', preview);
+        Assert.DoesNotContain('\r', preview);
+    }
+
+    [Fact]
+    public void ShowTranscriptTabCommandSelectsTranscriptTab()
+    {
+        var engine = new RecordingEngineClient();
+        var card = FullQsoCardViewModel.ForNew(engine, new QsoLoggerViewModel(engine));
+
+        Assert.Equal(0, card.SelectedTabIndex);
+        card.ShowTranscriptTabCommand.Execute(null);
+        Assert.Equal(5, card.SelectedTabIndex);
+    }
+
+    [Fact]
+    public void EditingCwTranscriptRaisesSummaryAndPreviewChangeNotifications()
+    {
+        var engine = new RecordingEngineClient();
+        var card = FullQsoCardViewModel.ForNew(engine, new QsoLoggerViewModel(engine));
+        var raised = new List<string?>();
+        card.PropertyChanged += (_, e) => raised.Add(e.PropertyName);
+
+        card.CwDecodeTranscript = "TEST";
+
+        Assert.Contains(nameof(FullQsoCardViewModel.CwTranscriptSummary), raised);
+        Assert.Contains(nameof(FullQsoCardViewModel.CwTranscriptPreview), raised);
+        Assert.Contains(nameof(FullQsoCardViewModel.HasCwTranscriptContent), raised);
+    }
+
     private static async Task WaitUntilAsync(Func<bool> predicate, TimeSpan timeout)
     {
         var deadline = DateTime.UtcNow + timeout;
@@ -479,6 +547,8 @@ public sealed class FullQsoCardViewModelTests
 
         public Task<GetCurrentSpaceWeatherResponse> GetCurrentSpaceWeatherAsync(CancellationToken ct = default) =>
             Task.FromResult(new GetCurrentSpaceWeatherResponse());
+        public Task<ComputeGreatCircleResponse> ComputeGreatCircleAsync(ComputeGreatCircleRequest request, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task<GetActiveStationContextResponse> GetActiveStationContextAsync(CancellationToken ct = default) => throw new NotImplementedException();
         public Task<PurgeDeletedQsosResponse> PurgeDeletedQsosAsync(IReadOnlyList<string>? localIds = null, Timestamp? olderThan = null, bool includePendingRemoteDeletes = false, CancellationToken ct = default) => throw new NotImplementedException();
     }
 }

@@ -91,6 +91,73 @@ internal static class AdifCodec
     }
 
     /// <summary>
+    /// QRZ Logbook rejects uploads whose <c>STATION_CALLSIGN</c> does not match
+    /// the callsign the logbook is registered to. Operators who have changed
+    /// callsigns (e.g. KB7QOP → AE7XI) keep historical QSOs locally with the
+    /// old call. Without rewriting, every such QSO fails with "wrong
+    /// station_callsign for this logbook".
+    /// <para>
+    /// Mirrors the Rust helper
+    /// <c>qsoripper-core::qrz_logbook::rewrite_station_callsign_for_book</c>.
+    /// When the book owner is known and differs (case-insensitive, trimmed)
+    /// from the QSO's <see cref="QsoRecord.StationCallsign"/>:
+    /// </para>
+    /// <list type="bullet">
+    ///   <item><description><c>StationCallsign</c> is set to the book owner.</description></item>
+    ///   <item><description>The station snapshot's <c>StationCallsign</c> is updated too
+    ///     (the snapshot is what <see cref="WriteAdifFields"/> emits).</description></item>
+    ///   <item><description>The original station callsign is preserved as <c>OPERATOR</c>
+    ///     (via <c>StationSnapshot.OperatorCallsign</c>) when no operator was recorded.</description></item>
+    /// </list>
+    /// <para>Skipped (payload left untouched) when:</para>
+    /// <list type="bullet">
+    ///   <item><description>book owner is empty/missing</description></item>
+    ///   <item><description><c>StationCallsign</c> is empty/missing</description></item>
+    ///   <item><description><c>StationCallsign</c> contains a <c>/</c> (portable / mobile /
+    ///     secondary suffix) — these typically belong to a different QRZ logbook.</description></item>
+    /// </list>
+    /// <para>
+    /// This mutates <paramref name="prepared"/> in place; callers must clone the
+    /// QSO first if local storage must remain untouched.
+    /// </para>
+    /// </summary>
+    internal static void RewriteStationCallsignForBook(QsoRecord prepared, string? bookOwner)
+    {
+        ArgumentNullException.ThrowIfNull(prepared);
+
+        if (string.IsNullOrWhiteSpace(bookOwner))
+        {
+            return;
+        }
+
+        var owner = bookOwner.Trim();
+        var original = prepared.StationCallsign?.Trim() ?? string.Empty;
+        if (string.IsNullOrEmpty(original))
+        {
+            return;
+        }
+
+        if (original.Contains('/', StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        if (string.Equals(original, owner, StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        prepared.StationCallsign = owner;
+        prepared.StationSnapshot ??= new StationSnapshot();
+        prepared.StationSnapshot.StationCallsign = owner;
+
+        if (string.IsNullOrWhiteSpace(prepared.StationSnapshot.OperatorCallsign))
+        {
+            prepared.StationSnapshot.OperatorCallsign = original;
+        }
+    }
+
+    /// <summary>
     /// Serialize multiple QSOs with an optional ADIF header.
     /// </summary>
     internal static byte[] SerializeAdif(IEnumerable<QsoRecord> qsos, bool includeHeader)
@@ -389,6 +456,28 @@ internal static class AdifCodec
                     }
 
                     break;
+                case "APP_QSORIPPER_RX_WPM":
+                    if (uint.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var rxWpm))
+                    {
+                        qso.CwDecodeRxWpm = rxWpm;
+                    }
+                    else
+                    {
+                        qso.ExtraFields[key] = value;
+                    }
+
+                    break;
+                case "APP_QSORIPPER_CW_TRANSCRIPT":
+                    // Decoded CW transcript text — accepted as-is. Empty
+                    // values are dropped to avoid a noisy `HasCwDecodeTranscript`
+                    // flag for round-trips through tools that emit zero-length
+                    // user-defined fields.
+                    if (!string.IsNullOrEmpty(value))
+                    {
+                        qso.CwDecodeTranscript = value;
+                    }
+
+                    break;
                 case "COUNTRY":
                     qso.WorkedCountry = value;
                     break;
@@ -640,6 +729,20 @@ internal static class AdifCodec
             AppendField(sb, "QSO_COMPLETE", completionStr);
         }
 
+        if (qso.HasCwDecodeRxWpm)
+        {
+            AppendField(sb, "APP_QSORIPPER_RX_WPM", qso.CwDecodeRxWpm.ToString(CultureInfo.InvariantCulture));
+        }
+
+        if (qso.HasCwDecodeTranscript && !string.IsNullOrEmpty(qso.CwDecodeTranscript))
+        {
+            // ADIF length-delimited fields tolerate `<`, `>`, and embedded
+            // newlines. Sanitize ASCII control bytes (defensive — the
+            // decoder shouldn't emit them but the field is operator-editable)
+            // and emit verbatim.
+            AppendField(sb, "APP_QSORIPPER_CW_TRANSCRIPT", SanitizeCwTranscriptForAdif(qso.CwDecodeTranscript));
+        }
+
         AppendOptional(sb, "COUNTRY", qso.WorkedCountry);
 
         if (qso.HasWorkedDxcc)
@@ -713,7 +816,12 @@ internal static class AdifCodec
         string.Equals(key, "APP_QRZLOG_LOGID", StringComparison.OrdinalIgnoreCase) ||
         string.Equals(key, "APP_QRZ_LOGID", StringComparison.OrdinalIgnoreCase) ||
         string.Equals(key, "APP_QRZLOG_QSO_ID", StringComparison.OrdinalIgnoreCase) ||
-        string.Equals(key, "APP_QRZ_BOOKID", StringComparison.OrdinalIgnoreCase);
+        string.Equals(key, "APP_QRZ_BOOKID", StringComparison.OrdinalIgnoreCase) ||
+        // QsoRipper-owned app keys are emitted from their dedicated proto
+        // fields above; never re-emit them from ExtraFields, even if a
+        // caller seeded a stale value there.
+        string.Equals(key, "APP_QSORIPPER_RX_WPM", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(key, "APP_QSORIPPER_CW_TRANSCRIPT", StringComparison.OrdinalIgnoreCase);
 
     // -- Helpers -------------------------------------------------------------
 
@@ -734,6 +842,47 @@ internal static class AdifCodec
         {
             AppendField(sb, key, value);
         }
+    }
+
+    /// <summary>
+    /// Strip ASCII control bytes (other than CR/LF/tab) from operator-editable
+    /// CW transcript text before writing to ADIF. The .NET writer uses
+    /// <c>value.Length</c> (chars) for the length prefix while the Rust writer
+    /// uses byte length; restricting payload to printable ASCII + CR/LF/tab
+    /// keeps both runtimes' length math consistent and avoids round-trip drift.
+    /// </summary>
+    internal static string SanitizeCwTranscriptForAdif(string value)
+    {
+        if (string.IsNullOrEmpty(value))
+        {
+            return string.Empty;
+        }
+
+        var sb = new StringBuilder(value.Length);
+        foreach (var c in value)
+        {
+            if (c == '\r' || c == '\n' || c == '\t')
+            {
+                sb.Append(c);
+                continue;
+            }
+
+            if (c < 0x20 || c == 0x7F)
+            {
+                continue;
+            }
+
+            // Drop non-ASCII so byte length and char length agree
+            // across runtimes when the field is round-tripped.
+            if (c > 0x7E)
+            {
+                continue;
+            }
+
+            sb.Append(c);
+        }
+
+        return sb.ToString();
     }
 
     private static bool TryNormalizeQrzPower(string? value, out string normalized)

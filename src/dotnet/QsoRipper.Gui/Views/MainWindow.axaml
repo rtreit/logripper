@@ -26,12 +26,16 @@
     <KeyBinding Gesture="Ctrl+H" Command="{Binding ToggleColumnChooserCommand}" />
     <KeyBinding Gesture="Alt+Enter" Command="{Binding ToggleInspectorCommand}" />
     <KeyBinding Gesture="F8" Command="{Binding OpenCallsignCardCommand}" />
+    <KeyBinding Gesture="F9" Command="{Binding ToggleCwStatsPaneCommand}" />
+    <KeyBinding Gesture="Ctrl+Shift+A" Command="{Binding MarkCwAnchorHeardCommand}" />
     <KeyBinding Gesture="F6" Command="{Binding SyncNowCommand}" />
     <KeyBinding Gesture="Ctrl+Enter" Command="{Binding Logger.LogQsoCommand}" />
     <KeyBinding Gesture="F10" Command="{Binding Logger.LogQsoCommand}" />
     <KeyBinding Gesture="Ctrl+N" Command="{Binding FocusLoggerCommand}" />
     <KeyBinding Gesture="Ctrl+R" Command="{Binding ToggleRigControlCommand}" />
     <KeyBinding Gesture="Ctrl+W" Command="{Binding ToggleSpaceWeatherCommand}" />
+    <KeyBinding Gesture="Ctrl+Shift+W" Command="{Binding ToggleCwWpmStatusBarCommand}" />
+    <KeyBinding Gesture="Ctrl+Alt+W" Command="{Binding RestartCwDecoderCommand}" />
     <KeyBinding Gesture="Alt+A" Command="{Binding OpenQsoCardCommand}" />
     <KeyBinding Gesture="Ctrl+L" Command="{Binding OpenQsoCardCommand}" />
   </Window.KeyBindings>
@@ -173,6 +177,8 @@
                   Command="{Binding OpenQsoCardCommand}" />
         <MenuItem Header="Callsign _Card" InputGesture="F8"
                   Command="{Binding OpenCallsignCardCommand}" />
+        <MenuItem Header="C_W Stats Pane" InputGesture="F9"
+                  Command="{Binding ToggleCwStatsPaneCommand}" />
       </MenuItem>
       <MenuItem Header="_Tools">
         <MenuItem Header="Sync _Now" InputGesture="F6"
@@ -201,6 +207,20 @@
                  VerticalAlignment="Center"
                  Margin="0,0,12,0" />
       </Panel>
+
+    <Border DockPanel.Dock="Top"
+            x:Name="EngineUnreachableBanner"
+            AutomationProperties.AutomationId="EngineUnreachableBanner"
+            Background="#B00020"
+            Padding="12,6"
+            Focusable="False"
+            IsHitTestVisible="False"
+            IsVisible="{Binding IsEngineUnreachable}">
+      <TextBlock Text="{Binding EngineUnreachableMessage}"
+                 Foreground="White"
+                 FontWeight="SemiBold"
+                 TextWrapping="Wrap" />
+    </Border>
 
     <Panel>
       <Grid RowDefinitions="Auto,Auto,*,Auto"
@@ -422,6 +442,12 @@
                            FontSize="11" Opacity="0.7"
                            FontFamily="Cascadia Mono, Consolas, monospace" />
               </Button>
+              <TextBlock Text="{Binding CwDecoderStatusText}"
+                         FontSize="11"
+                         IsVisible="{Binding IsCwWpmStatusBarVisible}"
+                         Opacity="{Binding CwDecoderStatusOpacity}"
+                         ToolTip.Tip="CW WPM live readout — toggle Ctrl+Shift+W · reset decoder Ctrl+Alt+W · configure source in Settings → Display"
+                         FontFamily="Cascadia Mono, Consolas, monospace" />
               <TextBlock Text="{Binding SpaceWeatherText}"
                          FontSize="11" Opacity="0.7"
                          IsVisible="{Binding IsSpaceWeatherVisible}"
@@ -772,6 +798,13 @@
                                       SortMemberPath="Continent"
                                       IsReadOnly="True"
                                       IsVisible="False" />
+                  <DataGridTextColumn Header="WPM"
+                                      Width="64"
+                                      MinWidth="48"
+                                      Binding="{ReflectionBinding RxWpmDisplay}"
+                                      SortMemberPath="RxWpmSortKey"
+                                      IsReadOnly="True"
+                                      IsVisible="False" />
                 </DataGrid.Columns>
               </DataGrid>
 
@@ -1001,6 +1034,20 @@
                         VerticalAlignment="Top"
                         Margin="0,8,14,8">
                   <v:CallsignCardView />
+                </Border>
+              </DataTemplate>
+            </ContentControl.DataTemplates>
+          </ContentControl>
+
+          <!-- CW Stats pane overlay (F9) -->
+          <ContentControl Content="{Binding CwStatsPane}">
+            <ContentControl.DataTemplates>
+              <DataTemplate x:DataType="vm:CwStatsPaneViewModel">
+                <Border AutomationProperties.AutomationId="CwStatsPanePanel"
+                        HorizontalAlignment="Right"
+                        VerticalAlignment="Bottom"
+                        Margin="0,8,14,46">
+                  <v:CwStatsPaneView />
                 </Border>
               </DataTemplate>
             </ContentControl.DataTemplates>

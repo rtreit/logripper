@@ -1,0 +1,199 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:QsoRipper.Gui.ViewModels"
+             xmlns:automation="clr-namespace:Avalonia.Automation;assembly=Avalonia.Controls"
+             x:Class="QsoRipper.Gui.Views.CwStatsPaneView"
+             x:DataType="vm:CwStatsPaneViewModel">
+
+  <UserControl.Styles>
+    <Style Selector="TextBlock.label">
+      <Setter Property="FontSize" Value="11" />
+      <Setter Property="Foreground" Value="#888888" />
+      <Setter Property="Margin" Value="0,0,8,0" />
+      <Setter Property="VerticalAlignment" Value="Center" />
+    </Style>
+    <Style Selector="TextBlock.value">
+      <Setter Property="FontSize" Value="14" />
+      <Setter Property="FontFamily" Value="Cascadia Mono, Consolas, monospace" />
+      <Setter Property="Foreground" Value="White" />
+      <Setter Property="VerticalAlignment" Value="Center" />
+    </Style>
+    <Style Selector="TextBlock.bigvalue">
+      <Setter Property="FontSize" Value="22" />
+      <Setter Property="FontWeight" Value="SemiBold" />
+      <Setter Property="FontFamily" Value="Cascadia Mono, Consolas, monospace" />
+      <Setter Property="Foreground" Value="#22dd88" />
+    </Style>
+    <!-- Stale modifier: dim the value when IsLocked = false so the
+         operator can see at a glance that the displayed numbers are no
+         longer being refreshed by a live decode. -->
+    <Style Selector="TextBlock.bigvalue.stale">
+      <Setter Property="Foreground" Value="#445566" />
+    </Style>
+    <Style Selector="TextBlock.decoded">
+      <Setter Property="Foreground" Value="#bbeebb" />
+    </Style>
+    <Style Selector="TextBlock.decoded.stale">
+      <Setter Property="Foreground" Value="#446644" />
+    </Style>
+    <!-- Lock badge: green dot when locked, dim when not. -->
+    <Style Selector="TextBlock.badge">
+      <Setter Property="FontSize" Value="11" />
+      <Setter Property="FontWeight" Value="SemiBold" />
+      <Setter Property="FontFamily" Value="Cascadia Mono, Consolas, monospace" />
+      <Setter Property="Foreground" Value="#666677" />
+      <Setter Property="VerticalAlignment" Value="Center" />
+    </Style>
+    <Style Selector="TextBlock.badge.live">
+      <Setter Property="Foreground" Value="#22dd88" />
+    </Style>
+    <!-- Compact close button styled to match a window-chrome X. -->
+    <Style Selector="Button.closeBtn">
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="Foreground" Value="#888899" />
+      <Setter Property="BorderThickness" Value="0" />
+      <Setter Property="Padding" Value="0" />
+      <Setter Property="Width" Value="22" />
+      <Setter Property="Height" Value="22" />
+      <Setter Property="FontSize" Value="13" />
+      <Setter Property="FontWeight" Value="Bold" />
+      <Setter Property="HorizontalContentAlignment" Value="Center" />
+      <Setter Property="VerticalContentAlignment" Value="Center" />
+      <Setter Property="CornerRadius" Value="2" />
+    </Style>
+    <Style Selector="Button.closeBtn:pointerover /template/ ContentPresenter">
+      <Setter Property="Background" Value="#cc3333" />
+      <Setter Property="TextElement.Foreground" Value="White" />
+    </Style>
+    <Style Selector="Button.actionBtn">
+      <Setter Property="Padding" Value="8,3" />
+      <Setter Property="FontSize" Value="11" />
+      <Setter Property="HorizontalAlignment" Value="Left" />
+    </Style>
+  </UserControl.Styles>
+
+  <!-- Outer border has a fixed width AND fixed height so the pane
+       footprint never jumps around as decoded text streams in.
+       The decoded box scrolls internally instead of resizing the pane. -->
+  <Border Background="#202028"
+          BorderBrush="#0096D6"
+          BorderThickness="1"
+           CornerRadius="4"
+           Padding="14,10,14,12"
+           Width="360"
+           Height="340"
+           automation:AutomationProperties.AutomationId="CwStatsPane">
+    <DockPanel LastChildFill="True">
+
+      <!-- Header row: title + lock badge on left, close button pinned
+           to the upper-right corner. DockPanel guarantees the close
+           button always sits in the same spot regardless of header
+           text width. -->
+      <Grid DockPanel.Dock="Top"
+            ColumnDefinitions="Auto,*,Auto"
+            Margin="0,0,0,6">
+        <TextBlock Grid.Column="0"
+                   Text="CW Stats"
+                   FontSize="13"
+                   FontWeight="SemiBold"
+                   Foreground="#aaaacc"
+                   VerticalAlignment="Center" />
+        <TextBlock Grid.Column="1"
+                   Margin="10,0,0,0"
+                   Classes="badge"
+                   Classes.live="{Binding IsLocked}"
+                   Text="{Binding LockBadgeText}"
+                   automation:AutomationProperties.AutomationId="CwStatsLockBadge" />
+        <Button Grid.Column="2"
+                Classes="closeBtn"
+                Content="✕"
+                Command="{Binding CloseCommand}"
+                ToolTip.Tip="Close (Esc or F9)"
+                automation:AutomationProperties.AutomationId="CwStatsClose" />
+      </Grid>
+
+      <Border DockPanel.Dock="Top" Height="1" Background="#333355" Margin="0,0,0,6" />
+
+      <!-- Status text pinned to the bottom so it can never push other
+           rows around. -->
+      <TextBlock DockPanel.Dock="Bottom"
+                 Text="{Binding StatusText}"
+                 FontSize="10.5"
+                 Foreground="#888888"
+                 TextTrimming="CharacterEllipsis"
+                 Margin="0,6,0,0" />
+
+      <!-- WPM block pinned just above the status text so the operator's
+           eye lands on it consistently regardless of decoded-text
+           length. -->
+      <Border DockPanel.Dock="Bottom" Height="1" Background="#333355" Margin="0,6,0,0" />
+      <DockPanel DockPanel.Dock="Bottom" LastChildFill="True" Margin="0,4,0,0">
+        <TextBlock DockPanel.Dock="Left" Classes="label" Text="WPM" />
+        <TextBlock Classes="bigvalue"
+                   Classes.stale="{Binding !IsLocked}"
+                   HorizontalAlignment="Right"
+                   Text="{Binding WpmText}"
+                   automation:AutomationProperties.AutomationId="CwStatsWpm" />
+      </DockPanel>
+
+      <!-- Stats grid + decoded text fill the middle. The decoded box
+           has a fixed height so the overall pane stays exactly 320px
+           tall even when the decoded buffer is empty vs. full. -->
+      <StackPanel Spacing="6">
+        <Grid ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto,Auto,Auto" >
+          <TextBlock Grid.Row="0" Grid.Column="0" Classes="label" Text="State" />
+          <TextBlock Grid.Row="0" Grid.Column="1" Classes="value"
+                     Text="{Binding ConfidenceText}"
+                     automation:AutomationProperties.AutomationId="CwStatsConfidence" />
+
+          <TextBlock Grid.Row="1" Grid.Column="0" Classes="label" Text="Pitch" />
+          <TextBlock Grid.Row="1" Grid.Column="1" Classes="value" Text="{Binding PitchText}" />
+
+          <TextBlock Grid.Row="2" Grid.Column="0" Classes="label" Text="Power" />
+          <TextBlock Grid.Row="2" Grid.Column="1" Classes="value" Text="{Binding PowerText}" />
+
+          <TextBlock Grid.Row="3" Grid.Column="0" Classes="label" Text="Garbled" />
+          <TextBlock Grid.Row="3" Grid.Column="1" Classes="value" Foreground="#cc8866"
+                     Text="{Binding LastGarbledText}" />
+         </Grid>
+
+         <Border Height="1" Background="#333355" />
+
+         <DockPanel>
+           <Button DockPanel.Dock="Left"
+                   Classes="actionBtn"
+                   Content="Anchor heard"
+                   Command="{Binding MarkAnchorHeardCommand}"
+                   IsEnabled="{Binding IsLive}"
+                   ToolTip.Tip="Manually start mid-QSO decoding (Ctrl+Shift+A)"
+                   automation:AutomationProperties.AutomationId="CwStatsAnchorHeard" />
+           <TextBlock Margin="8,0,0,0"
+                      VerticalAlignment="Center"
+                      FontSize="10.5"
+                      Foreground="#777788"
+                      Text="Ctrl+Shift+A" />
+         </DockPanel>
+
+         <TextBlock Classes="label" Text="Decoded" />
+        <Border Background="#101018"
+                BorderBrush="#333355"
+                BorderThickness="1"
+                CornerRadius="2"
+                Padding="6,4"
+                Height="80"
+                ClipToBounds="True">
+          <ScrollViewer HorizontalScrollBarVisibility="Disabled"
+                        VerticalScrollBarVisibility="Auto">
+            <TextBlock Text="{Binding DecodedText}"
+                       Classes="decoded"
+                       Classes.stale="{Binding !IsLocked}"
+                       FontFamily="Cascadia Mono, Consolas, monospace"
+                       FontSize="12.5"
+                       TextWrapping="Wrap"
+                       automation:AutomationProperties.AutomationId="CwStatsDecoded" />
+          </ScrollViewer>
+        </Border>
+      </StackPanel>
+    </DockPanel>
+  </Border>
+</UserControl>

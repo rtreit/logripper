@@ -17,7 +17,15 @@ public interface IQrzLogbookApi
     /// Upload a single QSO to QRZ via the INSERT action.
     /// Returns the QRZ-assigned LOGID on success.
     /// </summary>
-    Task<string> UploadQsoAsync(QsoRecord qso);
+    /// <param name="qso">The QSO record to upload.</param>
+    /// <param name="bookOwner">
+    /// Optional QRZ logbook owner callsign (from a fresh STATUS call, falling back to
+    /// cached <c>SyncMetadata.QrzLogbookOwner</c>). When provided and different from
+    /// <c>qso.StationCallsign</c>, the upload payload's <c>STATION_CALLSIGN</c> is
+    /// rewritten to the owner so QRZ accepts QSOs logged under a previous callsign.
+    /// The local QSO is never modified.
+    /// </param>
+    Task<string> UploadQsoAsync(QsoRecord qso, string? bookOwner = null);
 
     /// <summary>
     /// Update an existing QSO on QRZ via the REPLACE action.
@@ -25,7 +33,13 @@ public interface IQrzLogbookApi
     /// that identifies the remote record to overwrite.
     /// Returns the QRZ LOGID on success.
     /// </summary>
-    Task<string> UpdateQsoAsync(QsoRecord qso);
+    /// <param name="qso">The QSO record to update.</param>
+    /// <param name="bookOwner">
+    /// Optional QRZ logbook owner callsign — same semantics as
+    /// <see cref="UploadQsoAsync"/>: rewrites the upload payload's
+    /// <c>STATION_CALLSIGN</c> when the QSO was logged under a previous callsign.
+    /// </param>
+    Task<string> UpdateQsoAsync(QsoRecord qso, string? bookOwner = null);
 
     /// <summary>
     /// Calls the QRZ Logbook <c>STATUS</c> action and returns the authoritative

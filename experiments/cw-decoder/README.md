@@ -9,6 +9,66 @@ The project has converged on two parallel goals:
 
 Today, the reference path is the causal `ditdah` baseline. The custom streaming decoder has improved substantially, but it is still not the only truth source and should not replace corpus-driven evaluation yet.
 
+> **Integration status (round 1, issue #321)**: the production GUI now hosts the
+> `cw-decoder` binary as a subprocess and auto-fills `QsoRecord.cw_decode_rx_wpm`
+> on logged CW QSOs (time-weighted mean over the QSO start/end window, ADIF
+> field `APP_QSORIPPER_RX_WPM`). See
+> `src\dotnet\QsoRipper.Gui\Services\CwDecoderProcessSampleSource.cs`,
+> `src\dotnet\QsoRipper.Gui\Services\CwQsoWpmAggregator.cs`, and the
+> **Settings → Display → Monitor radio** section in the main window.
+> Round 2 will move the decoder behind an engine-side `CwDecodeService`
+> so all clients can consume the same stream.
+>
+> **Fresh-user prerequisites for the radio monitor to do anything:**
+>
+> 1. Build the decoder once: from `experiments\cw-decoder\` run
+>    `cargo build --release` (this folder is a stand-alone Cargo workspace and
+>    is **not** built by the main `cargo build` in `src\rust\`). Built outputs
+>    land in `experiments\cw-decoder\target\release\cw-decoder.exe`.
+> 2. Either leave the binary at that default location (the GUI walks up from
+>    its base directory looking for it) or set the `CW_DECODER_EXE` env var to
+>    an absolute path.
+> 3. Allow the application access to a capture device. The decoder uses the
+>    OS default capture device unless you pick a specific one in the dropdown.
+> 4. Open **Settings → Display** in the GUI and tick *Enable radio monitor
+>    (auto-fills CW WPM on logged QSOs)*. Pick a capture device from the
+>    dropdown — physical inputs (microphones, USB Audio CODEC dongles) appear
+>    as plain device names; system output devices that can be tapped via
+>    WASAPI loopback appear with a `(system output / loopback)` suffix so you
+>    can validate without a radio by playing audio through your speakers.
+>    Save. Optionally tick *Show CW WPM in the status bar* (toggle live with
+>    `Ctrl+Shift+W`) to see the live WPM readout, which dims when the monitor
+>    is off as a reminder. If the decoder gets "stuck" on a wrong baseline
+>    (e.g. a slow station hands off to a fast one and the dot/dash estimator
+>    doesn't follow), press `Ctrl+Alt+W` to restart the decoder process and
+>    let the confidence state machine re-acquire from scratch.
+>
+> If the binary cannot be found, the monitor toggle silently flips back off
+> and the status row reports `CW WPM: decoder not built`. If the binary is
+> found but launching fails (e.g. cpal cannot open the capture device), the
+> status row reports the underlying error and the toggle flips off.
+>
+> **Validating the GUI without a radio (loopback / file playback):**
+>
+> 1. Build the decoder (`cargo build --release` in `experiments\cw-decoder`).
+> 2. Open **Settings → Display → Monitor radio**, enable the monitor, and
+>    pick a `(system output / loopback)` entry from the *Capture device*
+>    dropdown — for example *Speakers (Realtek)  (system output / loopback)*.
+>    The dropdown auto-detects the loopback case so you don't need to know
+>    the underlying WASAPI plumbing.
+> 3. Play a CW practice clip through your speakers. The status row (when
+>    enabled with `Ctrl+Shift+W`) reports a live WPM.
+> 4. Cross-platform alternative: install VB-Audio Cable or similar, route
+>    system output to the cable, and pick the cable's *input* entry from the
+>    dropdown (the plain non-loopback variant).
+> 5. List candidate device names from the command line with
+>    `experiments\cw-decoder\target\release\cw-decoder.exe devices` (add
+>    `--json` for machine-readable output that mirrors the GUI dropdown) —
+>    this prints both input devices and the output devices that are usable
+>    as loopback targets.
+> 6. Log a CW QSO during playback and confirm `cw_decode_rx_wpm` is
+>    populated on the new row in the recent-QSO grid.
+
 ## Current architecture
 
 ### Core binaries
@@ -20,7 +80,7 @@ Main experiment executable. It currently exposes several surfaces:
 - **Offline decode**
   - `file` — single-pass or sliding-window whole-file decode through `ditdah`
 - **Live capture**
-  - `devices` — list available CPAL input devices
+  - `devices` — list available CPAL input devices (add `--json` for machine-readable output that includes both inputs and loopback-capable outputs)
   - `live` — TUI-driven capture + rolling-window `ditdah` decode (legacy interactive surface)
 - **Custom streaming decoder**
   - `stream-file` — file-driven streaming decode with optional NDJSON event output and live `--stdin-control` config updates
@@ -467,6 +527,84 @@ The experiment no longer depends on shell-only tuning:
 - Decode tab can record live audio and replay it offline for CER comparison
 - Decode and Labeling now share inline audio playback instead of launching an external media player
 - CW SCOPE now shows a moving signal profile/playhead during playback
+
+### Integration with the QsoRipper GUI (Round 1, PR #324)
+
+The QsoRipper desktop GUI (`src\dotnet\QsoRipper.Gui`) hosts `cw-decoder.exe`
+as a subprocess (`stream-live --json`) and consumes the NDJSON event stream
+to drive two operator-facing surfaces:
+
+- **CW WPM auto-fill**: when a CW QSO is logged, the time-weighted mean WPM
+  over the QSO start→end window is written to `QsoRecord.cw_decode_rx_wpm`.
+- **F9 CW Stats pane**: live overlay showing the current confidence/lock
+  state, signal pitch (Hz), instantaneous WPM, last decoded characters and
+  the most recent garbled symbol. Driven entirely by the same NDJSON stream
+  the CW Scope tooling uses.
+
+The episode boundary for both surfaces is **operator activity, not decoder
+lock**: the QSO clock starts the moment the operator first types a callsign
+and ends on save or clear. The decoder process itself runs continuously
+whenever Radio Monitor is enabled.
+
+### Advanced diagnostics mode
+
+Enable **Settings → Advanced CW diagnostics** to capture an offline-debug
+bundle for every QSO. Each radio-monitor session writes to:
+
+```text
+%LOCALAPPDATA%\QsoRipper\diagnostics\session-<UTC>\
+  session.json                 startup metadata (binary, device, loopback)
+  session.wav                  continuous mirror of decoder input audio
+  session-events.ndjson        every raw NDJSON line emitted by the decoder
+  episodes\episode-NNN\
+    events.ndjson              decoder events between callsign-typed and save/clear
+    ux-snapshot.json           comparison: aggregator mean vs displayed UI
+                               WPM vs in-window samples + the QsoRecord +
+                               a copy/paste repro command
+```
+
+The repro command in each `ux-snapshot.json` re-runs the decoder against the
+captured WAV over the same time window. Sample form:
+
+```text
+cw-decoder decode-and-play --json --start 12.4 --end 47.9 "session.wav"
+```
+
+Use this to compare what the operator saw in the status bar against what the
+decoder would emit in a deterministic offline replay — the canonical way to
+debug round 1 WPM regressions without trying to reproduce live propagation.
+
+WAV size is roughly 330 MB/hour (48 kHz mono, 16-bit) and is not rotated in
+round 1. Disable diagnostics or prune `%LOCALAPPDATA%\QsoRipper\diagnostics`
+manually between debug sessions.
+
+### WPM emission smoothing (#326)
+
+The first live capture made with the diagnostics bundle revealed a failure
+mode in `current_wpm()`: a sustained signal degradation produced a
+monotonically drifting raw WPM (11.3 → 6.75 over ~6 s on a real on-air QSO)
+while the pitch lock was still nominally healthy. The pitch-quality
+watchdog only fired ~6 s after the WPM had already collapsed, so the
+operator-facing speed dropped from a correct ~13 WPM to ~6 WPM mid-QSO.
+
+`StreamingDecoder` now emits a smoothed value instead of the raw
+`current_wpm()` in `StreamEvent::WpmUpdate`:
+
+1. **Median over the last `WPM_SMOOTH_WINDOW` (=7) raw samples.** Rejects
+   single degenerate calibration windows where one mis-classified
+   character produces a wild dot-length estimate.
+2. **Rate cap of `WPM_MAX_REL_DELTA_PER_EMIT` (=3%) per emit.** Real
+   operators cannot physically alter keying speed faster than this between
+   adjacent character emits; anything larger is the dit-cluster
+   calibration tracking the noise instead of the operator. Genuine WPM
+   changes still converge in ~3 s; a crashing calibration gets stretched
+   far enough that the watchdog drops the lock first.
+
+The internal `current_wpm()` is unchanged and is still what end-of-run
+summaries and the harvest output use. Replaying the original captured
+session through the fixed decoder shows the displayed WPM staying above
+9.5 WPM across the same crash window where the pre-fix value bottomed at
+6.75 WPM.
 
 ## Current labeled corpus
 

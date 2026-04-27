@@ -168,6 +168,22 @@ impl AdifMapper {
                         qso.qso_complete = parsed.into();
                     }
                 }
+                "APP_QSORIPPER_RX_WPM" => {
+                    if let Ok(wpm) = value_str.parse::<u32>() {
+                        qso.cw_decode_rx_wpm = Some(wpm);
+                    } else {
+                        qso.extra_fields.insert(key_upper, value_str.to_owned());
+                    }
+                }
+                "APP_QSORIPPER_CW_TRANSCRIPT" => {
+                    // Decoded CW transcript text — accepted as-is. Empty
+                    // values are dropped so a zero-length user-defined
+                    // field from another tool doesn't trigger a noisy
+                    // round-trip.
+                    if !value_str.is_empty() {
+                        qso.cw_decode_transcript = Some(value_str.to_owned());
+                    }
+                }
                 "COUNTRY" => qso.worked_country = Some(value_str.to_owned()),
                 "DXCC" => {
                     if let Ok(code) = value_str.parse::<u32>() {
@@ -554,6 +570,18 @@ impl AdifMapper {
         ) {
             push_field(&mut fields, "QSO_COMPLETE", s);
         }
+        if let Some(wpm) = qso.cw_decode_rx_wpm {
+            push_field(&mut fields, "APP_QSORIPPER_RX_WPM", wpm.to_string());
+        }
+        if let Some(transcript) = qso.cw_decode_transcript.as_deref() {
+            // Sanitize ASCII control bytes (other than CR/LF/tab) and drop
+            // non-ASCII so byte length (Rust writer) and char length (.NET
+            // writer) agree across runtimes for round-trips.
+            let sanitized = sanitize_cw_transcript_for_adif(transcript);
+            if !sanitized.is_empty() {
+                push_field(&mut fields, "APP_QSORIPPER_CW_TRANSCRIPT", sanitized);
+            }
+        }
         if let Some(v) = qso.worked_country.as_deref() {
             push_field(&mut fields, "COUNTRY", v);
         }
@@ -754,6 +782,27 @@ fn push_field<'a>(
     value: impl Into<Cow<'a, str>>,
 ) {
     fields.push((key.into(), value.into()));
+}
+
+/// Strip ASCII control bytes (other than CR/LF/tab) and drop non-ASCII
+/// characters from operator-editable CW transcript text before writing
+/// to ADIF. Keeping the payload to printable ASCII + CR/LF/tab keeps
+/// the .NET writer's char-count length and the Rust writer's byte
+/// length in agreement so round-trips don't drift across runtimes.
+fn sanitize_cw_transcript_for_adif(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for c in value.chars() {
+        if c == '\r' || c == '\n' || c == '\t' {
+            out.push(c);
+            continue;
+        }
+        let code = c as u32;
+        if code < 0x20 || code == 0x7F || code > 0x7E {
+            continue;
+        }
+        out.push(c);
+    }
+    out
 }
 
 /// Parse ADIF date (YYYYMMDD) + optional time (HHMM or HHMMSS) into prost Timestamp.
@@ -1120,6 +1169,10 @@ fn field_is_overridden(
     } else if key.eq_ignore_ascii_case("QSO_COMPLETE") {
         QsoCompletion::try_from(qso.qso_complete).unwrap_or(QsoCompletion::Unspecified)
             != QsoCompletion::Unspecified
+    } else if key.eq_ignore_ascii_case("APP_QSORIPPER_RX_WPM") {
+        qso.cw_decode_rx_wpm.is_some()
+    } else if key.eq_ignore_ascii_case("APP_QSORIPPER_CW_TRANSCRIPT") {
+        qso.cw_decode_transcript.is_some()
     } else if key.eq_ignore_ascii_case("MY_ALTITUDE") {
         station_snapshot
             .and_then(|snapshot| snapshot.altitude_meters)
@@ -2222,6 +2275,152 @@ mod tests {
         assert_eq!(
             qso.extra_fields.get("QSO_COMPLETE").map(String::as_str),
             Some("MAYBE")
+        );
+    }
+
+    #[test]
+    fn cw_decode_rx_wpm_round_trips_via_app_qsoripper_rx_wpm() {
+        let qso = QsoRecord {
+            worked_callsign: "K1ABC".to_string(),
+            cw_decode_rx_wpm: Some(28),
+            ..Default::default()
+        };
+
+        let fields = AdifMapper::qso_to_adif_fields(&qso);
+        assert_eq!(count_field(&fields, "APP_QSORIPPER_RX_WPM"), 1);
+        assert_eq!(field_value(&fields, "APP_QSORIPPER_RX_WPM"), Some("28"));
+
+        let mut rec = Record::new();
+        rec.insert("CALL", "K1ABC").unwrap();
+        rec.insert("APP_QSORIPPER_RX_WPM", "28").unwrap();
+        let parsed = AdifMapper::record_to_qso(&rec);
+        assert_eq!(parsed.cw_decode_rx_wpm, Some(28));
+        assert!(!parsed.extra_fields.contains_key("APP_QSORIPPER_RX_WPM"));
+    }
+
+    #[test]
+    fn cw_decode_rx_wpm_unset_emits_no_field() {
+        let qso = QsoRecord {
+            worked_callsign: "K1ABC".to_string(),
+            ..Default::default()
+        };
+        let fields = AdifMapper::qso_to_adif_fields(&qso);
+        assert_eq!(count_field(&fields, "APP_QSORIPPER_RX_WPM"), 0);
+    }
+
+    #[test]
+    fn cw_decode_rx_wpm_invalid_value_falls_back_to_extra_fields() {
+        let mut rec = Record::new();
+        rec.insert("CALL", "K1ABC").unwrap();
+        rec.insert("APP_QSORIPPER_RX_WPM", "not-a-number").unwrap();
+        let parsed = AdifMapper::record_to_qso(&rec);
+        assert_eq!(parsed.cw_decode_rx_wpm, None);
+        assert_eq!(
+            parsed
+                .extra_fields
+                .get("APP_QSORIPPER_RX_WPM")
+                .map(String::as_str),
+            Some("not-a-number")
+        );
+    }
+
+    #[test]
+    fn cw_decode_rx_wpm_extra_fields_does_not_shadow_typed_value() {
+        let mut qso = QsoRecord {
+            worked_callsign: "K1ABC".to_string(),
+            cw_decode_rx_wpm: Some(25),
+            ..Default::default()
+        };
+        qso.extra_fields
+            .insert("APP_QSORIPPER_RX_WPM".to_string(), "stale".to_string());
+        let fields = AdifMapper::qso_to_adif_fields(&qso);
+        assert_eq!(count_field(&fields, "APP_QSORIPPER_RX_WPM"), 1);
+        assert_eq!(field_value(&fields, "APP_QSORIPPER_RX_WPM"), Some("25"));
+    }
+
+    #[test]
+    fn cw_decode_transcript_round_trips_via_app_qsoripper_cw_transcript() {
+        let qso = QsoRecord {
+            worked_callsign: "K1ABC".to_string(),
+            cw_decode_transcript: Some("CQ DE K1ABC K".to_string()),
+            ..Default::default()
+        };
+
+        let fields = AdifMapper::qso_to_adif_fields(&qso);
+        assert_eq!(count_field(&fields, "APP_QSORIPPER_CW_TRANSCRIPT"), 1);
+        assert_eq!(
+            field_value(&fields, "APP_QSORIPPER_CW_TRANSCRIPT"),
+            Some("CQ DE K1ABC K")
+        );
+
+        let mut rec = Record::new();
+        rec.insert("CALL", "K1ABC").unwrap();
+        rec.insert("APP_QSORIPPER_CW_TRANSCRIPT", "CQ DE K1ABC K")
+            .unwrap();
+        let parsed = AdifMapper::record_to_qso(&rec);
+        assert_eq!(
+            parsed.cw_decode_transcript.as_deref(),
+            Some("CQ DE K1ABC K")
+        );
+        assert!(!parsed
+            .extra_fields
+            .contains_key("APP_QSORIPPER_CW_TRANSCRIPT"));
+    }
+
+    #[test]
+    fn cw_decode_transcript_unset_emits_no_field() {
+        let qso = QsoRecord {
+            worked_callsign: "K1ABC".to_string(),
+            ..Default::default()
+        };
+        let fields = AdifMapper::qso_to_adif_fields(&qso);
+        assert_eq!(count_field(&fields, "APP_QSORIPPER_CW_TRANSCRIPT"), 0);
+    }
+
+    #[test]
+    fn cw_decode_transcript_empty_value_does_not_set_field() {
+        let mut rec = Record::new();
+        rec.insert("CALL", "K1ABC").unwrap();
+        rec.insert("APP_QSORIPPER_CW_TRANSCRIPT", "").unwrap();
+        let parsed = AdifMapper::record_to_qso(&rec);
+        assert!(parsed.cw_decode_transcript.is_none());
+    }
+
+    #[test]
+    fn cw_decode_transcript_sanitizes_non_ascii_and_control_chars() {
+        let qso = QsoRecord {
+            worked_callsign: "K1ABC".to_string(),
+            // Intentionally include: a non-ASCII character (é, U+00E9), a
+            // bell control (0x07), DEL (0x7F), and a preserved newline.
+            cw_decode_transcript: Some("CQ\u{00e9}\u{0007}DE\u{007f}\nK".to_string()),
+            ..Default::default()
+        };
+
+        let fields = AdifMapper::qso_to_adif_fields(&qso);
+        let value = field_value(&fields, "APP_QSORIPPER_CW_TRANSCRIPT")
+            .expect("transcript should be written after sanitization");
+        // Non-ASCII, BEL, and DEL stripped; CR/LF/tab + printable ASCII kept.
+        assert_eq!(value, "CQDE\nK");
+        // Sanitized output is pure ASCII so byte length and char count agree.
+        assert!(value.is_ascii());
+    }
+
+    #[test]
+    fn cw_decode_transcript_extra_fields_does_not_shadow_typed_value() {
+        let mut qso = QsoRecord {
+            worked_callsign: "K1ABC".to_string(),
+            cw_decode_transcript: Some("typed".to_string()),
+            ..Default::default()
+        };
+        qso.extra_fields.insert(
+            "APP_QSORIPPER_CW_TRANSCRIPT".to_string(),
+            "stale".to_string(),
+        );
+        let fields = AdifMapper::qso_to_adif_fields(&qso);
+        assert_eq!(count_field(&fields, "APP_QSORIPPER_CW_TRANSCRIPT"), 1);
+        assert_eq!(
+            field_value(&fields, "APP_QSORIPPER_CW_TRANSCRIPT"),
+            Some("typed")
         );
     }
 

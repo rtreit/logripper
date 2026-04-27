@@ -1,0 +1,13 @@
+syntax = "proto3";
+
+package qsoripper.services;
+
+option csharp_namespace = "QsoRipper.Services";
+
+import "domain/great_circle_path.proto";
+
+// Response carrying the resolved great-circle path between the request's
+// origin and target.
+message ComputeGreatCircleResponse {
+  qsoripper.domain.GreatCirclePath path = 1;
+}

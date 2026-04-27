@@ -144,6 +144,7 @@ static const int FIELD_MAX_LEN[] = {
 typedef struct {
     HWND hwnd;
     char callsign[64];
+    unsigned generation;
 } LookupThreadArg;
 
 typedef struct {
@@ -156,6 +157,7 @@ typedef struct {
     int  has_data;
     int  not_found;
     char error_msg[128];
+    unsigned generation;
 } LookupResultMsg;
 
 /* ── Rig poll message structs ──────────────────────────────────────────── */
@@ -336,6 +338,10 @@ typedef struct {
     /* Lookup debounce */
     ULONGLONG last_callsign_change;
     char last_looked_up[32];
+    /* Generation counter for in-flight lookups. Incremented when the form
+       is cleared (Esc, Log, QSO load) so any pending result whose generation
+       no longer matches is discarded and cannot poison last_looked_up. */
+    unsigned lookup_generation;
 
     /* Confirm delete dialog */
     int confirm_delete_visible;
@@ -407,6 +413,7 @@ static void OnChar(HWND hwnd, WPARAM ch);
 static void OnTimer(HWND hwnd);
 static void InitState(void);
 static void ClearForm(void);
+static void ApplyLookupResult(LookupResultMsg *res);
 static void SetStatus(const char *msg, int is_error);
 static void LogQso(void);
 static void RefreshQsoList(void);
@@ -446,6 +453,36 @@ static void safe_strcat(char *dst, size_t dstsz, const char *src)
     size_t avail = dstsz - cur;
     if (avail <= 1) return;
     safe_strcpy(dst + cur, avail, src);
+}
+
+/* Parse "HH:MM" into seconds since midnight, or -1 on error. */
+static int parse_hhmm_to_seconds(const char *s)
+{
+    if (!s) return -1;
+    if (!(s[0] >= '0' && s[0] <= '9')) return -1;
+    if (!(s[1] >= '0' && s[1] <= '9')) return -1;
+    if (s[2] != ':') return -1;
+    if (!(s[3] >= '0' && s[3] <= '9')) return -1;
+    if (!(s[4] >= '0' && s[4] <= '9')) return -1;
+    if (s[5] != 0) return -1;
+    int h = (s[0] - '0') * 10 + (s[1] - '0');
+    int m = (s[3] - '0') * 10 + (s[4] - '0');
+    if (h > 23 || m > 59) return -1;
+    return h * 3600 + m * 60;
+}
+
+/* Compute duration in seconds between two "HH:MM" timestamps.
+   Returns -1 if either input cannot be parsed. If time_off is earlier
+   than time_on (e.g. a QSO that crossed midnight) the result wraps by
+   adding 24 hours so the displayed duration is non-negative. */
+static int qso_duration_seconds(const char *time_on, const char *time_off)
+{
+    int on = parse_hhmm_to_seconds(time_on);
+    int off = parse_hhmm_to_seconds(time_off);
+    if (on < 0 || off < 0) return -1;
+    int diff = off - on;
+    if (diff < 0) diff += 24 * 3600;
+    return diff;
 }
 
 /* Convert raw MHz decimal string to radio-style: "14.22500" -> "14.225.00" */
@@ -769,6 +806,44 @@ void qsr_test_invoke_delete_selected_qso(void)
 void qsr_test_invoke_fetch_space_weather(void)
 {
     FetchSpaceWeather();
+}
+
+unsigned qsr_test_get_lookup_generation(void)
+{
+    return g_state.lookup_generation;
+}
+
+const char *qsr_test_get_last_looked_up(void)
+{
+    return g_state.last_looked_up;
+}
+
+void qsr_test_clear_form(void)
+{
+    ClearForm();
+}
+
+void qsr_test_apply_lookup_result(const char *callsign, unsigned generation, int has_data)
+{
+    LookupResultMsg *res = (LookupResultMsg *)calloc(1, sizeof(LookupResultMsg));
+    if (!res) return;
+    if (callsign) safe_strcpy(res->callsign, sizeof(res->callsign), callsign);
+    res->generation = generation;
+    res->has_data = has_data ? 1 : 0;
+    if (has_data) {
+        safe_strcpy(res->name,    sizeof(res->name),    "Test Name");
+        safe_strcpy(res->qth,     sizeof(res->qth),     "Test QTH");
+        safe_strcpy(res->grid,    sizeof(res->grid),    "FN31");
+        safe_strcpy(res->country, sizeof(res->country), "United States");
+        res->cq_zone = 5;
+    }
+    /* ApplyLookupResult takes ownership and frees res. */
+    ApplyLookupResult(res);
+}
+
+int qsr_test_qso_duration_seconds(const char *time_on, const char *time_off)
+{
+    return qso_duration_seconds(time_on, time_off);
 }
 #endif
 
@@ -1113,6 +1188,11 @@ static void ClearForm(void)
     g_state.qso_timer_active = 0;
     g_state.qso_started_at = 0;
     g_state.last_looked_up[0] = 0;
+    g_state.last_callsign_change = 0;
+    /* Invalidate any in-flight lookup so its result cannot resurrect
+       last_looked_up after the form is cleared. See issue #330. */
+    g_state.lookup_generation++;
+    g_state.lookup_in_progress = 0;
     SetFocusField(FIELD_CALLSIGN);
     g_state.qso_list_focused = 0;
     g_state.search_focused = 0;
@@ -1542,11 +1622,53 @@ static void ClearLookupDisplay(void)
     g_state.lookup_country[0] = 0;
     g_state.lookup_cq_zone = 0;
     g_state.last_looked_up[0] = 0;
+    /* Invalidate any in-flight lookup so a stale result cannot poison
+       last_looked_up after the user edits the callsign. See issue #330. */
+    g_state.lookup_generation++;
     /* Clear form fields that were auto-populated from lookup */
     g_state.worked_name[0] = 0;
     g_state.cursor_pos[FIELD_WORKED_NAME] = 0;
     g_state.qth[0] = 0;
     g_state.cursor_pos[FIELD_QTH] = 0;
+}
+
+/* Apply a completed lookup result. Discards results whose generation no
+   longer matches g_state.lookup_generation: those belong to a lookup that
+   was started before the form was cleared (Esc) or before the user edited
+   the callsign, and applying them would resurrect last_looked_up and
+   block the next debounce-triggered lookup. See issue #330. */
+static void ApplyLookupResult(LookupResultMsg *res)
+{
+    if (!res) return;
+    if (res->generation != g_state.lookup_generation) {
+        free(res);
+        return;
+    }
+    if (_stricmp(res->callsign, g_state.callsign) == 0) {
+        if (res->has_data) {
+            safe_strcpy(g_state.lookup_name, sizeof(g_state.lookup_name), res->name);
+            safe_strcpy(g_state.lookup_qth,  sizeof(g_state.lookup_qth),  res->qth);
+            safe_strcpy(g_state.lookup_grid, sizeof(g_state.lookup_grid), res->grid);
+            safe_strcpy(g_state.lookup_country, sizeof(g_state.lookup_country), res->country);
+            g_state.lookup_cq_zone = res->cq_zone;
+            g_state.has_lookup = 1;
+            g_state.lookup_not_found = 0;
+            g_state.lookup_error[0] = 0;
+            safe_strcpy(g_state.worked_name, sizeof(g_state.worked_name), res->name);
+            g_state.cursor_pos[FIELD_WORKED_NAME] = (int)strlen(g_state.worked_name);
+            safe_strcpy(g_state.qth, sizeof(g_state.qth), res->qth);
+            g_state.cursor_pos[FIELD_QTH] = (int)strlen(g_state.qth);
+        } else if (res->not_found) {
+            g_state.lookup_not_found = 1;
+            g_state.lookup_error[0] = 0;
+        } else if (res->error_msg[0]) {
+            g_state.lookup_not_found = 0;
+            safe_strcpy(g_state.lookup_error, sizeof(g_state.lookup_error), res->error_msg);
+        }
+        safe_strcpy(g_state.last_looked_up, sizeof(g_state.last_looked_up), res->callsign);
+    }
+    g_state.lookup_in_progress = 0;
+    free(res);
 }
 
 static unsigned __stdcall LookupThread(void *param)
@@ -1556,6 +1678,7 @@ static unsigned __stdcall LookupThread(void *param)
     if (!res) { free(arg); return 0; }
 
     safe_strcpy(res->callsign, sizeof(res->callsign), arg->callsign);
+    res->generation = arg->generation;
 
     if (g_backend.mode == BACKEND_FFI) {
         struct QsrClient *ffi_client = NULL;
@@ -2268,7 +2391,7 @@ static int PaintLogForm(HDC hdc, int y_start, int w)
 
     /* Row 6: QSO Duration */
     {
-        char dur[32];
+        char dur[48];
         if (g_state.qso_timer_active) {
             ULONGLONG elapsed = GetTickCount64() - g_state.qso_started_at;
             int secs = (int)(elapsed / 1000);
@@ -2279,7 +2402,15 @@ static int PaintLogForm(HDC hdc, int y_start, int w)
         } else if (g_state.callsign[0] != 0) {
             DrawText_A(hdc, pad, y + 3, CLR_DARKGRAY, "Press F7 to start timer");
         } else {
-            DrawText_A(hdc, pad, y + 3, CLR_DARKGRAY, "QSO Duration: ---");
+            int total = qso_duration_seconds(g_state.time_str, g_state.time_off);
+            if (total >= 0) {
+                int mins = total / 60;
+                int secs = total % 60;
+                snprintf(dur, sizeof(dur), "QSO Duration: %02d:%02d", mins, secs);
+                DrawText_A(hdc, pad, y + 3, CLR_DARKGRAY, dur);
+            } else {
+                DrawText_A(hdc, pad, y + 3, CLR_DARKGRAY, "QSO Duration: ---");
+            }
         }
     }
     y += row_h;
@@ -3433,6 +3564,7 @@ static void OnTimer(HWND hwnd)
                 if (arg) {
                     arg->hwnd = hwnd;
                     safe_strcpy(arg->callsign, sizeof(arg->callsign), g_state.callsign);
+                    arg->generation = g_state.lookup_generation;
                     g_state.lookup_in_progress = 1;
                     uintptr_t h = _beginthreadex(NULL, 0, LookupThread, arg, 0, NULL);
                     if (h) CloseHandle((HANDLE)h);
@@ -3694,34 +3826,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
     case WM_APP_LOOKUP_DONE:
     {
         LookupResultMsg *res = (LookupResultMsg *)lParam;
-        if (res) {
-            if (_stricmp(res->callsign, g_state.callsign) == 0) {
-                if (res->has_data) {
-                    safe_strcpy(g_state.lookup_name, sizeof(g_state.lookup_name), res->name);
-                    safe_strcpy(g_state.lookup_qth,  sizeof(g_state.lookup_qth),  res->qth);
-                    safe_strcpy(g_state.lookup_grid, sizeof(g_state.lookup_grid), res->grid);
-                    safe_strcpy(g_state.lookup_country, sizeof(g_state.lookup_country), res->country);
-                    g_state.lookup_cq_zone = res->cq_zone;
-                    g_state.has_lookup = 1;
-                    g_state.lookup_not_found = 0;
-                    g_state.lookup_error[0] = 0;
-                    /* Always populate from lookup (overwrite stale data from previous callsign) */
-                    safe_strcpy(g_state.worked_name, sizeof(g_state.worked_name), res->name);
-                    g_state.cursor_pos[FIELD_WORKED_NAME] = (int)strlen(g_state.worked_name);
-                    safe_strcpy(g_state.qth, sizeof(g_state.qth), res->qth);
-                    g_state.cursor_pos[FIELD_QTH] = (int)strlen(g_state.qth);
-                } else if (res->not_found) {
-                    g_state.lookup_not_found = 1;
-                    g_state.lookup_error[0] = 0;
-                } else if (res->error_msg[0]) {
-                    g_state.lookup_not_found = 0;
-                    safe_strcpy(g_state.lookup_error, sizeof(g_state.lookup_error), res->error_msg);
-                }
-                safe_strcpy(g_state.last_looked_up, sizeof(g_state.last_looked_up), res->callsign);
-            }
-            g_state.lookup_in_progress = 0;
-            free(res);
-        }
+        ApplyLookupResult(res);
         InvalidateRect(hwnd, NULL, FALSE);
         break;
     }

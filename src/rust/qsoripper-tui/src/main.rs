@@ -18,8 +18,8 @@ use tokio::sync::{mpsc, watch};
 
 use app::App;
 use events::{
-    spawn_clock_task, spawn_key_task, spawn_lookup_task, spawn_rig_poll_task,
-    spawn_space_weather_task, AppEvent,
+    spawn_clock_task, spawn_engine_health_task, spawn_key_task, spawn_lookup_task,
+    spawn_rig_poll_task, spawn_space_weather_task, AppEvent,
 };
 use form::{AdvancedTab, Field, LogForm, BANDS, MODES};
 
@@ -142,11 +142,16 @@ async fn run<B: ratatui::backend::Backend>(
     let mut app = App::new(endpoint);
     let channel = grpc::create_channel(&app.endpoint)?;
 
+    // One-shot startup probe so the header reflects engine reachability before
+    // the first periodic tick of the health task fires.
+    app.engine_status = events::probe_engine_health(channel.clone()).await;
+
     spawn_key_task(event_tx.clone());
     spawn_clock_task(event_tx.clone());
     spawn_lookup_task(lookup_rx, event_tx.clone(), channel.clone());
     spawn_rig_poll_task(rig_enabled_rx, event_tx.clone(), channel.clone());
     spawn_space_weather_task(event_tx.clone(), channel.clone());
+    spawn_engine_health_task(channel.clone(), event_tx.clone());
 
     // Prefetch recent QSOs on startup.
     {
@@ -292,6 +297,11 @@ fn handle_event_with_channel(
         AppEvent::QsoNameEnriched { local_id, name } => {
             if let Some(q) = app.recent_qsos.iter_mut().find(|q| q.local_id == local_id) {
                 q.name = Some(name);
+            }
+        }
+        AppEvent::EngineHealth(status) => {
+            if app.engine_status != status {
+                app.engine_status = status;
             }
         }
     }

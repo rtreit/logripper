@@ -82,6 +82,14 @@ $Win32FfiGateSource = Join-Path $Win32SourceDir 'src' 'backend_ffi_gate.c'
 $Win32ResourcesDir = Join-Path $Win32SourceDir 'resources'
 $Win32ResourceScript = Join-Path $Win32ResourcesDir 'app.rc'
 $Win32PublishDir = Join-Path $PSScriptRoot 'artifacts' 'publish' | Join-Path -ChildPath 'qsoripper-win32' | Join-Path -ChildPath $Configuration
+$ServerPublishDir = Join-Path $PSScriptRoot 'artifacts' 'publish' | Join-Path -ChildPath 'qsoripper-server' | Join-Path -ChildPath $Configuration
+$DotnetEnginePublishDir = Join-Path $PSScriptRoot 'artifacts' 'publish' | Join-Path -ChildPath 'qsoripper-engine-dotnet' | Join-Path -ChildPath $Configuration
+$DotnetDebugHostPublishDir = Join-Path $PSScriptRoot 'artifacts' 'publish' | Join-Path -ChildPath 'qsoripper-debughost' | Join-Path -ChildPath $Configuration
+$CwScopeGuiPublishDir = Join-Path $PSScriptRoot 'artifacts' 'publish' | Join-Path -ChildPath 'cw-decoder-gui' | Join-Path -ChildPath $Configuration
+$DotnetEngineProject = Join-Path $PSScriptRoot 'src' 'dotnet' 'QsoRipper.Engine.DotNet' 'QsoRipper.Engine.DotNet.csproj'
+$DotnetDebugHostProject = Join-Path $PSScriptRoot 'src' 'dotnet' 'QsoRipper.DebugHost' 'QsoRipper.DebugHost.csproj'
+$CwScopeGuiProject = Join-Path $PSScriptRoot 'experiments' 'cw-decoder' 'gui' 'CwDecoderGui.csproj'
+$ServerBinary = if ($IsWindows) { 'qsoripper-server.exe' } else { 'qsoripper-server' }
 
 function Build-Rust {
     $arguments = @('build', '--manifest-path', $RustManifest)
@@ -105,6 +113,14 @@ function Build-Rust {
         $null = New-Item -ItemType Directory -Force -Path $StressTuiPublishDir
         Copy-Item -Path $stressTuiSrc -Destination $StressTuiPublishDir -Force
         Write-Host "  -> $StressTuiPublishDir"
+    }
+
+    $serverSrc = Join-Path $PSScriptRoot 'src' 'rust' 'target' $RustTargetProfile $ServerBinary
+    if (Test-Path $serverSrc) {
+        Write-Step "Publishing qsoripper-server ($Configuration)"
+        $null = New-Item -ItemType Directory -Force -Path $ServerPublishDir
+        Copy-Item -Path $serverSrc -Destination $ServerPublishDir -Force
+        Write-Host "  -> $ServerPublishDir"
     }
 
     # Publish qsoripper-ffi DLL and import library (Windows only)
@@ -212,6 +228,38 @@ function Build-Dotnet {
         '-o',
         $DotnetGuiPublishDir
     )
+
+    Invoke-Build "Publishing QsoRipper.Engine.DotNet ($Configuration)" dotnet @(
+        'publish',
+        $DotnetEngineProject,
+        '-c',
+        $Configuration,
+        '--use-current-runtime',
+        '-o',
+        $DotnetEnginePublishDir
+    )
+
+    Invoke-Build "Publishing QsoRipper.DebugHost ($Configuration)" dotnet @(
+        'publish',
+        $DotnetDebugHostProject,
+        '-c',
+        $Configuration,
+        '--use-current-runtime',
+        '-o',
+        $DotnetDebugHostPublishDir
+    )
+
+    if (Test-Path $CwScopeGuiProject) {
+        Invoke-Build "Publishing CwDecoderGui ($Configuration)" dotnet @(
+            'publish',
+            $CwScopeGuiProject,
+            '-c',
+            $Configuration,
+            '--use-current-runtime',
+            '-o',
+            $CwScopeGuiPublishDir
+        )
+    }
 }
 
 function Build-Win32 {

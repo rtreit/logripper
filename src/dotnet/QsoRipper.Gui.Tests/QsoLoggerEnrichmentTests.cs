@@ -41,6 +41,204 @@ public sealed class QsoLoggerEnrichmentTests
         Assert.Equal("NA", qso.WorkedContinent);
     }
 
+    private sealed class CwSampleHarness : ICwWpmSampleSource
+    {
+        public bool IsRunning => false;
+        public CwWpmSample? LatestSample { get; private set; }
+        public CwLockState CurrentLockState { get; private set; } = CwLockState.Locked;
+        public event EventHandler<CwWpmSample>? SampleReceived;
+        public event EventHandler? StatusChanged;
+#pragma warning disable CS0067 // unused in tests
+        public event EventHandler<string>? RawLineReceived;
+        public event EventHandler<CwLockState>? LockStateChanged;
+#pragma warning restore CS0067
+        public void Emit(CwWpmSample s)
+        {
+            LatestSample = s;
+            SampleReceived?.Invoke(this, s);
+        }
+        public void Start(string? deviceOverride) => StatusChanged?.Invoke(this, EventArgs.Empty);
+        public void MarkAnchorHeard() { }
+        public void Stop() => StatusChanged?.Invoke(this, EventArgs.Empty);
+        public void Dispose() { }
+    }
+
+    [Fact]
+    public void EnrichFromCwDecoderFillsRxWpmForCwQsoWhenSamplesPresent()
+    {
+        using var src = new CwSampleHarness();
+        using var agg = new CwQsoWpmAggregator(src, maxSampleHoldDuration: TimeSpan.FromSeconds(60));
+
+        var start = new DateTimeOffset(2024, 6, 1, 12, 0, 0, TimeSpan.Zero);
+        var end = start.AddSeconds(20);
+
+        src.Emit(new CwWpmSample(start, 18.0, Epoch: 1));
+        src.Emit(new CwWpmSample(start.AddSeconds(10), 22.0, Epoch: 1));
+
+        var logger = new QsoLoggerViewModel(new FakeEngineClient(), agg);
+        var qso = new QsoRecord { WorkedCallsign = "K7DOE", Mode = Mode.Cw };
+
+        logger.EnrichFromCwDecoder(qso, start, end);
+
+        // Time-weighted: (18*10 + 22*10)/20 = 20 ⇒ rounds to 20.
+        Assert.True(qso.HasCwDecodeRxWpm);
+        Assert.Equal(20u, qso.CwDecodeRxWpm);
+    }
+
+    [Fact]
+    public void EnrichFromCwDecoderSkipsNonCwQso()
+    {
+        using var src = new CwSampleHarness();
+        using var agg = new CwQsoWpmAggregator(src);
+        src.Emit(new CwWpmSample(DateTimeOffset.UtcNow, 25.0, Epoch: 1));
+
+        var logger = new QsoLoggerViewModel(new FakeEngineClient(), agg);
+        var qso = new QsoRecord { WorkedCallsign = "K7DOE", Mode = Mode.Ssb };
+
+        logger.EnrichFromCwDecoder(qso, DateTimeOffset.UtcNow.AddSeconds(-30), DateTimeOffset.UtcNow);
+
+        Assert.False(qso.HasCwDecodeRxWpm);
+    }
+
+    [Fact]
+    public void EnrichFromCwDecoderIsNoOpWhenAggregatorMissing()
+    {
+        var logger = new QsoLoggerViewModel(new FakeEngineClient());
+        var qso = new QsoRecord { WorkedCallsign = "K7DOE", Mode = Mode.Cw };
+
+        logger.EnrichFromCwDecoder(qso, DateTimeOffset.UtcNow.AddSeconds(-30), DateTimeOffset.UtcNow);
+
+        Assert.False(qso.HasCwDecodeRxWpm);
+    }
+
+    [Fact]
+    public void EnrichFromCwDecoderSkipsCwQsoWithoutSamples()
+    {
+        using var src = new CwSampleHarness();
+        using var agg = new CwQsoWpmAggregator(src);
+
+        var logger = new QsoLoggerViewModel(new FakeEngineClient(), agg);
+        var qso = new QsoRecord { WorkedCallsign = "K7DOE", Mode = Mode.Cw };
+
+        logger.EnrichFromCwDecoder(qso, DateTimeOffset.UtcNow.AddSeconds(-30), DateTimeOffset.UtcNow);
+
+        Assert.False(qso.HasCwDecodeRxWpm);
+    }
+
+    [Fact]
+    public void EnrichFromCwDecoderFillsTranscriptForCwQsoWhenFragmentsPresent()
+    {
+        using var src = new CwSampleHarness();
+        using var transcriptAgg = new CwQsoTranscriptAggregator(src);
+
+        var start = DateTimeOffset.UtcNow.AddSeconds(-2);
+
+        transcriptAgg.IngestForTest("{\"type\":\"char\",\"ch\":\"C\"}");
+        transcriptAgg.IngestForTest("{\"type\":\"char\",\"ch\":\"Q\"}");
+        transcriptAgg.IngestForTest("{\"type\":\"word\"}");
+        transcriptAgg.IngestForTest("{\"type\":\"char\",\"ch\":\"K\"}");
+
+        var logger = new QsoLoggerViewModel(new FakeEngineClient(), cwWpmAggregator: null);
+        logger.AttachCwTranscriptAggregator(transcriptAgg);
+
+        var qso = new QsoRecord { WorkedCallsign = "K7DOE", Mode = Mode.Cw };
+
+        logger.EnrichFromCwDecoder(qso, start, DateTimeOffset.UtcNow.AddSeconds(2));
+
+        Assert.True(qso.HasCwDecodeTranscript);
+        Assert.Equal("CQ K", qso.CwDecodeTranscript);
+    }
+
+    [Fact]
+    public void EnrichFromCwDecoderPreservesOperatorTypedTranscript()
+    {
+        using var src = new CwSampleHarness();
+        using var transcriptAgg = new CwQsoTranscriptAggregator(src);
+        transcriptAgg.IngestForTest("{\"type\":\"char\",\"ch\":\"X\"}");
+
+        var logger = new QsoLoggerViewModel(new FakeEngineClient(), cwWpmAggregator: null);
+        logger.AttachCwTranscriptAggregator(transcriptAgg);
+
+        var qso = new QsoRecord
+        {
+            WorkedCallsign = "K7DOE",
+            Mode = Mode.Cw,
+            CwDecodeTranscript = "operator typed",
+        };
+
+        logger.EnrichFromCwDecoder(qso, DateTimeOffset.UtcNow.AddSeconds(-2), DateTimeOffset.UtcNow.AddSeconds(2));
+
+        Assert.Equal("operator typed", qso.CwDecodeTranscript);
+    }
+
+    [Fact]
+    public void EnrichFromCwDecoderClearsCwFieldsWhenModeIsNotCw()
+    {
+        using var src = new CwSampleHarness();
+        using var wpm = new CwQsoWpmAggregator(src);
+        using var transcriptAgg = new CwQsoTranscriptAggregator(src);
+        src.Emit(new CwWpmSample(DateTimeOffset.UtcNow, 25.0, Epoch: 1));
+        transcriptAgg.IngestForTest("{\"type\":\"char\",\"ch\":\"Y\"}");
+
+        var logger = new QsoLoggerViewModel(new FakeEngineClient(), wpm);
+        logger.AttachCwTranscriptAggregator(transcriptAgg);
+
+        var qso = new QsoRecord
+        {
+            WorkedCallsign = "K7DOE",
+            Mode = Mode.Ssb,
+            CwDecodeRxWpm = 30,
+            CwDecodeTranscript = "stale auto-fill",
+        };
+
+        logger.EnrichFromCwDecoder(qso, DateTimeOffset.UtcNow.AddSeconds(-30), DateTimeOffset.UtcNow);
+
+        Assert.False(qso.HasCwDecodeRxWpm);
+        Assert.False(qso.HasCwDecodeTranscript);
+    }
+
+    [Fact]
+    public void EnrichFromCwDecoderTranscriptIsNoOpWhenAggregatorMissing()
+    {
+        var logger = new QsoLoggerViewModel(new FakeEngineClient());
+        var qso = new QsoRecord { WorkedCallsign = "K7DOE", Mode = Mode.Cw };
+
+        logger.EnrichFromCwDecoder(qso, DateTimeOffset.UtcNow.AddSeconds(-30), DateTimeOffset.UtcNow);
+
+        Assert.False(qso.HasCwDecodeTranscript);
+    }
+
+    [Fact]
+    public void EnrichFromCwDecoderFillsBothWpmAndTranscriptForCwQso()
+    {
+        using var src = new CwSampleHarness();
+        using var wpm = new CwQsoWpmAggregator(src, maxSampleHoldDuration: TimeSpan.FromSeconds(60));
+        using var transcriptAgg = new CwQsoTranscriptAggregator(src);
+
+        var start = new DateTimeOffset(2024, 6, 1, 12, 0, 0, TimeSpan.Zero);
+        var end = start.AddSeconds(20);
+
+        src.Emit(new CwWpmSample(start, 24.0, Epoch: 1));
+        src.Emit(new CwWpmSample(start.AddSeconds(10), 24.0, Epoch: 1));
+        transcriptAgg.IngestForTest("{\"type\":\"char\",\"ch\":\"R\"}");
+
+        var logger = new QsoLoggerViewModel(new FakeEngineClient(), wpm);
+        logger.AttachCwTranscriptAggregator(transcriptAgg);
+
+        var qso = new QsoRecord { WorkedCallsign = "K7DOE", Mode = Mode.Cw };
+        logger.EnrichFromCwDecoder(qso, start, end);
+
+        // wpm aggregator queries on a window in the past; transcript
+        // aggregator timestamps fragments at ingest-time using
+        // DateTimeOffset.UtcNow, so use a wide window for transcript here
+        // by re-running with a wide window:
+        logger.EnrichFromCwDecoder(qso, DateTimeOffset.UtcNow.AddSeconds(-5), DateTimeOffset.UtcNow.AddSeconds(5));
+
+        Assert.True(qso.HasCwDecodeRxWpm);
+        Assert.Equal(24u, qso.CwDecodeRxWpm);
+        Assert.Equal("R", qso.CwDecodeTranscript);
+    }
+
     [Fact]
     public void EnrichFromLookupWithNullRecordLeavesQsoUnchanged()
     {
@@ -165,7 +363,7 @@ public sealed class QsoLoggerEnrichmentTests
     }
 
     [Fact]
-    public async Task LogQsoCommandPopulatesUtcEndTimestamp()
+    public async Task LogQsoCommandLeavesUtcEndTimestampNullWithoutF7()
     {
         var engine = new FakeEngineClient();
         var logger = new QsoLoggerViewModel(engine)
@@ -173,6 +371,27 @@ public sealed class QsoLoggerEnrichmentTests
             Callsign = "KW5CW",
         };
 
+        await logger.LogQsoCommand.ExecuteAsync(null);
+
+        Assert.NotNull(engine.LastLoggedQso);
+        Assert.NotNull(engine.LastLoggedQso!.UtcTimestamp);
+        // The duration timer is no longer auto-started — operator must press
+        // F7 to acknowledge a real QSO. Without F7, no end timestamp is set.
+        Assert.Null(engine.LastLoggedQso.UtcEndTimestamp);
+    }
+
+    [Fact]
+    public async Task LogQsoCommandPopulatesUtcEndTimestampAfterF7()
+    {
+        var engine = new FakeEngineClient();
+        var logger = new QsoLoggerViewModel(engine)
+        {
+            Callsign = "KW5CW",
+        };
+
+        // F7: operator acknowledges the QSO is underway, starting the
+        // duration timer.
+        await logger.AcknowledgeQsoStartCommand.ExecuteAsync(null);
         await logger.LogQsoCommand.ExecuteAsync(null);
 
         Assert.NotNull(engine.LastLoggedQso);
@@ -235,8 +454,9 @@ public sealed class QsoLoggerEnrichmentTests
         public Task<GetRigStatusResponse> GetRigStatusAsync(CancellationToken ct = default) =>
             throw new NotImplementedException();
 
-        public Task<GetCurrentSpaceWeatherResponse> GetCurrentSpaceWeatherAsync(CancellationToken ct = default) =>
-            throw new NotImplementedException();
+        public Task<GetCurrentSpaceWeatherResponse> GetCurrentSpaceWeatherAsync(CancellationToken ct = default) => throw new NotImplementedException();
+        public Task<ComputeGreatCircleResponse> ComputeGreatCircleAsync(ComputeGreatCircleRequest request, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task<GetActiveStationContextResponse> GetActiveStationContextAsync(CancellationToken ct = default) => throw new NotImplementedException();
         public Task<PurgeDeletedQsosResponse> PurgeDeletedQsosAsync(IReadOnlyList<string>? localIds = null, Timestamp? olderThan = null, bool includePendingRemoteDeletes = false, CancellationToken ct = default) => throw new NotImplementedException();
     }
 
@@ -292,8 +512,9 @@ public sealed class QsoLoggerEnrichmentTests
         public Task<GetRigStatusResponse> GetRigStatusAsync(CancellationToken ct = default) =>
             throw new NotImplementedException();
 
-        public Task<GetCurrentSpaceWeatherResponse> GetCurrentSpaceWeatherAsync(CancellationToken ct = default) =>
-            throw new NotImplementedException();
+        public Task<GetCurrentSpaceWeatherResponse> GetCurrentSpaceWeatherAsync(CancellationToken ct = default) => throw new NotImplementedException();
+        public Task<ComputeGreatCircleResponse> ComputeGreatCircleAsync(ComputeGreatCircleRequest request, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task<GetActiveStationContextResponse> GetActiveStationContextAsync(CancellationToken ct = default) => throw new NotImplementedException();
         public Task<PurgeDeletedQsosResponse> PurgeDeletedQsosAsync(IReadOnlyList<string>? localIds = null, Timestamp? olderThan = null, bool includePendingRemoteDeletes = false, CancellationToken ct = default) => throw new NotImplementedException();
     }
 }

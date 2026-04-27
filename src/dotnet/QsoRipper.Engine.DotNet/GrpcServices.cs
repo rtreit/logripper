@@ -1,6 +1,7 @@
 using System.Diagnostics.CodeAnalysis;
 using Google.Protobuf;
 using Grpc.Core;
+using QsoRipper.Domain;
 using QsoRipper.Engine.Lookup;
 using QsoRipper.Services;
 
@@ -554,5 +555,83 @@ internal sealed class ManagedSpaceWeatherGrpcService(ManagedEngineState state)
         {
             Snapshot = state.BuildSpaceWeatherSnapshot(refreshed: true),
         });
+    }
+}
+
+[SuppressMessage("Performance", "CA1812:Avoid uninstantiated internal classes", Justification = "Activated by ASP.NET Core gRPC.")]
+internal sealed class ManagedGreatCircleGrpcService
+    : GreatCircleService.GreatCircleServiceBase
+{
+    public override Task<ComputeGreatCircleResponse> ComputeGreatCircle(
+        ComputeGreatCircleRequest request,
+        ServerCallContext context)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        var origin = ResolveReference(request.Origin, "origin");
+        var target = ResolveReference(request.Target, "target");
+        Geodesy.ValidatePoint(origin, "origin");
+        Geodesy.ValidatePoint(target, "target");
+
+        uint count;
+        try
+        {
+            count = Geodesy.ResolveSampleCount(request.SampleCount);
+        }
+        catch (ArgumentOutOfRangeException ex)
+        {
+            throw new RpcException(new Status(StatusCode.InvalidArgument, ex.Message));
+        }
+
+        var samples = Geodesy.SampleGreatCircle(origin, target, count);
+        var path = new GreatCirclePath
+        {
+            Origin = origin,
+            Target = target,
+            DistanceKm = Geodesy.DistanceKm(origin, target),
+        };
+        path.Samples.AddRange(samples);
+        var initial = Geodesy.InitialBearingDeg(origin, target);
+        if (initial.HasValue)
+        {
+            path.InitialBearingDeg = initial.Value;
+        }
+        var final = Geodesy.FinalBearingDeg(origin, target);
+        if (final.HasValue)
+        {
+            path.FinalBearingDeg = final.Value;
+        }
+
+        return Task.FromResult(new ComputeGreatCircleResponse { Path = path });
+    }
+
+    private static GeoPoint ResolveReference(GeoReference? reference, string label)
+    {
+        if (reference is null)
+        {
+            throw new RpcException(new Status(
+                StatusCode.InvalidArgument,
+                $"{label} reference is required"));
+        }
+        if (reference.Coordinates is { } coords)
+        {
+            return coords;
+        }
+        if (!string.IsNullOrWhiteSpace(reference.Maidenhead))
+        {
+            try
+            {
+                return Geodesy.MaidenheadToGeoPoint(reference.Maidenhead);
+            }
+            catch (ArgumentException ex)
+            {
+                throw new RpcException(new Status(
+                    StatusCode.InvalidArgument,
+                    $"{label}: {ex.Message}"));
+            }
+        }
+        throw new RpcException(new Status(
+            StatusCode.InvalidArgument,
+            $"{label}: must supply coordinates or maidenhead"));
     }
 }

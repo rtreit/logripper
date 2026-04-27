@@ -124,6 +124,63 @@ internal sealed partial class SettingsViewModel : ObservableObject
     [ObservableProperty]
     private bool _isSpaceWeatherVisible;
 
+    // Radio monitor (round 1: GUI-side cw-decoder host driving CW WPM auto-fill)
+    [ObservableProperty]
+    private bool _isRadioMonitorEnabled;
+
+    [ObservableProperty]
+    private bool _isCwWpmStatusBarVisible;
+
+    /// <summary>
+    /// When true, every cw-decoder NDJSON event + audio is mirrored to a
+    /// per-session diagnostics directory. See
+    /// <see cref="QsoRipper.Gui.Services.CwDiagnosticsRecorder"/> for the
+    /// on-disk layout.
+    /// </summary>
+    [ObservableProperty]
+    private bool _isAdvancedDiagnosticsEnabled;
+
+    public ObservableCollection<RadioMonitorDevice> RadioMonitorDevices { get; } = [];
+
+    [ObservableProperty]
+    private RadioMonitorDevice? _selectedRadioMonitorDevice;
+
+    [ObservableProperty]
+    private string _radioMonitorBinaryStatus = string.Empty;
+
+    [ObservableProperty]
+    private bool _isLoadingRadioMonitorDevices;
+
+    /// <summary>
+    /// Captured by <see cref="MainWindowViewModel.CreateSettingsViewModel"/> so
+    /// <see cref="RefreshRadioMonitorDevicesAsync"/> can preselect the persisted
+    /// device once the device list is populated. Avoids the race where the
+    /// catalog auto-selects "System default" before the caller can apply its
+    /// own preselection.
+    /// </summary>
+    internal string? PendingPreselectDeviceOverride { get; set; }
+
+    internal bool PendingPreselectIsLoopback { get; set; }
+
+    private bool _pendingPreselectConsumed;
+
+    /// <summary>
+    /// Resolved capture device name to forward to the decoder (empty = host
+    /// default). Computed from <see cref="SelectedRadioMonitorDevice"/>.
+    /// </summary>
+    public string ResolvedCaptureDevice =>
+        SelectedRadioMonitorDevice is null
+        || ReferenceEquals(SelectedRadioMonitorDevice, RadioMonitorDeviceCatalog.SystemDefault)
+        || string.Equals(SelectedRadioMonitorDevice.Name, RadioMonitorDeviceCatalog.SystemDefault.Name, StringComparison.Ordinal)
+            ? string.Empty
+            : SelectedRadioMonitorDevice.Name;
+
+    /// <summary>
+    /// Whether the resolved capture device is a system OUTPUT being captured
+    /// via WASAPI loopback. Computed from the dropdown selection.
+    /// </summary>
+    public bool ResolvedIsLoopback => SelectedRadioMonitorDevice?.IsLoopback ?? false;
+
     [ObservableProperty]
     private int _selectedSectionIndex;
 
@@ -204,6 +261,98 @@ internal sealed partial class SettingsViewModel : ObservableObject
         finally
         {
             IsLoading = false;
+        }
+
+        await RefreshRadioMonitorDevicesAsync().ConfigureAwait(true);
+    }
+
+    /// <summary>
+    /// Sets the dropdown's pre-selection from the current persisted device
+    /// override + loopback flag. Call after constructing the view-model.
+    /// Matching is by (name, isLoopback) so users see the same entry they
+    /// previously picked, even if multiple devices share a substring.
+    /// </summary>
+    internal void PreselectRadioMonitorDevice(string? deviceOverride, bool isLoopback)
+    {
+        if (string.IsNullOrWhiteSpace(deviceOverride))
+        {
+            SelectedRadioMonitorDevice = RadioMonitorDeviceCatalog.SystemDefault;
+            return;
+        }
+
+        var match = RadioMonitorDevices.FirstOrDefault(d =>
+            !ReferenceEquals(d, RadioMonitorDeviceCatalog.SystemDefault)
+            && string.Equals(d.Name, deviceOverride, StringComparison.Ordinal)
+            && d.IsLoopback == isLoopback);
+
+        if (match is null)
+        {
+            // Persisted device is no longer present in the enumeration (radio
+            // unplugged, etc.). Insert a synthetic entry so the user keeps the
+            // visible state but can still pick a different one. The synthetic
+            // entry's Name stays clean (so cw-decoder's substring matching can
+            // still succeed if the device reappears), and the
+            // "(not currently available)" suffix lives only in DisplayName.
+            match = new RadioMonitorDevice(deviceOverride, isLoopback, IsUnavailable: true);
+            RadioMonitorDevices.Add(match);
+        }
+
+        SelectedRadioMonitorDevice = match;
+    }
+
+    [RelayCommand]
+    internal async Task RefreshRadioMonitorDevicesAsync()
+    {
+        if (IsLoadingRadioMonitorDevices)
+        {
+            return;
+        }
+
+        IsLoadingRadioMonitorDevices = true;
+        try
+        {
+            var binary = CwDecoderProcessSampleSource.LocateBinary();
+            RadioMonitorBinaryStatus = binary is null
+                ? "Decoder not built — see experiments/cw-decoder/README.md"
+                : $"Decoder: {binary}";
+
+            var previousSelection = SelectedRadioMonitorDevice;
+            var devices = await RadioMonitorDeviceCatalog.ListAsync().ConfigureAwait(true);
+
+            RadioMonitorDevices.Clear();
+            foreach (var device in devices)
+            {
+                RadioMonitorDevices.Add(device);
+            }
+
+            // First refresh after construction: honor the caller's persisted
+            // preselection (set by MainWindowViewModel.CreateSettingsViewModel).
+            // This must run BEFORE the "preserve previousSelection" logic and
+            // BEFORE the SystemDefault fallback so we don't auto-select an
+            // unrelated entry.
+            if (!_pendingPreselectConsumed)
+            {
+                _pendingPreselectConsumed = true;
+                PreselectRadioMonitorDevice(PendingPreselectDeviceOverride, PendingPreselectIsLoopback);
+                return;
+            }
+
+            // Preserve user's selection across explicit refresh.
+            if (previousSelection is not null)
+            {
+                var match = RadioMonitorDevices.FirstOrDefault(d =>
+                    string.Equals(d.Name, previousSelection.Name, StringComparison.Ordinal)
+                    && d.IsLoopback == previousSelection.IsLoopback);
+                SelectedRadioMonitorDevice = match ?? RadioMonitorDeviceCatalog.SystemDefault;
+            }
+            else if (RadioMonitorDevices.Count > 0)
+            {
+                SelectedRadioMonitorDevice = RadioMonitorDevices[0];
+            }
+        }
+        finally
+        {
+            IsLoadingRadioMonitorDevices = false;
         }
     }
 

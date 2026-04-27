@@ -341,4 +341,134 @@ public sealed class AdifCodecTests
         // by the dedicated QrzLogid domain field only.
         Assert.False(parsed[0].ExtraFields.ContainsKey("APP_QRZLOG_LOGID"));
     }
+
+    [Fact]
+    public void Cw_decode_rx_wpm_round_trips_via_app_qsoripper_rx_wpm()
+    {
+        var original = new QsoRecord
+        {
+            WorkedCallsign = "W1AW",
+            Band = Band._40M,
+            Mode = Mode.Cw,
+            UtcTimestamp = Timestamp.FromDateTimeOffset(new DateTimeOffset(2024, 6, 15, 12, 0, 0, TimeSpan.Zero)),
+            CwDecodeRxWpm = 28,
+        };
+
+        var adif = AdifCodec.SerializeSingleQso(original);
+        Assert.Contains("<APP_QSORIPPER_RX_WPM:2>28", adif);
+
+        var parsed = AdifCodec.ParseAdif($"<EOH>\n{adif}");
+        Assert.Single(parsed);
+        Assert.True(parsed[0].HasCwDecodeRxWpm);
+        Assert.Equal(28u, parsed[0].CwDecodeRxWpm);
+        Assert.False(parsed[0].ExtraFields.ContainsKey("APP_QSORIPPER_RX_WPM"));
+    }
+
+    [Fact]
+    public void Cw_decode_rx_wpm_invalid_value_falls_back_to_extra_fields()
+    {
+        const string adif = "<EOH><CALL:4>W1AW<MODE:2>CW<QSO_DATE:8>20240101<TIME_ON:4>1200<APP_QSORIPPER_RX_WPM:7>not-num<eor>";
+
+        var qsos = AdifCodec.ParseAdif(adif);
+
+        Assert.Single(qsos);
+        Assert.False(qsos[0].HasCwDecodeRxWpm);
+        Assert.Equal("not-num", qsos[0].ExtraFields["APP_QSORIPPER_RX_WPM"]);
+    }
+
+    [Fact]
+    public void Serialize_omits_cw_decode_rx_wpm_when_unset()
+    {
+        var qso = new QsoRecord
+        {
+            WorkedCallsign = "W1AW",
+            Mode = Mode.Cw,
+            Band = Band._40M,
+            UtcTimestamp = Timestamp.FromDateTimeOffset(new DateTimeOffset(2024, 6, 15, 12, 0, 0, TimeSpan.Zero)),
+        };
+
+        var adif = AdifCodec.SerializeSingleQso(qso);
+
+        Assert.DoesNotContain("APP_QSORIPPER_RX_WPM", adif);
+    }
+
+    [Fact]
+    public void Cw_decode_transcript_round_trips_via_app_qsoripper_cw_transcript()
+    {
+        var original = new QsoRecord
+        {
+            WorkedCallsign = "W1AW",
+            Band = Band._40M,
+            Mode = Mode.Cw,
+            UtcTimestamp = Timestamp.FromDateTimeOffset(new DateTimeOffset(2024, 6, 15, 12, 0, 0, TimeSpan.Zero)),
+            CwDecodeTranscript = "CQ DE W1AW K",
+        };
+
+        var adif = AdifCodec.SerializeSingleQso(original);
+        Assert.Contains("<APP_QSORIPPER_CW_TRANSCRIPT:12>CQ DE W1AW K", adif);
+
+        var parsed = AdifCodec.ParseAdif($"<EOH>\n{adif}");
+        Assert.Single(parsed);
+        Assert.True(parsed[0].HasCwDecodeTranscript);
+        Assert.Equal("CQ DE W1AW K", parsed[0].CwDecodeTranscript);
+        Assert.False(parsed[0].ExtraFields.ContainsKey("APP_QSORIPPER_CW_TRANSCRIPT"));
+    }
+
+    [Fact]
+    public void Serialize_omits_cw_decode_transcript_when_unset()
+    {
+        var qso = new QsoRecord
+        {
+            WorkedCallsign = "W1AW",
+            Mode = Mode.Cw,
+            Band = Band._40M,
+            UtcTimestamp = Timestamp.FromDateTimeOffset(new DateTimeOffset(2024, 6, 15, 12, 0, 0, TimeSpan.Zero)),
+        };
+
+        var adif = AdifCodec.SerializeSingleQso(qso);
+
+        Assert.DoesNotContain("APP_QSORIPPER_CW_TRANSCRIPT", adif);
+    }
+
+    [Fact]
+    public void Cw_decode_transcript_sanitizes_non_ascii_and_control_chars()
+    {
+        // Include non-ASCII (é U+00E9), bell control (0x07), DEL (0x7F),
+        // and a preserved newline. After sanitization the field length
+        // must equal byte length so the Rust reader (byte-length writer)
+        // and .NET reader (char-length writer) agree on parsing.
+        var original = new QsoRecord
+        {
+            WorkedCallsign = "W1AW",
+            Mode = Mode.Cw,
+            Band = Band._40M,
+            UtcTimestamp = Timestamp.FromDateTimeOffset(new DateTimeOffset(2024, 6, 15, 12, 0, 0, TimeSpan.Zero)),
+            CwDecodeTranscript = "CQ\u00e9\u0007DE\u007f\nK",
+        };
+
+        var adif = AdifCodec.SerializeSingleQso(original);
+        Assert.Contains("<APP_QSORIPPER_CW_TRANSCRIPT:6>CQDE\nK", adif);
+
+        var parsed = AdifCodec.ParseAdif($"<EOH>\n{adif}");
+        Assert.Equal("CQDE\nK", parsed[0].CwDecodeTranscript);
+    }
+
+    [Fact]
+    public void Cw_decode_transcript_extra_fields_does_not_shadow_typed_value()
+    {
+        var qso = new QsoRecord
+        {
+            WorkedCallsign = "W1AW",
+            Mode = Mode.Cw,
+            Band = Band._40M,
+            UtcTimestamp = Timestamp.FromDateTimeOffset(new DateTimeOffset(2024, 6, 15, 12, 0, 0, TimeSpan.Zero)),
+            CwDecodeTranscript = "typed",
+        };
+        qso.ExtraFields["APP_QSORIPPER_CW_TRANSCRIPT"] = "stale";
+
+        var adif = AdifCodec.SerializeSingleQso(qso);
+
+        Assert.Contains("<APP_QSORIPPER_CW_TRANSCRIPT:5>typed", adif);
+        Assert.DoesNotContain("stale", adif);
+    }
 }

@@ -21,6 +21,9 @@ internal sealed partial class QsoLoggerViewModel : ObservableObject
 {
     private readonly IEngineClient _engine;
     private readonly DispatcherTimer _elapsedTimer;
+    private CwQsoWpmAggregator? _cwWpmAggregator;
+    private CwQsoTranscriptAggregator? _cwTranscriptAggregator;
+    private Action? _cwResetLockHandler;
     private DateTimeOffset _qsoStartTime;
     private bool _timerRunning;
     private CancellationTokenSource? _lookupCts;
@@ -90,8 +93,14 @@ internal sealed partial class QsoLoggerViewModel : ObservableObject
     // ── Constructor ──────────────────────────────────────────────────────
 
     public QsoLoggerViewModel(IEngineClient engine)
+        : this(engine, cwWpmAggregator: null)
+    {
+    }
+
+    internal QsoLoggerViewModel(IEngineClient engine, CwQsoWpmAggregator? cwWpmAggregator)
     {
         _engine = engine;
+        _cwWpmAggregator = cwWpmAggregator;
         _selectedBandIndex = 5;  // 20 m
         _selectedModeIndex = 0;  // SSB
         _qsoStartTime = DateTimeOffset.UtcNow;
@@ -115,10 +124,58 @@ internal sealed partial class QsoLoggerViewModel : ObservableObject
     internal CallsignRecord? LastLookupRecord => _lastLookupRecord;
     internal DateTimeOffset SuggestedUtcStart => _timerRunning ? _qsoStartTime : DateTimeOffset.UtcNow;
 
+    /// <summary>
+    /// True while the operator has an in-progress QSO entry — i.e., the
+    /// elapsed-time timer is running because a non-empty callsign was typed
+    /// and not yet logged, cleared, or abandoned. Consumed by
+    /// <c>MainWindowViewModel</c> to gate the cw-decoder subprocess
+    /// lifecycle on actual operator activity rather than running it
+    /// continuously.
+    /// </summary>
+    internal bool IsLoggerEpisodeActive => _timerRunning;
+
+    /// <summary>
+    /// True when the active operator-selected mode is CW. Consumed by
+    /// <c>MainWindowViewModel</c> together with
+    /// <see cref="IsLoggerEpisodeActive"/> to gate the cw-decoder
+    /// subprocess on actual CW QSOs — there's no value in hunting for
+    /// keying on an SSB or FT8 contact and a stale lock from CW spillover
+    /// would just noise up the WPM badge.
+    /// </summary>
+    internal bool IsLoggerOnCwMode => SelectedMode.ProtoMode == Mode.Cw;
+
+    /// <summary>
+    /// Raised when <see cref="IsLoggerOnCwMode"/> changes — i.e. the
+    /// operator selected a different mode from the picker. The host uses
+    /// this to start/stop the cw-decoder mid-episode without waiting for
+    /// the current QSO to end. Fires before
+    /// <see cref="ObservableObject.PropertyChanged"/> for SelectedMode.
+    /// </summary>
+    public event EventHandler? CwModeChanged;
+
     // ── Events ───────────────────────────────────────────────────────────
 
     /// <summary>Raised after a QSO is successfully logged.</summary>
     public event EventHandler? QsoLogged;
+
+    /// <summary>
+    /// Raised when a logged or cleared QSO crosses an episode boundary
+    /// (whichever the diagnostics recorder, if any, should finalize against).
+    /// The host (<see cref="MainWindowViewModel"/>) subscribes and writes
+    /// the per-episode comparison snapshot. Fired on the same thread as the
+    /// triggering action — UI thread for save success and Clear.
+    /// </summary>
+    public event EventHandler<CwEpisodeBoundaryEventArgs>? CwEpisodeBoundary;
+
+    /// <summary>
+    /// Raised when the operator first commits to a new QSO by typing into
+    /// the Callsign field (the same trigger that starts the elapsed timer).
+    /// The host (<see cref="MainWindowViewModel"/>) subscribes and asks an
+    /// active <see cref="Services.CwDiagnosticsRecorder"/> to open a new
+    /// per-QSO episode aligned to <c>UtcStart</c>. Idempotent semantics —
+    /// the timer only starts once per QSO so this fires once per QSO.
+    /// </summary>
+    public event EventHandler<CwEpisodeStartedEventArgs>? CwEpisodeStarted;
 
     /// <summary>Raised when the view should move focus to the callsign field.</summary>
     public event EventHandler? LoggerFocusRequested;
@@ -143,7 +200,18 @@ internal sealed partial class QsoLoggerViewModel : ObservableObject
         }
         else if (string.IsNullOrWhiteSpace(value))
         {
+            // Operator backed out of a QSO without saving or pressing Clear.
+            // Treat that the same as Clear() for episode-boundary purposes
+            // so a diagnostics recorder doesn't leave the episode hanging.
+            var boundaryStart = _qsoStartTime;
+            var boundaryEnd = DateTimeOffset.UtcNow;
+            StopTimer();
             ElapsedTimeText = "---";
+            CwEpisodeBoundary?.Invoke(this, new CwEpisodeBoundaryEventArgs(
+                Reason: "abandoned",
+                Qso: null,
+                UtcStart: boundaryStart,
+                UtcEnd: boundaryEnd));
         }
 
         // Cancel any pending lookup
@@ -175,19 +243,31 @@ internal sealed partial class QsoLoggerViewModel : ObservableObject
         }
     }
 
-    partial void OnSelectedModeIndexChanged(int value)
+    partial void OnSelectedModeIndexChanged(int oldValue, int newValue)
     {
-        if (value < 0 || value >= OperatorOptions.Modes.Length)
+        if (newValue < 0 || newValue >= OperatorOptions.Modes.Length)
             return;
 
         OnPropertyChanged(nameof(SelectedMode));
         OnPropertyChanged(nameof(ModeLabel));
+        OnPropertyChanged(nameof(IsLoggerOnCwMode));
 
         if (!_rstManuallySet)
         {
-            var defaultRst = OperatorOptions.Modes[value].DefaultRst;
+            var defaultRst = OperatorOptions.Modes[newValue].DefaultRst;
             RstSent = defaultRst;
             RstRcvd = defaultRst;
+        }
+
+        // Fire CwModeChanged whenever the CW-vs-not-CW classification
+        // flips so the host can start/stop the cw-decoder subprocess
+        // without waiting for the next episode boundary.
+        var oldIsCw = oldValue >= 0 && oldValue < OperatorOptions.Modes.Length
+            && OperatorOptions.Modes[oldValue].ProtoMode == Mode.Cw;
+        var newIsCw = OperatorOptions.Modes[newValue].ProtoMode == Mode.Cw;
+        if (oldIsCw != newIsCw)
+        {
+            CwModeChanged?.Invoke(this, EventArgs.Empty);
         }
     }
 
@@ -289,6 +369,7 @@ internal sealed partial class QsoLoggerViewModel : ObservableObject
         }
 
         EnrichFromLookup(qso, _lastLookupRecord);
+        EnrichFromCwDecoder(qso, utcStart, utcEnd);
 
         LogStatusText = "Logging\u2026";
         IsLogEnabled = false;
@@ -297,8 +378,18 @@ internal sealed partial class QsoLoggerViewModel : ObservableObject
         {
             var response = await _engine.LogQsoAsync(qso);
             LogStatusText = $"Logged {callsign}";
+            // Snapshot the window before Clear() resets _qsoStartTime, then
+            // raise the boundary event so a host-side diagnostics recorder
+            // (if attached) can finalize the episode against the actual QSO.
+            var boundaryStart = utcStart;
+            var boundaryEnd = utcEnd;
             Clear();
             QsoLogged?.Invoke(this, EventArgs.Empty);
+            CwEpisodeBoundary?.Invoke(this, new CwEpisodeBoundaryEventArgs(
+                Reason: "logged",
+                Qso: qso,
+                UtcStart: boundaryStart,
+                UtcEnd: boundaryEnd));
             FocusLogger();
         }
         catch (Grpc.Core.RpcException ex)
@@ -312,6 +403,81 @@ internal sealed partial class QsoLoggerViewModel : ObservableObject
     /// Copies cached callsign-lookup fields into the QSO record so the logged
     /// contact includes operator name, grid, country, DXCC, and zone data.
     /// </summary>
+    /// <summary>
+    /// Attach (or replace) the CW WPM aggregator used to populate
+    /// <see cref="QsoRecord.CwDecodeRxWpm"/> on logged CW QSOs. The
+    /// aggregator is owned by the host (typically the MainWindowViewModel)
+    /// and may be null when CW decoding is disabled or unsupported.
+    /// </summary>
+    internal void AttachCwAggregator(CwQsoWpmAggregator? aggregator)
+        => _cwWpmAggregator = aggregator;
+
+    /// <summary>
+    /// Attach (or replace) the CW transcript aggregator used to populate
+    /// <see cref="QsoRecord.CwDecodeTranscript"/> on logged CW QSOs. The
+    /// aggregator is owned by the host (typically the MainWindowViewModel)
+    /// and may be null when CW decoding is disabled or unsupported.
+    /// </summary>
+    internal void AttachCwTranscriptAggregator(CwQsoTranscriptAggregator? aggregator)
+        => _cwTranscriptAggregator = aggregator;
+
+    /// <summary>
+    /// Attach (or replace) the handler invoked from <see cref="ResetTimer"/>
+    /// (F7) to release the CW decoder's current pitch lock so the next QSO
+    /// starts hunting fresh. The handler is owned by the host (typically
+    /// MainWindowViewModel) and may be null when the decoder is disabled.
+    /// </summary>
+    internal void AttachCwResetLockHandler(Action? handler)
+        => _cwResetLockHandler = handler;
+
+    /// <summary>
+    /// Auto-fills <see cref="QsoRecord.CwDecodeRxWpm"/> and
+    /// <see cref="QsoRecord.CwDecodeTranscript"/> from the live CW
+    /// decoder when the QSO is on CW mode and the aggregator(s) have
+    /// data inside the QSO's window. Non-CW QSOs and missing/empty
+    /// sources are no-ops so logging is never blocked. Existing
+    /// transcript text on the QSO (e.g. typed by the operator on the
+    /// full card) is preserved — auto-fill never overwrites a
+    /// caller-supplied transcript.
+    /// </summary>
+    internal void EnrichFromCwDecoder(QsoRecord qso, DateTimeOffset utcStart, DateTimeOffset utcEnd)
+    {
+        if (qso.Mode != Mode.Cw)
+        {
+            // Defensive: if mode isn't CW, scrub any auto-filled CW
+            // fields so they can't ride along on a re-classified QSO.
+            qso.ClearCwDecodeRxWpm();
+            qso.ClearCwDecodeTranscript();
+            return;
+        }
+
+        if (_cwWpmAggregator is not null)
+        {
+            var mean = _cwWpmAggregator.GetMeanWpm(utcStart, utcEnd);
+            if (mean is not null && double.IsFinite(mean.Value) && mean.Value > 0)
+            {
+                var rounded = (uint)Math.Round(mean.Value, MidpointRounding.AwayFromZero);
+                if (rounded > 0)
+                {
+                    qso.CwDecodeRxWpm = rounded;
+                }
+            }
+        }
+
+        // Operator wins: if the QSO already carries non-empty transcript
+        // text (typed/edited on the full QSO card), don't overwrite it
+        // with the decoder's snapshot.
+        if (_cwTranscriptAggregator is not null
+            && (!qso.HasCwDecodeTranscript || string.IsNullOrWhiteSpace(qso.CwDecodeTranscript)))
+        {
+            var transcript = _cwTranscriptAggregator.GetTranscript(utcStart, utcEnd);
+            if (!string.IsNullOrWhiteSpace(transcript))
+            {
+                qso.CwDecodeTranscript = transcript;
+            }
+        }
+    }
+
     internal static void EnrichFromLookup(QsoRecord qso, CallsignRecord? record)
     {
         if (record is not { } rec)
@@ -376,6 +542,14 @@ internal sealed partial class QsoLoggerViewModel : ObservableObject
     [RelayCommand]
     private void Clear()
     {
+        // Snapshot the window before we reset state. We only fire the
+        // episode boundary if the timer was running (i.e. there was an
+        // operator-driven QSO attempt with a meaningful start time);
+        // resetting an already-empty form is not an episode boundary.
+        var hadTimer = _timerRunning;
+        var boundaryStart = _qsoStartTime;
+        var boundaryEnd = DateTimeOffset.UtcNow;
+
         _lookupCts?.Cancel();
         Callsign = string.Empty;
         Comment = string.Empty;
@@ -397,6 +571,15 @@ internal sealed partial class QsoLoggerViewModel : ObservableObject
         StopTimer();
         ElapsedTimeText = "---";
         UpdateLogEnabled();
+
+        if (hadTimer)
+        {
+            CwEpisodeBoundary?.Invoke(this, new CwEpisodeBoundaryEventArgs(
+                Reason: "cleared",
+                Qso: null,
+                UtcStart: boundaryStart,
+                UtcEnd: boundaryEnd));
+        }
     }
 
     [RelayCommand]
@@ -406,6 +589,20 @@ internal sealed partial class QsoLoggerViewModel : ObservableObject
         _timerRunning = true;
         _elapsedTimer.Start();
         ElapsedTimeText = "00:00";
+        // F7 is the operator's "starting a new QSO" signal — also drop
+        // any stale CW pitch lock from the previous contact so the
+        // decoder re-acquires for the new station instead of bleeding
+        // partial morse / WPM into the next QSO. Handler may be null
+        // when the CW decoder is disabled or unavailable.
+        try
+        {
+            _cwResetLockHandler?.Invoke();
+        }
+#pragma warning disable CA1031 // best-effort: never let a stuck child process block F7
+        catch
+        {
+        }
+#pragma warning restore CA1031
     }
 
     // ── Manual-override notifications ────────────────────────────────────
@@ -585,6 +782,7 @@ internal sealed partial class QsoLoggerViewModel : ObservableObject
         _qsoStartTime = DateTimeOffset.UtcNow;
         _timerRunning = true;
         _elapsedTimer.Start();
+        CwEpisodeStarted?.Invoke(this, new CwEpisodeStartedEventArgs(_qsoStartTime));
     }
 
     private void StopTimer()
