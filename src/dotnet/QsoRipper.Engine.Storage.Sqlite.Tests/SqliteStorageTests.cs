@@ -909,5 +909,86 @@ public sealed class SqliteStorageTests : IDisposable
             }
         }
     }
+    [Fact]
+    public async Task Migration_opens_legacy_pre_soft_delete_database_without_crash()
+    {
+        // Regression for #348: opening a database created before PR #289 must
+        // not throw "no such column: deleted_at_ms". The bug was that the
+        // bootstrap MigrationSql block created idx_qsos_deleted_at_ms before
+        // ApplySoftDeleteMigration() had a chance to ALTER TABLE the column
+        // in. On a fresh DB it worked because CREATE TABLE included the
+        // column; on an upgraded DB the CREATE TABLE IF NOT EXISTS no-oped
+        // and the CREATE INDEX exploded.
+        var path = Path.Combine(Path.GetTempPath(), $"qsoripper-legacy-{Guid.NewGuid():N}.db");
+        try
+        {
+            // Hand-build the pre-#289 schema: no deleted_at_ms, no
+            // pending_remote_delete columns, no soft-delete index.
+            using (var raw = new SqliteConnection($"Data Source={path}"))
+            {
+                raw.Open();
+                using var cmd = raw.CreateCommand();
+                cmd.CommandText = """
+                    CREATE TABLE qsos (
+                        local_id TEXT PRIMARY KEY NOT NULL,
+                        qrz_logid TEXT,
+                        qrz_bookid TEXT,
+                        station_callsign TEXT NOT NULL,
+                        worked_callsign TEXT NOT NULL,
+                        utc_timestamp_ms INTEGER,
+                        band INTEGER NOT NULL,
+                        mode INTEGER NOT NULL,
+                        contest_id TEXT,
+                        created_at_ms INTEGER,
+                        updated_at_ms INTEGER,
+                        sync_status INTEGER NOT NULL,
+                        record BLOB NOT NULL
+                    );
+                    """;
+                cmd.ExecuteNonQuery();
+            }
+            SqliteConnection.ClearAllPools();
+
+            // Opening must succeed — the migration has to detect the missing
+            // columns, ALTER TABLE them in, then create the soft-delete index.
+            using (var storage = new SqliteStorageBuilder().Path(path).Build())
+            {
+                // Soft-deleting must work end-to-end against the migrated DB.
+                var qso = MakeQso("legacy-1", "W1AW", Band._20M, Mode.Ft8, "2026-04-01T00:00:00Z");
+                qso.StationCallsign = "K7RND";
+                await storage.Logbook.InsertQsoAsync(qso);
+                await storage.Logbook.SoftDeleteQsoAsync("legacy-1", DateTimeOffset.UtcNow, pendingRemoteDelete: false);
+
+                var fetched = await storage.Logbook.GetQsoAsync("legacy-1");
+                Assert.NotNull(fetched);
+                Assert.NotNull(fetched!.DeletedAt);
+            }
+
+            // Verify the index was created by the post-bootstrap migration step.
+            SqliteConnection.ClearAllPools();
+            using (var verify = new SqliteConnection($"Data Source={path}"))
+            {
+                verify.Open();
+                using var cmd = verify.CreateCommand();
+                cmd.CommandText = "SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'idx_qsos_deleted_at_ms'";
+                using var reader = cmd.ExecuteReader();
+                Assert.True(reader.Read(), "idx_qsos_deleted_at_ms should exist after migrating a legacy DB");
+            }
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            if (File.Exists(path))
+            {
+                try
+                {
+                    File.Delete(path);
+                }
+                catch (IOException)
+                {
+                }
+            }
+        }
+    }
 }
 #pragma warning restore CA1707
