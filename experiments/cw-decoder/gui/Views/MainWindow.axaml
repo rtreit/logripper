@@ -725,10 +725,12 @@
                         ToolTip.Tip="SCORE LABELS scoring mode. Off = exact-window (decode just the labeled slice; measures decoder quality). On = full-stream (run the streaming decoder over the whole file and align to the label window; measures live acquisition + lock behavior — much harsher, often CER 0.8+ on the same clip)." />
               <CheckBox Grid.Column="3" Content="WIDE SWEEP" IsChecked="{Binding UseWideSweep, Mode=TwoWay}" VerticalAlignment="Center" />
               <CheckBox Grid.Column="4" Content="USE CHECKED LABELS" IsChecked="{Binding UseSelectedLabelFiles, Mode=TwoWay}" VerticalAlignment="Center" />
-              <Button Grid.Column="5" Classes="primary" Content="SCORE LABELS" Click="OnRunLabelScoreClick"
-                      IsEnabled="{Binding CanRunLabelScore}" FontSize="11" Padding="14,4" />
-              <Button Grid.Column="6" Classes="primary" Content="SWEEP BASELINE" Click="OnRunLabelSweepClick"
-                      IsEnabled="{Binding CanRunLabelSweep}" FontSize="11" Padding="14,4" />
+              <Button Grid.Column="5" Classes="primary" Content="SCORE LABELS (v1 legacy)" Click="OnRunLabelScoreClick"
+                      IsEnabled="{Binding CanRunLabelScore}" FontSize="11" Padding="14,4"
+                      ToolTip.Tip="LEGACY label-eval harness that runs the v1 streaming decoder (window/decode_every/confirmations). The live decoder on the DECODE tab does NOT use this path — it uses Whole-buffer ditdah (v2) by default. Use STRATEGY SWEEP for honest decoder-quality numbers; this button is kept only for historical comparison." />
+              <Button Grid.Column="6" Classes="primary" Content="SWEEP BASELINE (v1 legacy)" Click="OnRunLabelSweepClick"
+                      IsEnabled="{Binding CanRunLabelSweep}" FontSize="11" Padding="14,4"
+                      ToolTip.Tip="LEGACY: tunes v1 streaming parameters. The live decoder doesn't use these. Kept for historical comparison." />
               <StackPanel Grid.Column="7" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center"
                           ToolTip.Tip="Comma-separated strategy tokens. auto / N (e.g. 28) = ditdah exact-window. region / regionN = region-stream pipeline + ditdah. env / envN = alternate envelope decoder. Example: auto,28,region28,env,env28">
                 <TextBlock Text="STRAT WPMS" Classes="label" VerticalAlignment="Center" />
@@ -738,7 +740,7 @@
               </StackPanel>
               <Button Grid.Column="8" Classes="primary" Content="STRATEGY SWEEP" Click="OnRunStrategySweepClick"
                       IsEnabled="{Binding CanRunLabelScore}" FontSize="11" Padding="14,4"
-                      ToolTip.Tip="Run the strategy sweep across the selected labels. Supports auto/N (ditdah exact-window), region/regionN (region-stream + ditdah), and env/envN (alternate envelope decoder). Outputs a per-clip × strategy CER table." />
+                      ToolTip.Tip="Recommended decoder-quality test. Runs the bounded v2 decoder across the selected labels. auto/N = ditdah whole-buffer (the live default). region/regionN = region-stream pipeline + ditdah. env/envN = alternate envelope decoder. Outputs a per-clip × strategy CER table." />
             </Grid>
 
             <Border Grid.Row="1" BorderBrush="{StaticResource AccentCyan}" BorderThickness="1" CornerRadius="2" Padding="8"
@@ -933,6 +935,8 @@
                 <Border BorderBrush="{StaticResource GridLine}" BorderThickness="1" CornerRadius="2" Padding="8"
                         IsVisible="{Binding HasStrategySweepResult}">
                   <StackPanel Spacing="8">
+                    <TextBlock Text="STRATEGY SWEEP — bounded v2 decoder (the same one the live DECODE tab uses by default). auto/N = whole-buffer ditdah. region/regionN = region-stream pipeline. env/envN = alternate envelope decoder."
+                               Foreground="{StaticResource AccentAmber}" FontSize="11" TextWrapping="Wrap" />
                     <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
                       <TextBlock Text="{Binding StrategySweepSummaryText}" Foreground="{StaticResource AccentCyan}" TextWrapping="Wrap" />
                       <Button Grid.Column="1" Classes="primary" Content="COPY MARKDOWN" Click="OnCopyStrategySweepMarkdownClick"
@@ -972,9 +976,12 @@
                   </StackPanel>
                 </Border>
 
-                <Expander Header="RAW RESULT JSON"
+                <Expander Header="RAW RESULT JSON — SCORE LABELS (v1 legacy harness)"
                           IsVisible="{Binding LabelEvaluationOutputText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
-                  <TextBox Text="{Binding LabelEvaluationOutputText}"
+                  <StackPanel Spacing="6">
+                    <TextBlock Text="LEGACY: this is from the v1 streaming label-eval harness, not the live decoder. The live decoder defaults to Whole-buffer ditdah (v2) which gets near-zero CER on these same clips — see STRATEGY SWEEP above."
+                               Foreground="{StaticResource AccentAmber}" FontSize="11" TextWrapping="Wrap" />
+                    <TextBox Text="{Binding LabelEvaluationOutputText}"
                            IsReadOnly="True"
                            AcceptsReturn="True"
                            TextWrapping="NoWrap"
@@ -983,6 +990,7 @@
                            FontSize="12"
                            Background="#0C1A28"
                            Foreground="{StaticResource TextHi}" />
+                  </StackPanel>
                 </Expander>
               </StackPanel>
             </ScrollViewer>
