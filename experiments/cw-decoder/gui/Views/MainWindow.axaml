@@ -730,14 +730,15 @@
               <Button Grid.Column="6" Classes="primary" Content="SWEEP BASELINE" Click="OnRunLabelSweepClick"
                       IsEnabled="{Binding CanRunLabelSweep}" FontSize="11" Padding="14,4" />
               <StackPanel Grid.Column="7" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center"
-                          ToolTip.Tip="Comma-separated pin-WPM values to sweep (in addition to auto). Example: 18,22,25,28">
+                          ToolTip.Tip="Comma-separated strategy tokens. auto / N (e.g. 28) = ditdah exact-window. region / regionN = region-stream pipeline + ditdah. env / envN = alternate envelope decoder. Example: auto,28,region28,env,env28">
                 <TextBlock Text="STRAT WPMS" Classes="label" VerticalAlignment="Center" />
-                <TextBox Width="110" Text="{Binding StrategySweepWpms, Mode=TwoWay}"
-                         Background="{StaticResource BgPanel}" Foreground="{StaticResource TextHi}" />
+                <TextBox Width="240" Text="{Binding StrategySweepWpms, Mode=TwoWay}"
+                         Background="{StaticResource BgPanel}" Foreground="{StaticResource TextHi}"
+                         Watermark="auto,28,region28,env28" />
               </StackPanel>
               <Button Grid.Column="8" Classes="primary" Content="STRATEGY SWEEP" Click="OnRunStrategySweepClick"
                       IsEnabled="{Binding CanRunLabelScore}" FontSize="11" Padding="14,4"
-                      ToolTip.Tip="Run the v2 (whole-buffer ditdah) decoder against the selected labels with auto + each pin-WPM. Outputs a per-clip × strategy CER table." />
+                      ToolTip.Tip="Run the strategy sweep across the selected labels. Supports auto/N (ditdah exact-window), region/regionN (region-stream + ditdah), and env/envN (alternate envelope decoder). Outputs a per-clip × strategy CER table." />
             </Grid>
 
             <Border Grid.Row="1" BorderBrush="{StaticResource AccentCyan}" BorderThickness="1" CornerRadius="2" Padding="8"
