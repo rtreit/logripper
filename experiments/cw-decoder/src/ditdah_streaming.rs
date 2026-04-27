@@ -219,9 +219,7 @@ impl PrefixStabilizer {
 
     pub fn push_snapshot(&mut self, snapshot_text: &str) -> String {
         let mut normalized = normalize_snapshot_text(snapshot_text);
-        if normalized.is_empty()
-            || is_noise_dominated_snapshot(&normalized)
-        {
+        if normalized.is_empty() || is_noise_dominated_snapshot(&normalized) {
             return String::new();
         }
 
@@ -315,8 +313,6 @@ fn has_stream_anchor(text: &str, stream_is_active: bool) -> bool {
             || *token == "DE"
             || *token == "POTA"
             || *token == "TEST"
-            || *token == "Q"
-            || *token == "SB"
             || *token == "QSB"
             || *token == "QST"
             || *token == "73"
@@ -329,7 +325,9 @@ fn has_stream_anchor(text: &str, stream_is_active: bool) -> bool {
 
 fn anchored_snapshot_text(text: &str) -> Option<String> {
     let tokens: Vec<&str> = text.split_whitespace().collect();
-    let idx = tokens.iter().position(|token| is_stream_anchor_token(token))?;
+    let idx = tokens
+        .iter()
+        .position(|token| is_stream_anchor_token(token))?;
     Some(tokens[idx..].join(" "))
 }
 
@@ -348,8 +346,6 @@ fn is_stream_anchor_token(token: &str) -> bool {
         || token == "DE"
         || token == "POTA"
         || token == "TEST"
-        || token == "Q"
-        || token == "SB"
         || token == "QSB"
         || token == "QST"
         || token == "73"
@@ -662,6 +658,23 @@ mod tests {
     }
 
     #[test]
+    fn prefix_stabilizer_rejects_weak_q_code_fragments_as_anchors() {
+        let mut stabilizer = PrefixStabilizer::new(1);
+
+        assert_eq!(stabilizer.push_snapshot("Q OEIIT OI EEE"), "");
+        assert_eq!(stabilizer.push_snapshot("SB IZ"), "");
+        assert_eq!(stabilizer.transcript(), "");
+    }
+
+    #[test]
+    fn prefix_stabilizer_accepts_complete_q_code_anchors() {
+        let mut stabilizer = PrefixStabilizer::new(1);
+
+        assert_eq!(stabilizer.push_snapshot("QSB"), "QSB");
+        assert_eq!(stabilizer.transcript(), "QSB");
+    }
+
+    #[test]
     fn prefix_stabilizer_manual_anchor_accepts_callsign_like_mid_qso_text() {
         let mut stabilizer = PrefixStabilizer::new(1);
         assert_eq!(stabilizer.push_snapshot("KK6QZM"), "");
@@ -688,7 +701,10 @@ mod tests {
     fn prefix_stabilizer_crops_noise_before_automatic_anchor() {
         let mut stabilizer = PrefixStabilizer::new(1);
 
-        assert_eq!(stabilizer.push_snapshot("T E I CQ CQ DE K5KV"), "CQ CQ DE K5KV");
+        assert_eq!(
+            stabilizer.push_snapshot("T E I CQ CQ DE K5KV"),
+            "CQ CQ DE K5KV"
+        );
         assert_eq!(stabilizer.transcript(), "CQ CQ DE K5KV");
     }
 
