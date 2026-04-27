@@ -10,6 +10,7 @@ pub mod harvest;
 pub mod json;
 pub mod log_capture;
 pub mod preview;
+pub mod region_stream;
 pub mod streaming;
 pub mod streaming_v2;
 pub mod tui;

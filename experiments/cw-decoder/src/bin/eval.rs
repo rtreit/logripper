@@ -842,7 +842,19 @@ fn score_labels_full_stream_streaming(
         .collect()
 }
 
-fn parse_strategy_list(args: &[String]) -> Vec<Option<f32>> {
+#[derive(Debug, Clone, Copy)]
+enum Strategy {
+    /// v2 whole-buffer ditdah on the (expanded) labeled slice. Auto WPM.
+    ExactAuto,
+    /// v2 whole-buffer ditdah on the (expanded) labeled slice. Pinned WPM.
+    ExactPin(f32),
+    /// New region-stream pipeline (see `region_stream` module). Auto WPM.
+    RegionAuto,
+    /// Region-stream pipeline with pinned WPM passed to ditdah.
+    RegionPin(f32),
+}
+
+fn parse_strategy_list(args: &[String]) -> Vec<Strategy> {
     let raw = arg_value_string(args, "--strategies").unwrap_or_else(|| "auto,22,25,28".to_string());
     let mut out = Vec::new();
     for tok in raw.split(',') {
@@ -851,15 +863,24 @@ fn parse_strategy_list(args: &[String]) -> Vec<Option<f32>> {
             continue;
         }
         if t.eq_ignore_ascii_case("auto") || t == "0" {
-            out.push(None);
+            out.push(Strategy::ExactAuto);
+        } else if t.eq_ignore_ascii_case("region") {
+            out.push(Strategy::RegionAuto);
+        } else if let Some(rest) = t.strip_prefix("region:").or_else(|| t.strip_prefix("region")) {
+            // accept "region:25" and "region25"
+            if let Ok(v) = rest.trim().parse::<f32>() {
+                if v > 0.0 {
+                    out.push(Strategy::RegionPin(v));
+                }
+            }
         } else if let Ok(v) = t.parse::<f32>() {
             if v > 0.0 {
-                out.push(Some(v));
+                out.push(Strategy::ExactPin(v));
             }
         }
     }
     if out.is_empty() {
-        out.push(None);
+        out.push(Strategy::ExactAuto);
     }
     out
 }
@@ -870,43 +891,133 @@ fn arg_value_string(args: &[String], name: &str) -> Option<String> {
         .map(|w| w[1].clone())
 }
 
-fn score_labels_v2_pinned(
+fn score_labels_strategy(
     labels: &[LabelExample],
     audio_cache: &HashMap<PathBuf, audio::DecodedAudio>,
     score_cfg: LabelScoreConfig,
-    pin_wpm: Option<f32>,
+    strategy: Strategy,
 ) -> Vec<LabelScore> {
+    // For region modes we want to compute regions per-source-file once and
+    // share across all labels referencing that file (huge win for long
+    // recordings with many labels).
+    let mut region_cache: HashMap<PathBuf, cw_decoder_poc::region_stream::RegionStreamResult> =
+        HashMap::new();
+    if matches!(strategy, Strategy::RegionAuto | Strategy::RegionPin(_)) {
+        let pin = if let Strategy::RegionPin(w) = strategy { Some(w) } else { None };
+        let cfg = cw_decoder_poc::region_stream::RegionStreamConfig {
+            pin_wpm: pin,
+            ..Default::default()
+        };
+        for example in labels {
+            if region_cache.contains_key(&example.source) { continue; }
+            if let Some(audio) = audio_cache.get(&example.source) {
+                let r = cw_decoder_poc::region_stream::decode_region_stream(
+                    &audio.samples,
+                    audio.sample_rate,
+                    &cfg,
+                );
+                region_cache.insert(example.source.clone(), r);
+            }
+        }
+    }
+
     labels
         .iter()
         .map(|example| {
             let audio = audio_cache
                 .get(&example.source)
                 .expect("audio cache missing source");
-            let (start, end) = expanded_sample_bounds(audio, example, score_cfg);
-            let samples = if end > start {
-                &audio.samples[start..end]
-            } else {
-                &[][..]
-            };
-            let decoded = match pin_wpm {
-                Some(w) => decode_text_pinned(samples, audio.sample_rate, w),
-                None => decode_text(samples, audio.sample_rate),
+            let decoded = match strategy {
+                Strategy::ExactAuto | Strategy::ExactPin(_) => {
+                    let (start, end) = expanded_sample_bounds(audio, example, score_cfg);
+                    let samples = if end > start { &audio.samples[start..end] } else { &[][..] };
+                    match strategy {
+                        Strategy::ExactAuto => decode_text(samples, audio.sample_rate),
+                        Strategy::ExactPin(w) => decode_text_pinned(samples, audio.sample_rate, w),
+                        _ => unreachable!(),
+                    }
+                }
+                Strategy::RegionAuto | Strategy::RegionPin(_) => {
+                    let pin = if let Strategy::RegionPin(w) = strategy { Some(w) } else { None };
+                    let result = region_cache
+                        .get(&example.source)
+                        .expect("region cache missing source");
+                    decode_label_via_region(result, audio, example, pin)
+                }
             };
             build_label_score(example, &decoded)
         })
         .collect()
 }
 
-fn strategy_label(strategy: Option<f32>) -> String {
+/// Score a single label using the region pipeline:
+/// 1. Find any regions that overlap the labeled time span.
+/// 2. For each, take the *intersection* of the region and the label window
+///    (so we don't include audio outside the labeled span — that would inflate
+///    CER on short labels excerpted from longer recordings).
+/// 3. Decode each clipped slice with ditdah whole-buffer.
+/// 4. Concatenate. If no region overlaps, fall back to decoding the raw
+///    labeled span (equivalent to ExactWindow), which is the right "no signal
+///    detected" behavior because the noise floor was too high for the
+///    detector — at worst we tie ExactWindow.
+fn decode_label_via_region(
+    result: &cw_decoder_poc::region_stream::RegionStreamResult,
+    audio: &audio::DecodedAudio,
+    example: &LabelExample,
+    pin_wpm: Option<f32>,
+) -> String {
+    let lo = example.start_s.max(0.0);
+    let hi = example.end_s.max(lo);
+    let mut overlapping: Vec<(f32, f32)> = result
+        .regions
+        .iter()
+        .filter_map(|r| {
+            let s = r.start_s.max(lo);
+            let e = r.end_s.min(hi);
+            if e > s { Some((s, e)) } else { None }
+        })
+        .collect();
+    overlapping.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+
+    if overlapping.is_empty() {
+        let s = (lo * audio.sample_rate as f32) as usize;
+        let e = ((hi * audio.sample_rate as f32) as usize).min(audio.samples.len());
+        if e <= s { return String::new(); }
+        let slice = &audio.samples[s..e];
+        return match pin_wpm {
+            Some(w) => decode_text_pinned(slice, audio.sample_rate, w),
+            None => decode_text(slice, audio.sample_rate),
+        };
+    }
+
+    let mut parts = Vec::with_capacity(overlapping.len());
+    for (s_s, e_s) in overlapping {
+        let s = (s_s * audio.sample_rate as f32) as usize;
+        let e = ((e_s * audio.sample_rate as f32) as usize).min(audio.samples.len());
+        if e <= s { continue; }
+        let slice = &audio.samples[s..e];
+        let text = match pin_wpm {
+            Some(w) => decode_text_pinned(slice, audio.sample_rate, w),
+            None => decode_text(slice, audio.sample_rate),
+        };
+        let trimmed = text.trim();
+        if !trimmed.is_empty() { parts.push(trimmed.to_string()); }
+    }
+    parts.join(" ")
+}
+
+fn strategy_label(strategy: Strategy) -> String {
     match strategy {
-        None => "auto".to_string(),
-        Some(w) => format!("pin{:.0}", w),
+        Strategy::ExactAuto => "auto".to_string(),
+        Strategy::ExactPin(w) => format!("pin{:.0}", w),
+        Strategy::RegionAuto => "region".to_string(),
+        Strategy::RegionPin(w) => format!("region{:.0}", w),
     }
 }
 
 fn run_strategy_sweep(
     label_files: &[PathBuf],
-    strategies: &[Option<f32>],
+    strategies: &[Strategy],
     score_cfg: LabelScoreConfig,
     json_mode: bool,
 ) -> Result<()> {
@@ -921,7 +1032,7 @@ fn run_strategy_sweep(
         .par_iter()
         .map(|s| {
             let label = strategy_label(*s);
-            let scores = score_labels_v2_pinned(&labels, &audio_cache, score_cfg, *s);
+            let scores = score_labels_strategy(&labels, &audio_cache, score_cfg, *s);
             (label, scores)
         })
         .collect();
