@@ -187,6 +187,9 @@ public partial class MainWindow : Window
         await Vm.RunStrategySweepAsync();
     }
 
+    private void OnResetStrategyDefaultsClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+        => Vm?.ResetStrategyDefaults();
+
     private async void OnCopyStrategySweepMarkdownClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
         if (Vm is null) return;
