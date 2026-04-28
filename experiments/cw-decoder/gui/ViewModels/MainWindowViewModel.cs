@@ -54,6 +54,8 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
         _selectedLabelCorpusFolder = defaultFolder;
         ReloadAvailableLabelFiles();
 
+        HookStrategyOptionEvents();
+
         _process.EventReceived += OnEvent;
         _process.StderrLine += line => Dispatcher.UIThread.Post(() => StatusText = line);
         _process.Exited += code => Dispatcher.UIThread.Post(() =>
@@ -2504,15 +2506,122 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
     }
 
     private string _strategySweepWpms = "auto,28,region28,env,env28,live-env";
-    /// <summary>Comma-separated list of strategy tokens to sweep alongside auto.
-    /// Editable by the operator. "auto" is always included.
-    /// Includes "live-env" by default so the VISUALIZER tab's decoder
-    /// (LiveEnvelopeStreamer / stream-live-v3) is scored apples-to-apples
-    /// alongside the offline strategies.</summary>
+    /// <summary>Comma-separated list of strategy tokens. Retained for
+    /// backwards compatibility (some tests/bindings still reference it),
+    /// but no longer the source of truth for the TUNING tab — the picker
+    /// (<see cref="StrategyOptions"/> + <see cref="StrategySweepCustomTokens"/>)
+    /// is what <see cref="RunStrategySweepAsync"/> forwards to the eval binary.</summary>
     public string StrategySweepWpms
     {
         get => _strategySweepWpms;
         set => Set(ref _strategySweepWpms, value);
+    }
+
+    /// <summary>Predefined strategy checkboxes shown in the TUNING tab picker.
+    /// Tokens are forwarded verbatim to the Rust eval binary's
+    /// parse_strategy_list (auto, region, region&lt;N&gt;, env, env&lt;N&gt;,
+    /// live-env, bare numbers).</summary>
+    public ObservableCollection<StrategyOption> StrategyOptions { get; } = new()
+    {
+        new StrategyOption("auto",     "auto",     true,  "Whole-buffer ditdah, auto-detect WPM (DECODE tab default)"),
+        new StrategyOption("22",       "22 wpm",   false, "Whole-buffer ditdah, pinned to 22 wpm"),
+        new StrategyOption("25",       "25 wpm",   false, "Whole-buffer ditdah, pinned to 25 wpm"),
+        new StrategyOption("28",       "28 wpm",   true,  "Whole-buffer ditdah, pinned to 28 wpm"),
+        new StrategyOption("30",       "30 wpm",   false, "Whole-buffer ditdah, pinned to 30 wpm"),
+        new StrategyOption("region",   "region",   false, "Region-stream pipeline, auto-detect WPM"),
+        new StrategyOption("region28", "region28", true,  "Region-stream pipeline, pinned to 28 wpm"),
+        new StrategyOption("env",      "env",      true,  "Offline envelope decoder, auto-detect WPM"),
+        new StrategyOption("env28",    "env28",    true,  "Offline envelope decoder, pinned to 28 wpm"),
+        new StrategyOption("live-env", "live-env", true,  "Live envelope streamer (VISUALIZER tab decoder), auto-detect WPM"),
+    };
+
+    private string _strategySweepCustomTokens = string.Empty;
+    /// <summary>One-off comma-separated tokens (e.g. "region30,env25") appended
+    /// to the picker selection before forwarding to the eval binary.</summary>
+    public string StrategySweepCustomTokens
+    {
+        get => _strategySweepCustomTokens;
+        set
+        {
+            if (Set(ref _strategySweepCustomTokens, value))
+            {
+                OnPropertyChanged(nameof(StrategyPickerSummary));
+            }
+        }
+    }
+
+    /// <summary>Live label for the picker button — e.g. "STRATEGIES (5)" or
+    /// "STRATEGIES (5+2 custom)" when custom tokens are present.</summary>
+    public string StrategyPickerSummary
+    {
+        get
+        {
+            int checkedCount = 0;
+            foreach (var opt in StrategyOptions)
+            {
+                if (opt.IsChecked) checkedCount++;
+            }
+            int customCount = 0;
+            foreach (var tok in (_strategySweepCustomTokens ?? string.Empty).Split(','))
+            {
+                if (!string.IsNullOrWhiteSpace(tok)) customCount++;
+            }
+            return customCount > 0
+                ? $"STRATEGIES ({checkedCount}+{customCount} custom)"
+                : $"STRATEGIES ({checkedCount})";
+        }
+    }
+
+    /// <summary>Resolve the ordered, deduped (case-insensitive) token list to send
+    /// to the eval binary: always "auto" first, then checked picker tokens in
+    /// declaration order, then comma-split custom tokens.</summary>
+    private List<string> BuildStrategyTokens()
+    {
+        var tokens = new List<string> { "auto" };
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "auto" };
+        foreach (var opt in StrategyOptions)
+        {
+            if (!opt.IsChecked) continue;
+            var t = opt.Token?.Trim();
+            if (string.IsNullOrEmpty(t)) continue;
+            if (!seen.Add(t)) continue;
+            tokens.Add(t);
+        }
+        foreach (var raw in (_strategySweepCustomTokens ?? string.Empty).Split(','))
+        {
+            var t = raw.Trim();
+            if (string.IsNullOrEmpty(t)) continue;
+            if (!seen.Add(t)) continue;
+            tokens.Add(t);
+        }
+        return tokens;
+    }
+
+    /// <summary>Restore the strategy picker to its documented defaults and
+    /// clear the custom-tokens textbox. Wired to the RESET TO DEFAULTS button.</summary>
+    public void ResetStrategyDefaults()
+    {
+        foreach (var opt in StrategyOptions)
+        {
+            opt.IsChecked = opt.DefaultChecked;
+        }
+        StrategySweepCustomTokens = string.Empty;
+    }
+
+    private void HookStrategyOptionEvents()
+    {
+        foreach (var opt in StrategyOptions)
+        {
+            opt.PropertyChanged += OnStrategyOptionPropertyChanged;
+        }
+    }
+
+    private void OnStrategyOptionPropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(StrategyOption.IsChecked))
+        {
+            OnPropertyChanged(nameof(StrategyPickerSummary));
+        }
     }
 
     private StrategySweepResult? _strategySweepResult;
@@ -2573,23 +2682,13 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
             return;
         }
 
-        // Always include "auto" plus operator-supplied tokens. The Rust eval
-        // binary's parse_strategy_list accepts: auto, region, region<N>,
-        // region:<N>, env, envelope, env<N>, envelope<N>, env:<N>,
-        // envelope:<N>, live-env, liveenv, and bare numbers (ExactPin).
-        // Forward any non-empty, case-insensitively-deduped token; let the
-        // Rust parser decide what's valid. (The previous implementation only
-        // accepted "auto" and bare numbers, silently dropping region*/env*
-        // tokens advertised by the tooltip and watermark.)
-        var strategies = new List<string> { "auto" };
-        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "auto" };
-        foreach (var tok in (StrategySweepWpms ?? string.Empty).Split(','))
-        {
-            var t = tok.Trim();
-            if (string.IsNullOrEmpty(t)) continue;
-            if (!seen.Add(t)) continue;
-            strategies.Add(t);
-        }
+        // The picker (StrategyOptions + StrategySweepCustomTokens) is the
+        // source of truth. The Rust eval binary's parse_strategy_list accepts:
+        // auto, region, region<N>, region:<N>, env, envelope, env<N>,
+        // envelope<N>, env:<N>, envelope:<N>, live-env, liveenv, and bare
+        // numbers (ExactPin). BuildStrategyTokens always includes "auto"
+        // first and dedupes case-insensitively across picker + custom tokens.
+        var strategies = BuildStrategyTokens();
 
         CancelAndDisposeEvaluation();
         var cts = new CancellationTokenSource();

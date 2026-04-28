@@ -723,16 +723,36 @@
               <CheckBox Grid.Column="1" Content="ALL LABELS" IsChecked="{Binding EvaluateAllLabels, Mode=TwoWay}" VerticalAlignment="Center" />
               <CheckBox Grid.Column="2" Content="WIDE SWEEP" IsChecked="{Binding UseWideSweep, Mode=TwoWay}" VerticalAlignment="Center" />
               <CheckBox Grid.Column="3" Content="USE CHECKED LABELS" IsChecked="{Binding UseSelectedLabelFiles, Mode=TwoWay}" VerticalAlignment="Center" />
-              <StackPanel Grid.Column="4" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center"
-                          ToolTip.Tip="Comma-separated strategy tokens. auto / N (e.g. 28) = ditdah exact-window. region / regionN = region-stream pipeline + ditdah. env / envN = alternate envelope decoder. Example: auto,28,region28,env,env28">
-                <TextBlock Text="STRAT WPMS" Classes="label" VerticalAlignment="Center" />
-                <TextBox Width="240" Text="{Binding StrategySweepWpms, Mode=TwoWay}"
-                         Background="{StaticResource BgPanel}" Foreground="{StaticResource TextHi}"
-                         Watermark="auto,28,region28,env28" />
-              </StackPanel>
+              <Button Grid.Column="4" Content="{Binding StrategyPickerSummary}" FontSize="11" Padding="14,4"
+                      VerticalAlignment="Center"
+                      ToolTip.Tip="Pick which strategies the eval binary scores. auto/N = ditdah whole-buffer. region/regionN = region-stream pipeline + ditdah. env/envN = offline envelope decoder. live-env = VISUALIZER tab streamer. Use CUSTOM TOKENS for one-offs (e.g. region30,env25).">
+                <Button.Flyout>
+                  <Flyout Placement="Bottom">
+                    <StackPanel Orientation="Vertical" Spacing="6" MinWidth="240">
+                      <TextBlock Text="STRATEGIES" Classes="label" />
+                      <ItemsControl ItemsSource="{Binding StrategyOptions}">
+                        <ItemsControl.ItemTemplate>
+                          <DataTemplate>
+                            <CheckBox Content="{Binding Label}"
+                                      IsChecked="{Binding IsChecked, Mode=TwoWay}"
+                                      ToolTip.Tip="{Binding Tooltip}" />
+                          </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                      </ItemsControl>
+                      <TextBlock Text="CUSTOM TOKENS" Classes="label" Margin="0,4,0,0" />
+                      <TextBox Text="{Binding StrategySweepCustomTokens, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                               Background="{StaticResource BgPanel}" Foreground="{StaticResource TextHi}"
+                               Watermark="region30,env25,live-env"
+                               ToolTip.Tip="Comma-separated extra tokens forwarded verbatim to the eval binary." />
+                      <Button Content="RESET TO DEFAULTS" Click="OnResetStrategyDefaultsClick"
+                              FontSize="11" Padding="10,4" HorizontalAlignment="Stretch" />
+                    </StackPanel>
+                  </Flyout>
+                </Button.Flyout>
+              </Button>
               <Button Grid.Column="5" Classes="primary" Content="SCORE LABELS (v2 — recommended)" Click="OnRunStrategySweepClick"
                       IsEnabled="{Binding CanRunLabelScore}" FontSize="11" Padding="14,4"
-                      ToolTip.Tip="Recommended decoder-quality test. Runs the bounded v2 decoder (the same one the live DECODE tab uses by default) across the selected labels using the STRAT WPMS tokens. auto/N = ditdah whole-buffer. region/regionN = region-stream pipeline + ditdah. env/envN = alternate envelope decoder. Outputs a per-clip × strategy CER table." />
+                      ToolTip.Tip="Recommended decoder-quality test. Runs the bounded v2 decoder (the same one the live DECODE tab uses by default) across the selected labels using the STRATEGIES picker tokens. auto/N = ditdah whole-buffer. region/regionN = region-stream pipeline + ditdah. env/envN = alternate envelope decoder. live-env = VISUALIZER tab streamer. Outputs a per-clip × strategy CER table." />
               <CheckBox Grid.Column="6" Content="FULL STREAM" IsChecked="{Binding UseFullStreamScorer, Mode=TwoWay}" VerticalAlignment="Center"
                         ToolTip.Tip="v1 legacy SCORE LABELS scoring mode. Off = exact-window (decode just the labeled slice; measures decoder quality). On = full-stream (run the streaming decoder over the whole file and align to the label window; measures live acquisition + lock behavior — much harsher, often CER 0.8+ on the same clip). Does not affect the v2 SCORE LABELS button above." />
               <Button Grid.Column="7" Content="SCORE LABELS (v1 legacy)" Click="OnRunLabelScoreClick"
