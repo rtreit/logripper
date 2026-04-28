@@ -80,6 +80,17 @@ pub struct EnvelopeConfig {
     /// CW. Disable for synthetic test fixtures that already feed the
     /// decoder a pristine tone.
     pub preprocess: PreprocessConfig,
+    /// When `Some(s)`, only the most recent `s` seconds of the envelope
+    /// drive the quality gate, hysteresis thresholds, and decode. The
+    /// visualizer envelope still reflects the full input buffer. This
+    /// makes the live decoder robust to QSO turn-taking: when a strong
+    /// station finishes and a weaker one starts, the strong station's
+    /// peaks no longer anchor `env_max` and collapse the dynamic-range
+    /// gate. It also lets a sparse burst at the end of a long buffer
+    /// pass the gate as if the buffer were short. `None` keeps the
+    /// legacy behavior (gate over the entire buffer); preferred for
+    /// offline whole-file decode and synthetic test fixtures.
+    pub analysis_window_seconds: Option<f32>,
 }
 
 impl Default for EnvelopeConfig {
@@ -90,6 +101,7 @@ impl Default for EnvelopeConfig {
             min_snr_db: DEFAULT_MIN_SNR_DB,
             min_dyn_range_ratio: DEFAULT_MIN_DYN_RANGE_RATIO,
             preprocess: PreprocessConfig::default(),
+            analysis_window_seconds: None,
         }
     }
 }
@@ -189,9 +201,13 @@ pub fn decode_envelope(samples: &[f32], sample_rate: u32, cfg: &EnvelopeConfig) 
     // 2) Estimate noise / signal floor as 20th / 90th percentiles.
     //    Use a robust 99th-percentile peak instead of the literal max
     //    so a single key-click transient or QRN spike does not collapse
-    //    the dynamic-range bimodality ratio.
-    let env_max = robust_peak(&env, ROBUST_PEAK_PERCENTILE);
-    let (noise, signal) = percentile_pair(&env, 0.20, 0.90);
+    //    the dynamic-range bimodality ratio. When `analysis_window_seconds`
+    //    is set, only the most recent slice drives the gate so older
+    //    transmissions cannot anchor `env_max`.
+    let frame_dt = frame_step as f32 / sample_rate as f32;
+    let (analysis_env, _) = analysis_slice(&env, frame_dt, cfg);
+    let env_max = robust_peak(analysis_env, ROBUST_PEAK_PERCENTILE);
+    let (noise, signal) = percentile_pair(analysis_env, 0.20, 0.90);
     // 2a) Quality gate: combine an SNR floor with a dynamic-range
     //     bimodality check. The latter is what kills the noise-locked
     //     failure mode (random envelope variance can clear the SNR ratio
@@ -203,9 +219,9 @@ pub fn decode_envelope(samples: &[f32], sample_rate: u32, cfg: &EnvelopeConfig) 
     let high = noise + HYST_HIGH * span;
     let low = noise + HYST_LOW * span;
 
-    // 3) Hysteresis state machine -> events.
-    let frame_dt = frame_step as f32 / sample_rate as f32;
-    let (ons, offs) = events_from_envelope(&env, high, low, frame_dt);
+    // 3) Hysteresis state machine -> events. Run on the analysis slice so
+    //    the thresholds derived from its stats apply to the same data.
+    let (ons, offs) = events_from_envelope(analysis_env, high, low, frame_dt);
     if ons.is_empty() {
         return String::new();
     }
@@ -295,8 +311,10 @@ pub fn decode_envelope_with_stats(
         };
     }
 
-    let env_max = robust_peak(&env, ROBUST_PEAK_PERCENTILE);
-    let (noise, signal) = percentile_pair(&env, 0.20, 0.90);
+    let frame_dt = frame_step as f32 / sample_rate as f32;
+    let (analysis_env, _) = analysis_slice(&env, frame_dt, cfg);
+    let env_max = robust_peak(analysis_env, ROBUST_PEAK_PERCENTILE);
+    let (noise, signal) = percentile_pair(analysis_env, 0.20, 0.90);
     if !passes_quality_gate(cfg, noise, signal, env_max) {
         return EnvelopeDecode {
             text: String::new(),
@@ -309,8 +327,7 @@ pub fn decode_envelope_with_stats(
     let high = noise + HYST_HIGH * span;
     let low = noise + HYST_LOW * span;
 
-    let frame_dt = frame_step as f32 / sample_rate as f32;
-    let (ons, offs) = events_from_envelope(&env, high, low, frame_dt);
+    let (ons, offs) = events_from_envelope(analysis_env, high, low, frame_dt);
     if ons.is_empty() {
         return EnvelopeDecode {
             text: String::new(),
@@ -414,6 +431,7 @@ pub struct LiveEnvelopeStreamer {
     min_snr_db: f32,
     min_dyn_range_ratio: f32,
     preprocess: PreprocessConfig,
+    analysis_window_seconds: Option<f32>,
 }
 
 #[derive(Debug, Clone)]
@@ -497,7 +515,21 @@ impl LiveEnvelopeStreamer {
             min_snr_db: DEFAULT_MIN_SNR_DB,
             min_dyn_range_ratio: DEFAULT_MIN_DYN_RANGE_RATIO,
             preprocess: PreprocessConfig::default(),
+            // Live decode: only the most recent 3s drive the gate, hysteresis,
+            // and decode. Insulates the gate from QSO turn-taking — when a
+            // strong station finishes and a weaker one starts, the strong
+            // station's peaks no longer anchor `env_max` and falsely trip
+            // the dynamic-range gate. Visualizer envelope still spans the
+            // full buffer.
+            analysis_window_seconds: Some(3.0),
         }
+    }
+
+    /// Override the rolling analysis-window length used for gate +
+    /// decode (see [`EnvelopeConfig::analysis_window_seconds`]). Pass
+    /// `None` to gate over the entire buffer (legacy behavior).
+    pub fn set_analysis_window_seconds(&mut self, seconds: Option<f32>) {
+        self.analysis_window_seconds = seconds.filter(|s| *s > 0.0);
     }
 
     /// Override the front-end audio preprocessing (bandpass + compander).
@@ -591,6 +623,7 @@ impl LiveEnvelopeStreamer {
             min_snr_db: self.min_snr_db,
             min_dyn_range_ratio: self.min_dyn_range_ratio,
             preprocess: self.preprocess,
+            analysis_window_seconds: self.analysis_window_seconds,
         };
         let (text, wpm, elements, viz) = if with_viz {
             let (text, frame) = decode_envelope_with_viz(&self.buffer, self.sample_rate, &cfg);
@@ -626,6 +659,35 @@ impl LiveEnvelopeStreamer {
             wpm,
             viz,
         }
+    }
+}
+
+/// Returns the suffix of the envelope that should drive the quality
+/// gate, hysteresis thresholds, and decode, plus the frame offset of
+/// that suffix from the start of the full envelope.
+///
+/// When `cfg.analysis_window_seconds` is `None` (default), the full
+/// envelope is used (legacy behavior). When `Some(s)`, only the most
+/// recent `s` seconds drive decoding while the visualizer still
+/// displays the entire buffer. This insulates the gate from older
+/// stations whose peaks would otherwise anchor `env_max` and falsely
+/// suppress a quieter station now on the air.
+fn analysis_slice<'a>(
+    full_env: &'a [f32],
+    frame_dt: f32,
+    cfg: &EnvelopeConfig,
+) -> (&'a [f32], usize) {
+    match cfg.analysis_window_seconds {
+        Some(s) if s > 0.0 && frame_dt > 0.0 => {
+            let target_frames = ((s / frame_dt).ceil() as usize).max(1);
+            if full_env.len() > target_frames {
+                let offset = full_env.len() - target_frames;
+                (&full_env[offset..], offset)
+            } else {
+                (full_env, 0)
+            }
+        }
+        _ => (full_env, 0),
     }
 }
 
@@ -706,8 +768,12 @@ pub fn decode_envelope_with_viz(
         return (String::new(), v);
     }
 
-    let env_max = robust_peak(&env, ROBUST_PEAK_PERCENTILE);
-    let (noise, signal) = percentile_pair(&env, 0.20, 0.90);
+    let frame_dt = frame_step as f32 / sample_rate as f32;
+    let (analysis_env, analysis_offset_frames) = analysis_slice(&env, frame_dt, cfg);
+    let analysis_offset_s = analysis_offset_frames as f32 * frame_dt;
+
+    let env_max = robust_peak(analysis_env, ROBUST_PEAK_PERCENTILE);
+    let (noise, signal) = percentile_pair(analysis_env, 0.20, 0.90);
     let snr = snr_db(noise, signal);
     if !passes_quality_gate(cfg, noise, signal, env_max) {
         // Quality gate: envelope is essentially noise. Return empty
@@ -732,8 +798,7 @@ pub fn decode_envelope_with_viz(
     let high = noise + HYST_HIGH * span;
     let low = noise + HYST_LOW * span;
 
-    let frame_dt = frame_step as f32 / sample_rate as f32;
-    let timed = events_with_times(&env, high, low, frame_dt);
+    let timed = events_with_times(analysis_env, high, low, frame_dt);
 
     let on_durations: Vec<f32> = timed
         .iter()
@@ -790,8 +855,8 @@ pub fn decode_envelope_with_viz(
                 VizEventKind::OffIntra
             };
             VizEvent {
-                start_s: e.start_s,
-                end_s: e.end_s,
+                start_s: e.start_s + analysis_offset_s,
+                end_s: e.end_s + analysis_offset_s,
                 duration_s: e.duration_s,
                 kind,
             }
@@ -1223,6 +1288,7 @@ mod tests {
                 min_snr_db: DEFAULT_MIN_SNR_DB,
                 min_dyn_range_ratio: DEFAULT_MIN_DYN_RANGE_RATIO,
                 preprocess: PreprocessConfig::default(),
+                analysis_window_seconds: None,
             },
         );
         assert_eq!(txt, "K", "got {:?}", txt);
@@ -1415,6 +1481,7 @@ mod tests {
             min_snr_db: 0.0,
             min_dyn_range_ratio: 0.0,
             preprocess: PreprocessConfig::default(),
+            analysis_window_seconds: None,
         };
         let (_text, viz) = decode_envelope_with_viz(&s, rate, &cfg);
         // With the gate disabled the viz frame is the full happy-path
@@ -1435,5 +1502,70 @@ mod tests {
         let snap = streamer.flush_with_viz();
         let viz = snap.viz.expect("viz frame requested");
         assert!(!viz.snr_suppressed, "gate should be disabled");
+    }
+
+    #[test]
+    fn analysis_window_isolates_recent_station_from_louder_earlier_one() {
+        // Regression for the QSO turn-taking false-trip: when a strong
+        // station finishes and a quieter station now on the air would
+        // otherwise pass on its own, the loud earlier transients anchor
+        // env_max for the whole buffer and collapse the dyn-range gate.
+        // The 3s analysis window confines gate stats to the recent
+        // station's footprint.
+        let rate = 8000u32;
+        let dot = 0.060_f32;
+
+        // Loud burst first (amp ~3x the K below).
+        let loud_pitch = 700.0_f32;
+        let mut buf: Vec<f32> = synth_morse(rate, dot, loud_pitch, "-.- -.-");
+        for s in &mut buf {
+            *s *= 3.0;
+        }
+        // ~6 s of low background noise simulates inter-transmission silence.
+        buf.extend_from_slice(&noise_buf(rate, 6.0, 0xCAFE_BABE, 0.01));
+        // Quieter later transmission ("K") that we *want* decoded.
+        let mut later = synth_morse(rate, dot, 700.0, "-.-");
+        for s in &mut later {
+            *s *= 0.4;
+        }
+        buf.extend_from_slice(&later);
+
+        // Disable preprocessing so the test isolates gate behavior from
+        // compander gain (compander would equalize the two amplitudes).
+        let no_pp = PreprocessConfig {
+            enabled: false,
+            ..PreprocessConfig::default()
+        };
+
+        let legacy_cfg = EnvelopeConfig {
+            preprocess: no_pp,
+            analysis_window_seconds: None,
+            ..Default::default()
+        };
+        let (legacy_text, legacy_viz) = decode_envelope_with_viz(&buf, rate, &legacy_cfg);
+        assert!(
+            legacy_viz.snr_suppressed || !legacy_text.ends_with('K'),
+            "legacy gate should mishandle the trailing K; \
+             snr_suppressed={}, text={:?}",
+            legacy_viz.snr_suppressed,
+            legacy_text
+        );
+
+        let windowed_cfg = EnvelopeConfig {
+            preprocess: no_pp,
+            analysis_window_seconds: Some(3.0),
+            ..Default::default()
+        };
+        let (windowed_text, windowed_viz) = decode_envelope_with_viz(&buf, rate, &windowed_cfg);
+        assert!(
+            !windowed_viz.snr_suppressed,
+            "windowed gate should pass the recent K, got snr_db={}",
+            windowed_viz.snr_db
+        );
+        assert!(
+            windowed_text.contains('K'),
+            "expected decoded text to contain 'K', got {:?}",
+            windowed_text
+        );
     }
 }
