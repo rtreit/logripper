@@ -522,6 +522,11 @@ enum Cmd {
         /// Pin the WPM (0 = auto / k-means lock).
         #[arg(long, default_value_t = 0.0)]
         pin_wpm: f32,
+        /// Decode an audio file (mp3/wav/m4a/...) instead of live capture.
+        /// Samples are streamed at real-time pace into the same envelope
+        /// pipeline so the visualizer behaves identically to live audio.
+        #[arg(long)]
+        file: Option<PathBuf>,
     },
     /// Diagnostic: scan candidate pitches across an audio file and print
     /// the trial-decode Fisher score per pitch. Use this to compare
@@ -995,6 +1000,7 @@ fn main() -> Result<()> {
             stdin_control,
             loopback,
             pin_wpm,
+            file,
         } => run_stream_live_v3(
             device.as_deref(),
             seconds,
@@ -1004,6 +1010,7 @@ fn main() -> Result<()> {
             stdin_control,
             loopback,
             (pin_wpm > 0.0).then_some(pin_wpm),
+            file.as_deref(),
         ),
         Cmd::ProbeFisher {
             path,
@@ -3595,7 +3602,11 @@ fn run_stream_live_v3(
     stdin_control: bool,
     loopback: bool,
     pin_wpm: Option<f32>,
+    file: Option<&std::path::Path>,
 ) -> Result<()> {
+    if let Some(path) = file {
+        return run_stream_live_v3_file(path, seconds, json, decode_every_ms, pin_wpm);
+    }
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
     use std::time::{Duration, Instant};
@@ -3804,6 +3815,154 @@ fn run_stream_live_v3(
     } else {
         println!();
         println!("Final transcript (v3):");
+        println!("{}", last_transcript.unwrap_or_default());
+    }
+    Ok(())
+}
+
+fn run_stream_live_v3_file(
+    path: &std::path::Path,
+    seconds: f32,
+    json: bool,
+    decode_every_ms: u64,
+    pin_wpm: Option<f32>,
+) -> Result<()> {
+    use std::time::{Duration, Instant};
+    use cw_decoder_poc::envelope_decoder::{
+        LiveEnvelopeStreamer, VizEventKind, MAX_VIZ_ENVELOPE_SAMPLES,
+    };
+
+    let decoded = audio::decode_file(path)?;
+    let sr = decoded.sample_rate;
+    let total_samples = decoded.samples.len();
+    let duration_s = total_samples as f32 / sr as f32;
+    let mut streamer = LiveEnvelopeStreamer::new(sr);
+    let _ = pin_wpm;
+
+    let mut emitter = if json {
+        Some(json::JsonEmitter::new())
+    } else {
+        None
+    };
+    if let Some(em) = emitter.as_mut() {
+        em.emit(
+            0.0,
+            serde_json::json!({
+                "type": "ready",
+                "source": "live-v3-file",
+                "device": format!("file:{}", path.display()),
+                "rate": sr,
+                "decode_every_ms": decode_every_ms,
+                "max_viz_envelope_samples": MAX_VIZ_ENVELOPE_SAMPLES,
+                "recording": serde_json::Value::Null,
+                "pin_wpm": pin_wpm,
+                "duration_s": duration_s,
+            }),
+        );
+    } else {
+        println!(
+            "Streaming file (v3 envelope+viz): {} @ {} Hz ({:.1}s); decode every {} ms",
+            path.display(), sr, duration_s, decode_every_ms
+        );
+    }
+
+    let started = Instant::now();
+    let mut last_decode_at = Instant::now();
+    let decode_period = Duration::from_millis(decode_every_ms);
+    let chunk_period = Duration::from_millis(50);
+    let chunk_samples = ((sr as u64 * 50) / 1000) as usize;
+    let mut cursor = 0usize;
+    let mut last_transcript: Option<String> = None;
+
+    while cursor < total_samples {
+        if seconds > 0.0 && started.elapsed().as_secs_f32() >= seconds {
+            break;
+        }
+        std::thread::sleep(chunk_period);
+        let end = (cursor + chunk_samples).min(total_samples);
+        if end > cursor {
+            streamer.feed(&decoded.samples[cursor..end]);
+            cursor = end;
+        }
+
+        if last_decode_at.elapsed() < decode_period {
+            continue;
+        }
+        last_decode_at = Instant::now();
+
+        let snap = streamer.flush_with_viz();
+        let t = started.elapsed().as_secs_f32();
+        last_transcript = Some(snap.transcript.clone());
+
+        if let Some(em) = emitter.as_mut() {
+            em.emit(
+                t,
+                serde_json::json!({
+                    "type": "transcript",
+                    "text": snap.transcript,
+                    "appended": snap.appended,
+                    "wpm": snap.wpm,
+                }),
+            );
+            if let Some(viz) = snap.viz {
+                let events_json: Vec<serde_json::Value> = viz.events.iter().map(|e| {
+                    let kind = match e.kind {
+                        VizEventKind::OnDit => "on_dit",
+                        VizEventKind::OnDah => "on_dah",
+                        VizEventKind::OffIntra => "off_intra",
+                        VizEventKind::OffChar => "off_char",
+                        VizEventKind::OffWord => "off_word",
+                    };
+                    serde_json::json!({
+                        "start_s": e.start_s,
+                        "end_s": e.end_s,
+                        "duration_s": e.duration_s,
+                        "kind": kind,
+                    })
+                }).collect();
+                em.emit(
+                    t,
+                    serde_json::json!({
+                        "type": "viz",
+                        "buffer_seconds": viz.buffer_seconds,
+                        "frame_step_s": viz.frame_step_s,
+                        "pitch_hz": viz.pitch_hz,
+                        "envelope": viz.envelope,
+                        "envelope_max": viz.envelope_max,
+                        "noise_floor": viz.noise_floor,
+                        "signal_floor": viz.signal_floor,
+                        "hyst_high": viz.hyst_high,
+                        "hyst_low": viz.hyst_low,
+                        "events": events_json,
+                        "on_durations": viz.on_durations,
+                        "dot_seconds": viz.dot_seconds,
+                        "wpm": viz.wpm,
+                        "centroid_dot": viz.centroid_dot,
+                        "centroid_dah": viz.centroid_dah,
+                        "locked_wpm": viz.locked_wpm,
+                    }),
+                );
+            }
+        } else {
+            println!(
+                "[t={:>6.2}s wpm={:>5.1}] {}",
+                t, snap.wpm, snap.transcript
+            );
+        }
+    }
+
+    if let Some(em) = emitter.as_mut() {
+        em.emit(
+            started.elapsed().as_secs_f32(),
+            serde_json::json!({
+                "type": "end",
+                "transcript": last_transcript.unwrap_or_default(),
+                "recording": serde_json::Value::Null,
+            }),
+        );
+    } else {
+        println!();
+        println!("Final transcript (v3 file):");
         println!("{}", last_transcript.unwrap_or_default());
     }
     Ok(())

@@ -17,6 +17,29 @@ public partial class MainWindow : Window
     private void OnStartStopClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
         => Vm?.ToggleStartStop();
 
+    private void OnVizStartStopClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+        => Vm?.ToggleViz();
+
+    private async void OnVizPlayFileClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (StorageProvider is null || Vm is null) return;
+        var picked = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+        {
+            Title = "Pick a CW audio file to visualize",
+            AllowMultiple = false,
+            FileTypeFilter = new[]
+            {
+                new FilePickerFileType("Audio")
+                {
+                    Patterns = new[] { "*.wav", "*.mp3", "*.m4a", "*.aac" },
+                },
+            },
+        });
+        var first = picked.FirstOrDefault();
+        if (first?.TryGetLocalPath() is string path)
+            Vm.StartVizFile(path);
+    }
+
     private void OnRefreshClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
         => Vm?.RefreshDevices();
 

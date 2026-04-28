@@ -1099,6 +1099,104 @@
           </Grid>
         </Border>
       </TabItem>
+      <TabItem Header="VISUALIZER">
+        <Border Padding="14" Background="{StaticResource BgPanel}">
+          <Grid RowDefinitions="Auto,Auto,*,Auto" ColumnDefinitions="*">
+            <!-- Controls row -->
+            <Grid Grid.Row="0" ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,*,Auto"
+                  Margin="0,0,0,8">
+              <Button Grid.Column="0" Classes="primary"
+                      Content="{Binding VizStartStopLabel}"
+                      Click="OnVizStartStopClick"
+                      MinWidth="120" />
+              <Button Grid.Column="1" Margin="8,0,0,0"
+                      Content="PLAY FILE..."
+                      Click="OnVizPlayFileClick"
+                      MinWidth="110" />
+              <CheckBox Grid.Column="2" Margin="14,0,0,0"
+                        Content="LOOPBACK"
+                        IsChecked="{Binding VizUseLoopback}"
+                        VerticalAlignment="Center" />
+              <TextBlock Grid.Column="3" Margin="20,0,6,0"
+                         Text="WINDOW"
+                         FontFamily="Consolas"
+                         VerticalAlignment="Center"
+                         Foreground="{StaticResource TextDim}" />
+              <Slider Grid.Column="4" Width="160"
+                      Minimum="2" Maximum="30"
+                      TickFrequency="2" IsSnapToTickEnabled="True"
+                      Value="{Binding VizWindowSeconds}" />
+              <TextBlock Grid.Column="5" Margin="6,0,0,0"
+                         Text="{Binding VizWindowSeconds, StringFormat='{}{0:F0}s'}"
+                         FontFamily="Consolas"
+                         VerticalAlignment="Center" />
+              <TextBlock Grid.Column="7"
+                         Text="{Binding VizStatus}"
+                         FontFamily="Consolas"
+                         FontSize="11"
+                         Foreground="{StaticResource TextDim}"
+                         VerticalAlignment="Center" />
+            </Grid>
+
+            <!-- WPM big readout -->
+            <Border Grid.Row="1" Background="{StaticResource BgDeep}" CornerRadius="4"
+                    BorderBrush="{StaticResource EdgeGlow}" BorderThickness="1"
+                    Padding="14,8" Margin="0,0,0,8">
+              <Grid ColumnDefinitions="Auto,*,Auto">
+                <TextBlock Grid.Column="0"
+                           Text="WPM"
+                           FontFamily="Consolas"
+                           FontSize="14"
+                           Foreground="{StaticResource TextDim}"
+                           LetterSpacing="3"
+                           VerticalAlignment="Center" />
+                <TextBlock Grid.Column="1" Margin="14,0,0,0"
+                           Text="{Binding VizCurrentWpm, StringFormat='{}{0:F1}'}"
+                           FontFamily="Consolas"
+                           FontSize="42"
+                           FontWeight="Bold"
+                           Foreground="#22D3EE"
+                           VerticalAlignment="Center" />
+                <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                  <TextBlock Text="PIN WPM"
+                             FontFamily="Consolas"
+                             FontSize="11"
+                             Foreground="{StaticResource TextDim}"
+                             VerticalAlignment="Center" />
+                  <NumericUpDown Margin="6,0,0,0" Width="100" MinWidth="100"
+                                 Minimum="0" Maximum="60" Increment="1"
+                                 FormatString="0" ShowButtonSpinner="True"
+                                 Value="{Binding VizPinWpm, Mode=TwoWay}" />
+                </StackPanel>
+              </Grid>
+            </Border>
+
+            <!-- Visualizer canvas -->
+            <Border Grid.Row="2" Background="{StaticResource BgDeep}" CornerRadius="4"
+                    BorderBrush="{StaticResource EdgeGlow}" BorderThickness="1"
+                    Padding="4">
+              <v:VisualizerCanvas Frame="{Binding VizFrame}"
+                                  WindowSeconds="{Binding VizWindowSeconds}"
+                                  MinHeight="320" />
+            </Border>
+
+            <!-- Live transcript -->
+            <Border Grid.Row="3" Background="{StaticResource BgDeep}" CornerRadius="4"
+                    BorderBrush="{StaticResource EdgeGlow}" BorderThickness="1"
+                    Padding="10,8" Margin="0,8,0,0">
+              <ScrollViewer HorizontalScrollBarVisibility="Auto"
+                            VerticalScrollBarVisibility="Auto"
+                            MaxHeight="120">
+                <TextBlock Text="{Binding VizTranscript}"
+                           FontFamily="Consolas"
+                           FontSize="14"
+                           TextWrapping="Wrap"
+                           Foreground="{StaticResource TextHi}" />
+              </ScrollViewer>
+            </Border>
+          </Grid>
+        </Border>
+      </TabItem>
     </TabControl>
 
     <!-- Status -->
