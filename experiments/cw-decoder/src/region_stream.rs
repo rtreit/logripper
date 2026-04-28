@@ -53,7 +53,7 @@ impl Default for RegionStreamConfig {
             frame_len_s: 0.025,
             frame_step_s: 0.010,
             pitch_lo_hz: 400.0,
-            pitch_hi_hz: 900.0,
+            pitch_hi_hz: 1200.0,
             pitch_step_hz: 25.0,
             threshold_factor: 0.30,
             merge_gap_s: 3.0,
@@ -299,6 +299,24 @@ mod tests {
         assert!(
             (pitch - 600.0).abs() <= cfg.pitch_step_hz,
             "expected ~600, got {pitch}"
+        );
+    }
+
+    #[test]
+    fn estimate_pitch_finds_high_sidetone() {
+        // Real-world live captures (e.g. live-20260427-111419.wav) use
+        // sidetones up to ~1100 Hz. Default pitch sweep must cover that
+        // range; otherwise the detector locks onto whatever has highest
+        // power inside the [pitch_lo, pitch_hi] window (typically a
+        // low-frequency noise hump) and the rest of the decoder
+        // produces ghost-character garbage.
+        let sr = 12_000u32;
+        let buf = synth_tone(1100.0, 2.0, sr, 0.5);
+        let cfg = RegionStreamConfig::default();
+        let pitch = estimate_dominant_pitch(&buf, sr, &cfg);
+        assert!(
+            (pitch - 1100.0).abs() <= cfg.pitch_step_hz,
+            "expected ~1100 Hz, got {pitch} (default pitch_hi_hz must cover common operator sidetones)"
         );
     }
 

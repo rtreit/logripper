@@ -206,6 +206,34 @@ if (-not $NoGui) {
 if (-not $NoCwScope) {
     Write-Step 'Restarting CW Scope GUI'
     Stop-ProcessByName 'CwDecoderGui'
+
+    # Stale cw-decoder.exe trap: the CW Scope GUI shells out to the Rust
+    # binary in experiments/cw-decoder/target/{release,debug}/. If a cargo
+    # build is missing or older than the source tree, the GUI silently
+    # launches outdated logic (e.g. an old default pitch-sweep range).
+    # Surface that loudly so the operator knows to rebuild instead of
+    # chasing ghosts in the visualizer.
+    $cwDecoderTargetDir = Join-Path $PSScriptRoot 'experiments' 'cw-decoder' 'target' | Join-Path -ChildPath $Configuration.ToLowerInvariant()
+    $cwDecoderBinaryName = if ($IsWindows) { 'cw-decoder.exe' } else { 'cw-decoder' }
+    $cwDecoderBinary = Join-Path $cwDecoderTargetDir $cwDecoderBinaryName
+    if (-not (Test-Path -LiteralPath $cwDecoderBinary)) {
+        Write-Host "  WARNING: $cwDecoderBinaryName not found at $cwDecoderBinary." -ForegroundColor Yellow
+        Write-Host "           CW Scope will fail to start. Re-run runall.ps1 without -SkipBuild, or run:" -ForegroundColor Yellow
+        Write-Host "             ./build.ps1 cw-decoder -Configuration $Configuration" -ForegroundColor Yellow
+    }
+    else {
+        $cwDecoderSourceDir = Join-Path $PSScriptRoot 'experiments' 'cw-decoder' 'src'
+        $newestSource = Get-ChildItem -LiteralPath $cwDecoderSourceDir -Recurse -File -Filter '*.rs' -ErrorAction SilentlyContinue |
+            Sort-Object LastWriteTimeUtc -Descending |
+            Select-Object -First 1
+        $binaryWriteTime = (Get-Item -LiteralPath $cwDecoderBinary).LastWriteTimeUtc
+        if ($newestSource -and $newestSource.LastWriteTimeUtc -gt $binaryWriteTime) {
+            Write-Host "  WARNING: $cwDecoderBinaryName is older than $($newestSource.Name) (binary $binaryWriteTime UTC, source $($newestSource.LastWriteTimeUtc) UTC)." -ForegroundColor Yellow
+            Write-Host "           CW Scope will run stale Rust code. Re-run runall.ps1 without -SkipBuild, or run:" -ForegroundColor Yellow
+            Write-Host "             ./build.ps1 cw-decoder -Configuration $Configuration" -ForegroundColor Yellow
+        }
+    }
+
     if (Test-Path -LiteralPath $cwScopeExe) {
         $null = Start-Detached -Path $cwScopeExe -WorkingDirectory $cwScopeDir
     } else {

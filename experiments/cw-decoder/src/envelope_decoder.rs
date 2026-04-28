@@ -26,6 +26,21 @@ const FRAME_STEP_S: f32 = 0.005; // 5 ms hop.
 const HYST_HIGH: f32 = 0.55; // Fraction of (signal - noise) to enter key-on.
 const HYST_LOW: f32 = 0.35; // Fraction of (signal - noise) to leave key-on.
 const MIN_ELEMENT_S: f32 = 0.012; // Reject sub-12ms blips as noise (~50 WPM dot).
+/// Default SNR floor (dB) below which the decode is suppressed and the
+/// pipeline returns empty text. 20*log10(2.0) ≈ 6 dB; CW signals worth
+/// decoding sit comfortably above this. Tuned to filter out the
+/// noise-locked failure mode where the auto-pitch detector locks onto a
+/// harmonic peak and the envelope is essentially noise.
+pub const DEFAULT_MIN_SNR_DB: f32 = 6.0;
+/// Default fraction of `envelope_max` that the dynamic range
+/// (`signal_floor - noise_floor`) must exceed to pass the bimodality
+/// gate. Real CW with intentional silence between elements produces a
+/// dynamic range close to `envelope_max`. Random noise has random
+/// transient peaks that dominate `envelope_max` while the bulk of the
+/// envelope hovers near the mean, giving a much smaller fraction. The
+/// 0.55 default cleanly rejects pure white noise (~0.30 in tests) while
+/// passing weak but legitimate CW (>0.7).
+pub const DEFAULT_MIN_DYN_RANGE_RATIO: f32 = 0.55;
 
 /// Configuration for [`decode_envelope`].
 #[derive(Debug, Clone)]
@@ -38,6 +53,19 @@ pub struct EnvelopeConfig {
     /// bypassed and the envelope is computed at the supplied frequency.
     /// Useful when the auto-detector locks onto a noise/harmonic peak.
     pub pin_hz: Option<f32>,
+    /// Minimum signal-to-noise ratio (dB) required to emit a transcript.
+    /// Computed as `20 * log10(signal_floor / noise_floor)` from the 90th
+    /// and 20th percentiles of the envelope. When the gate trips the
+    /// pipeline still populates the visualizer frame so an operator can
+    /// see *why* nothing decoded — only the text is suppressed.
+    pub min_snr_db: f32,
+    /// Minimum bimodality ratio: `(signal_floor - noise_floor) /
+    /// envelope_max`. Real CW with intentional silence has a value near
+    /// 1.0; pure noise is ~0.3 because random transient peaks dominate
+    /// `envelope_max` while the percentiles cluster near the mean. This
+    /// gate catches the noise-locked failure mode that high-variance
+    /// noise sneaks past the percentile-ratio SNR check.
+    pub min_dyn_range_ratio: f32,
 }
 
 impl Default for EnvelopeConfig {
@@ -45,8 +73,52 @@ impl Default for EnvelopeConfig {
         Self {
             pin_wpm: None,
             pin_hz: None,
+            min_snr_db: DEFAULT_MIN_SNR_DB,
+            min_dyn_range_ratio: DEFAULT_MIN_DYN_RANGE_RATIO,
         }
     }
+}
+
+/// Compute SNR (dB) from envelope noise and signal floor estimates.
+/// - `signal <= 0` → 0 dB (no signal at all).
+/// - `noise <= 0` and `signal > 0` → +∞ dB (a literal-zero noise floor
+///   means the signal is infinitely above the noise; happens with
+///   synthetic test inputs and very clean recordings).
+#[inline]
+pub(crate) fn snr_db(noise: f32, signal: f32) -> f32 {
+    if signal <= 0.0 {
+        return 0.0;
+    }
+    if noise <= 0.0 {
+        return f32::INFINITY;
+    }
+    20.0 * (signal / noise).log10()
+}
+
+/// Bimodality ratio: dynamic range relative to envelope peak.
+/// `(signal_floor - noise_floor) / envelope_max`. 1.0 means the
+/// percentiles span the full peak range (clean bimodal CW). Low values
+/// mean the percentiles cluster near the mean while a few random
+/// transient peaks dominate `envelope_max` (white noise).
+#[inline]
+pub(crate) fn dyn_range_ratio(noise: f32, signal: f32, env_max: f32) -> f32 {
+    if env_max <= 0.0 {
+        return 0.0;
+    }
+    ((signal - noise).max(0.0) / env_max).min(1.0)
+}
+
+/// True when the envelope passes both quality gates and a transcript
+/// should be emitted.
+#[inline]
+pub(crate) fn passes_quality_gate(
+    cfg: &EnvelopeConfig,
+    noise: f32,
+    signal: f32,
+    env_max: f32,
+) -> bool {
+    snr_db(noise, signal) >= cfg.min_snr_db
+        && dyn_range_ratio(noise, signal, env_max) >= cfg.min_dyn_range_ratio
 }
 
 /// Decode `samples` to text using the envelope+hysteresis pipeline.
@@ -88,7 +160,15 @@ pub fn decode_envelope(samples: &[f32], sample_rate: u32, cfg: &EnvelopeConfig) 
     }
 
     // 2) Estimate noise / signal floor as 20th / 90th percentiles.
+    let env_max = env.iter().copied().fold(0.0_f32, f32::max);
     let (noise, signal) = percentile_pair(&env, 0.20, 0.90);
+    // 2a) Quality gate: combine an SNR floor with a dynamic-range
+    //     bimodality check. The latter is what kills the noise-locked
+    //     failure mode (random envelope variance can clear the SNR ratio
+    //     gate by itself but does not produce a clean bimodal envelope).
+    if !passes_quality_gate(cfg, noise, signal, env_max) {
+        return String::new();
+    }
     let span = (signal - noise).max(1e-9);
     let high = noise + HYST_HIGH * span;
     let low = noise + HYST_LOW * span;
@@ -177,7 +257,16 @@ pub fn decode_envelope_with_stats(
         };
     }
 
+    let env_max = env.iter().copied().fold(0.0_f32, f32::max);
     let (noise, signal) = percentile_pair(&env, 0.20, 0.90);
+    if !passes_quality_gate(cfg, noise, signal, env_max) {
+        return EnvelopeDecode {
+            text: String::new(),
+            dot_seconds: 0.0,
+            wpm: 0.0,
+            elements: 0,
+        };
+    }
     let span = (signal - noise).max(1e-9);
     let high = noise + HYST_HIGH * span;
     let low = noise + HYST_LOW * span;
@@ -284,6 +373,8 @@ pub struct LiveEnvelopeStreamer {
     last_text: String,
     last_wpm: f32,
     pinned_hz: Option<f32>,
+    min_snr_db: f32,
+    min_dyn_range_ratio: f32,
 }
 
 #[derive(Debug, Clone)]
@@ -331,6 +422,12 @@ pub struct VizFrame {
     pub envelope_max: f32,
     pub noise_floor: f32,
     pub signal_floor: f32,
+    /// 20*log10(signal_floor / noise_floor). 0 when either is non-positive.
+    pub snr_db: f32,
+    /// True when the SNR gate suppressed text emission for this frame.
+    /// The visualizer should still render the envelope so the operator
+    /// can see *why* nothing was decoded.
+    pub snr_suppressed: bool,
     pub hyst_high: f32,
     pub hyst_low: f32,
     pub events: Vec<VizEvent>,
@@ -358,6 +455,8 @@ impl LiveEnvelopeStreamer {
             last_text: String::new(),
             last_wpm: 0.0,
             pinned_hz: None,
+            min_snr_db: DEFAULT_MIN_SNR_DB,
+            min_dyn_range_ratio: DEFAULT_MIN_DYN_RANGE_RATIO,
         }
     }
 
@@ -372,6 +471,20 @@ impl LiveEnvelopeStreamer {
     pub fn set_pinned_wpm(&mut self, pinned_wpm: Option<f32>) {
         self.pinned_wpm = pinned_wpm.filter(|w| *w > 0.0);
         self.locked_wpm = self.pinned_wpm;
+    }
+
+    /// Set the minimum signal-to-noise ratio (dB) required to emit text.
+    /// Below this floor the streamer still produces visualizer frames but
+    /// returns an empty transcript so the noise-locked failure mode does
+    /// not pollute the output.
+    pub fn set_min_snr_db(&mut self, min_snr_db: f32) {
+        self.min_snr_db = min_snr_db;
+    }
+
+    /// Set the minimum dynamic-range bimodality ratio. See
+    /// [`EnvelopeConfig::min_dyn_range_ratio`].
+    pub fn set_min_dyn_range_ratio(&mut self, ratio: f32) {
+        self.min_dyn_range_ratio = ratio;
     }
 
     /// Feed a chunk of audio. Returns one snapshot per decode cycle (may be
@@ -430,6 +543,8 @@ impl LiveEnvelopeStreamer {
         let cfg = EnvelopeConfig {
             pin_wpm: self.pinned_wpm.or(self.locked_wpm),
             pin_hz: self.pinned_hz,
+            min_snr_db: self.min_snr_db,
+            min_dyn_range_ratio: self.min_dyn_range_ratio,
         };
         let (text, wpm, elements, viz) = if with_viz {
             let (text, frame) = decode_envelope_with_viz(&self.buffer, self.sample_rate, &cfg);
@@ -486,6 +601,8 @@ pub fn decode_envelope_with_viz(
         envelope_max: 0.0,
         noise_floor: 0.0,
         signal_floor: 0.0,
+        snr_db: 0.0,
+        snr_suppressed: false,
         hyst_high: 0.0,
         hyst_low: 0.0,
         events: Vec::new(),
@@ -537,6 +654,26 @@ pub fn decode_envelope_with_viz(
 
     let env_max = env.iter().copied().fold(0.0_f32, f32::max);
     let (noise, signal) = percentile_pair(&env, 0.20, 0.90);
+    let snr = snr_db(noise, signal);
+    if !passes_quality_gate(cfg, noise, signal, env_max) {
+        // Quality gate: envelope is essentially noise. Return empty
+        // text but a populated viz frame so the operator can SEE why
+        // the decoder refused to emit text (the visualizer dashed
+        // lines should sit close together, and the noise/signal
+        // floors hover near the mean of the envelope).
+        let mut v = empty_viz();
+        v.pitch_hz = pitch;
+        v.envelope = downsample_envelope(&env);
+        v.envelope_max = env_max;
+        v.noise_floor = noise;
+        v.signal_floor = signal;
+        v.snr_db = snr;
+        v.snr_suppressed = true;
+        let span = (signal - noise).max(1e-9);
+        v.hyst_high = noise + HYST_HIGH * span;
+        v.hyst_low = noise + HYST_LOW * span;
+        return (String::new(), v);
+    }
     let span = (signal - noise).max(1e-9);
     let high = noise + HYST_HIGH * span;
     let low = noise + HYST_LOW * span;
@@ -562,6 +699,7 @@ pub fn decode_envelope_with_viz(
         v.envelope_max = env_max;
         v.noise_floor = noise;
         v.signal_floor = signal;
+        v.snr_db = snr;
         v.hyst_high = high;
         v.hyst_low = low;
         return (String::new(), v);
@@ -615,6 +753,8 @@ pub fn decode_envelope_with_viz(
         envelope_max: env_max,
         noise_floor: noise,
         signal_floor: signal,
+        snr_db: snr,
+        snr_suppressed: false,
         hyst_high: high,
         hyst_low: low,
         events,
@@ -1013,6 +1153,8 @@ mod tests {
             &EnvelopeConfig {
                 pin_wpm: Some(20.0),
                 pin_hz: None,
+                min_snr_db: DEFAULT_MIN_SNR_DB,
+                min_dyn_range_ratio: DEFAULT_MIN_DYN_RANGE_RATIO,
             },
         );
         assert_eq!(txt, "K", "got {:?}", txt);
@@ -1119,5 +1261,107 @@ mod tests {
             "wpm out of range: {}",
             viz.wpm
         );
+        assert!(
+            viz.snr_db > DEFAULT_MIN_SNR_DB,
+            "clean signal SNR should clear the gate, got {} dB",
+            viz.snr_db
+        );
+        assert!(!viz.snr_suppressed, "clean signal should not trigger SNR gate");
+    }
+
+    /// Deterministic pseudo-random noise so tests don't depend on
+    /// `rand`. Uses a tiny LCG for reproducibility.
+    fn noise_buf(rate: u32, seconds: f32, seed: u64, amplitude: f32) -> Vec<f32> {
+        let n = (rate as f32 * seconds) as usize;
+        let mut state = seed;
+        let mut out = Vec::with_capacity(n);
+        for _ in 0..n {
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            let v = ((state >> 33) as u32) as f32 / u32::MAX as f32;
+            out.push((v * 2.0 - 1.0) * amplitude);
+        }
+        out
+    }
+
+    #[test]
+    fn noise_only_signal_is_suppressed_by_snr_gate() {
+        let rate = 8000u32;
+        let s = noise_buf(rate, 5.0, 0x5EED, 0.05);
+        // Probe the actual SNR of pure noise to validate the default
+        // threshold discriminates noise from real CW.
+        let probe_cfg = EnvelopeConfig {
+            min_snr_db: 0.0,
+            min_dyn_range_ratio: 0.0,
+            ..Default::default()
+        };
+        let (_, probe_viz) = decode_envelope_with_viz(&s, rate, &probe_cfg);
+        eprintln!(
+            "noise probe: snr_db = {:.2}, dyn_range = {:.3}, noise_floor = {:.6}, signal_floor = {:.6}, env_max = {:.6}",
+            probe_viz.snr_db,
+            dyn_range_ratio(probe_viz.noise_floor, probe_viz.signal_floor, probe_viz.envelope_max),
+            probe_viz.noise_floor,
+            probe_viz.signal_floor,
+            probe_viz.envelope_max,
+        );
+
+        let cfg = EnvelopeConfig::default();
+        let (text, viz) = decode_envelope_with_viz(&s, rate, &cfg);
+        assert_eq!(
+            text, "",
+            "noise-only signal must not emit text (got {:?})",
+            text
+        );
+        assert!(
+            viz.snr_suppressed,
+            "expected snr_suppressed = true; snr_db = {}, threshold = {}",
+            viz.snr_db, cfg.min_snr_db
+        );
+        // Visualizer payload must still be populated so the operator
+        // can see *why* nothing decoded.
+        assert!(
+            !viz.envelope.is_empty(),
+            "envelope should remain populated when SNR gate fires"
+        );
+        assert!(
+            viz.signal_floor > 0.0 && viz.noise_floor > 0.0,
+            "noise/signal floors should be measured even when gated"
+        );
+        // Stats-path mirrors the gate.
+        let stats = decode_envelope_with_stats(&s, rate, &cfg);
+        assert_eq!(stats.text, "");
+        assert_eq!(stats.elements, 0);
+    }
+
+    #[test]
+    fn snr_gate_can_be_disabled() {
+        let rate = 8000u32;
+        let s = noise_buf(rate, 2.0, 0x5EED, 0.05);
+        let cfg = EnvelopeConfig {
+            pin_wpm: None,
+            pin_hz: None,
+            min_snr_db: 0.0,
+            min_dyn_range_ratio: 0.0,
+        };
+        let (_text, viz) = decode_envelope_with_viz(&s, rate, &cfg);
+        // With the gate disabled the viz frame is the full happy-path
+        // shape (snr_suppressed = false), even on noise.
+        assert!(!viz.snr_suppressed);
+    }
+
+    #[test]
+    fn live_streamer_set_min_snr_db_propagates() {
+        let rate = 8000u32;
+        let mut streamer = LiveEnvelopeStreamer::new(rate);
+        streamer.set_min_snr_db(0.0);
+        streamer.set_min_dyn_range_ratio(0.0);
+        // Feed pure noise; with both gates disabled the streamer reaches
+        // the classifier (which may emit garbage chars). Important: it
+        // must not return immediately due to SNR.
+        streamer.feed(&noise_buf(rate, 1.5, 0xC0FFEE, 0.05));
+        let snap = streamer.flush_with_viz();
+        let viz = snap.viz.expect("viz frame requested");
+        assert!(!viz.snr_suppressed, "gate should be disabled");
     }
 }
