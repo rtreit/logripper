@@ -976,7 +976,7 @@ fn score_labels_strategy(
                     cw_decoder_poc::envelope_decoder::decode_envelope(
                         samples,
                         audio.sample_rate,
-                        &cw_decoder_poc::envelope_decoder::EnvelopeConfig { pin_wpm: pin },
+                        &cw_decoder_poc::envelope_decoder::EnvelopeConfig { pin_wpm: pin, pin_hz: None },
                     )
                 }
                 Strategy::LiveEnvelopeAuto => {

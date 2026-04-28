@@ -36,11 +36,15 @@ pub struct EnvelopeConfig {
     /// of from the median of detected element lengths. Useful when the
     /// decoder gets confused about dit-vs-dah on short samples.
     pub pin_wpm: Option<f32>,
+    /// Optional pin pitch (Hz). When `Some`, the pitch detector is
+    /// bypassed and the envelope is computed at the supplied frequency.
+    /// Useful when the auto-detector locks onto a noise/harmonic peak.
+    pub pin_hz: Option<f32>,
 }
 
 impl Default for EnvelopeConfig {
     fn default() -> Self {
-        Self { pin_wpm: None }
+        Self { pin_wpm: None, pin_hz: None }
     }
 }
 
@@ -57,7 +61,7 @@ pub fn decode_envelope(samples: &[f32], sample_rate: u32, cfg: &EnvelopeConfig) 
         frame_step_s: 0.010,
         ..RegionStreamConfig::default()
     };
-    let pitch = estimate_dominant_pitch(samples, sample_rate, &pitch_cfg);
+    let pitch = cfg.pin_hz.unwrap_or_else(|| estimate_dominant_pitch(samples, sample_rate, &pitch_cfg));
 
     let frame_len = ((FRAME_LEN_S * sample_rate as f32).round() as usize).max(32);
     let frame_step = ((FRAME_STEP_S * sample_rate as f32).round() as usize).max(8);
@@ -131,7 +135,7 @@ pub fn decode_envelope_with_stats(
         frame_step_s: 0.010,
         ..RegionStreamConfig::default()
     };
-    let pitch = estimate_dominant_pitch(samples, sample_rate, &pitch_cfg);
+    let pitch = cfg.pin_hz.unwrap_or_else(|| estimate_dominant_pitch(samples, sample_rate, &pitch_cfg));
 
     let frame_len = ((FRAME_LEN_S * sample_rate as f32).round() as usize).max(32);
     let frame_step = ((FRAME_STEP_S * sample_rate as f32).round() as usize).max(8);
@@ -240,6 +244,7 @@ pub struct LiveEnvelopeStreamer {
     lock_after_elements: usize,
     last_text: String,
     last_wpm: f32,
+    pinned_hz: Option<f32>,
 }
 
 #[derive(Debug, Clone)]
@@ -311,7 +316,14 @@ impl LiveEnvelopeStreamer {
             lock_after_elements: 30,
             last_text: String::new(),
             last_wpm: 0.0,
+            pinned_hz: None,
         }
+    }
+
+    /// Pin the pitch detector to a specific frequency (Hz). When `None`,
+    /// auto-detection is used.
+    pub fn set_pinned_hz(&mut self, pinned_hz: Option<f32>) {
+        self.pinned_hz = pinned_hz;
     }
 
     /// Feed a chunk of audio. Returns one snapshot per decode cycle (may be
@@ -357,7 +369,10 @@ impl LiveEnvelopeStreamer {
     }
 
     fn decode_now(&mut self, with_viz: bool) -> LiveEnvelopeSnapshot {
-        let cfg = EnvelopeConfig { pin_wpm: self.locked_wpm };
+        let cfg = EnvelopeConfig {
+            pin_wpm: self.locked_wpm,
+            pin_hz: self.pinned_hz,
+        };
         let (text, wpm, elements, viz) = if with_viz {
             let (text, frame) = decode_envelope_with_viz(&self.buffer, self.sample_rate, &cfg);
             let mut frame = frame;
@@ -427,7 +442,7 @@ pub fn decode_envelope_with_viz(
         frame_step_s: 0.010,
         ..RegionStreamConfig::default()
     };
-    let pitch = estimate_dominant_pitch(samples, sample_rate, &pitch_cfg);
+    let pitch = cfg.pin_hz.unwrap_or_else(|| estimate_dominant_pitch(samples, sample_rate, &pitch_cfg));
 
     let frame_len = ((FRAME_LEN_S * sample_rate as f32).round() as usize).max(32);
     let frame_step = ((FRAME_STEP_S * sample_rate as f32).round() as usize).max(8);
@@ -871,7 +886,7 @@ mod tests {
         let txt = decode_envelope(
             &s,
             rate,
-            &EnvelopeConfig { pin_wpm: Some(20.0) },
+            &EnvelopeConfig { pin_wpm: Some(20.0), pin_hz: None },
         );
         assert_eq!(txt, "K", "got {:?}", txt);
     }

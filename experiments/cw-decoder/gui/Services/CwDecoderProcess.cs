@@ -88,24 +88,26 @@ internal sealed class CwDecoderProcess : IDisposable
     /// Live capture using the in-house envelope decoder + visualizer
     /// emission (stream-live-v3). Drives the VISUALIZER tab.
     /// </summary>
-    public void StartLiveV3(string? device, int decodeEveryMs = 250, string? recordPath = null, bool loopback = false, double pinWpm = 0)
+    public void StartLiveV3(string? device, int decodeEveryMs = 250, string? recordPath = null, bool loopback = false, double pinWpm = 0, double pinHz = 0)
     {
         Stop();
         var ic = CultureInfo.InvariantCulture;
         var args = $"stream-live-v3 --json --stdin-control --decode-every-ms {decodeEveryMs.ToString(ic)}";
         if (pinWpm > 0) args += $" --pin-wpm {pinWpm.ToString(ic)}";
+        if (pinHz > 0) args += $" --pin-hz {pinHz.ToString(ic)}";
         if (!string.IsNullOrWhiteSpace(device)) args += $" --device \"{device}\"";
         if (!string.IsNullOrWhiteSpace(recordPath)) args += $" --record \"{recordPath}\"";
         if (loopback) args += " --loopback";
         Spawn(args);
     }
 
-    public void StartFileV3(string filePath, int decodeEveryMs = 250, double pinWpm = 0)
+    public void StartFileV3(string filePath, int decodeEveryMs = 250, double pinWpm = 0, double pinHz = 0)
     {
         Stop();
         var ic = CultureInfo.InvariantCulture;
         var args = $"stream-live-v3 --json --decode-every-ms {decodeEveryMs.ToString(ic)} --file \"{filePath}\"";
         if (pinWpm > 0) args += $" --pin-wpm {pinWpm.ToString(ic)}";
+        if (pinHz > 0) args += $" --pin-hz {pinHz.ToString(ic)}";
         Spawn(args);
     }
 

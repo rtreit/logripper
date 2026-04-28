@@ -104,7 +104,32 @@ public sealed partial class MainWindowViewModel
     private double _vizPinWpm;
     public double VizPinWpm { get => _vizPinWpm; set => Set(ref _vizPinWpm, value); }
 
+    private double _vizPinHz;
+    public double VizPinHz { get => _vizPinHz; set => Set(ref _vizPinHz, value); }
+
     public string VizStartStopLabel => VizRunning ? "STOP" : "START LIVE";
+
+    /// <summary>Resolves the persistent capture directory and ensures it exists.</summary>
+    private static string ResolveVizCaptureDir()
+    {
+        // Walk up from the running exe to find the experiments\cw-decoder root.
+        var dir = AppContext.BaseDirectory;
+        for (int i = 0; i < 8 && !string.IsNullOrEmpty(dir); i++)
+        {
+            var candidate = System.IO.Path.Combine(dir, "captures");
+            var marker = System.IO.Path.Combine(dir, "Cargo.toml");
+            if (System.IO.File.Exists(marker))
+            {
+                System.IO.Directory.CreateDirectory(candidate);
+                return candidate;
+            }
+            dir = System.IO.Path.GetDirectoryName(dir) ?? "";
+        }
+        // Fallback: cwd\captures.
+        var fallback = System.IO.Path.Combine(Environment.CurrentDirectory, "captures");
+        System.IO.Directory.CreateDirectory(fallback);
+        return fallback;
+    }
 
     /// <summary>Toggle the live envelope visualizer.</summary>
     public void ToggleViz()
@@ -122,10 +147,16 @@ public sealed partial class MainWindowViewModel
             VizFrame = VizFrameVm.Empty;
             VizCurrentWpm = 0;
             VizStatus = "starting…";
+            // Auto-save every live capture so it can be labeled later.
+            var stamp = DateTime.Now.ToString("yyyyMMdd-HHmmss");
+            var captureDir = ResolveVizCaptureDir();
+            var recordPath = System.IO.Path.Combine(captureDir, $"viz-{stamp}.wav");
             _vizProcess.StartLiveV3(SelectedDevice, decodeEveryMs: 250,
-                recordPath: null, loopback: VizUseLoopback, pinWpm: VizPinWpm);
+                recordPath: recordPath, loopback: VizUseLoopback,
+                pinWpm: VizPinWpm, pinHz: VizPinHz);
             VizRunning = true;
-            VizStatus = VizUseLoopback ? "live (loopback)" : "live (mic)";
+            VizStatus = (VizUseLoopback ? "live (loopback)" : "live (mic)") +
+                $" → captures\\viz-{stamp}.wav";
         }
         catch (Exception ex)
         {
@@ -150,7 +181,8 @@ public sealed partial class MainWindowViewModel
             VizFrame = VizFrameVm.Empty;
             VizCurrentWpm = 0;
             VizStatus = $"file: {System.IO.Path.GetFileName(filePath)}";
-            _vizProcess.StartFileV3(filePath, decodeEveryMs: 250, pinWpm: VizPinWpm);
+            _vizProcess.StartFileV3(filePath, decodeEveryMs: 250,
+                pinWpm: VizPinWpm, pinHz: VizPinHz);
             VizRunning = true;
         }
         catch (Exception ex)

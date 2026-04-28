@@ -522,6 +522,10 @@ enum Cmd {
         /// Pin the WPM (0 = auto / k-means lock).
         #[arg(long, default_value_t = 0.0)]
         pin_wpm: f32,
+        /// Pin the pitch in Hz (0 = auto-detect). Useful when the auto
+        /// detector locks onto a noise/harmonic peak instead of the CW tone.
+        #[arg(long, default_value_t = 0.0)]
+        pin_hz: f32,
         /// Decode an audio file (mp3/wav/m4a/...) instead of live capture.
         /// Samples are streamed at real-time pace into the same envelope
         /// pipeline so the visualizer behaves identically to live audio.
@@ -1000,6 +1004,7 @@ fn main() -> Result<()> {
             stdin_control,
             loopback,
             pin_wpm,
+            pin_hz,
             file,
         } => run_stream_live_v3(
             device.as_deref(),
@@ -1010,6 +1015,7 @@ fn main() -> Result<()> {
             stdin_control,
             loopback,
             (pin_wpm > 0.0).then_some(pin_wpm),
+            (pin_hz > 0.0).then_some(pin_hz),
             file.as_deref(),
         ),
         Cmd::ProbeFisher {
@@ -3602,10 +3608,11 @@ fn run_stream_live_v3(
     stdin_control: bool,
     loopback: bool,
     pin_wpm: Option<f32>,
+    pin_hz: Option<f32>,
     file: Option<&std::path::Path>,
 ) -> Result<()> {
     if let Some(path) = file {
-        return run_stream_live_v3_file(path, seconds, json, decode_every_ms, pin_wpm);
+        return run_stream_live_v3_file(path, seconds, json, decode_every_ms, pin_wpm, pin_hz);
     }
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
@@ -3620,6 +3627,7 @@ fn run_stream_live_v3(
         audio::open_input_with_recording(device, 1.0, record_path)?
     };
     let mut streamer = LiveEnvelopeStreamer::new(capture.sample_rate);
+    streamer.set_pinned_hz(pin_hz);
     if let Some(w) = pin_wpm {
         // Force initial lock to user-pinned WPM by feeding through the
         // streamer's locked_wpm channel via an empty flush won't work;
@@ -3826,6 +3834,7 @@ fn run_stream_live_v3_file(
     json: bool,
     decode_every_ms: u64,
     pin_wpm: Option<f32>,
+    pin_hz: Option<f32>,
 ) -> Result<()> {
     use std::time::{Duration, Instant};
     use cw_decoder_poc::envelope_decoder::{
@@ -3837,6 +3846,7 @@ fn run_stream_live_v3_file(
     let total_samples = decoded.samples.len();
     let duration_s = total_samples as f32 / sr as f32;
     let mut streamer = LiveEnvelopeStreamer::new(sr);
+    streamer.set_pinned_hz(pin_hz);
     let _ = pin_wpm;
 
     let mut emitter = if json {
