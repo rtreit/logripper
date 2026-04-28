@@ -118,14 +118,29 @@ internal sealed class CwQsoTranscriptAggregator : IDisposable
 
     private void OnRawLineReceived(object? sender, string line)
     {
-        // Runs on the source's stdout pump thread. Catch everything —
-        // a JsonException, an OOM in StringBuilder, or any other failure
-        // here must NOT kill the pump (which would silently freeze WPM
-        // updates and any other downstream subscribers).
+#pragma warning disable CA1031, RCS1075 // raw-line handler must never crash the pump
         try
         {
             if (string.IsNullOrWhiteSpace(line))
             {
+                return;
+            }
+
+            // v2 path: a `transcript` event carries the full current text
+            // and REPLACES anything we had buffered. ditdah re-decodes the
+            // entire audio buffer on each cycle, so per-character
+            // accumulation is wrong (the prefix can change). Detect this
+            // up front and short-circuit the legacy fragment path.
+            if (TryParseTranscriptEvent(line, out var fullText))
+            {
+                lock (_lock)
+                {
+                    _fragments.Clear();
+                    if (!string.IsNullOrEmpty(fullText))
+                    {
+                        _fragments.AddLast(new TranscriptFragment(DateTimeOffset.UtcNow, fullText));
+                    }
+                }
                 return;
             }
 
@@ -144,18 +159,43 @@ internal sealed class CwQsoTranscriptAggregator : IDisposable
                 }
             }
         }
-#pragma warning disable CA1031, RCS1075 // background pump handler must not crash on a single bad line
-        catch (Exception ex)
+        catch (JsonException)
         {
-            // Intentionally swallowed — see class doc on robustness rules.
-            // A malformed NDJSON line, OOM, or any other failure here must
-            // NOT kill the source's stdout pump (which would silently
-            // freeze WPM updates and any other downstream subscribers).
-            System.Diagnostics.Trace.WriteLine($"CwQsoTranscriptAggregator handler error: {ex.GetType().Name}: {ex.Message}");
+            // Malformed NDJSON — ignore silently.
+        }
+        catch (Exception)
+        {
+            // Defensive: never let a single bad line kill the pump.
         }
 #pragma warning restore CA1031, RCS1075
     }
 
+    private static bool TryParseTranscriptEvent(string line, out string text)
+    {
+        text = string.Empty;
+        try
+        {
+            using var doc = JsonDocument.Parse(line);
+            var root = doc.RootElement;
+            if (!root.TryGetProperty("type", out var typeProp)
+                || typeProp.ValueKind != JsonValueKind.String
+                || !string.Equals(typeProp.GetString(), "transcript", StringComparison.Ordinal))
+            {
+                return false;
+            }
+            if (!root.TryGetProperty("text", out var textProp)
+                || textProp.ValueKind != JsonValueKind.String)
+            {
+                return false;
+            }
+            text = textProp.GetString() ?? string.Empty;
+            return true;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
     private static TranscriptFragment? TryParseFragment(string line)
     {
         using var doc = JsonDocument.Parse(line);

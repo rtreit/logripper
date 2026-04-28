@@ -8,7 +8,7 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use cw_decoder_poc::{
     audio, bench_latency, decoder, ditdah_streaming, harvest, json, log_capture, preview,
-    streaming, tui,
+    streaming, streaming_v2, tui,
 };
 
 #[derive(Parser, Debug)]
@@ -44,6 +44,12 @@ enum Cmd {
         /// Hop length in seconds for sliding mode.
         #[arg(long, default_value_t = 3.0)]
         hop: f32,
+
+        /// Pin the decoder WPM (overrides ditdah's auto-detect AND its
+        /// median-element-length self-calibration). Useful when auto-WPM
+        /// locks onto a wrong value on noisy live signals. 0 = auto.
+        #[arg(long, default_value_t = 0.0)]
+        pin_wpm: f32,
     },
 
     /// List available input audio devices.
@@ -459,6 +465,73 @@ enum Cmd {
         #[arg(long)]
         loopback: bool,
     },
+    /// Round-2 live decoder: append-only audio buffer + whole-buffer
+    /// ditdah redecode. Each decode emits a full-replacement transcript
+    /// (no incremental commit). Empirically reaches CER ~0.06 vs the
+    /// rolling-window backend's 0.83-0.89 on training-set-a 30 WPM CW.
+    /// Per-decode latency stays under 100 ms even on a 3-minute buffer.
+    StreamLiveV2 {
+        #[arg(long)]
+        device: Option<String>,
+        /// How long to capture before exiting (seconds). 0 = run forever.
+        #[arg(long, default_value_t = 0.0)]
+        seconds: f32,
+        /// Emit one JSON object per event to stdout (for the Avalonia GUI bridge).
+        #[arg(long)]
+        json: bool,
+        /// How often to re-run ditdah on the buffered audio.
+        #[arg(long, default_value_t = streaming_v2::DEFAULT_DECODE_EVERY_MS)]
+        decode_every_ms: u64,
+        /// Optional WAV path to mirror raw mono samples to (16-bit PCM).
+        #[arg(long)]
+        record: Option<PathBuf>,
+        /// Read NDJSON config-update lines from stdin while streaming
+        /// (currently only `{"type":"reset_lock"}` is honored, which
+        /// resets the audio buffer).
+        #[arg(long)]
+        stdin_control: bool,
+        /// Capture from a system OUTPUT device (WASAPI loopback).
+        #[arg(long)]
+        loopback: bool,
+        /// Pin the WPM hint passed into ditdah. Overrides auto-detect AND
+        /// the median-element-length self-calibration. Useful when auto-WPM
+        /// locks onto a wrong value on noisy live signals. 0 = auto.
+        #[arg(long, default_value_t = 0.0)]
+        pin_wpm: f32,
+    },
+    /// Live streaming with the in-house envelope decoder, emitting full
+    /// visualizer frames (audio envelope, hysteresis thresholds, classified
+    /// events, k-means centroids) on every decode cycle. Powers the GUI
+    /// VISUALIZER tab.
+    StreamLiveV3 {
+        #[arg(long)]
+        device: Option<String>,
+        #[arg(long, default_value_t = 0.0)]
+        seconds: f32,
+        #[arg(long)]
+        json: bool,
+        /// Re-decode the whole buffer every N ms (default 250).
+        #[arg(long, default_value_t = 250)]
+        decode_every_ms: u64,
+        #[arg(long)]
+        record: Option<PathBuf>,
+        #[arg(long)]
+        stdin_control: bool,
+        #[arg(long)]
+        loopback: bool,
+        /// Pin the WPM (0 = auto / k-means lock).
+        #[arg(long, default_value_t = 0.0)]
+        pin_wpm: f32,
+        /// Pin the pitch in Hz (0 = auto-detect). Useful when the auto
+        /// detector locks onto a noise/harmonic peak instead of the CW tone.
+        #[arg(long, default_value_t = 0.0)]
+        pin_hz: f32,
+        /// Decode an audio file (mp3/wav/m4a/...) instead of live capture.
+        /// Samples are streamed at real-time pace into the same envelope
+        /// pipeline so the visualizer behaves identically to live audio.
+        #[arg(long)]
+        file: Option<PathBuf>,
+    },
     /// Diagnostic: scan candidate pitches across an audio file and print
     /// the trial-decode Fisher score per pitch. Use this to compare
     /// faint signals vs noise and tune lock thresholds.
@@ -611,7 +684,8 @@ fn main() -> Result<()> {
             sliding,
             window,
             hop,
-        } => run_file(&path, sliding, window, hop, &log_capture),
+            pin_wpm,
+        } => run_file(&path, sliding, window, hop, pin_wpm, &log_capture),
         Cmd::Devices { json } => {
             let names = audio::list_input_devices().context("listing devices")?;
             let outs = audio::list_output_devices().context("listing output devices")?;
@@ -902,6 +976,48 @@ fn main() -> Result<()> {
                 loopback,
             )
         }
+        Cmd::StreamLiveV2 {
+            device,
+            seconds,
+            json,
+            decode_every_ms,
+            record,
+            stdin_control,
+            loopback,
+            pin_wpm,
+        } => run_stream_live_v2(
+            device.as_deref(),
+            seconds,
+            json,
+            decode_every_ms,
+            record.as_deref(),
+            stdin_control,
+            loopback,
+            (pin_wpm > 0.0).then_some(pin_wpm),
+        ),
+        Cmd::StreamLiveV3 {
+            device,
+            seconds,
+            json,
+            decode_every_ms,
+            record,
+            stdin_control,
+            loopback,
+            pin_wpm,
+            pin_hz,
+            file,
+        } => run_stream_live_v3(
+            device.as_deref(),
+            seconds,
+            json,
+            decode_every_ms,
+            record.as_deref(),
+            stdin_control,
+            loopback,
+            (pin_wpm > 0.0).then_some(pin_wpm),
+            (pin_hz > 0.0).then_some(pin_hz),
+            file.as_deref(),
+        ),
         Cmd::ProbeFisher {
             path,
             min_hz,
@@ -1127,9 +1243,14 @@ fn run_file(
     sliding: bool,
     window: f32,
     hop: f32,
+    pin_wpm: f32,
     log_capture: &log_capture::DitdahLogCapture,
 ) -> Result<()> {
+    let pin = (pin_wpm > 0.0).then_some(pin_wpm);
     println!("Decoding: {}", path.display());
+    if let Some(w) = pin {
+        println!("  pin_wpm = {w:.1}");
+    }
     let audio = audio::decode_file(path).context("decoding audio file")?;
     let dur = audio.samples.len() as f32 / audio.sample_rate as f32;
     println!(
@@ -1140,7 +1261,8 @@ fn run_file(
     );
 
     if !sliding {
-        let out = decoder::decode_window(&audio.samples, audio.sample_rate, log_capture)?;
+        let out =
+            decoder::decode_window_with_pin(&audio.samples, audio.sample_rate, log_capture, pin)?;
         let stats = out.stats;
         println!();
         println!("== ditdah stats ==");
@@ -1184,7 +1306,7 @@ fn run_file(
     while start + win_samples <= audio.samples.len() {
         let end = start + win_samples;
         let slice = &audio.samples[start..end];
-        let out = decoder::decode_window(slice, audio.sample_rate, log_capture)?;
+        let out = decoder::decode_window_with_pin(slice, audio.sample_rate, log_capture, pin)?;
         let t = start as f32 / audio.sample_rate as f32;
         let wpm = out
             .stats
@@ -2950,6 +3072,217 @@ fn run_stream_live(
     Ok(())
 }
 
+/// Round-2 live decoder: append-only audio buffer + whole-buffer ditdah
+/// redecode. See [`streaming_v2`] for the design rationale.
+fn run_stream_live_v2(
+    device: Option<&str>,
+    seconds: f32,
+    json: bool,
+    decode_every_ms: u64,
+    record_path: Option<&std::path::Path>,
+    stdin_control: bool,
+    loopback: bool,
+    pin_wpm: Option<f32>,
+) -> Result<()> {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
+
+    let capture = if loopback {
+        audio::open_loopback_with_recording(device, 1.0, record_path)?
+    } else {
+        audio::open_input_with_recording(device, 1.0, record_path)?
+    };
+    let mut decoder = streaming_v2::WholeBufferDecoder::new(capture.sample_rate);
+    decoder.set_pin_wpm(pin_wpm);
+
+    let stop = Arc::new(AtomicBool::new(false));
+    {
+        let stop = Arc::clone(&stop);
+        ctrlc_setup(move || {
+            stop.store(true, Ordering::Relaxed);
+        });
+    }
+    let cfg_channel = stdin_control.then(|| spawn_stdin_config_channel(Some(Arc::clone(&stop))));
+    if !stdin_control {
+        let stop = Arc::clone(&stop);
+        std::thread::spawn(move || {
+            use std::io::Read;
+            let mut buf = [0u8; 256];
+            let mut stdin = std::io::stdin();
+            loop {
+                match stdin.read(&mut buf) {
+                    Ok(0) | Err(_) => {
+                        stop.store(true, Ordering::Relaxed);
+                        break;
+                    }
+                    Ok(_) => {}
+                }
+            }
+        });
+    }
+
+    let mut emitter = if json {
+        Some(json::JsonEmitter::new())
+    } else {
+        None
+    };
+    if let Some(em) = emitter.as_mut() {
+        em.emit(
+            0.0,
+            serde_json::json!({
+                "type": "ready",
+                "source": "live-v2",
+                "device": capture.device_name,
+                "rate": capture.sample_rate,
+                "decode_every_ms": decode_every_ms,
+                "min_decode_audio_secs": streaming_v2::MIN_DECODE_AUDIO_SECS,
+                "recording": capture.record_path().map(|p| p.display().to_string()),
+                "pin_wpm": pin_wpm,
+            }),
+        );
+    } else {
+        println!(
+            "Live streaming (v2) from: {} @ {} Hz; decode every {} ms; pin_wpm={}",
+            capture.device_name,
+            capture.sample_rate,
+            decode_every_ms,
+            pin_wpm
+                .map(|w| format!("{w:.1}"))
+                .unwrap_or_else(|| "auto".into())
+        );
+    }
+
+    let started = Instant::now();
+    let mut last_drain_at: u64 = 0;
+    let mut last_decode_at = Instant::now();
+    let decode_period = Duration::from_millis(decode_every_ms);
+    let mut last_transcript: Option<String> = None;
+    let mut last_wpm_emitted: Option<f32> = None;
+    let mut last_lock_emitted: Option<streaming_v2::LockState> = None;
+
+    loop {
+        if stop.load(Ordering::Relaxed) {
+            break;
+        }
+        if seconds > 0.0 && started.elapsed().as_secs_f32() >= seconds {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+
+        if let Some(rx) = cfg_channel.as_ref() {
+            // v2 currently honors only ResetLock (clears the audio
+            // buffer so the operator can start a fresh QSO). Config
+            // updates are no-ops because v2 has no per-decode tunables.
+            while let Ok(msg) = rx.try_recv() {
+                if matches!(msg, StdinControlMessage::ResetLock) {
+                    decoder.reset();
+                    last_drain_at = capture.buffer.lock().written;
+                    last_transcript = None;
+                    last_wpm_emitted = None;
+                    last_lock_emitted = None;
+                    if let Some(em) = emitter.as_mut() {
+                        em.emit(
+                            started.elapsed().as_secs_f32(),
+                            serde_json::json!({"type": "reset_ack"}),
+                        );
+                    }
+                }
+            }
+        }
+
+        let chunk = {
+            let lock = capture.buffer.lock();
+            let total = lock.written;
+            let avail = lock.len();
+            let want = (total - last_drain_at).min(avail as u64) as usize;
+            if want == 0 {
+                Vec::new()
+            } else {
+                let snap = lock.snapshot();
+                last_drain_at = total;
+                let start = snap.len() - want;
+                snap[start..].to_vec()
+            }
+        };
+        if !chunk.is_empty() {
+            decoder.feed(&chunk);
+        }
+
+        if last_decode_at.elapsed() < decode_period {
+            continue;
+        }
+        last_decode_at = Instant::now();
+
+        let snap = match decoder.decode()? {
+            Some(s) => s,
+            None => continue,
+        };
+
+        let t = started.elapsed().as_secs_f32();
+        if let Some(em) = emitter.as_mut() {
+            em.emit(
+                t,
+                serde_json::json!({
+                    "type": "transcript",
+                    "text": snap.text,
+                    "chars": snap.text.chars().count(),
+                    "wpm": snap.wpm,
+                    "decode_ms": snap.decode_ms,
+                    "audio_secs": snap.audio_secs,
+                    "lock": snap.lock.as_str(),
+                }),
+            );
+            if last_wpm_emitted
+                .map(|w| (w - snap.wpm).abs() >= 0.5)
+                .unwrap_or(true)
+            {
+                em.emit(t, serde_json::json!({"type": "wpm", "wpm": snap.wpm}));
+                last_wpm_emitted = Some(snap.wpm);
+            }
+            if last_lock_emitted != Some(snap.lock) {
+                em.emit(
+                    t,
+                    serde_json::json!({"type": "lock", "state": snap.lock.as_str()}),
+                );
+                last_lock_emitted = Some(snap.lock);
+            }
+        } else {
+            println!(
+                "[t={:>6.2}s audio={:>6.1}s decode={:>4}ms wpm={:>5.1} lock={}] {}",
+                t,
+                snap.audio_secs,
+                snap.decode_ms,
+                snap.wpm,
+                snap.lock.as_str(),
+                snap.text
+            );
+        }
+        last_transcript = Some(snap.text);
+    }
+
+    let recording_path = capture.record_path().map(|p| p.display().to_string());
+    let recording_saved = capture
+        .finalize_recording()
+        .map(|p| p.display().to_string());
+    if let Some(em) = emitter.as_mut() {
+        em.emit(
+            started.elapsed().as_secs_f32(),
+            serde_json::json!({
+                "type": "end",
+                "transcript": last_transcript.unwrap_or_default(),
+                "recording": recording_saved.or(recording_path),
+            }),
+        );
+        return Ok(());
+    }
+
+    println!();
+    println!("Final transcript (v2):");
+    println!("{}", last_transcript.unwrap_or_default());
+    Ok(())
+}
+
 fn ctrlc_setup<F: FnMut() + Send + 'static>(_f: F) {
     // Best-effort: no ctrlc crate, rely on terminal interrupt for now.
 }
@@ -3267,5 +3600,385 @@ fn run_gen_rough_fist(
     );
     println!("Truth: {}", truth_path.display());
     println!("Text:  {}", canonical_text);
+    Ok(())
+}
+
+fn run_stream_live_v3(
+    device: Option<&str>,
+    seconds: f32,
+    json: bool,
+    decode_every_ms: u64,
+    record_path: Option<&std::path::Path>,
+    stdin_control: bool,
+    loopback: bool,
+    pin_wpm: Option<f32>,
+    pin_hz: Option<f32>,
+    file: Option<&std::path::Path>,
+) -> Result<()> {
+    if let Some(path) = file {
+        return run_stream_live_v3_file(path, seconds, json, decode_every_ms, pin_wpm, pin_hz);
+    }
+    use cw_decoder_poc::envelope_decoder::{
+        LiveEnvelopeStreamer, VizEventKind, MAX_VIZ_ENVELOPE_SAMPLES,
+    };
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
+
+    let capture = if loopback {
+        audio::open_loopback_with_recording(device, 1.0, record_path)?
+    } else {
+        audio::open_input_with_recording(device, 1.0, record_path)?
+    };
+    let new_streamer = || {
+        let mut streamer = LiveEnvelopeStreamer::new(capture.sample_rate);
+        streamer.set_pinned_hz(pin_hz);
+        streamer.set_pinned_wpm(pin_wpm);
+        streamer
+    };
+    let mut streamer = new_streamer();
+
+    let stop = Arc::new(AtomicBool::new(false));
+    {
+        let stop = Arc::clone(&stop);
+        ctrlc_setup(move || {
+            stop.store(true, Ordering::Relaxed);
+        });
+    }
+    let cfg_channel = stdin_control.then(|| spawn_stdin_config_channel(Some(Arc::clone(&stop))));
+    if !stdin_control {
+        let stop = Arc::clone(&stop);
+        std::thread::spawn(move || {
+            use std::io::Read;
+            let mut buf = [0u8; 256];
+            let mut stdin = std::io::stdin();
+            loop {
+                match stdin.read(&mut buf) {
+                    Ok(0) | Err(_) => {
+                        stop.store(true, Ordering::Relaxed);
+                        break;
+                    }
+                    Ok(_) => {}
+                }
+            }
+        });
+    }
+
+    let mut emitter = if json {
+        Some(json::JsonEmitter::new())
+    } else {
+        None
+    };
+    if let Some(em) = emitter.as_mut() {
+        em.emit(
+            0.0,
+            serde_json::json!({
+                "type": "ready",
+                "source": "live-v3",
+                "device": capture.device_name,
+                "rate": capture.sample_rate,
+                "decode_every_ms": decode_every_ms,
+                "max_viz_envelope_samples": MAX_VIZ_ENVELOPE_SAMPLES,
+                "recording": capture.record_path().map(|p| p.display().to_string()),
+                "pin_wpm": pin_wpm,
+            }),
+        );
+    } else {
+        println!(
+            "Live streaming (v3 envelope+viz) from: {} @ {} Hz; decode every {} ms",
+            capture.device_name, capture.sample_rate, decode_every_ms
+        );
+    }
+
+    let started = Instant::now();
+    let mut last_drain_at: u64 = 0;
+    let mut last_decode_at = Instant::now();
+    let decode_period = Duration::from_millis(decode_every_ms);
+    let mut last_transcript: Option<String> = None;
+
+    loop {
+        if stop.load(Ordering::Relaxed) {
+            break;
+        }
+        if seconds > 0.0 && started.elapsed().as_secs_f32() >= seconds {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+
+        if let Some(rx) = cfg_channel.as_ref() {
+            while let Ok(msg) = rx.try_recv() {
+                if matches!(msg, StdinControlMessage::ResetLock) {
+                    streamer = new_streamer();
+                    last_drain_at = capture.buffer.lock().written;
+                    last_transcript = None;
+                    if let Some(em) = emitter.as_mut() {
+                        em.emit(
+                            started.elapsed().as_secs_f32(),
+                            serde_json::json!({"type": "reset_ack"}),
+                        );
+                    }
+                }
+            }
+        }
+
+        let chunk = {
+            let lock = capture.buffer.lock();
+            let total = lock.written;
+            let avail = lock.len();
+            let want = (total - last_drain_at).min(avail as u64) as usize;
+            if want == 0 {
+                Vec::new()
+            } else {
+                let snap = lock.snapshot();
+                last_drain_at = total;
+                let start = snap.len() - want;
+                snap[start..].to_vec()
+            }
+        };
+        if !chunk.is_empty() {
+            // Buffer the audio without forcing a viz decode (cheap path).
+            streamer.feed(&chunk);
+        }
+
+        if last_decode_at.elapsed() < decode_period {
+            continue;
+        }
+        last_decode_at = Instant::now();
+
+        // Force a viz-producing decode now.
+        let snap = streamer.flush_with_viz();
+        let t = started.elapsed().as_secs_f32();
+        last_transcript = Some(snap.transcript.clone());
+
+        if let Some(em) = emitter.as_mut() {
+            em.emit(
+                t,
+                serde_json::json!({
+                    "type": "transcript",
+                    "text": snap.transcript,
+                    "appended": snap.appended,
+                    "wpm": snap.wpm,
+                }),
+            );
+            if let Some(viz) = snap.viz {
+                let events_json: Vec<serde_json::Value> = viz
+                    .events
+                    .iter()
+                    .map(|e| {
+                        let kind = match e.kind {
+                            VizEventKind::OnDit => "on_dit",
+                            VizEventKind::OnDah => "on_dah",
+                            VizEventKind::OffIntra => "off_intra",
+                            VizEventKind::OffChar => "off_char",
+                            VizEventKind::OffWord => "off_word",
+                        };
+                        serde_json::json!({
+                            "start_s": e.start_s,
+                            "end_s": e.end_s,
+                            "duration_s": e.duration_s,
+                            "kind": kind,
+                        })
+                    })
+                    .collect();
+                em.emit(
+                    t,
+                    serde_json::json!({
+                        "type": "viz",
+                        "buffer_seconds": viz.buffer_seconds,
+                        "frame_step_s": viz.frame_step_s,
+                        "pitch_hz": viz.pitch_hz,
+                        "envelope": viz.envelope,
+                        "envelope_max": viz.envelope_max,
+                        "noise_floor": viz.noise_floor,
+                        "signal_floor": viz.signal_floor,
+                        "hyst_high": viz.hyst_high,
+                        "hyst_low": viz.hyst_low,
+                        "events": events_json,
+                        "on_durations": viz.on_durations,
+                        "dot_seconds": viz.dot_seconds,
+                        "wpm": viz.wpm,
+                        "centroid_dot": viz.centroid_dot,
+                        "centroid_dah": viz.centroid_dah,
+                        "locked_wpm": viz.locked_wpm,
+                    }),
+                );
+            }
+        } else {
+            println!("[t={:>6.2}s wpm={:>5.1}] {}", t, snap.wpm, snap.transcript);
+        }
+    }
+
+    let recording_path = capture.record_path().map(|p| p.display().to_string());
+    let recording_saved = capture
+        .finalize_recording()
+        .map(|p| p.display().to_string());
+    if let Some(em) = emitter.as_mut() {
+        em.emit(
+            started.elapsed().as_secs_f32(),
+            serde_json::json!({
+                "type": "end",
+                "transcript": last_transcript.unwrap_or_default(),
+                "recording": recording_saved.or(recording_path),
+            }),
+        );
+    } else {
+        println!();
+        println!("Final transcript (v3):");
+        println!("{}", last_transcript.unwrap_or_default());
+    }
+    Ok(())
+}
+
+fn run_stream_live_v3_file(
+    path: &std::path::Path,
+    seconds: f32,
+    json: bool,
+    decode_every_ms: u64,
+    pin_wpm: Option<f32>,
+    pin_hz: Option<f32>,
+) -> Result<()> {
+    use cw_decoder_poc::envelope_decoder::{
+        LiveEnvelopeStreamer, VizEventKind, MAX_VIZ_ENVELOPE_SAMPLES,
+    };
+    use std::time::{Duration, Instant};
+
+    let decoded = audio::decode_file(path)?;
+    let sr = decoded.sample_rate;
+    let total_samples = decoded.samples.len();
+    let duration_s = total_samples as f32 / sr as f32;
+    let mut streamer = LiveEnvelopeStreamer::new(sr);
+    streamer.set_pinned_hz(pin_hz);
+    streamer.set_pinned_wpm(pin_wpm);
+
+    let mut emitter = if json {
+        Some(json::JsonEmitter::new())
+    } else {
+        None
+    };
+    if let Some(em) = emitter.as_mut() {
+        em.emit(
+            0.0,
+            serde_json::json!({
+                "type": "ready",
+                "source": "live-v3-file",
+                "device": format!("file:{}", path.display()),
+                "rate": sr,
+                "decode_every_ms": decode_every_ms,
+                "max_viz_envelope_samples": MAX_VIZ_ENVELOPE_SAMPLES,
+                "recording": serde_json::Value::Null,
+                "pin_wpm": pin_wpm,
+                "duration_s": duration_s,
+            }),
+        );
+    } else {
+        println!(
+            "Streaming file (v3 envelope+viz): {} @ {} Hz ({:.1}s); decode every {} ms",
+            path.display(),
+            sr,
+            duration_s,
+            decode_every_ms
+        );
+    }
+
+    let started = Instant::now();
+    let mut last_decode_at = Instant::now();
+    let decode_period = Duration::from_millis(decode_every_ms);
+    let chunk_period = Duration::from_millis(50);
+    let chunk_samples = ((sr as u64 * 50) / 1000) as usize;
+    let mut cursor = 0usize;
+    let mut last_transcript: Option<String> = None;
+
+    while cursor < total_samples {
+        if seconds > 0.0 && started.elapsed().as_secs_f32() >= seconds {
+            break;
+        }
+        std::thread::sleep(chunk_period);
+        let end = (cursor + chunk_samples).min(total_samples);
+        if end > cursor {
+            streamer.feed(&decoded.samples[cursor..end]);
+            cursor = end;
+        }
+
+        if last_decode_at.elapsed() < decode_period {
+            continue;
+        }
+        last_decode_at = Instant::now();
+
+        let snap = streamer.flush_with_viz();
+        let t = started.elapsed().as_secs_f32();
+        last_transcript = Some(snap.transcript.clone());
+
+        if let Some(em) = emitter.as_mut() {
+            em.emit(
+                t,
+                serde_json::json!({
+                    "type": "transcript",
+                    "text": snap.transcript,
+                    "appended": snap.appended,
+                    "wpm": snap.wpm,
+                }),
+            );
+            if let Some(viz) = snap.viz {
+                let events_json: Vec<serde_json::Value> = viz
+                    .events
+                    .iter()
+                    .map(|e| {
+                        let kind = match e.kind {
+                            VizEventKind::OnDit => "on_dit",
+                            VizEventKind::OnDah => "on_dah",
+                            VizEventKind::OffIntra => "off_intra",
+                            VizEventKind::OffChar => "off_char",
+                            VizEventKind::OffWord => "off_word",
+                        };
+                        serde_json::json!({
+                            "start_s": e.start_s,
+                            "end_s": e.end_s,
+                            "duration_s": e.duration_s,
+                            "kind": kind,
+                        })
+                    })
+                    .collect();
+                em.emit(
+                    t,
+                    serde_json::json!({
+                        "type": "viz",
+                        "buffer_seconds": viz.buffer_seconds,
+                        "frame_step_s": viz.frame_step_s,
+                        "pitch_hz": viz.pitch_hz,
+                        "envelope": viz.envelope,
+                        "envelope_max": viz.envelope_max,
+                        "noise_floor": viz.noise_floor,
+                        "signal_floor": viz.signal_floor,
+                        "hyst_high": viz.hyst_high,
+                        "hyst_low": viz.hyst_low,
+                        "events": events_json,
+                        "on_durations": viz.on_durations,
+                        "dot_seconds": viz.dot_seconds,
+                        "wpm": viz.wpm,
+                        "centroid_dot": viz.centroid_dot,
+                        "centroid_dah": viz.centroid_dah,
+                        "locked_wpm": viz.locked_wpm,
+                    }),
+                );
+            }
+        } else {
+            println!("[t={:>6.2}s wpm={:>5.1}] {}", t, snap.wpm, snap.transcript);
+        }
+    }
+
+    if let Some(em) = emitter.as_mut() {
+        em.emit(
+            started.elapsed().as_secs_f32(),
+            serde_json::json!({
+                "type": "end",
+                "transcript": last_transcript.unwrap_or_default(),
+                "recording": serde_json::Value::Null,
+            }),
+        );
+    } else {
+        println!();
+        println!("Final transcript (v3 file):");
+        println!("{}", last_transcript.unwrap_or_default());
+    }
     Ok(())
 }

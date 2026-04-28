@@ -84,10 +84,11 @@ Main experiment executable. It currently exposes several surfaces:
   - `live` — TUI-driven capture + rolling-window `ditdah` decode (legacy interactive surface)
 - **Custom streaming decoder**
   - `stream-file` — file-driven streaming decode with optional NDJSON event output and live `--stdin-control` config updates
-  - `stream-live` — live capture through the streaming decoder, with optional `--record` WAV mirror and `--stdin-control`
+  - `stream-live` — live capture through the streaming Goertzel decoder, with optional `--record` WAV mirror and `--stdin-control`
+  - `stream-live-v2` — **current GUI default.** Live capture into an append-only audio buffer; re-runs pristine `ditdah` on the **whole buffer** every `--decode-every-ms` (default 5000) and emits a full-replacement `transcript` event. Empirically reaches CER ~0.06 on training-set-a 30 WPM CW (3-4× better than `stream-live`'s 0.17 and ~14× better than the old `stream-live-ditdah` rolling-window backend's 0.83-0.89). Per-decode latency stays under 100 ms even on a 3-minute buffer. See `src\streaming_v2.rs` for design rationale and `tools\rolling-whole-buffer\` for the empirical validation harness.
 - **Causal ditdah baseline**
   - `stream-file-ditdah` — file-driven causal whole-window `ditdah` replay
-  - `stream-live-ditdah` — live capture through the causal baseline, with optional `--record` WAV mirror
+  - `stream-live-ditdah` — live capture through the rolling-window causal baseline, with optional `--record` WAV mirror. **Deprecated** — kept only for A/B comparison; the GUI now uses `stream-live-v2`.
 - **Labeling helpers**
   - `harvest-file` — find candidate "golden copy" windows by intersecting offline `ditdah` and the streaming decoder, optional `--needle` anchors
   - `preview-window` — render a slowed WAV preview of a window for human verification

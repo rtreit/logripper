@@ -17,6 +17,29 @@ public partial class MainWindow : Window
     private void OnStartStopClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
         => Vm?.ToggleStartStop();
 
+    private void OnVizStartStopClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+        => Vm?.ToggleViz();
+
+    private async void OnVizPlayFileClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (StorageProvider is null || Vm is null) return;
+        var picked = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+        {
+            Title = "Pick a CW audio file to visualize",
+            AllowMultiple = false,
+            FileTypeFilter = new[]
+            {
+                new FilePickerFileType("Audio")
+                {
+                    Patterns = new[] { "*.wav", "*.mp3", "*.m4a", "*.aac" },
+                },
+            },
+        });
+        var first = picked.FirstOrDefault();
+        if (first?.TryGetLocalPath() is string path)
+            Vm.StartVizFile(path);
+    }
+
     private void OnRefreshClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
         => Vm?.RefreshDevices();
 
@@ -132,6 +155,9 @@ public partial class MainWindow : Window
     private void OnSaveLabelClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
         => Vm?.SaveSelectedLabel();
 
+    private void OnExportSelectionToTrainingSetClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+        => Vm?.ExportSelectionToTrainingSet();
+
     private void OnResetAdjustedSpanClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
         => Vm?.ResetAdjustedSpan();
 
@@ -148,6 +174,30 @@ public partial class MainWindow : Window
     {
         if (Vm is null) return;
         await Vm.RunLabelSweepAsync();
+    }
+
+    private void OnRefreshLabelCorpusClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        Vm?.RefreshLabelCorpus();
+    }
+
+    private async void OnRunStrategySweepClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (Vm is null) return;
+        await Vm.RunStrategySweepAsync();
+    }
+
+    private async void OnCopyStrategySweepMarkdownClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (Vm is null) return;
+        var md = Vm.BuildStrategySweepMarkdown();
+        if (string.IsNullOrEmpty(md)) return;
+        var top = Avalonia.Application.Current?.ApplicationLifetime as Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime;
+        var window = top?.MainWindow;
+        if (window?.Clipboard is { } clip)
+        {
+            await clip.SetTextAsync(md);
+        }
     }
 
     private void OnApplyTopSweepClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)

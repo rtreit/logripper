@@ -85,3 +85,22 @@ pub fn decode_samples(samples: &[f32], sample_rate: u32) -> Result<String> {
 
     decoder.finalize()
 }
+
+/// Like `decode_samples` but accepts an optional pinned WPM. Returns
+/// (text, wpm_used, threshold_used) so callers doing rolling-buffer decodes
+/// can pin the WPM after the first stable detection (avoids the spacing
+/// flip-flop where ditdah can re-converge to a different WPM as the buffer
+/// grows).
+pub fn decode_samples_with_params(
+    samples: &[f32],
+    sample_rate: u32,
+    pin_wpm: Option<f32>,
+    pin_threshold: Option<f32>,
+) -> Result<(String, f32, f32)> {
+    let mut decoder = MorseDecoder::new(sample_rate, 12000)?;
+    const CHUNK_SIZE: usize = 4096;
+    for chunk in samples.chunks(CHUNK_SIZE) {
+        decoder.process(chunk)?;
+    }
+    decoder.finalize_with_params(pin_wpm, pin_threshold)
+}
