@@ -12,7 +12,7 @@
 //!   4. Classify on-durations into dits/dahs using a 1-D split (median or
 //!      pin-WPM derived split point).
 //!   5. Classify off-durations into intra-character / character / word
-//!      gaps using learned off-gap clusters with dot-length fallbacks.
+//!      gaps using two split points (1.5x and 4.5x dot length).
 //!   6. Build morse string and look up in the canonical table.
 //!
 //! The point is to keep this self-contained: zero coupling to ditdah, no
@@ -578,7 +578,8 @@ pub fn decode_envelope_with_viz(
     let wpm = if dot_s > 0.0 { 1.2 / dot_s } else { 0.0 };
 
     let elem_split = 2.0 * dot_s;
-    let gap_thresholds = estimate_gap_thresholds(&off_durations, dot_s);
+    let char_gap = 2.0 * dot_s;
+    let word_gap = 5.0 * dot_s;
 
     let events: Vec<VizEvent> = timed
         .iter()
@@ -589,9 +590,9 @@ pub fn decode_envelope_with_viz(
                 } else {
                     VizEventKind::OnDit
                 }
-            } else if e.duration_s >= gap_thresholds.word_gap {
+            } else if e.duration_s >= word_gap {
                 VizEventKind::OffWord
-            } else if e.duration_s >= gap_thresholds.char_gap {
+            } else if e.duration_s >= char_gap {
                 VizEventKind::OffChar
             } else {
                 VizEventKind::OffIntra
@@ -783,123 +784,6 @@ fn dot_seconds_from_wpm(wpm: f32) -> f32 {
     (1.2_f32 / wpm.max(1.0)).max(MIN_ELEMENT_S)
 }
 
-#[derive(Debug, Clone, Copy)]
-struct GapThresholds {
-    char_gap: f32,
-    word_gap: f32,
-}
-
-fn estimate_gap_thresholds(offs: &[f32], dot_s: f32) -> GapThresholds {
-    let fixed_char = 2.0 * dot_s;
-    let fixed_word = 5.0 * dot_s;
-    if offs.len() < 2 {
-        return GapThresholds {
-            char_gap: fixed_char,
-            word_gap: fixed_word,
-        };
-    }
-
-    let mut gaps: Vec<f32> = offs
-        .iter()
-        .copied()
-        .filter(|gap| *gap > MIN_ELEMENT_S * 0.5)
-        .collect();
-    if gaps.len() < 2 {
-        return GapThresholds {
-            char_gap: fixed_char,
-            word_gap: fixed_word,
-        };
-    }
-    gaps.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-
-    let (gap_lo, gap_hi) = kmeans_centroids(&gaps);
-    let char_gap = if gap_hi >= gap_lo * 1.45 && gap_hi >= 1.5 * dot_s {
-        ((gap_lo + gap_hi) * 0.5).clamp(1.45 * dot_s, 3.3 * dot_s)
-    } else {
-        fixed_char
-    };
-
-    let mut word_gap = fixed_word;
-    if let Some([_, char_centroid, word_centroid]) = kmeans_three_centroids(&gaps) {
-        if word_centroid >= char_centroid * 1.45 && word_centroid >= 3.6 * dot_s {
-            word_gap = ((char_centroid + word_centroid) * 0.5).clamp(3.4 * dot_s, 7.5 * dot_s);
-        }
-    }
-    let long_gaps: Vec<f32> = gaps
-        .iter()
-        .copied()
-        .filter(|gap| *gap >= char_gap)
-        .collect();
-    if long_gaps.len() >= 3 {
-        let char_like = median_lower_half(&long_gaps).max(char_gap);
-        let longest = long_gaps.iter().copied().fold(0.0_f32, f32::max);
-        if longest >= char_like * 1.35 && longest >= 3.6 * dot_s {
-            let sparse_word_gap = ((char_like + longest) * 0.5).clamp(3.4 * dot_s, 7.5 * dot_s);
-            word_gap = word_gap.min(sparse_word_gap);
-        }
-    }
-
-    GapThresholds {
-        char_gap,
-        word_gap: word_gap.max(char_gap + dot_s),
-    }
-}
-
-fn kmeans_three_centroids(durations: &[f32]) -> Option<[f32; 3]> {
-    if durations.len() < 6 {
-        return None;
-    }
-    let mut sorted: Vec<f32> = durations.iter().copied().collect();
-    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    let spread = sorted.last().copied().unwrap_or(0.0) - sorted.first().copied().unwrap_or(0.0);
-    if spread < 1e-4 {
-        return None;
-    }
-
-    let mut centroids = [
-        sorted[sorted.len() / 6],
-        sorted[sorted.len() / 2],
-        sorted[(5 * sorted.len()) / 6],
-    ];
-    for _ in 0..20 {
-        let mut sums = [0.0_f64; 3];
-        let mut counts = [0_u32; 3];
-        for &duration in durations {
-            let mut best = 0usize;
-            let mut best_dist = (duration - centroids[0]).abs();
-            for (i, centroid) in centroids.iter().enumerate().skip(1) {
-                let dist = (duration - *centroid).abs();
-                if dist < best_dist {
-                    best = i;
-                    best_dist = dist;
-                }
-            }
-            sums[best] += duration as f64;
-            counts[best] += 1;
-        }
-        if counts.iter().any(|count| *count == 0) {
-            return None;
-        }
-
-        let next = [
-            (sums[0] / counts[0] as f64) as f32,
-            (sums[1] / counts[1] as f64) as f32,
-            (sums[2] / counts[2] as f64) as f32,
-        ];
-        if next
-            .iter()
-            .zip(centroids)
-            .all(|(a, b)| (*a - b).abs() < 1e-5)
-        {
-            centroids = next;
-            break;
-        }
-        centroids = next;
-    }
-    centroids.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    Some(centroids)
-}
-
 /// Returns `(on_durations_s, off_durations_s)` aligned so that
 /// `offs[i]` is the gap between `ons[i]` and `ons[i+1]`. `offs` therefore
 /// has at most `ons.len() - 1` entries.
@@ -950,7 +834,9 @@ fn events_from_envelope(env: &[f32], high: f32, low: f32, frame_dt: f32) -> (Vec
 fn decode_events(ons: &[f32], offs: &[f32], dot_s: f32) -> String {
     // Standard CW: dah = 3*dot. Element split at 2*dot.
     let elem_split = 2.0 * dot_s;
-    let gap_thresholds = estimate_gap_thresholds(offs, dot_s);
+    // Inter-element gap = 1*dot, char gap = 3*dot, word gap = 7*dot.
+    let char_gap = 2.0 * dot_s;
+    let word_gap = 5.0 * dot_s;
 
     let mut out = String::new();
     let mut current = String::new();
@@ -970,12 +856,12 @@ fn decode_events(ons: &[f32], offs: &[f32], dot_s: f32) -> String {
         current.push(if on >= elem_split { '-' } else { '.' });
         if i < offs.len() {
             let gap = offs[i];
-            if gap >= gap_thresholds.word_gap {
+            if gap >= word_gap {
                 flush(&mut current, &mut out);
                 if !out.ends_with(' ') {
                     out.push(' ');
                 }
-            } else if gap >= gap_thresholds.char_gap {
+            } else if gap >= char_gap {
                 flush(&mut current, &mut out);
             }
             // else: intra-character — keep building.
@@ -1106,32 +992,6 @@ mod tests {
         s
     }
 
-    fn durations_from_morse(
-        dot_s: f32,
-        char_gap_units: f32,
-        word_gap_units: f32,
-        code: &str,
-    ) -> (Vec<f32>, Vec<f32>) {
-        let mut ons = Vec::new();
-        let mut offs = Vec::new();
-        let mut pending_gap: Option<f32> = None;
-        for ch in code.chars() {
-            match ch {
-                '.' | '-' => {
-                    if let Some(gap) = pending_gap.take() {
-                        offs.push(gap);
-                    }
-                    ons.push(if ch == '-' { 3.0 * dot_s } else { dot_s });
-                    pending_gap = Some(dot_s);
-                }
-                ' ' => pending_gap = Some(char_gap_units * dot_s),
-                '/' => pending_gap = Some(word_gap_units * dot_s),
-                _ => {}
-            }
-        }
-        (ons, offs)
-    }
-
     #[test]
     fn decodes_simple_paris() {
         let rate = 8000u32;
@@ -1214,26 +1074,6 @@ mod tests {
             streamer.buffer.len(),
             rate as usize * MAX_LIVE_ENVELOPE_BUFFER_SECONDS
         );
-    }
-
-    #[test]
-    fn learned_gap_thresholds_keep_tightly_spaced_words() {
-        let dot = 0.060_f32;
-        let (ons, offs) = durations_from_morse(dot, 2.7, 4.2, "-.-. --.-/-.-. --.-");
-
-        let txt = decode_events(&ons, &offs, dot);
-
-        assert_eq!(txt, "CQ CQ", "got {txt:?}");
-    }
-
-    #[test]
-    fn learned_gap_thresholds_do_not_promote_character_gaps_to_words() {
-        let dot = 0.060_f32;
-        let (ons, offs) = durations_from_morse(dot, 3.1, 4.2, ".--. .- .-. .. ...");
-
-        let txt = decode_events(&ons, &offs, dot);
-
-        assert_eq!(txt, "PARIS", "got {txt:?}");
     }
 
     #[test]
