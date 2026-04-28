@@ -2503,9 +2503,12 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
         }
     }
 
-    private string _strategySweepWpms = "auto,28,region28,env,env28";
-    /// <summary>Comma-separated list of pin-WPM values to sweep alongside auto.
-    /// Editable by the operator. "auto" is always included.</summary>
+    private string _strategySweepWpms = "auto,28,region28,env,env28,live-env";
+    /// <summary>Comma-separated list of strategy tokens to sweep alongside auto.
+    /// Editable by the operator. "auto" is always included.
+    /// Includes "live-env" by default so the VISUALIZER tab's decoder
+    /// (LiveEnvelopeStreamer / stream-live-v3) is scored apples-to-apples
+    /// alongside the offline strategies.</summary>
     public string StrategySweepWpms
     {
         get => _strategySweepWpms;
@@ -2604,7 +2607,13 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
                 strategies,
                 cts.Token).ConfigureAwait(true);
             StrategySweepResult = result;
-            LabelEvaluationStatusText = $"Strategy sweep done — {result.Labels} labels × {result.Strategies.Length} strategies.";
+            var autoApply = TryAutoApplyBestPinToVisualizer(result);
+            var status = $"Strategy sweep done — {result.Labels} labels × {result.Strategies.Length} strategies.";
+            if (autoApply is not null)
+            {
+                status += $" Auto-applied to visualizer: PIN WPM={autoApply.Value.Wpm:0.##} (best {autoApply.Value.Strategy} CER {autoApply.Value.WeightedCer:0.000}).";
+            }
+            LabelEvaluationStatusText = status;
         }
         catch (OperationCanceledException) { }
         catch (Exception ex)
@@ -2621,6 +2630,50 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
             IsEvaluationBusy = false;
             IsAdvancedBusy = false;
         }
+    }
+
+    /// <summary>
+    /// After a strategy sweep, find the best <c>pinNN</c> strategy by weighted CER
+    /// and apply that NN to the visualizer's PIN WPM control. This automates the
+    /// "explore the best decode path" loop: run sweep on a labeled clip, then
+    /// drop the same clip into the visualizer with the WPM the sweep proved
+    /// works best for it.
+    ///
+    /// Only triggers when the best pinNN strategy meaningfully beats the auto
+    /// row (delta CER &gt;= 0.02) so that pristine clips where auto already wins
+    /// don't pin away the auto-detect path. Returns the applied details, or
+    /// null if no auto-apply happened.
+    /// </summary>
+    private (string Strategy, double Wpm, double WeightedCer)? TryAutoApplyBestPinToVisualizer(StrategySweepResult result)
+    {
+        if (result.Summary is null || result.Summary.Length == 0) return null;
+
+        var auto = Array.Find(result.Summary, s => string.Equals(s.Strategy, "auto", StringComparison.OrdinalIgnoreCase));
+        var autoCer = auto?.WeightedCer ?? double.PositiveInfinity;
+
+        (string Strategy, double Wpm, double WeightedCer)? best = null;
+        foreach (var row in result.Summary)
+        {
+            if (string.IsNullOrEmpty(row.Strategy)) continue;
+            // Match pinNN tokens like "pin28", "pin22.5". Skip region/env/live-env -
+            // those are different decoder pipelines, not WPM hints for the visualizer.
+            if (!row.Strategy.StartsWith("pin", StringComparison.OrdinalIgnoreCase)) continue;
+            var numPart = row.Strategy.Substring(3);
+            if (!double.TryParse(numPart, NumberStyles.Float, CultureInfo.InvariantCulture, out var wpm) || wpm <= 0)
+                continue;
+            if (best is null || row.WeightedCer < best.Value.WeightedCer)
+            {
+                best = (row.Strategy, wpm, row.WeightedCer);
+            }
+        }
+
+        if (best is null) return null;
+        // Only auto-apply when the pin meaningfully helps. Avoids pinning away
+        // a working auto-detect on clean clips.
+        if (autoCer - best.Value.WeightedCer < 0.02) return null;
+
+        VizPinWpm = best.Value.Wpm;
+        return best;
     }
 
     public string BuildStrategySweepMarkdown()
