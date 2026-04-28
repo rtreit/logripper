@@ -1123,7 +1123,7 @@
         <Border Padding="14" Background="{StaticResource BgPanel}">
           <Grid RowDefinitions="Auto,Auto,*,Auto" ColumnDefinitions="*">
             <!-- Controls row -->
-            <Grid Grid.Row="0" ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,*,Auto"
+            <Grid Grid.Row="0" ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,*,Auto"
                   Margin="0,0,0,8">
               <Button Grid.Column="0" Classes="primary"
                       Content="{Binding VizStartStopLabel}"
@@ -1133,24 +1133,29 @@
                       Content="PLAY FILE..."
                       Click="OnVizPlayFileClick"
                       MinWidth="110" />
-              <CheckBox Grid.Column="2" Margin="14,0,0,0"
+              <CheckBox Grid.Column="2" Margin="8,0,0,0"
+                        Content="MUTE AUDIO"
+                        IsChecked="{Binding VizMute}"
+                        ToolTip.Tip="When checked, PLAY FILE drives the visualizer without sending the WAV to the speakers."
+                        VerticalAlignment="Center" />
+              <CheckBox Grid.Column="3" Margin="14,0,0,0"
                         Content="LOOPBACK"
                         IsChecked="{Binding VizUseLoopback}"
                         VerticalAlignment="Center" />
-              <TextBlock Grid.Column="3" Margin="20,0,6,0"
+              <TextBlock Grid.Column="4" Margin="20,0,6,0"
                          Text="WINDOW"
                          FontFamily="Consolas"
                          VerticalAlignment="Center"
                          Foreground="{StaticResource TextDim}" />
-              <Slider Grid.Column="4" Width="160"
+              <Slider Grid.Column="5" Width="160"
                       Minimum="2" Maximum="30"
                       TickFrequency="2" IsSnapToTickEnabled="True"
                       Value="{Binding VizWindowSeconds}" />
-              <TextBlock Grid.Column="5" Margin="6,0,0,0"
+              <TextBlock Grid.Column="6" Margin="6,0,0,0"
                          Text="{Binding VizWindowSeconds, StringFormat='{}{0:F0}s'}"
                          FontFamily="Consolas"
                          VerticalAlignment="Center" />
-              <TextBlock Grid.Column="7"
+              <TextBlock Grid.Column="8"
                          Text="{Binding VizStatus}"
                          FontFamily="Consolas"
                          FontSize="11"

@@ -3063,6 +3063,8 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
         CancelAndDisposeEvaluation();
         _playback.Dispose();
         _process.Dispose();
+        _vizProcess.Dispose();
+        _vizPlayback.Dispose();
     }
 
     private void CancelAndDisposePlaybackProfileLoad()
