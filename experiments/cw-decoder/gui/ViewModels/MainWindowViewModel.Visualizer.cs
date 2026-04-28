@@ -148,7 +148,7 @@ public sealed partial class MainWindowViewModel
             VizCurrentWpm = 0;
             VizStatus = "starting…";
             // Auto-save every live capture so it can be labeled later.
-            var stamp = DateTime.Now.ToString("yyyyMMdd-HHmmss");
+            var stamp = DateTime.Now.ToString("yyyyMMdd-HHmmss-fff");
             var captureDir = ResolveVizCaptureDir();
             var recordPath = System.IO.Path.Combine(captureDir, $"viz-{stamp}.wav");
             _vizProcess.StartLiveV3(SelectedDevice, decodeEveryMs: 250,

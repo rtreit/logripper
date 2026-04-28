@@ -876,7 +876,10 @@ fn parse_strategy_list(args: &[String]) -> Vec<Strategy> {
             out.push(Strategy::ExactAuto);
         } else if t.eq_ignore_ascii_case("region") {
             out.push(Strategy::RegionAuto);
-        } else if let Some(rest) = t.strip_prefix("region:").or_else(|| t.strip_prefix("region")) {
+        } else if let Some(rest) = t
+            .strip_prefix("region:")
+            .or_else(|| t.strip_prefix("region"))
+        {
             // accept "region:25" and "region25"
             if let Ok(v) = rest.trim().parse::<f32>() {
                 if v > 0.0 {
@@ -885,7 +888,10 @@ fn parse_strategy_list(args: &[String]) -> Vec<Strategy> {
             }
         } else if t.eq_ignore_ascii_case("envelope") || t.eq_ignore_ascii_case("env") {
             out.push(Strategy::EnvelopeAuto);
-        } else if t.eq_ignore_ascii_case("live-env") || t.eq_ignore_ascii_case("liveenv") || t.eq_ignore_ascii_case("live") {
+        } else if t.eq_ignore_ascii_case("live-env")
+            || t.eq_ignore_ascii_case("liveenv")
+            || t.eq_ignore_ascii_case("live")
+        {
             out.push(Strategy::LiveEnvelopeAuto);
         } else if let Some(rest) = t
             .strip_prefix("envelope:")
@@ -911,9 +917,7 @@ fn parse_strategy_list(args: &[String]) -> Vec<Strategy> {
 }
 
 fn arg_value_string(args: &[String], name: &str) -> Option<String> {
-    args.windows(2)
-        .find(|w| w[0] == name)
-        .map(|w| w[1].clone())
+    args.windows(2).find(|w| w[0] == name).map(|w| w[1].clone())
 }
 
 fn score_labels_strategy(
@@ -928,13 +932,19 @@ fn score_labels_strategy(
     let mut region_cache: HashMap<PathBuf, cw_decoder_poc::region_stream::RegionStreamResult> =
         HashMap::new();
     if matches!(strategy, Strategy::RegionAuto | Strategy::RegionPin(_)) {
-        let pin = if let Strategy::RegionPin(w) = strategy { Some(w) } else { None };
+        let pin = if let Strategy::RegionPin(w) = strategy {
+            Some(w)
+        } else {
+            None
+        };
         let cfg = cw_decoder_poc::region_stream::RegionStreamConfig {
             pin_wpm: pin,
             ..Default::default()
         };
         for example in labels {
-            if region_cache.contains_key(&example.source) { continue; }
+            if region_cache.contains_key(&example.source) {
+                continue;
+            }
             if let Some(audio) = audio_cache.get(&example.source) {
                 let r = cw_decoder_poc::region_stream::decode_region_stream(
                     &audio.samples,
@@ -955,7 +965,11 @@ fn score_labels_strategy(
             let decoded = match strategy {
                 Strategy::ExactAuto | Strategy::ExactPin(_) => {
                     let (start, end) = expanded_sample_bounds(audio, example, score_cfg);
-                    let samples = if end > start { &audio.samples[start..end] } else { &[][..] };
+                    let samples = if end > start {
+                        &audio.samples[start..end]
+                    } else {
+                        &[][..]
+                    };
                     match strategy {
                         Strategy::ExactAuto => decode_text(samples, audio.sample_rate),
                         Strategy::ExactPin(w) => decode_text_pinned(samples, audio.sample_rate, w),
@@ -963,7 +977,11 @@ fn score_labels_strategy(
                     }
                 }
                 Strategy::RegionAuto | Strategy::RegionPin(_) => {
-                    let pin = if let Strategy::RegionPin(w) = strategy { Some(w) } else { None };
+                    let pin = if let Strategy::RegionPin(w) = strategy {
+                        Some(w)
+                    } else {
+                        None
+                    };
                     let result = region_cache
                         .get(&example.source)
                         .expect("region cache missing source");
@@ -971,17 +989,32 @@ fn score_labels_strategy(
                 }
                 Strategy::EnvelopeAuto | Strategy::EnvelopePin(_) => {
                     let (start, end) = expanded_sample_bounds(audio, example, score_cfg);
-                    let samples = if end > start { &audio.samples[start..end] } else { &[][..] };
-                    let pin = if let Strategy::EnvelopePin(w) = strategy { Some(w) } else { None };
+                    let samples = if end > start {
+                        &audio.samples[start..end]
+                    } else {
+                        &[][..]
+                    };
+                    let pin = if let Strategy::EnvelopePin(w) = strategy {
+                        Some(w)
+                    } else {
+                        None
+                    };
                     cw_decoder_poc::envelope_decoder::decode_envelope(
                         samples,
                         audio.sample_rate,
-                        &cw_decoder_poc::envelope_decoder::EnvelopeConfig { pin_wpm: pin, pin_hz: None },
+                        &cw_decoder_poc::envelope_decoder::EnvelopeConfig {
+                            pin_wpm: pin,
+                            pin_hz: None,
+                        },
                     )
                 }
                 Strategy::LiveEnvelopeAuto => {
                     let (start, end) = expanded_sample_bounds(audio, example, score_cfg);
-                    let samples = if end > start { &audio.samples[start..end] } else { &[][..] };
+                    let samples = if end > start {
+                        &audio.samples[start..end]
+                    } else {
+                        &[][..]
+                    };
                     let mut streamer = cw_decoder_poc::envelope_decoder::LiveEnvelopeStreamer::new(
                         audio.sample_rate,
                     );
@@ -1025,7 +1058,11 @@ fn decode_label_via_region(
         .filter_map(|r| {
             let s = r.start_s.max(lo);
             let e = r.end_s.min(hi);
-            if e > s { Some((s, e)) } else { None }
+            if e > s {
+                Some((s, e))
+            } else {
+                None
+            }
         })
         .collect();
     overlapping.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
@@ -1033,7 +1070,9 @@ fn decode_label_via_region(
     if overlapping.is_empty() {
         let s = (lo * audio.sample_rate as f32) as usize;
         let e = ((hi * audio.sample_rate as f32) as usize).min(audio.samples.len());
-        if e <= s { return String::new(); }
+        if e <= s {
+            return String::new();
+        }
         let slice = &audio.samples[s..e];
         return match pin_wpm {
             Some(w) => decode_text_pinned(slice, audio.sample_rate, w),
@@ -1045,14 +1084,18 @@ fn decode_label_via_region(
     for (s_s, e_s) in overlapping {
         let s = (s_s * audio.sample_rate as f32) as usize;
         let e = ((e_s * audio.sample_rate as f32) as usize).min(audio.samples.len());
-        if e <= s { continue; }
+        if e <= s {
+            continue;
+        }
         let slice = &audio.samples[s..e];
         let text = match pin_wpm {
             Some(w) => decode_text_pinned(slice, audio.sample_rate, w),
             None => decode_text(slice, audio.sample_rate),
         };
         let trimmed = text.trim();
-        if !trimmed.is_empty() { parts.push(trimmed.to_string()); }
+        if !trimmed.is_empty() {
+            parts.push(trimmed.to_string());
+        }
     }
     parts.join(" ")
 }

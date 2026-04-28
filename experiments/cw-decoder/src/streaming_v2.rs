@@ -157,8 +157,12 @@ impl WholeBufferDecoder {
             return Ok(None);
         }
         let started = std::time::Instant::now();
-        let (text, wpm, _threshold) =
-            ditdah::decode_samples_with_params(&self.samples, self.sample_rate, self.pin_wpm, None)?;
+        let (text, wpm, _threshold) = ditdah::decode_samples_with_params(
+            &self.samples,
+            self.sample_rate,
+            self.pin_wpm,
+            None,
+        )?;
         let decode_ms = started.elapsed().as_millis();
         let pitch_hz = ditdah_estimated_pitch(&self.samples, self.sample_rate).unwrap_or(0.0);
 

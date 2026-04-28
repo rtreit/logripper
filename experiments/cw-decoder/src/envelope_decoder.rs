@@ -19,9 +19,7 @@
 //! use of the streaming v1 path, and minimal tunable knobs so any
 //! regressions are localised.
 
-use crate::region_stream::{
-    self, estimate_dominant_pitch, goertzel_power, RegionStreamConfig,
-};
+use crate::region_stream::{self, estimate_dominant_pitch, goertzel_power, RegionStreamConfig};
 
 const FRAME_LEN_S: f32 = 0.010; // 10 ms — fine enough for 40 WPM dits.
 const FRAME_STEP_S: f32 = 0.005; // 5 ms hop.
@@ -44,7 +42,10 @@ pub struct EnvelopeConfig {
 
 impl Default for EnvelopeConfig {
     fn default() -> Self {
-        Self { pin_wpm: None, pin_hz: None }
+        Self {
+            pin_wpm: None,
+            pin_hz: None,
+        }
     }
 }
 
@@ -61,7 +62,9 @@ pub fn decode_envelope(samples: &[f32], sample_rate: u32, cfg: &EnvelopeConfig) 
         frame_step_s: 0.010,
         ..RegionStreamConfig::default()
     };
-    let pitch = cfg.pin_hz.unwrap_or_else(|| estimate_dominant_pitch(samples, sample_rate, &pitch_cfg));
+    let pitch = cfg
+        .pin_hz
+        .unwrap_or_else(|| estimate_dominant_pitch(samples, sample_rate, &pitch_cfg));
 
     let frame_len = ((FRAME_LEN_S * sample_rate as f32).round() as usize).max(32);
     let frame_step = ((FRAME_STEP_S * sample_rate as f32).round() as usize).max(8);
@@ -127,7 +130,12 @@ pub fn decode_envelope_with_stats(
     cfg: &EnvelopeConfig,
 ) -> EnvelopeDecode {
     if samples.is_empty() {
-        return EnvelopeDecode { text: String::new(), dot_seconds: 0.0, wpm: 0.0, elements: 0 };
+        return EnvelopeDecode {
+            text: String::new(),
+            dot_seconds: 0.0,
+            wpm: 0.0,
+            elements: 0,
+        };
     }
 
     let pitch_cfg = RegionStreamConfig {
@@ -135,12 +143,19 @@ pub fn decode_envelope_with_stats(
         frame_step_s: 0.010,
         ..RegionStreamConfig::default()
     };
-    let pitch = cfg.pin_hz.unwrap_or_else(|| estimate_dominant_pitch(samples, sample_rate, &pitch_cfg));
+    let pitch = cfg
+        .pin_hz
+        .unwrap_or_else(|| estimate_dominant_pitch(samples, sample_rate, &pitch_cfg));
 
     let frame_len = ((FRAME_LEN_S * sample_rate as f32).round() as usize).max(32);
     let frame_step = ((FRAME_STEP_S * sample_rate as f32).round() as usize).max(8);
     if samples.len() < frame_len {
-        return EnvelopeDecode { text: String::new(), dot_seconds: 0.0, wpm: 0.0, elements: 0 };
+        return EnvelopeDecode {
+            text: String::new(),
+            dot_seconds: 0.0,
+            wpm: 0.0,
+            elements: 0,
+        };
     }
 
     let mut env: Vec<f32> = Vec::with_capacity(samples.len() / frame_step + 1);
@@ -154,7 +169,12 @@ pub fn decode_envelope_with_stats(
         offset += frame_step;
     }
     if env.is_empty() {
-        return EnvelopeDecode { text: String::new(), dot_seconds: 0.0, wpm: 0.0, elements: 0 };
+        return EnvelopeDecode {
+            text: String::new(),
+            dot_seconds: 0.0,
+            wpm: 0.0,
+            elements: 0,
+        };
     }
 
     let (noise, signal) = percentile_pair(&env, 0.20, 0.90);
@@ -165,7 +185,12 @@ pub fn decode_envelope_with_stats(
     let frame_dt = frame_step as f32 / sample_rate as f32;
     let (ons, offs) = events_from_envelope(&env, high, low, frame_dt);
     if ons.is_empty() {
-        return EnvelopeDecode { text: String::new(), dot_seconds: 0.0, wpm: 0.0, elements: 0 };
+        return EnvelopeDecode {
+            text: String::new(),
+            dot_seconds: 0.0,
+            wpm: 0.0,
+            elements: 0,
+        };
     }
 
     let dot_s = if let Some(wpm) = cfg.pin_wpm {
@@ -176,7 +201,12 @@ pub fn decode_envelope_with_stats(
 
     let text = decode_events(&ons, &offs, dot_s);
     let wpm = if dot_s > 0.0 { 1.2 / dot_s } else { 0.0 };
-    EnvelopeDecode { text, dot_seconds: dot_s, wpm, elements: ons.len() }
+    EnvelopeDecode {
+        text,
+        dot_seconds: dot_s,
+        wpm,
+        elements: ons.len(),
+    }
 }
 
 /// 1-D k-means with k=2 over on-durations. Returns the lower centroid as
@@ -214,8 +244,16 @@ fn estimate_dot_kmeans(durations: &[f32]) -> f32 {
                 n_hi += 1;
             }
         }
-        let new_lo = if n_lo > 0 { (sum_lo / n_lo as f64) as f32 } else { c_lo };
-        let new_hi = if n_hi > 0 { (sum_hi / n_hi as f64) as f32 } else { c_hi };
+        let new_lo = if n_lo > 0 {
+            (sum_lo / n_lo as f64) as f32
+        } else {
+            c_lo
+        };
+        let new_hi = if n_hi > 0 {
+            (sum_hi / n_hi as f64) as f32
+        } else {
+            c_hi
+        };
         if (new_lo - c_lo).abs() < 1e-5 && (new_hi - c_hi).abs() < 1e-5 {
             c_lo = new_lo;
             c_hi = new_hi;
@@ -241,6 +279,7 @@ pub struct LiveEnvelopeStreamer {
     decode_every_samples: usize,
     since_last_decode: usize,
     locked_wpm: Option<f32>,
+    pinned_wpm: Option<f32>,
     lock_after_elements: usize,
     last_text: String,
     last_wpm: f32,
@@ -304,6 +343,7 @@ pub struct VizFrame {
 }
 
 pub const MAX_VIZ_ENVELOPE_SAMPLES: usize = 1500;
+const MAX_LIVE_ENVELOPE_BUFFER_SECONDS: usize = 60;
 
 impl LiveEnvelopeStreamer {
     pub fn new(sample_rate: u32) -> Self {
@@ -313,6 +353,7 @@ impl LiveEnvelopeStreamer {
             decode_every_samples: ((0.25 * sample_rate as f32) as usize).max(1024),
             since_last_decode: 0,
             locked_wpm: None,
+            pinned_wpm: None,
             lock_after_elements: 30,
             last_text: String::new(),
             last_wpm: 0.0,
@@ -326,10 +367,17 @@ impl LiveEnvelopeStreamer {
         self.pinned_hz = pinned_hz;
     }
 
+    /// Pin the timing detector to a specific WPM. When `None`, the streamer
+    /// auto-locks once enough elements have been observed.
+    pub fn set_pinned_wpm(&mut self, pinned_wpm: Option<f32>) {
+        self.pinned_wpm = pinned_wpm.filter(|w| *w > 0.0);
+        self.locked_wpm = self.pinned_wpm;
+    }
+
     /// Feed a chunk of audio. Returns one snapshot per decode cycle (may be
     /// empty if the buffer hasn't grown enough since the last decode).
     pub fn feed(&mut self, samples: &[f32]) -> Vec<LiveEnvelopeSnapshot> {
-        self.buffer.extend_from_slice(samples);
+        self.push_samples(samples);
         self.since_last_decode += samples.len();
         let mut out = Vec::new();
         if self.since_last_decode >= self.decode_every_samples {
@@ -341,7 +389,7 @@ impl LiveEnvelopeStreamer {
 
     /// Like [`feed`] but the snapshot includes a [`VizFrame`].
     pub fn feed_with_viz(&mut self, samples: &[f32]) -> Vec<LiveEnvelopeSnapshot> {
-        self.buffer.extend_from_slice(samples);
+        self.push_samples(samples);
         self.since_last_decode += samples.len();
         let mut out = Vec::new();
         if self.since_last_decode >= self.decode_every_samples {
@@ -368,15 +416,25 @@ impl LiveEnvelopeStreamer {
         &self.last_text
     }
 
+    fn push_samples(&mut self, samples: &[f32]) {
+        self.buffer.extend_from_slice(samples);
+        let max_samples = (self.sample_rate as usize * MAX_LIVE_ENVELOPE_BUFFER_SECONDS)
+            .max(self.decode_every_samples * 2);
+        if self.buffer.len() > max_samples {
+            let excess = self.buffer.len() - max_samples;
+            self.buffer.drain(0..excess);
+        }
+    }
+
     fn decode_now(&mut self, with_viz: bool) -> LiveEnvelopeSnapshot {
         let cfg = EnvelopeConfig {
-            pin_wpm: self.locked_wpm,
+            pin_wpm: self.pinned_wpm.or(self.locked_wpm),
             pin_hz: self.pinned_hz,
         };
         let (text, wpm, elements, viz) = if with_viz {
             let (text, frame) = decode_envelope_with_viz(&self.buffer, self.sample_rate, &cfg);
             let mut frame = frame;
-            frame.locked_wpm = self.locked_wpm;
+            frame.locked_wpm = self.pinned_wpm.or(self.locked_wpm);
             let elem_count = frame.on_durations.len();
             let wpm = frame.wpm;
             (text, wpm, elem_count, Some(frame))
@@ -385,7 +443,8 @@ impl LiveEnvelopeStreamer {
             (result.text, result.wpm, result.elements, None)
         };
 
-        if self.locked_wpm.is_none()
+        if self.pinned_wpm.is_none()
+            && self.locked_wpm.is_none()
             && elements >= self.lock_after_elements
             && wpm > 5.0
             && wpm < 60.0
@@ -400,7 +459,12 @@ impl LiveEnvelopeStreamer {
         };
         self.last_text = text.clone();
         self.last_wpm = wpm;
-        LiveEnvelopeSnapshot { transcript: text, appended, wpm, viz }
+        LiveEnvelopeSnapshot {
+            transcript: text,
+            appended,
+            wpm,
+            viz,
+        }
     }
 }
 
@@ -442,7 +506,9 @@ pub fn decode_envelope_with_viz(
         frame_step_s: 0.010,
         ..RegionStreamConfig::default()
     };
-    let pitch = cfg.pin_hz.unwrap_or_else(|| estimate_dominant_pitch(samples, sample_rate, &pitch_cfg));
+    let pitch = cfg
+        .pin_hz
+        .unwrap_or_else(|| estimate_dominant_pitch(samples, sample_rate, &pitch_cfg));
 
     let frame_len = ((FRAME_LEN_S * sample_rate as f32).round() as usize).max(32);
     let frame_step = ((FRAME_STEP_S * sample_rate as f32).round() as usize).max(8);
@@ -519,7 +585,11 @@ pub fn decode_envelope_with_viz(
         .iter()
         .map(|e| {
             let kind = if e.is_on {
-                if e.duration_s >= elem_split { VizEventKind::OnDah } else { VizEventKind::OnDit }
+                if e.duration_s >= elem_split {
+                    VizEventKind::OnDah
+                } else {
+                    VizEventKind::OnDit
+                }
             } else if e.duration_s >= word_gap {
                 VizEventKind::OffWord
             } else if e.duration_s >= char_gap {
@@ -594,7 +664,12 @@ fn events_with_times(env: &[f32], high: f32, low: f32, frame_dt: f32) -> Vec<Tim
                             });
                         }
                     }
-                    out.push(TimedEvent { start_s, end_s, duration_s: dur, is_on: true });
+                    out.push(TimedEvent {
+                        start_s,
+                        end_s,
+                        duration_s: dur,
+                        is_on: true,
+                    });
                     have_first_on = true;
                     last_on_end_frame = i;
                 }
@@ -623,7 +698,12 @@ fn events_with_times(env: &[f32], high: f32, low: f32, frame_dt: f32) -> Vec<Tim
                     });
                 }
             }
-            out.push(TimedEvent { start_s, end_s, duration_s: dur, is_on: true });
+            out.push(TimedEvent {
+                start_s,
+                end_s,
+                duration_s: dur,
+                is_on: true,
+            });
         }
     }
     out
@@ -678,8 +758,16 @@ fn kmeans_centroids(durations: &[f32]) -> (f32, f32) {
                 n_hi += 1;
             }
         }
-        let new_lo = if n_lo > 0 { (sum_lo / n_lo as f64) as f32 } else { c_lo };
-        let new_hi = if n_hi > 0 { (sum_hi / n_hi as f64) as f32 } else { c_hi };
+        let new_lo = if n_lo > 0 {
+            (sum_lo / n_lo as f64) as f32
+        } else {
+            c_lo
+        };
+        let new_hi = if n_hi > 0 {
+            (sum_hi / n_hi as f64) as f32
+        } else {
+            c_hi
+        };
         if (new_lo - c_lo).abs() < 1e-5 && (new_hi - c_hi).abs() < 1e-5 {
             c_lo = new_lo;
             c_hi = new_hi;
@@ -690,9 +778,6 @@ fn kmeans_centroids(durations: &[f32]) -> (f32, f32) {
     }
     (c_lo, c_hi)
 }
-
-
-
 
 fn dot_seconds_from_wpm(wpm: f32) -> f32 {
     // PARIS standard: 1 word = 50 dot units => dot = 1.2 / wpm seconds.
@@ -807,25 +892,60 @@ fn median_lower_half(values: &[f32]) -> f32 {
 
 fn morse_to_char(s: &str) -> Option<char> {
     match s {
-        ".-" => Some('A'), "-..." => Some('B'), "-.-." => Some('C'),
-        "-.." => Some('D'), "." => Some('E'), "..-." => Some('F'),
-        "--." => Some('G'), "...." => Some('H'), ".." => Some('I'),
-        ".---" => Some('J'), "-.-" => Some('K'), ".-.." => Some('L'),
-        "--" => Some('M'), "-." => Some('N'), "---" => Some('O'),
-        ".--." => Some('P'), "--.-" => Some('Q'), ".-." => Some('R'),
-        "..." => Some('S'), "-" => Some('T'), "..-" => Some('U'),
-        "...-" => Some('V'), ".--" => Some('W'), "-..-" => Some('X'),
-        "-.--" => Some('Y'), "--.." => Some('Z'),
-        ".----" => Some('1'), "..---" => Some('2'), "...--" => Some('3'),
-        "....-" => Some('4'), "....." => Some('5'), "-...." => Some('6'),
-        "--..." => Some('7'), "---.." => Some('8'), "----." => Some('9'),
+        ".-" => Some('A'),
+        "-..." => Some('B'),
+        "-.-." => Some('C'),
+        "-.." => Some('D'),
+        "." => Some('E'),
+        "..-." => Some('F'),
+        "--." => Some('G'),
+        "...." => Some('H'),
+        ".." => Some('I'),
+        ".---" => Some('J'),
+        "-.-" => Some('K'),
+        ".-.." => Some('L'),
+        "--" => Some('M'),
+        "-." => Some('N'),
+        "---" => Some('O'),
+        ".--." => Some('P'),
+        "--.-" => Some('Q'),
+        ".-." => Some('R'),
+        "..." => Some('S'),
+        "-" => Some('T'),
+        "..-" => Some('U'),
+        "...-" => Some('V'),
+        ".--" => Some('W'),
+        "-..-" => Some('X'),
+        "-.--" => Some('Y'),
+        "--.." => Some('Z'),
+        ".----" => Some('1'),
+        "..---" => Some('2'),
+        "...--" => Some('3'),
+        "....-" => Some('4'),
+        "....." => Some('5'),
+        "-...." => Some('6'),
+        "--..." => Some('7'),
+        "---.." => Some('8'),
+        "----." => Some('9'),
         "-----" => Some('0'),
-        ".-.-.-" => Some('.'), "--..--" => Some(','), "..--.." => Some('?'),
-        ".----." => Some('\''), "-.-.--" => Some('!'), "-..-." => Some('/'),
-        "-.--." => Some('('), "-.--.-" => Some(')'), ".-..." => Some('&'),
-        "---..." => Some(':'), "-.-.-." => Some(';'), "-...-" => Some('='),
-        ".-.-." => Some('+'), "-....-" => Some('-'), "..--.-" => Some('_'),
-        ".-..-." => Some('"'), "...-..-" => Some('$'), ".--.-." => Some('@'),
+        ".-.-.-" => Some('.'),
+        "--..--" => Some(','),
+        "..--.." => Some('?'),
+        ".----." => Some('\''),
+        "-.-.--" => Some('!'),
+        "-..-." => Some('/'),
+        "-.--." => Some('('),
+        "-.--.-" => Some(')'),
+        ".-..." => Some('&'),
+        "---..." => Some(':'),
+        "-.-.-." => Some(';'),
+        "-...-" => Some('='),
+        ".-.-." => Some('+'),
+        "-....-" => Some('-'),
+        "..--.-" => Some('_'),
+        ".-..-." => Some('"'),
+        "...-..-" => Some('$'),
+        ".--.-." => Some('@'),
         _ => None,
     }
 }
@@ -839,7 +959,11 @@ mod tests {
         let n = (secs * rate as f32) as usize;
         for i in 0..n {
             let t = i as f32 / rate as f32;
-            samples.push(if on { (TAU * pitch * t).sin() * 0.5 } else { 0.0 });
+            samples.push(if on {
+                (TAU * pitch * t).sin() * 0.5
+            } else {
+                0.0
+            });
         }
     }
 
@@ -872,7 +996,7 @@ mod tests {
     fn decodes_simple_paris() {
         let rate = 8000u32;
         let dot = 0.060_f32; // ~20 WPM
-        // PARIS = .--. .- .-. .. ...
+                             // PARIS = .--. .- .-. .. ...
         let s = synth_morse(rate, dot, 700.0, ".--. .- .-. .. ...");
         let txt = decode_envelope(&s, rate, &EnvelopeConfig::default());
         assert_eq!(txt, "PARIS", "got {:?}", txt);
@@ -886,7 +1010,10 @@ mod tests {
         let txt = decode_envelope(
             &s,
             rate,
-            &EnvelopeConfig { pin_wpm: Some(20.0), pin_hz: None },
+            &EnvelopeConfig {
+                pin_wpm: Some(20.0),
+                pin_hz: None,
+            },
         );
         assert_eq!(txt, "K", "got {:?}", txt);
     }
@@ -911,14 +1038,53 @@ mod tests {
             i = end;
         }
         let final_snap = streamer.flush();
-        assert_eq!(final_snap.transcript, "PARIS", "got {:?}", final_snap.transcript);
+        assert_eq!(
+            final_snap.transcript, "PARIS",
+            "got {:?}",
+            final_snap.transcript
+        );
+    }
+
+    #[test]
+    fn live_streamer_uses_pinned_wpm() {
+        let rate = 8000u32;
+        let mut streamer = LiveEnvelopeStreamer::new(rate);
+        streamer.set_pinned_wpm(Some(20.0));
+        streamer.feed(&synth_morse(rate, 0.060, 700.0, "-.-"));
+
+        let final_snap = streamer.flush_with_viz();
+
+        assert_eq!(
+            final_snap.transcript, "K",
+            "got {:?}",
+            final_snap.transcript
+        );
+        assert_eq!(final_snap.viz.and_then(|viz| viz.locked_wpm), Some(20.0));
+    }
+
+    #[test]
+    fn live_streamer_bounds_retained_audio() {
+        let rate = 1000u32;
+        let mut streamer = LiveEnvelopeStreamer::new(rate);
+        let samples = vec![0.0; rate as usize * (MAX_LIVE_ENVELOPE_BUFFER_SECONDS + 5)];
+
+        streamer.feed(&samples);
+
+        assert_eq!(
+            streamer.buffer.len(),
+            rate as usize * MAX_LIVE_ENVELOPE_BUFFER_SECONDS
+        );
     }
 
     #[test]
     fn kmeans_dot_estimate_separates_dits_and_dahs() {
         let mut durs = Vec::new();
-        for _ in 0..6 { durs.push(0.060); }
-        for _ in 0..6 { durs.push(0.180); }
+        for _ in 0..6 {
+            durs.push(0.060);
+        }
+        for _ in 0..6 {
+            durs.push(0.180);
+        }
         let dot = estimate_dot_kmeans(&durs);
         assert!((dot - 0.060).abs() < 0.005, "expected ~0.060, got {dot}");
     }
@@ -935,10 +1101,23 @@ mod tests {
         assert!(viz.signal_floor > viz.noise_floor);
         assert!(viz.hyst_high > viz.hyst_low);
         assert!(!viz.events.is_empty(), "viz events should be populated");
-        let on_count = viz.events.iter().filter(|e|
-            matches!(e.kind, VizEventKind::OnDit | VizEventKind::OnDah)).count();
-        assert!(on_count >= 14, "expected at least 14 on events, got {on_count}");
-        assert!(viz.centroid_dah > viz.centroid_dot, "dah centroid > dot centroid");
-        assert!(viz.wpm > 5.0 && viz.wpm < 40.0, "wpm out of range: {}", viz.wpm);
+        let on_count = viz
+            .events
+            .iter()
+            .filter(|e| matches!(e.kind, VizEventKind::OnDit | VizEventKind::OnDah))
+            .count();
+        assert!(
+            on_count >= 14,
+            "expected at least 14 on events, got {on_count}"
+        );
+        assert!(
+            viz.centroid_dah > viz.centroid_dot,
+            "dah centroid > dot centroid"
+        );
+        assert!(
+            viz.wpm > 5.0 && viz.wpm < 40.0,
+            "wpm out of range: {}",
+            viz.wpm
+        );
     }
 }

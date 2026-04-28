@@ -1261,7 +1261,8 @@ fn run_file(
     );
 
     if !sliding {
-        let out = decoder::decode_window_with_pin(&audio.samples, audio.sample_rate, log_capture, pin)?;
+        let out =
+            decoder::decode_window_with_pin(&audio.samples, audio.sample_rate, log_capture, pin)?;
         let stats = out.stats;
         println!();
         println!("== ditdah stats ==");
@@ -3143,8 +3144,12 @@ fn run_stream_live_v2(
     } else {
         println!(
             "Live streaming (v2) from: {} @ {} Hz; decode every {} ms; pin_wpm={}",
-            capture.device_name, capture.sample_rate, decode_every_ms,
-            pin_wpm.map(|w| format!("{w:.1}")).unwrap_or_else(|| "auto".into())
+            capture.device_name,
+            capture.sample_rate,
+            decode_every_ms,
+            pin_wpm
+                .map(|w| format!("{w:.1}"))
+                .unwrap_or_else(|| "auto".into())
         );
     }
 
@@ -3598,7 +3603,6 @@ fn run_gen_rough_fist(
     Ok(())
 }
 
-
 fn run_stream_live_v3(
     device: Option<&str>,
     seconds: f32,
@@ -3614,29 +3618,25 @@ fn run_stream_live_v3(
     if let Some(path) = file {
         return run_stream_live_v3_file(path, seconds, json, decode_every_ms, pin_wpm, pin_hz);
     }
-    use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::Arc;
-    use std::time::{Duration, Instant};
     use cw_decoder_poc::envelope_decoder::{
         LiveEnvelopeStreamer, VizEventKind, MAX_VIZ_ENVELOPE_SAMPLES,
     };
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
 
     let capture = if loopback {
         audio::open_loopback_with_recording(device, 1.0, record_path)?
     } else {
         audio::open_input_with_recording(device, 1.0, record_path)?
     };
-    let mut streamer = LiveEnvelopeStreamer::new(capture.sample_rate);
-    streamer.set_pinned_hz(pin_hz);
-    if let Some(w) = pin_wpm {
-        // Force initial lock to user-pinned WPM by feeding through the
-        // streamer's locked_wpm channel via an empty flush won't work;
-        // instead we just decode with that pin via EnvelopeConfig. The
-        // streamer's auto-lock will kick in once enough elements arrive.
-        let _ = w; // honored on first decode_now via decode_envelope_with_stats
-        // (LiveEnvelopeStreamer currently auto-locks; pin_wpm on v3 is a
-        // diagnostic input. If you need hard pinning, use eval --strategies env28.)
-    }
+    let new_streamer = || {
+        let mut streamer = LiveEnvelopeStreamer::new(capture.sample_rate);
+        streamer.set_pinned_hz(pin_hz);
+        streamer.set_pinned_wpm(pin_wpm);
+        streamer
+    };
+    let mut streamer = new_streamer();
 
     let stop = Arc::new(AtomicBool::new(false));
     {
@@ -3708,7 +3708,7 @@ fn run_stream_live_v3(
         if let Some(rx) = cfg_channel.as_ref() {
             while let Ok(msg) = rx.try_recv() {
                 if matches!(msg, StdinControlMessage::ResetLock) {
-                    streamer = LiveEnvelopeStreamer::new(capture.sample_rate);
+                    streamer = new_streamer();
                     last_drain_at = capture.buffer.lock().written;
                     last_transcript = None;
                     if let Some(em) = emitter.as_mut() {
@@ -3761,21 +3761,25 @@ fn run_stream_live_v3(
                 }),
             );
             if let Some(viz) = snap.viz {
-                let events_json: Vec<serde_json::Value> = viz.events.iter().map(|e| {
-                    let kind = match e.kind {
-                        VizEventKind::OnDit => "on_dit",
-                        VizEventKind::OnDah => "on_dah",
-                        VizEventKind::OffIntra => "off_intra",
-                        VizEventKind::OffChar => "off_char",
-                        VizEventKind::OffWord => "off_word",
-                    };
-                    serde_json::json!({
-                        "start_s": e.start_s,
-                        "end_s": e.end_s,
-                        "duration_s": e.duration_s,
-                        "kind": kind,
+                let events_json: Vec<serde_json::Value> = viz
+                    .events
+                    .iter()
+                    .map(|e| {
+                        let kind = match e.kind {
+                            VizEventKind::OnDit => "on_dit",
+                            VizEventKind::OnDah => "on_dah",
+                            VizEventKind::OffIntra => "off_intra",
+                            VizEventKind::OffChar => "off_char",
+                            VizEventKind::OffWord => "off_word",
+                        };
+                        serde_json::json!({
+                            "start_s": e.start_s,
+                            "end_s": e.end_s,
+                            "duration_s": e.duration_s,
+                            "kind": kind,
+                        })
                     })
-                }).collect();
+                    .collect();
                 em.emit(
                     t,
                     serde_json::json!({
@@ -3800,10 +3804,7 @@ fn run_stream_live_v3(
                 );
             }
         } else {
-            println!(
-                "[t={:>6.2}s wpm={:>5.1}] {}",
-                t, snap.wpm, snap.transcript
-            );
+            println!("[t={:>6.2}s wpm={:>5.1}] {}", t, snap.wpm, snap.transcript);
         }
     }
 
@@ -3836,10 +3837,10 @@ fn run_stream_live_v3_file(
     pin_wpm: Option<f32>,
     pin_hz: Option<f32>,
 ) -> Result<()> {
-    use std::time::{Duration, Instant};
     use cw_decoder_poc::envelope_decoder::{
         LiveEnvelopeStreamer, VizEventKind, MAX_VIZ_ENVELOPE_SAMPLES,
     };
+    use std::time::{Duration, Instant};
 
     let decoded = audio::decode_file(path)?;
     let sr = decoded.sample_rate;
@@ -3847,7 +3848,7 @@ fn run_stream_live_v3_file(
     let duration_s = total_samples as f32 / sr as f32;
     let mut streamer = LiveEnvelopeStreamer::new(sr);
     streamer.set_pinned_hz(pin_hz);
-    let _ = pin_wpm;
+    streamer.set_pinned_wpm(pin_wpm);
 
     let mut emitter = if json {
         Some(json::JsonEmitter::new())
@@ -3872,7 +3873,10 @@ fn run_stream_live_v3_file(
     } else {
         println!(
             "Streaming file (v3 envelope+viz): {} @ {} Hz ({:.1}s); decode every {} ms",
-            path.display(), sr, duration_s, decode_every_ms
+            path.display(),
+            sr,
+            duration_s,
+            decode_every_ms
         );
     }
 
@@ -3915,21 +3919,25 @@ fn run_stream_live_v3_file(
                 }),
             );
             if let Some(viz) = snap.viz {
-                let events_json: Vec<serde_json::Value> = viz.events.iter().map(|e| {
-                    let kind = match e.kind {
-                        VizEventKind::OnDit => "on_dit",
-                        VizEventKind::OnDah => "on_dah",
-                        VizEventKind::OffIntra => "off_intra",
-                        VizEventKind::OffChar => "off_char",
-                        VizEventKind::OffWord => "off_word",
-                    };
-                    serde_json::json!({
-                        "start_s": e.start_s,
-                        "end_s": e.end_s,
-                        "duration_s": e.duration_s,
-                        "kind": kind,
+                let events_json: Vec<serde_json::Value> = viz
+                    .events
+                    .iter()
+                    .map(|e| {
+                        let kind = match e.kind {
+                            VizEventKind::OnDit => "on_dit",
+                            VizEventKind::OnDah => "on_dah",
+                            VizEventKind::OffIntra => "off_intra",
+                            VizEventKind::OffChar => "off_char",
+                            VizEventKind::OffWord => "off_word",
+                        };
+                        serde_json::json!({
+                            "start_s": e.start_s,
+                            "end_s": e.end_s,
+                            "duration_s": e.duration_s,
+                            "kind": kind,
+                        })
                     })
-                }).collect();
+                    .collect();
                 em.emit(
                     t,
                     serde_json::json!({
@@ -3954,10 +3962,7 @@ fn run_stream_live_v3_file(
                 );
             }
         } else {
-            println!(
-                "[t={:>6.2}s wpm={:>5.1}] {}",
-                t, snap.wpm, snap.transcript
-            );
+            println!("[t={:>6.2}s wpm={:>5.1}] {}", t, snap.wpm, snap.transcript);
         }
     }
 

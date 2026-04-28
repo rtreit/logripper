@@ -85,7 +85,11 @@ pub fn decode_region_stream(
     cfg: &RegionStreamConfig,
 ) -> RegionStreamResult {
     if samples.is_empty() || sample_rate == 0 {
-        return RegionStreamResult { pitch_hz: 0.0, regions: vec![], text: String::new() };
+        return RegionStreamResult {
+            pitch_hz: 0.0,
+            regions: vec![],
+            text: String::new(),
+        };
     }
 
     let pitch_hz = estimate_dominant_pitch(samples, sample_rate, cfg);
@@ -95,24 +99,42 @@ pub fn decode_region_stream(
         let pad = cfg.pad_s.max(0.0);
         let s = ((start_s - pad).max(0.0) * sample_rate as f32) as usize;
         let e = (((end_s + pad) * sample_rate as f32) as usize).min(samples.len());
-        if e <= s { continue; }
+        if e <= s {
+            continue;
+        }
         let slice = &samples[s..e];
         let text = match cfg.pin_wpm {
             Some(w) => decode_text_pinned(slice, sample_rate, w),
             None => decode_text(slice, sample_rate),
         };
         let text = text.trim().to_string();
-        if text.is_empty() { continue; }
-        decoded.push(DecodedRegion { start_s, end_s, text });
+        if text.is_empty() {
+            continue;
+        }
+        decoded.push(DecodedRegion {
+            start_s,
+            end_s,
+            text,
+        });
     }
-    let text = decoded.iter().map(|r| r.text.as_str()).collect::<Vec<_>>().join(" ");
-    RegionStreamResult { pitch_hz, regions: decoded, text }
+    let text = decoded
+        .iter()
+        .map(|r| r.text.as_str())
+        .collect::<Vec<_>>()
+        .join(" ");
+    RegionStreamResult {
+        pitch_hz,
+        regions: decoded,
+        text,
+    }
 }
 
 pub fn estimate_dominant_pitch(samples: &[f32], sample_rate: u32, cfg: &RegionStreamConfig) -> f32 {
     let frame_len = ((cfg.frame_len_s * sample_rate as f32).round() as usize).max(64);
     let frame_step = ((cfg.frame_step_s * sample_rate as f32).round() as usize).max(8);
-    if samples.len() < frame_len { return cfg.pitch_lo_hz; }
+    if samples.len() < frame_len {
+        return cfg.pitch_lo_hz;
+    }
 
     let mut best_pitch = cfg.pitch_lo_hz;
     let mut best_score = f32::MIN;
@@ -146,15 +168,23 @@ fn detect_active_regions(
 ) -> Vec<(f32, f32)> {
     let frame_len = ((cfg.frame_len_s * sample_rate as f32).round() as usize).max(64);
     let frame_step = ((cfg.frame_step_s * sample_rate as f32).round() as usize).max(8);
-    if samples.len() < frame_len { return vec![]; }
+    if samples.len() < frame_len {
+        return vec![];
+    }
 
     let mut powers = Vec::new();
     let mut offset = 0usize;
     while offset + frame_len <= samples.len() {
-        powers.push(goertzel_power(&samples[offset..offset + frame_len], sample_rate, pitch_hz));
+        powers.push(goertzel_power(
+            &samples[offset..offset + frame_len],
+            sample_rate,
+            pitch_hz,
+        ));
         offset += frame_step;
     }
-    if powers.len() < 4 { return vec![]; }
+    if powers.len() < 4 {
+        return vec![];
+    }
 
     let mut sorted = powers.clone();
     sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
@@ -205,7 +235,10 @@ fn detect_active_regions(
     }
 
     // Drop runs shorter than min_region_s.
-    merged.into_iter().filter(|(s, e)| (e - s) >= cfg.min_region_s.max(0.0)).collect()
+    merged
+        .into_iter()
+        .filter(|(s, e)| (e - s) >= cfg.min_region_s.max(0.0))
+        .collect()
 }
 
 pub fn goertzel_power(samples: &[f32], sample_rate: u32, target_hz: f32) -> f32 {
@@ -222,7 +255,9 @@ pub fn goertzel_power(samples: &[f32], sample_rate: u32, target_hz: f32) -> f32 
 }
 
 pub fn percentile_sorted(sorted: &[f32], q: f32) -> f32 {
-    if sorted.is_empty() { return 0.0; }
+    if sorted.is_empty() {
+        return 0.0;
+    }
     let cq = q.clamp(0.0, 1.0);
     let idx = ((sorted.len() - 1) as f32 * cq).round() as usize;
     sorted[idx.min(sorted.len() - 1)]
@@ -235,7 +270,9 @@ mod tests {
     fn synth_tone(freq_hz: f32, dur_s: f32, sample_rate: u32, amp: f32) -> Vec<f32> {
         let n = (dur_s * sample_rate as f32) as usize;
         (0..n)
-            .map(|i| (2.0 * std::f32::consts::PI * freq_hz * i as f32 / sample_rate as f32).sin() * amp)
+            .map(|i| {
+                (2.0 * std::f32::consts::PI * freq_hz * i as f32 / sample_rate as f32).sin() * amp
+            })
             .collect()
     }
 
@@ -259,7 +296,10 @@ mod tests {
         let buf = synth_tone(600.0, 2.0, sr, 0.5);
         let cfg = RegionStreamConfig::default();
         let pitch = estimate_dominant_pitch(&buf, sr, &cfg);
-        assert!((pitch - 600.0).abs() <= cfg.pitch_step_hz, "expected ~600, got {pitch}");
+        assert!(
+            (pitch - 600.0).abs() <= cfg.pitch_step_hz,
+            "expected ~600, got {pitch}"
+        );
     }
 
     #[test]
