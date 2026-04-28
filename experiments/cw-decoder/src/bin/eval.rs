@@ -1005,6 +1005,7 @@ fn score_labels_strategy(
                         &cw_decoder_poc::envelope_decoder::EnvelopeConfig {
                             pin_wpm: pin,
                             pin_hz: None,
+                            ..Default::default()
                         },
                     )
                 }
