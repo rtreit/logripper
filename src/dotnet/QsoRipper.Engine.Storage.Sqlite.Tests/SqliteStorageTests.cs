@@ -903,6 +903,61 @@ public sealed class SqliteStorageTests : IDisposable
     }
 
     [Fact]
+    public async Task ListQsoHistory_query_uses_expression_index()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"qsoripper-history-index-{Guid.NewGuid():N}.db");
+        try
+        {
+            using (var storage = new SqliteStorageBuilder().Path(path).Build())
+            {
+                for (var i = 0; i < 32; i++)
+                {
+                    var qso = MakeQso(
+                        $"row-{i}",
+                        $"K7AB{i}",
+                        Band._20M,
+                        Mode.Ssb,
+                        $"2026-01-{(i % 28) + 1:D2}T00:00:00Z");
+                    await storage.Logbook.InsertQsoAsync(qso);
+                }
+            }
+
+            using (var connection = new SqliteConnection($"Data Source={path};Pooling=False"))
+            {
+                connection.Open();
+                using var command = connection.CreateCommand();
+                command.CommandText =
+                    "EXPLAIN QUERY PLAN " +
+                    "SELECT record FROM qsos " +
+                    "WHERE deleted_at_ms IS NULL " +
+                    "AND UPPER(worked_callsign) = $cs " +
+                    "ORDER BY utc_timestamp_ms DESC, local_id DESC " +
+                    "LIMIT $lim";
+                command.Parameters.AddWithValue("$cs", "K7AB0");
+                command.Parameters.AddWithValue("$lim", 10);
+
+                var plan = new System.Text.StringBuilder();
+                using var reader = command.ExecuteReader();
+                while (reader.Read())
+                {
+                    plan.AppendLine(reader.GetString(reader.GetOrdinal("detail")));
+                }
+
+                Assert.Contains("idx_qsos_worked_callsign_upper", plan.ToString(), StringComparison.Ordinal);
+            }
+
+            SqliteConnection.ClearAllPools();
+        }
+        finally
+        {
+            if (File.Exists(path))
+            {
+                File.Delete(path);
+            }
+        }
+    }
+
+    [Fact]
     public async Task Migration_idempotent_when_storage_reopens_existing_file()
     {
         var path = Path.Combine(Path.GetTempPath(), $"qsoripper-soft-delete-{Guid.NewGuid():N}.db");

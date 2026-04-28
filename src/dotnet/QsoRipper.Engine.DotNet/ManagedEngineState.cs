@@ -876,15 +876,6 @@ internal sealed class ManagedEngineState
 
         var result = _lookupCoordinator.LookupAsync(callsign, skipCache).GetAwaiter().GetResult();
 
-        // Also persist to the snapshot store for backward compat with existing storage code.
-        var normalized = callsign.Trim().ToUpperInvariant();
-        Sync(_storage.LookupSnapshots.UpsertAsync(new LookupSnapshot
-        {
-            Callsign = normalized,
-            Result = result.Clone(),
-            StoredAt = DateTimeOffset.UtcNow,
-        }));
-
         return new LookupResponse { Result = result };
     }
 

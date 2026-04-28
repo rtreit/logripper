@@ -40,6 +40,7 @@ public sealed class SqliteStorage : IEngineStorage, ILogbookStore, ILookupSnapsh
         CREATE INDEX IF NOT EXISTS idx_qsos_mode ON qsos (mode);
         CREATE INDEX IF NOT EXISTS idx_qsos_contest_id ON qsos (contest_id);
         CREATE INDEX IF NOT EXISTS idx_qsos_sync_status ON qsos (sync_status);
+        CREATE INDEX IF NOT EXISTS idx_qsos_worked_callsign_upper ON qsos (UPPER(worked_callsign));
 
         CREATE TABLE IF NOT EXISTS sync_metadata (
             id INTEGER PRIMARY KEY CHECK (id = 1),

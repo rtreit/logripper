@@ -13,7 +13,7 @@ use tokio::sync::{Mutex, RwLock};
 use crate::{
     domain::{
         callsign_parser::{annotate_record, parse_callsign},
-        lookup::normalize_callsign,
+        lookup::{normalize_callsign, normalize_callsign_for_history},
     },
     proto::qsoripper::domain::{CallsignRecord, LookupResult, LookupState, QsoHistoryEntry},
     storage::{EngineStorage, LookupSnapshot},
@@ -189,8 +189,7 @@ impl LookupCoordinator {
                 if self.is_fresh(&entry) {
                     let mut result =
                         Self::cache_entry_to_result(&entry, &normalized_callsign, None, true);
-                    self.populate_history(&normalized_callsign, &mut result)
-                        .await;
+                    self.populate_history(callsign, &mut result).await;
                     return result;
                 }
             }
@@ -211,8 +210,7 @@ impl LookupCoordinator {
         let mut result = self
             .provider_result_to_lookup(provider_result, &normalized_callsign, latency_ms, &parsed)
             .await;
-        self.populate_history(&normalized_callsign, &mut result)
-            .await;
+        self.populate_history(callsign, &mut result).await;
         result
     }
 
@@ -267,8 +265,7 @@ impl LookupCoordinator {
                 if self.is_fresh(&entry) {
                     let mut fresh =
                         Self::cache_entry_to_result(&entry, &normalized_callsign, None, true);
-                    self.populate_history(&normalized_callsign, &mut fresh)
-                        .await;
+                    self.populate_history(callsign, &mut fresh).await;
                     let _ = sender.send(fresh);
                     return;
                 }
@@ -280,8 +277,7 @@ impl LookupCoordinator {
                         Some(LookupState::Stale),
                         true,
                     );
-                    self.populate_history(&normalized_callsign, &mut stale)
-                        .await;
+                    self.populate_history(callsign, &mut stale).await;
                     if sender.send(stale).is_err() {
                         return;
                     }
@@ -304,8 +300,7 @@ impl LookupCoordinator {
         let mut final_update = self
             .provider_result_to_lookup(provider_result, &normalized_callsign, latency_ms, &parsed)
             .await;
-        self.populate_history(&normalized_callsign, &mut final_update)
-            .await;
+        self.populate_history(callsign, &mut final_update).await;
         let _ = sender.send(final_update);
     }
 
@@ -329,8 +324,7 @@ impl LookupCoordinator {
                 ..Default::default()
             }
         };
-        self.populate_history(&normalized_callsign, &mut result)
-            .await;
+        self.populate_history(callsign, &mut result).await;
         result
     }
 
@@ -446,13 +440,20 @@ impl LookupCoordinator {
     /// of cache freshness. A failed history query logs and leaves the result
     /// untouched so a transient storage error never masks the underlying
     /// callsign result.
-    async fn populate_history(&self, normalized_callsign: &str, result: &mut LookupResult) {
+    async fn populate_history(&self, callsign: &str, result: &mut LookupResult) {
         let Some(ref storage) = self.snapshot_storage else {
+            return;
+        };
+        // Use a history-specific normalizer that returns None for blank input
+        // rather than falling back to the developer placeholder. This prevents
+        // a blank/whitespace lookup from leaking real prior contacts logged
+        // against the placeholder callsign.
+        let Some(history_key) = normalize_callsign_for_history(callsign) else {
             return;
         };
         match storage
             .logbook()
-            .list_qso_history(normalized_callsign, DEFAULT_HISTORY_LIMIT)
+            .list_qso_history(&history_key, DEFAULT_HISTORY_LIMIT)
             .await
         {
             Ok(page) => {
@@ -460,7 +461,7 @@ impl LookupCoordinator {
                 result.prior_qso_total_count = page.total;
             }
             Err(err) => {
-                eprintln!("[lookup] Failed to load QSO history for {normalized_callsign}: {err}");
+                eprintln!("[lookup] Failed to load QSO history for {history_key}: {err}");
             }
         }
     }
@@ -1324,5 +1325,38 @@ mod tests {
             .find(|u| u.state == LookupState::NotFound as i32)
             .expect("terminal state expected");
         assert_eq!(final_update.prior_qso_total_count, 0);
+    }
+
+    #[tokio::test]
+    async fn lookup_with_blank_callsign_does_not_leak_placeholder_history() {
+        use crate::domain::qso::QsoRecordBuilder;
+        use crate::proto::qsoripper::domain::{Band, Mode};
+
+        let storage = Arc::new(MockSnapshotStorage::new());
+        // Seed history rows against the developer placeholder callsign that
+        // a blank input falls back to. A blank lookup must not surface them.
+        let mut qso = QsoRecordBuilder::new("K7DBG", "K7DBG")
+            .band(Band::Band20m)
+            .mode(Mode::Ssb)
+            .build();
+        qso.local_id = "placeholder-history".to_string();
+        storage.seed_qso(qso).await;
+
+        let provider = QueueProvider::new(
+            vec![Ok(ProviderLookup::not_found(Vec::new()))],
+            Duration::ZERO,
+        );
+        let coordinator = LookupCoordinator::with_snapshot_store(
+            Arc::new(provider),
+            LookupCoordinatorConfig::default(),
+            storage.clone() as Arc<dyn EngineStorage>,
+        );
+
+        let result = coordinator.lookup("   ", false).await;
+        assert!(
+            result.prior_qsos.is_empty(),
+            "blank lookup must not surface placeholder history"
+        );
+        assert_eq!(result.prior_qso_total_count, 0);
     }
 }

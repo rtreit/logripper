@@ -2,6 +2,9 @@
 
 use crate::proto::qsoripper::domain::{CallsignRecord, LookupResult, LookupState};
 
+/// Developer placeholder callsign returned when input is blank/whitespace.
+const PLACEHOLDER_CALLSIGN: &str = "K7DBG";
+
 /// Normalize a callsign for lookup and cache-key use.
 ///
 /// Blank input currently falls back to the developer placeholder callsign used by
@@ -10,9 +13,25 @@ use crate::proto::qsoripper::domain::{CallsignRecord, LookupResult, LookupState}
 pub fn normalize_callsign(callsign: &str) -> String {
     let trimmed = callsign.trim();
     if trimmed.is_empty() {
-        "K7DBG".to_string()
+        PLACEHOLDER_CALLSIGN.to_string()
     } else {
         trimmed.to_ascii_uppercase()
+    }
+}
+
+/// Normalize a callsign for QSO history lookup.
+///
+/// Unlike [`normalize_callsign`], this returns [`None`] for blank/whitespace
+/// input rather than falling back to a placeholder, so history queries cannot
+/// leak prior contacts logged against the developer placeholder when the user
+/// types nothing.
+#[must_use]
+pub fn normalize_callsign_for_history(callsign: &str) -> Option<String> {
+    let trimmed = callsign.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_ascii_uppercase())
     }
 }
 

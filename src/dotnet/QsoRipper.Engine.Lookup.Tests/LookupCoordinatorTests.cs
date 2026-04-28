@@ -339,6 +339,49 @@ public sealed class LookupCoordinatorTests
         Assert.Single(final.PriorQsos);
     }
 
+    [Fact]
+    public async Task Lookup_DoesNotPersistPriorQsosToSnapshotStore()
+    {
+        var provider = new FakeProvider();
+        provider.Enqueue(FoundResult("W1AW"));
+        var logbook = new FakeLogbookStore();
+        logbook.Add(MakeQso("h1", "W1AW", Band._20M, Mode.Ssb, 1_700_000_000));
+        logbook.Add(MakeQso("h2", "W1AW", Band._40M, Mode.Cw, 1_700_001_000));
+        var snapshots = new InMemoryLookupSnapshotStore();
+        var coordinator = new LookupCoordinator(provider, snapshots, logbookStore: logbook);
+
+        var result = await coordinator.LookupAsync("W1AW");
+
+        Assert.Equal(2, result.PriorQsos.Count);
+
+        var snapshot = await snapshots.GetAsync("W1AW");
+        Assert.NotNull(snapshot);
+        Assert.Empty(snapshot!.Result.PriorQsos);
+        Assert.Equal(0u, snapshot.Result.PriorQsoTotalCount);
+    }
+
+    private sealed class InMemoryLookupSnapshotStore : ILookupSnapshotStore
+    {
+        private readonly Dictionary<string, LookupSnapshot> _snapshots = new(StringComparer.OrdinalIgnoreCase);
+
+        public ValueTask UpsertAsync(LookupSnapshot snapshot)
+        {
+            _snapshots[snapshot.Callsign] = snapshot;
+            return ValueTask.CompletedTask;
+        }
+
+        public ValueTask<LookupSnapshot?> GetAsync(string callsign)
+        {
+            _snapshots.TryGetValue(callsign, out var snapshot);
+            return ValueTask.FromResult<LookupSnapshot?>(snapshot);
+        }
+
+        public ValueTask<bool> DeleteAsync(string callsign)
+        {
+            return ValueTask.FromResult(_snapshots.Remove(callsign));
+        }
+    }
+
     private static QsoRecord MakeQso(string localId, string worked, Band band, Mode mode, long utcSeconds) =>
         new()
         {

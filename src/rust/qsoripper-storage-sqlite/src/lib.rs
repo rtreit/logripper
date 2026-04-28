@@ -613,7 +613,7 @@ mod tests {
     use qsoripper_core::storage::{
         EngineStorage, LookupSnapshot, LookupSnapshotStore, QsoListQuery,
     };
-    use sqlite::Connection;
+    use sqlite::{Connection, State, Value};
     use std::fs;
     use std::path::PathBuf;
     use std::sync::Arc;
@@ -1037,5 +1037,54 @@ mod tests {
         let none = logbook.list_qso_history("NEVER", 5).await.unwrap();
         assert_eq!(none.total, 0);
         assert!(none.entries.is_empty());
+    }
+
+    #[tokio::test]
+    async fn sqlite_storage_history_query_uses_expression_index() {
+        let storage = Arc::new(SqliteStorageBuilder::new().in_memory().build().unwrap());
+        // Seed enough rows that the planner prefers the expression index over
+        // a full scan. Without enough rows, SQLite may pick SCAN even when an
+        // index is available, since the cost difference is negligible for tiny
+        // tables.
+        for i in 0..32 {
+            let mut qso = QsoRecordBuilder::new("W1AW", format!("K7AB{i}"))
+                .band(Band::Band20m)
+                .mode(Mode::Ssb)
+                .timestamp(Timestamp {
+                    seconds: 1_700_000_000 + i64::from(i),
+                    nanos: 0,
+                })
+                .build();
+            qso.local_id = format!("row-{i}");
+            storage.logbook().insert_qso(&qso).await.unwrap();
+        }
+
+        let connection = storage.connection().unwrap();
+        let mut statement = connection
+            .prepare(
+                "EXPLAIN QUERY PLAN \
+                 SELECT record FROM qsos \
+                 WHERE deleted_at_ms IS NULL \
+                 AND UPPER(worked_callsign) = ? \
+                 ORDER BY utc_timestamp_ms DESC, local_id DESC \
+                 LIMIT ?",
+            )
+            .unwrap();
+        statement
+            .bind((1, Value::String("K7AB0".to_string())))
+            .unwrap();
+        statement.bind((2, Value::Integer(10))).unwrap();
+
+        let mut plan = String::new();
+        while let State::Row = statement.next().unwrap() {
+            let detail = statement.read::<String, _>("detail").unwrap();
+            plan.push_str(&detail);
+            plan.push('\n');
+        }
+
+        assert!(
+            plan.contains("idx_qsos_worked_callsign_upper"),
+            "expected query plan to use idx_qsos_worked_callsign_upper, got:\n{plan}"
+        );
     }
 }
