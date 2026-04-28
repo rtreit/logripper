@@ -104,6 +104,23 @@ public sealed class VisualizerCanvas : Control
         // Background frame for envelope panel
         ctx.DrawRectangle(null, new Pen(new SolidColorBrush(Color.FromArgb(0x40, 0x33, 0x55, 0x77)), 1), envR);
 
+        // Low-SNR overlay: when the engine suppressed text emission, tint
+        // the envelope panel red and badge it so the operator immediately
+        // sees that the visualizer is still rendering noise but the
+        // transcript was intentionally muted.
+        if (f.SnrSuppressed)
+        {
+            ctx.FillRectangle(new SolidColorBrush(Color.FromArgb(0x22, 0xFF, 0x33, 0x33)), envR);
+            var badge = new FormattedText(
+                $"LOW SNR ({f.SnrDb:F1} dB) — text suppressed",
+                CultureInfo.InvariantCulture,
+                FlowDirection.LeftToRight,
+                typeface,
+                12,
+                new SolidColorBrush(Color.FromRgb(0xFF, 0x88, 0x88)));
+            ctx.DrawText(badge, new Point(envR.X + 8, envR.Y + 4));
+        }
+
         // Noise/signal floor band (shaded).
         var floorTop = ScaleY(envR, f.SignalFloor, envMaxY);
         var floorBot = ScaleY(envR, f.NoiseFloor, envMaxY);
