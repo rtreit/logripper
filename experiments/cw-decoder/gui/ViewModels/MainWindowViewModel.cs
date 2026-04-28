@@ -2570,16 +2570,22 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
             return;
         }
 
-        // Always include "auto" plus operator-supplied pin values.
+        // Always include "auto" plus operator-supplied tokens. The Rust eval
+        // binary's parse_strategy_list accepts: auto, region, region<N>,
+        // region:<N>, env, envelope, env<N>, envelope<N>, env:<N>,
+        // envelope:<N>, live-env, liveenv, and bare numbers (ExactPin).
+        // Forward any non-empty, case-insensitively-deduped token; let the
+        // Rust parser decide what's valid. (The previous implementation only
+        // accepted "auto" and bare numbers, silently dropping region*/env*
+        // tokens advertised by the tooltip and watermark.)
         var strategies = new List<string> { "auto" };
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "auto" };
         foreach (var tok in (StrategySweepWpms ?? string.Empty).Split(','))
         {
             var t = tok.Trim();
-            if (string.IsNullOrEmpty(t) || t.Equals("auto", StringComparison.OrdinalIgnoreCase)) continue;
-            if (double.TryParse(t, NumberStyles.Float, CultureInfo.InvariantCulture, out var v) && v > 0)
-            {
-                strategies.Add(v.ToString("0.##", CultureInfo.InvariantCulture));
-            }
+            if (string.IsNullOrEmpty(t)) continue;
+            if (!seen.Add(t)) continue;
+            strategies.Add(t);
         }
 
         CancelAndDisposeEvaluation();
