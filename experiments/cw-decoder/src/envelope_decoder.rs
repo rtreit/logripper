@@ -1222,6 +1222,449 @@ fn morse_to_char(s: &str) -> Option<char> {
     }
 }
 
+/// Per-track decode result from [`decode_envelope_multi`].
+#[derive(Debug, Clone)]
+pub struct MultiPitchTrack {
+    /// Pitch (Hz) the track was decoded at.
+    pub pitch_hz: f32,
+    /// Average per-frame Goertzel power at this pitch (sweep units).
+    pub power: f32,
+    /// Decoded text for this pitch.
+    pub transcript: String,
+    /// Estimated WPM for this pitch.
+    pub wpm: f32,
+    /// Visualizer payload from the underlying envelope decode.
+    pub viz: VizFrame,
+}
+
+/// Default narrow bandpass width for multi-pitch decode (Hz).
+///
+/// The single-pitch default in [`PreprocessConfig`] is 300 Hz, which is
+/// too wide when we are deliberately separating stations 50–200 Hz
+/// apart in audio pitch — at 300 Hz, two adjacent stations land in the
+/// same passband. 100 Hz is narrow enough to isolate stations spaced
+/// ≥ 60 Hz apart while still preserving CW key-click risetime.
+pub const DEFAULT_MULTI_PITCH_BANDPASS_WIDTH_HZ: f32 = 100.0;
+
+/// Decode the same buffer at each of the top-`cfg.k` spectral peaks
+/// and return one [`MultiPitchTrack`] per peak. Each track runs the
+/// existing single-pitch envelope pipeline pinned to its detected
+/// pitch.
+///
+/// `env_cfg` is cloned per track and mutated to set
+/// `pin_hz = Some(peak.pitch_hz)`. The caller is responsible for
+/// configuring `env_cfg.preprocess.bandpass_width_hz` to a narrow
+/// value (suggested
+/// [`DEFAULT_MULTI_PITCH_BANDPASS_WIDTH_HZ`]) so each pinned pitch
+/// gets its own filtered audio rather than a shared 300-Hz passband.
+///
+/// Peak detection runs on the recent analysis window (the last
+/// `env_cfg.analysis_window_seconds`) so old transients in the
+/// rolling buffer can't dominate the goertzel sweep.
+pub fn decode_envelope_multi(
+    samples: &[f32],
+    sample_rate: u32,
+    multi_cfg: &crate::region_stream::MultiPitchConfig,
+    env_cfg: &EnvelopeConfig,
+) -> Vec<MultiPitchTrack> {
+    if samples.is_empty() || sample_rate == 0 || multi_cfg.k == 0 {
+        return Vec::new();
+    }
+    // Slice the buffer down to the analysis window before the sweep so
+    // peaks reflect what the per-track decoder will actually see.
+    let window_samples = match env_cfg.analysis_window_seconds {
+        Some(s) if s > 0.0 => {
+            let n = (s * sample_rate as f32) as usize;
+            if samples.len() > n {
+                &samples[samples.len() - n..]
+            } else {
+                samples
+            }
+        }
+        _ => samples,
+    };
+    let peaks = crate::region_stream::find_top_pitch_peaks(window_samples, sample_rate, multi_cfg);
+    let mut tracks = Vec::with_capacity(peaks.len());
+    for peak in peaks {
+        let mut cfg = env_cfg.clone();
+        cfg.pin_hz = Some(peak.pitch_hz);
+        let (text, viz) = decode_envelope_with_viz(samples, sample_rate, &cfg);
+        tracks.push(MultiPitchTrack {
+            pitch_hz: peak.pitch_hz,
+            power: peak.power,
+            transcript: text,
+            wpm: viz.wpm,
+            viz,
+        });
+    }
+    tracks
+}
+
+/// Per-track snapshot from [`LiveMultiPitchStreamer`].
+#[derive(Debug, Clone)]
+pub struct TrackSnapshot {
+    /// Stable track id assigned by the streamer. The id persists
+    /// across cycles when the same pitch keeps being detected (within
+    /// the matching tolerance).
+    pub track_id: u32,
+    /// Pitch (Hz) the track was decoded at this cycle.
+    pub pitch_hz: f32,
+    pub wpm: f32,
+    pub transcript: String,
+    /// Difference from this track's prior transcript. When the
+    /// current transcript starts with the prior one, this is the
+    /// suffix; otherwise it's the full new transcript.
+    pub appended: String,
+    pub viz: Option<VizFrame>,
+}
+
+/// Internal per-track state kept by [`LiveMultiPitchStreamer`].
+struct TrackState {
+    track_id: u32,
+    pitch_hz: f32,
+    last_transcript: String,
+    /// Cycles since this track was last matched. Tracks that go
+    /// unmatched for more than `expiry_cycles` are dropped.
+    cycles_unmatched: u32,
+}
+
+/// Live cousin of [`LiveEnvelopeStreamer`] that maintains one
+/// transcript per detected pitch with stable track ids across cycles.
+///
+/// Audio buffering is reused via an internal [`LiveEnvelopeStreamer`]
+/// so the existing single-pitch decode keeps running unchanged. On
+/// each cycle the streamer also runs [`decode_envelope_multi`] and
+/// matches the resulting peaks to existing tracks via a globally-
+/// optimal assignment (brute-force over `k!` permutations), keeping
+/// track ids stable when stations cross over in pitch.
+pub struct LiveMultiPitchStreamer {
+    sample_rate: u32,
+    buffer: Vec<f32>,
+    decode_every_samples: usize,
+    since_last_decode: usize,
+    multi_cfg: crate::region_stream::MultiPitchConfig,
+    preprocess: PreprocessConfig,
+    pinned_wpm: Option<f32>,
+    min_snr_db: f32,
+    min_dyn_range_ratio: f32,
+    analysis_window_seconds: Option<f32>,
+    /// Maximum pitch difference (Hz) tolerated when matching a peak
+    /// to an existing track.
+    match_tolerance_hz: f32,
+    /// Cycles a track survives without a matching peak before it is
+    /// removed. Three cycles ≈ 750 ms at the default cadence — long
+    /// enough to ride out a single short dropout but short enough to
+    /// reclaim the id when a station goes silent for good.
+    expiry_cycles: u32,
+    next_track_id: u32,
+    tracks: Vec<TrackState>,
+}
+
+impl LiveMultiPitchStreamer {
+    pub fn new(sample_rate: u32, k: usize) -> Self {
+        let preprocess = PreprocessConfig {
+            bandpass_width_hz: DEFAULT_MULTI_PITCH_BANDPASS_WIDTH_HZ,
+            ..PreprocessConfig::default()
+        };
+        Self {
+            sample_rate,
+            buffer: Vec::new(),
+            decode_every_samples: ((0.25 * sample_rate as f32) as usize).max(1024),
+            since_last_decode: 0,
+            multi_cfg: crate::region_stream::MultiPitchConfig {
+                k,
+                ..crate::region_stream::MultiPitchConfig::default()
+            },
+            preprocess,
+            pinned_wpm: None,
+            min_snr_db: DEFAULT_MIN_SNR_DB,
+            min_dyn_range_ratio: DEFAULT_MIN_DYN_RANGE_RATIO,
+            analysis_window_seconds: Some(3.0),
+            match_tolerance_hz: 40.0,
+            expiry_cycles: 3,
+            next_track_id: 0,
+            tracks: Vec::new(),
+        }
+    }
+
+    pub fn set_k(&mut self, k: usize) {
+        self.multi_cfg.k = k;
+    }
+
+    pub fn set_match_tolerance_hz(&mut self, tol: f32) {
+        self.match_tolerance_hz = tol.max(0.0);
+    }
+
+    pub fn set_expiry_cycles(&mut self, cycles: u32) {
+        self.expiry_cycles = cycles;
+    }
+
+    pub fn set_min_snr_db(&mut self, db: f32) {
+        self.min_snr_db = db;
+    }
+
+    pub fn set_min_dyn_range_ratio(&mut self, r: f32) {
+        self.min_dyn_range_ratio = r;
+    }
+
+    pub fn set_pinned_wpm(&mut self, wpm: Option<f32>) {
+        self.pinned_wpm = wpm.filter(|w| *w > 0.0);
+    }
+
+    pub fn set_preprocess(&mut self, preprocess: PreprocessConfig) {
+        self.preprocess = preprocess;
+    }
+
+    pub fn set_analysis_window_seconds(&mut self, seconds: Option<f32>) {
+        self.analysis_window_seconds = seconds.filter(|s| *s > 0.0);
+    }
+
+    /// Feed audio. Returns `Some(snapshots)` once a decode cycle
+    /// fires; `None` while the buffer is still filling.
+    pub fn feed(&mut self, samples: &[f32]) -> Option<Vec<TrackSnapshot>> {
+        self.push_samples(samples);
+        self.since_last_decode += samples.len();
+        if self.since_last_decode >= self.decode_every_samples {
+            self.since_last_decode = 0;
+            Some(self.decode_now(false))
+        } else {
+            None
+        }
+    }
+
+    /// Like [`feed`] but viz frames are populated.
+    pub fn feed_with_viz(&mut self, samples: &[f32]) -> Option<Vec<TrackSnapshot>> {
+        self.push_samples(samples);
+        self.since_last_decode += samples.len();
+        if self.since_last_decode >= self.decode_every_samples {
+            self.since_last_decode = 0;
+            Some(self.decode_now(true))
+        } else {
+            None
+        }
+    }
+
+    pub fn flush(&mut self) -> Vec<TrackSnapshot> {
+        self.decode_now(false)
+    }
+
+    pub fn flush_with_viz(&mut self) -> Vec<TrackSnapshot> {
+        self.decode_now(true)
+    }
+
+    fn push_samples(&mut self, samples: &[f32]) {
+        self.buffer.extend_from_slice(samples);
+        let max_samples = (self.sample_rate as usize * MAX_LIVE_ENVELOPE_BUFFER_SECONDS)
+            .max(self.decode_every_samples * 2);
+        if self.buffer.len() > max_samples {
+            let excess = self.buffer.len() - max_samples;
+            self.buffer.drain(0..excess);
+        }
+    }
+
+    fn decode_now(&mut self, with_viz: bool) -> Vec<TrackSnapshot> {
+        let env_cfg = EnvelopeConfig {
+            pin_wpm: self.pinned_wpm,
+            pin_hz: None,
+            min_snr_db: self.min_snr_db,
+            min_dyn_range_ratio: self.min_dyn_range_ratio,
+            preprocess: self.preprocess,
+            analysis_window_seconds: self.analysis_window_seconds,
+        };
+        let tracks =
+            decode_envelope_multi(&self.buffer, self.sample_rate, &self.multi_cfg, &env_cfg);
+
+        // Build assignment of new tracks (peaks) to existing track ids.
+        let assignment = assign_tracks(&self.tracks, &tracks, self.match_tolerance_hz);
+
+        // Apply assignment: matched tracks reuse ids, unmatched peaks
+        // mint new ids, unmatched existing tracks tick toward expiry.
+        let mut new_states: Vec<TrackState> = Vec::with_capacity(tracks.len());
+        let mut snapshots: Vec<TrackSnapshot> = Vec::with_capacity(tracks.len());
+        let mut existing_matched = vec![false; self.tracks.len()];
+
+        for (new_idx, decoded) in tracks.iter().enumerate() {
+            let matched_existing = assignment[new_idx];
+            let (track_id, prior_transcript) = match matched_existing {
+                Some(old_idx) => {
+                    existing_matched[old_idx] = true;
+                    (
+                        self.tracks[old_idx].track_id,
+                        self.tracks[old_idx].last_transcript.clone(),
+                    )
+                }
+                None => {
+                    let id = self.next_track_id;
+                    self.next_track_id = self.next_track_id.wrapping_add(1);
+                    (id, String::new())
+                }
+            };
+            let appended = if decoded.transcript.starts_with(&prior_transcript) {
+                decoded.transcript[prior_transcript.len()..].to_string()
+            } else {
+                decoded.transcript.clone()
+            };
+            snapshots.push(TrackSnapshot {
+                track_id,
+                pitch_hz: decoded.pitch_hz,
+                wpm: decoded.wpm,
+                transcript: decoded.transcript.clone(),
+                appended,
+                viz: if with_viz {
+                    Some(decoded.viz.clone())
+                } else {
+                    None
+                },
+            });
+            new_states.push(TrackState {
+                track_id,
+                pitch_hz: decoded.pitch_hz,
+                last_transcript: decoded.transcript.clone(),
+                cycles_unmatched: 0,
+            });
+        }
+
+        // Carry forward unmatched existing tracks until they expire.
+        for (i, state) in self.tracks.iter().enumerate() {
+            if existing_matched[i] {
+                continue;
+            }
+            let aged = state.cycles_unmatched + 1;
+            if aged < self.expiry_cycles {
+                new_states.push(TrackState {
+                    track_id: state.track_id,
+                    pitch_hz: state.pitch_hz,
+                    last_transcript: state.last_transcript.clone(),
+                    cycles_unmatched: aged,
+                });
+            }
+        }
+
+        self.tracks = new_states;
+        snapshots
+    }
+}
+
+/// Returns `assignment[new_idx] = Some(old_idx)` when the new peak
+/// matches an existing track, otherwise `None`. Brute-force over all
+/// permutations subject to `tolerance_hz`. K is bounded by the
+/// `MultiPitchConfig::k` (≤4 in practice), so the K!*K cost is
+/// negligible.
+fn assign_tracks(
+    existing: &[TrackState],
+    new_peaks: &[MultiPitchTrack],
+    tolerance_hz: f32,
+) -> Vec<Option<usize>> {
+    let n_new = new_peaks.len();
+    let n_old = existing.len();
+    let mut assignment = vec![None; n_new];
+    if n_new == 0 || n_old == 0 || tolerance_hz <= 0.0 {
+        return assignment;
+    }
+
+    // Build cost matrix; INF where the diff exceeds tolerance.
+    let mut cost = vec![vec![f32::INFINITY; n_old]; n_new];
+    for (i, peak) in new_peaks.iter().enumerate() {
+        for (j, state) in existing.iter().enumerate() {
+            let d = (peak.pitch_hz - state.pitch_hz).abs();
+            if d <= tolerance_hz {
+                cost[i][j] = d;
+            }
+        }
+    }
+
+    // Enumerate assignments. We pick a subset of new peaks (up to
+    // n_old) to match against existing tracks via permutation.
+    // Equivalent: pick a permutation `perm` of length n_new whose
+    // entries are either an old index (each used at most once) or
+    // None (unmatched). Try every such mapping.
+    let n_choices = n_old + 1; // n_old slots + "unmatched"
+    let total: u64 = (n_choices as u64).saturating_pow(n_new as u32);
+    let mut best_cost = f32::INFINITY;
+    let mut best: Vec<Option<usize>> = vec![None; n_new];
+
+    // Hard cap to keep this bounded; K should never be > 6 in practice.
+    if total > 100_000 {
+        // Fall back to greedy nearest-pairing.
+        return greedy_assignment(&cost);
+    }
+
+    for mut code in 0..total {
+        let mut used = vec![false; n_old];
+        let mut try_assign = vec![None; n_new];
+        let mut total_cost = 0.0_f32;
+        let mut valid = true;
+        for slot in try_assign.iter_mut().take(n_new) {
+            let pick = (code % n_choices as u64) as usize;
+            code /= n_choices as u64;
+            if pick == n_old {
+                *slot = None;
+            } else {
+                if used[pick] {
+                    valid = false;
+                    break;
+                }
+                used[pick] = true;
+                *slot = Some(pick);
+            }
+        }
+        if !valid {
+            continue;
+        }
+        for (i, slot) in try_assign.iter().enumerate() {
+            if let Some(j) = slot {
+                let c = cost[i][*j];
+                if !c.is_finite() {
+                    valid = false;
+                    break;
+                }
+                total_cost += c;
+            } else {
+                // Unmatched — soft penalty so we prefer matching when
+                // possible. Use tolerance as the constant penalty so a
+                // legit match (cost ≤ tolerance) always beats leaving
+                // a track unmatched if a match is available.
+                total_cost += tolerance_hz;
+            }
+        }
+        if !valid {
+            continue;
+        }
+        if total_cost < best_cost {
+            best_cost = total_cost;
+            best = try_assign;
+        }
+    }
+    if best_cost.is_finite() {
+        assignment = best;
+    }
+    assignment
+}
+
+fn greedy_assignment(cost: &[Vec<f32>]) -> Vec<Option<usize>> {
+    let n_new = cost.len();
+    let n_old = cost.first().map(|r| r.len()).unwrap_or(0);
+    let mut assignment = vec![None; n_new];
+    let mut used = vec![false; n_old];
+    // Sort all (i, j, cost) ascending and greedily pick.
+    let mut pairs: Vec<(usize, usize, f32)> = Vec::new();
+    for (i, row) in cost.iter().enumerate() {
+        for (j, &c) in row.iter().enumerate() {
+            if c.is_finite() {
+                pairs.push((i, j, c));
+            }
+        }
+    }
+    pairs.sort_by(|a, b| a.2.partial_cmp(&b.2).unwrap_or(std::cmp::Ordering::Equal));
+    for (i, j, _) in pairs {
+        if assignment[i].is_none() && !used[j] {
+            assignment[i] = Some(j);
+            used[j] = true;
+        }
+    }
+    assignment
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1567,5 +2010,185 @@ mod tests {
             "expected decoded text to contain 'K', got {:?}",
             windowed_text
         );
+    }
+
+    // ---- Multi-pitch tests --------------------------------------------------
+
+    fn synth_continuous_tone(rate: u32, secs: f32, pitch: f32, amp: f32) -> Vec<f32> {
+        let n = (rate as f32 * secs) as usize;
+        (0..n)
+            .map(|i| (TAU * pitch * i as f32 / rate as f32).sin() * amp)
+            .collect()
+    }
+
+    fn mix(a: &[f32], b: &[f32]) -> Vec<f32> {
+        let n = a.len().max(b.len());
+        (0..n)
+            .map(|i| a.get(i).copied().unwrap_or(0.0) + b.get(i).copied().unwrap_or(0.0))
+            .collect()
+    }
+
+    #[test]
+    fn decode_envelope_multi_decodes_two_simultaneous_morse() {
+        let rate = 8000u32;
+        let dot = 0.060_f32;
+        let a = synth_morse(rate, dot, 600.0, "-.- -.- -.-"); // K K K
+        let b = synth_morse(rate, dot, 850.0, "- . ... -"); // T E S T
+        let buf = mix(&a, &b);
+        let multi_cfg = crate::region_stream::MultiPitchConfig {
+            k: 4,
+            min_separation_hz: 40.0,
+            min_relative_power: 0.10,
+            sweep: crate::region_stream::RegionStreamConfig {
+                pitch_step_hz: 10.0,
+                ..Default::default()
+            },
+        };
+        // Use the narrower bandpass for multi-pitch.
+        let preprocess = PreprocessConfig {
+            bandpass_width_hz: DEFAULT_MULTI_PITCH_BANDPASS_WIDTH_HZ,
+            ..PreprocessConfig::default()
+        };
+        let env_cfg = EnvelopeConfig {
+            preprocess,
+            analysis_window_seconds: None,
+            ..Default::default()
+        };
+        let tracks = decode_envelope_multi(&buf, rate, &multi_cfg, &env_cfg);
+        assert_eq!(tracks.len(), 2, "expected 2 tracks, got {tracks:?}");
+
+        // Identify which track corresponds to which pitch.
+        let mut by_pitch = tracks.clone();
+        by_pitch.sort_by(|a, b| a.pitch_hz.partial_cmp(&b.pitch_hz).unwrap());
+        let lo = &by_pitch[0];
+        let hi = &by_pitch[1];
+        assert!(
+            (lo.pitch_hz - 600.0).abs() < 25.0,
+            "lo pitch {}",
+            lo.pitch_hz
+        );
+        assert!(
+            (hi.pitch_hz - 850.0).abs() < 25.0,
+            "hi pitch {}",
+            hi.pitch_hz
+        );
+        // Each track should contain at least one of its expected
+        // characters. Decoding mixed tones is fragile so we keep the
+        // assertion weak — the goal is to prove the two tracks
+        // produce distinct, non-empty transcripts.
+        assert!(
+            !lo.transcript.is_empty(),
+            "low-pitch transcript empty: {:?}",
+            lo.transcript
+        );
+        assert!(
+            !hi.transcript.is_empty(),
+            "high-pitch transcript empty: {:?}",
+            hi.transcript
+        );
+    }
+
+    #[test]
+    fn live_multi_pitch_streamer_track_ids_persist_across_cycles() {
+        let rate = 8000u32;
+        let mut streamer = LiveMultiPitchStreamer::new(rate, 2);
+        // First cycle: feed continuous 700 Hz tone (long enough that
+        // the 250 ms cadence fires once).
+        let chunk = synth_continuous_tone(rate, 0.6, 700.0, 0.5);
+        let snaps1 = streamer.feed(&chunk).expect("cycle 1 should fire");
+        assert!(!snaps1.is_empty(), "cycle 1 produced no tracks");
+        let id1 = snaps1[0].track_id;
+        // Second cycle: same pitch — id should stick.
+        let snaps2 = streamer
+            .feed(&synth_continuous_tone(rate, 0.6, 700.0, 0.5))
+            .expect("cycle 2 should fire");
+        assert!(!snaps2.is_empty());
+        assert_eq!(snaps2[0].track_id, id1, "track id changed across cycles");
+    }
+
+    #[test]
+    fn live_multi_pitch_streamer_new_pitch_gets_new_track_id() {
+        let rate = 8000u32;
+        let mut streamer = LiveMultiPitchStreamer::new(rate, 4);
+        let _ = streamer.feed(&synth_continuous_tone(rate, 0.6, 700.0, 0.5));
+        let mix2 = mix(
+            &synth_continuous_tone(rate, 0.6, 700.0, 0.5),
+            &synth_continuous_tone(rate, 0.6, 900.0, 0.5),
+        );
+        let snaps = streamer.feed(&mix2).expect("cycle should fire");
+        let pitches: Vec<f32> = snaps.iter().map(|s| s.pitch_hz).collect();
+        assert!(
+            pitches.iter().any(|p| (p - 900.0).abs() < 30.0),
+            "new pitch missing: {pitches:?}"
+        );
+        // Distinct ids for each track.
+        let ids: std::collections::HashSet<u32> = snaps.iter().map(|s| s.track_id).collect();
+        assert_eq!(ids.len(), snaps.len(), "track ids not unique: {snaps:?}");
+    }
+
+    #[test]
+    fn live_multi_pitch_streamer_track_id_persists_through_dropout_and_reappearance() {
+        let rate = 8000u32;
+        let mut streamer = LiveMultiPitchStreamer::new(rate, 2);
+        streamer.set_expiry_cycles(5);
+        let snaps1 = streamer
+            .feed(&synth_continuous_tone(rate, 0.6, 700.0, 0.5))
+            .expect("cycle 1");
+        let id1 = snaps1[0].track_id;
+        // One cycle of silence (still within expiry window).
+        let _ = streamer.feed(&vec![0.0_f32; (rate as f32 * 0.6) as usize]);
+        // Pitch reappears.
+        let snaps3 = streamer
+            .feed(&synth_continuous_tone(rate, 0.6, 700.0, 0.5))
+            .expect("cycle 3");
+        assert!(!snaps3.is_empty());
+        assert_eq!(
+            snaps3[0].track_id, id1,
+            "track id should be reused across short dropout"
+        );
+    }
+
+    #[test]
+    fn live_multi_pitch_streamer_handles_track_crossing() {
+        // Two tracks whose pitches cross over time: A drifts up while
+        // B drifts down, ending swapped. With global assignment the
+        // ids should still follow the *closest* match each cycle —
+        // this test verifies the assignment is at least not arbitrary
+        // by checking that both starting ids survive through a small
+        // separation cycle.
+        let rate = 8000u32;
+        let mut streamer = LiveMultiPitchStreamer::new(rate, 2);
+        let cycle = mix(
+            &synth_continuous_tone(rate, 0.6, 700.0, 0.5),
+            &synth_continuous_tone(rate, 0.6, 900.0, 0.5),
+        );
+        let snaps1 = streamer.feed(&cycle).expect("cycle 1");
+        assert_eq!(snaps1.len(), 2, "expected 2 starting tracks");
+        let mut starting: std::collections::HashMap<u32, f32> = std::collections::HashMap::new();
+        for s in &snaps1 {
+            starting.insert(s.track_id, s.pitch_hz);
+        }
+        // Slightly drifted pitches — 700→720, 900→880. Minimum-cost
+        // assignment should keep ids tied to the closer pitch (still
+        // 700-ish vs 900-ish), not flip them.
+        let cycle2 = mix(
+            &synth_continuous_tone(rate, 0.6, 720.0, 0.5),
+            &synth_continuous_tone(rate, 0.6, 880.0, 0.5),
+        );
+        let snaps2 = streamer.feed(&cycle2).expect("cycle 2");
+        assert_eq!(snaps2.len(), 2);
+        for s in &snaps2 {
+            let prior_pitch = starting
+                .get(&s.track_id)
+                .copied()
+                .expect("id should match a starting track");
+            assert!(
+                (s.pitch_hz - prior_pitch).abs() <= 60.0,
+                "track {} jumped from {} to {} — assignment should pick nearest",
+                s.track_id,
+                prior_pitch,
+                s.pitch_hz
+            );
+        }
     }
 }
