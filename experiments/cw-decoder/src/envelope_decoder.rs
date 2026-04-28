@@ -19,6 +19,7 @@
 //! use of the streaming v1 path, and minimal tunable knobs so any
 //! regressions are localised.
 
+use crate::preprocess::{self, PreprocessConfig};
 use crate::region_stream::{self, estimate_dominant_pitch, goertzel_power, RegionStreamConfig};
 
 const FRAME_LEN_S: f32 = 0.010; // 10 ms — fine enough for 40 WPM dits.
@@ -41,6 +42,14 @@ pub const DEFAULT_MIN_SNR_DB: f32 = 6.0;
 /// 0.55 default cleanly rejects pure white noise (~0.30 in tests) while
 /// passing weak but legitimate CW (>0.7).
 pub const DEFAULT_MIN_DYN_RANGE_RATIO: f32 = 0.55;
+
+/// Percentile used as the "robust peak" for the dynamic-range gate. We
+/// deliberately do NOT use the literal `env_max` because a single
+/// key-click transient or QRN spike can dwarf the rest of the envelope
+/// and collapse the bimodality ratio even when the underlying CW is
+/// obviously bimodal. The 99th percentile keeps the gate sensitive to
+/// real noise floors while ignoring isolated transients.
+pub(crate) const ROBUST_PEAK_PERCENTILE: f32 = 0.99;
 
 /// Configuration for [`decode_envelope`].
 #[derive(Debug, Clone)]
@@ -66,6 +75,11 @@ pub struct EnvelopeConfig {
     /// gate catches the noise-locked failure mode that high-variance
     /// noise sneaks past the percentile-ratio SNR check.
     pub min_dyn_range_ratio: f32,
+    /// Front-end audio preprocessing (bandpass + compander). Defaults
+    /// match the recipe that cut CER from 0.380 → 0.130 on real-radio
+    /// CW. Disable for synthetic test fixtures that already feed the
+    /// decoder a pristine tone.
+    pub preprocess: PreprocessConfig,
 }
 
 impl Default for EnvelopeConfig {
@@ -75,6 +89,7 @@ impl Default for EnvelopeConfig {
             pin_hz: None,
             min_snr_db: DEFAULT_MIN_SNR_DB,
             min_dyn_range_ratio: DEFAULT_MIN_DYN_RANGE_RATIO,
+            preprocess: PreprocessConfig::default(),
         }
     }
 }
@@ -138,18 +153,30 @@ pub fn decode_envelope(samples: &[f32], sample_rate: u32, cfg: &EnvelopeConfig) 
         .pin_hz
         .unwrap_or_else(|| estimate_dominant_pitch(samples, sample_rate, &pitch_cfg));
 
+    // 0) Front-end preprocessing. Bandpass narrows to the detected
+    //    pitch (rejects QRM/hum) and the compander pulls element
+    //    amplitudes together so a single hysteresis threshold cleanly
+    //    separates key-on from key-off on real-radio audio.
+    let preprocessed: Vec<f32>;
+    let work: &[f32] = if cfg.preprocess.enabled {
+        preprocessed = preprocess::apply(samples, sample_rate, pitch, &cfg.preprocess);
+        &preprocessed
+    } else {
+        samples
+    };
+
     let frame_len = ((FRAME_LEN_S * sample_rate as f32).round() as usize).max(32);
     let frame_step = ((FRAME_STEP_S * sample_rate as f32).round() as usize).max(8);
-    if samples.len() < frame_len {
+    if work.len() < frame_len {
         return String::new();
     }
 
     // 1) Per-frame Goertzel power envelope.
-    let mut env: Vec<f32> = Vec::with_capacity(samples.len() / frame_step + 1);
+    let mut env: Vec<f32> = Vec::with_capacity(work.len() / frame_step + 1);
     let mut offset = 0usize;
-    while offset + frame_len <= samples.len() {
+    while offset + frame_len <= work.len() {
         env.push(goertzel_power(
-            &samples[offset..offset + frame_len],
+            &work[offset..offset + frame_len],
             sample_rate,
             pitch,
         ));
@@ -160,7 +187,10 @@ pub fn decode_envelope(samples: &[f32], sample_rate: u32, cfg: &EnvelopeConfig) 
     }
 
     // 2) Estimate noise / signal floor as 20th / 90th percentiles.
-    let env_max = env.iter().copied().fold(0.0_f32, f32::max);
+    //    Use a robust 99th-percentile peak instead of the literal max
+    //    so a single key-click transient or QRN spike does not collapse
+    //    the dynamic-range bimodality ratio.
+    let env_max = robust_peak(&env, ROBUST_PEAK_PERCENTILE);
     let (noise, signal) = percentile_pair(&env, 0.20, 0.90);
     // 2a) Quality gate: combine an SNR floor with a dynamic-range
     //     bimodality check. The latter is what kills the noise-locked
@@ -227,9 +257,17 @@ pub fn decode_envelope_with_stats(
         .pin_hz
         .unwrap_or_else(|| estimate_dominant_pitch(samples, sample_rate, &pitch_cfg));
 
+    let preprocessed: Vec<f32>;
+    let work: &[f32] = if cfg.preprocess.enabled {
+        preprocessed = preprocess::apply(samples, sample_rate, pitch, &cfg.preprocess);
+        &preprocessed
+    } else {
+        samples
+    };
+
     let frame_len = ((FRAME_LEN_S * sample_rate as f32).round() as usize).max(32);
     let frame_step = ((FRAME_STEP_S * sample_rate as f32).round() as usize).max(8);
-    if samples.len() < frame_len {
+    if work.len() < frame_len {
         return EnvelopeDecode {
             text: String::new(),
             dot_seconds: 0.0,
@@ -238,11 +276,11 @@ pub fn decode_envelope_with_stats(
         };
     }
 
-    let mut env: Vec<f32> = Vec::with_capacity(samples.len() / frame_step + 1);
+    let mut env: Vec<f32> = Vec::with_capacity(work.len() / frame_step + 1);
     let mut offset = 0usize;
-    while offset + frame_len <= samples.len() {
+    while offset + frame_len <= work.len() {
         env.push(goertzel_power(
-            &samples[offset..offset + frame_len],
+            &work[offset..offset + frame_len],
             sample_rate,
             pitch,
         ));
@@ -257,7 +295,7 @@ pub fn decode_envelope_with_stats(
         };
     }
 
-    let env_max = env.iter().copied().fold(0.0_f32, f32::max);
+    let env_max = robust_peak(&env, ROBUST_PEAK_PERCENTILE);
     let (noise, signal) = percentile_pair(&env, 0.20, 0.90);
     if !passes_quality_gate(cfg, noise, signal, env_max) {
         return EnvelopeDecode {
@@ -375,6 +413,7 @@ pub struct LiveEnvelopeStreamer {
     pinned_hz: Option<f32>,
     min_snr_db: f32,
     min_dyn_range_ratio: f32,
+    preprocess: PreprocessConfig,
 }
 
 #[derive(Debug, Clone)]
@@ -457,7 +496,13 @@ impl LiveEnvelopeStreamer {
             pinned_hz: None,
             min_snr_db: DEFAULT_MIN_SNR_DB,
             min_dyn_range_ratio: DEFAULT_MIN_DYN_RANGE_RATIO,
+            preprocess: PreprocessConfig::default(),
         }
+    }
+
+    /// Override the front-end audio preprocessing (bandpass + compander).
+    pub fn set_preprocess(&mut self, preprocess: PreprocessConfig) {
+        self.preprocess = preprocess;
     }
 
     /// Pin the pitch detector to a specific frequency (Hz). When `None`,
@@ -545,6 +590,7 @@ impl LiveEnvelopeStreamer {
             pin_hz: self.pinned_hz,
             min_snr_db: self.min_snr_db,
             min_dyn_range_ratio: self.min_dyn_range_ratio,
+            preprocess: self.preprocess,
         };
         let (text, wpm, elements, viz) = if with_viz {
             let (text, frame) = decode_envelope_with_viz(&self.buffer, self.sample_rate, &cfg);
@@ -627,19 +673,27 @@ pub fn decode_envelope_with_viz(
         .pin_hz
         .unwrap_or_else(|| estimate_dominant_pitch(samples, sample_rate, &pitch_cfg));
 
+    let preprocessed: Vec<f32>;
+    let work: &[f32] = if cfg.preprocess.enabled {
+        preprocessed = preprocess::apply(samples, sample_rate, pitch, &cfg.preprocess);
+        &preprocessed
+    } else {
+        samples
+    };
+
     let frame_len = ((FRAME_LEN_S * sample_rate as f32).round() as usize).max(32);
     let frame_step = ((FRAME_STEP_S * sample_rate as f32).round() as usize).max(8);
-    if samples.len() < frame_len {
+    if work.len() < frame_len {
         let mut v = empty_viz();
         v.pitch_hz = pitch;
         return (String::new(), v);
     }
 
-    let mut env: Vec<f32> = Vec::with_capacity(samples.len() / frame_step + 1);
+    let mut env: Vec<f32> = Vec::with_capacity(work.len() / frame_step + 1);
     let mut offset = 0usize;
-    while offset + frame_len <= samples.len() {
+    while offset + frame_len <= work.len() {
         env.push(goertzel_power(
-            &samples[offset..offset + frame_len],
+            &work[offset..offset + frame_len],
             sample_rate,
             pitch,
         ));
@@ -652,7 +706,7 @@ pub fn decode_envelope_with_viz(
         return (String::new(), v);
     }
 
-    let env_max = env.iter().copied().fold(0.0_f32, f32::max);
+    let env_max = robust_peak(&env, ROBUST_PEAK_PERCENTILE);
     let (noise, signal) = percentile_pair(&env, 0.20, 0.90);
     let snr = snr_db(noise, signal);
     if !passes_quality_gate(cfg, noise, signal, env_max) {
@@ -1020,6 +1074,19 @@ fn percentile_pair(values: &[f32], p_lo: f32, p_hi: f32) -> (f32, f32) {
     )
 }
 
+/// Robust peak: high percentile of the envelope rather than the literal
+/// max. Insulates the dynamic-range gate from single-sample QRN spikes
+/// or key-click transients that would otherwise dwarf the true CW
+/// peaks and falsely collapse the bimodality ratio.
+pub(crate) fn robust_peak(values: &[f32], percentile: f32) -> f32 {
+    if values.is_empty() {
+        return 0.0;
+    }
+    let mut sorted: Vec<f32> = values.iter().copied().collect();
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    region_stream::percentile_sorted(&sorted, percentile)
+}
+
 fn median_lower_half(values: &[f32]) -> f32 {
     if values.is_empty() {
         return 0.0;
@@ -1155,6 +1222,7 @@ mod tests {
                 pin_hz: None,
                 min_snr_db: DEFAULT_MIN_SNR_DB,
                 min_dyn_range_ratio: DEFAULT_MIN_DYN_RANGE_RATIO,
+                preprocess: PreprocessConfig::default(),
             },
         );
         assert_eq!(txt, "K", "got {:?}", txt);
@@ -1266,7 +1334,10 @@ mod tests {
             "clean signal SNR should clear the gate, got {} dB",
             viz.snr_db
         );
-        assert!(!viz.snr_suppressed, "clean signal should not trigger SNR gate");
+        assert!(
+            !viz.snr_suppressed,
+            "clean signal should not trigger SNR gate"
+        );
     }
 
     /// Deterministic pseudo-random noise so tests don't depend on
@@ -1343,6 +1414,7 @@ mod tests {
             pin_hz: None,
             min_snr_db: 0.0,
             min_dyn_range_ratio: 0.0,
+            preprocess: PreprocessConfig::default(),
         };
         let (_text, viz) = decode_envelope_with_viz(&s, rate, &cfg);
         // With the gate disabled the viz frame is the full happy-path

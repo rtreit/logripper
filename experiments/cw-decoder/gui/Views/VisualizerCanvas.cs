@@ -112,7 +112,7 @@ public sealed class VisualizerCanvas : Control
         {
             ctx.FillRectangle(new SolidColorBrush(Color.FromArgb(0x22, 0xFF, 0x33, 0x33)), envR);
             var badge = new FormattedText(
-                $"LOW SNR ({f.SnrDb:F1} dB) — text suppressed",
+                $"LOW QUALITY (SNR {f.SnrDb:F1} dB) — text suppressed",
                 CultureInfo.InvariantCulture,
                 FlowDirection.LeftToRight,
                 typeface,
