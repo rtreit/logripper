@@ -10,14 +10,28 @@ namespace QsoRipper.Gui.Services;
 
 /// <summary>
 /// Spawns the experimental <c>cw-decoder</c> Rust binary in
-/// <c>stream-live-ditdah --json</c> mode and surfaces parsed <c>wpm</c>
-/// NDJSON events as <see cref="CwWpmSample"/>s.
+/// <c>stream-live-v2 --json</c> mode and surfaces parsed <c>wpm</c>,
+/// <c>lock</c>, and full-replacement <c>transcript</c> NDJSON events.
 ///
-/// Round 1 deliberately reuses the experiment binary rather than the
-/// not-yet-existent engine-side <c>CwDecodeService</c>. The binary is
-/// located by walking up from the GUI's BaseDirectory, looking for the
-/// experiment build output, in line with the existing experiment GUI's
-/// discovery logic.
+/// <para>
+/// History (PR #347 + follow-up): the first ditdah-backed live path used
+/// a rolling 6-20 s window and produced CER ~0.83 on training-set-a. We
+/// reverted to the legacy Goertzel <c>stream-live</c> while we
+/// re-baselined; turns out ditdah itself is excellent (CER 0.046 on the
+/// whole file) — the rolling-window wrapper was breaking it. The fix
+/// validated in <c>tools/rolling-whole-buffer/</c> is to keep an
+/// append-only audio buffer and re-decode the entire buffer with ditdah
+/// every N seconds, replacing the displayed transcript wholesale.
+/// Final accuracy on training-set-a: CER 0.060 (clean) and 0.060 (QRN),
+/// 3-4× better than the Goertzel baseline.
+/// </para>
+///
+/// <para>
+/// v2 event vocabulary: <c>ready</c>, <c>transcript</c> (full replace),
+/// <c>wpm</c>, <c>lock</c> (state: hunting|locked), <c>reset_ack</c>,
+/// <c>end</c>. The transcript aggregator interprets <c>transcript</c>
+/// events as a wholesale replacement of any previously-buffered text.
+/// </para>
 /// </summary>
 internal sealed class CwDecoderProcessSampleSource : ICwWpmSampleSource
 {
@@ -114,16 +128,11 @@ internal sealed class CwDecoderProcessSampleSource : ICwWpmSampleSource
             CreateNoWindow = true,
             WorkingDirectory = Path.GetDirectoryName(exe)!,
         };
-        psi.ArgumentList.Add("stream-live-ditdah");
+        psi.ArgumentList.Add("stream-live-v2");
         psi.ArgumentList.Add("--json");
-        psi.ArgumentList.Add("--window");
-        psi.ArgumentList.Add("6");
-        psi.ArgumentList.Add("--min-window");
-        psi.ArgumentList.Add("4");
+        psi.ArgumentList.Add("--stdin-control");
         psi.ArgumentList.Add("--decode-every-ms");
-        psi.ArgumentList.Add("1000");
-        psi.ArgumentList.Add("--confirmations");
-        psi.ArgumentList.Add("1");
+        psi.ArgumentList.Add("5000");
         if (loopback)
         {
             // WASAPI loopback: capture from a system OUTPUT device so audio
@@ -253,14 +262,15 @@ internal sealed class CwDecoderProcessSampleSource : ICwWpmSampleSource
     }
 
     /// <summary>
-    /// Send a manual-anchor hint to the running decoder so the rolling
-    /// ditdah backend can start accepting plausible mid-QSO text even when
-    /// the operator tuned in after automatic anchors such as CQ/DE/73.
-    /// No-op if the decoder is not running.
+    /// Sends a "re-anchor from now" hint to the running decoder. With the
+    /// legacy <c>stream-live</c> backend this is mapped to
+    /// <c>reset_lock</c>, which drops the current pitch lock so the next
+    /// confident decode comes from the audio the operator is hearing right
+    /// now (useful when tuning in mid-QSO).
     /// </summary>
     public void MarkAnchorHeard()
     {
-        WriteControlLine("{\"type\":\"manual_anchor\"}");
+        WriteControlLine("{\"type\":\"reset_lock\"}");
         SetLockState(CwLockState.Probation);
     }
 
@@ -306,6 +316,10 @@ internal sealed class CwDecoderProcessSampleSource : ICwWpmSampleSource
                 if (TryParseConfidenceEvent(line, out var newState))
                 {
                     SetLockState(newState);
+                }
+                else if (TryParseV2LockEvent(line, out var v2State))
+                {
+                    SetLockState(v2State);
                 }
                 else if (TryParsePitchLostEvent(line))
                 {
@@ -415,6 +429,43 @@ internal sealed class CwDecoderProcessSampleSource : ICwWpmSampleSource
                 _ => CwLockState.Unknown,
             };
             return true;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Parses the v2 stream-live <c>{type:"lock", state:"hunting|locked"}</c>
+    /// event. v2 has only two lock states (no probation) — derived from
+    /// WPM stability across the last few whole-buffer decodes.
+    /// </summary>
+    internal static bool TryParseV2LockEvent(string ndjsonLine, out CwLockState state)
+    {
+        state = CwLockState.Unknown;
+        try
+        {
+            using var doc = JsonDocument.Parse(ndjsonLine);
+            var root = doc.RootElement;
+            if (!root.TryGetProperty("type", out var typeProp)
+                || typeProp.ValueKind != JsonValueKind.String
+                || !string.Equals(typeProp.GetString(), "lock", StringComparison.Ordinal))
+            {
+                return false;
+            }
+            if (!root.TryGetProperty("state", out var stateProp)
+                || stateProp.ValueKind != JsonValueKind.String)
+            {
+                return false;
+            }
+            state = stateProp.GetString() switch
+            {
+                "locked" => CwLockState.Locked,
+                "hunting" => CwLockState.Hunting,
+                _ => CwLockState.Unknown,
+            };
+            return state != CwLockState.Unknown;
         }
         catch (JsonException)
         {

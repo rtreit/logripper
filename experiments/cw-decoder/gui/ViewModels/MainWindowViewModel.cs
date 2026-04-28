@@ -30,7 +30,8 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
     private SweepTopResult? _topSweepResult;
 
     private const string CustomDecoderModeLabel = "Custom streaming";
-    private const string BaselineDecoderModeLabel = "Baseline ditdah";
+    private const string BaselineDecoderModeLabel = "Baseline ditdah (rolling window)";
+    private const string V2DecoderModeLabel = "Whole-buffer ditdah (v2)";
 
     public MainWindowViewModel()
     {
@@ -38,29 +39,20 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
         _inputDevices = devs.Inputs;
         _outputDevices = devs.Outputs;
         Devices = new ObservableCollection<string>(_inputDevices);
-        DecoderModes = new ObservableCollection<string>(new[] { CustomDecoderModeLabel, BaselineDecoderModeLabel });
+        DecoderModes = new ObservableCollection<string>(new[] { V2DecoderModeLabel, CustomDecoderModeLabel, BaselineDecoderModeLabel });
         SelectedDevice = Devices.Count > 0 ? Devices[0] : null;
         SelectedDecoderMode = DecoderModes[0];
         Cells = new ObservableCollection<TranscriptCell>();
         WpmHistory = new ObservableCollection<double>();
         HarvestCandidates = new ObservableCollection<HarvestCandidate>();
-        AvailableLabelFiles = new ObservableCollection<SelectableLabelFile>(
-            CwDecoderProcess.ListAvailableLabelFiles().Select(path =>
-            {
-                var file = new SelectableLabelFile(path);
-                file.PropertyChanged += (_, args) =>
-                {
-                    if (string.Equals(args.PropertyName, nameof(SelectableLabelFile.IsSelected), StringComparison.Ordinal))
-                    {
-                        OnPropertyChanged(nameof(SelectedLabelFilesSummary));
-                        OnPropertyChanged(nameof(ShowSelectedLabelPicker));
-                        OnPropertyChanged(nameof(LabelEvaluationTargetLabel));
-                        OnPropertyChanged(nameof(CanRunLabelScore));
-                        OnPropertyChanged(nameof(CanRunLabelSweep));
-                    }
-                };
-                return file;
-            }));
+        AvailableLabelFiles = new ObservableCollection<SelectableLabelFile>();
+        LabelCorpusFolders = new ObservableCollection<string>();
+        ReloadLabelCorpusFolders();
+        // Default to the labeling-tab subset if it exists, else "(all)".
+        var defaultFolder = LabelCorpusFolders.FirstOrDefault(f => string.Equals(f, _trainingSetSubset, StringComparison.OrdinalIgnoreCase))
+                            ?? AllFoldersSentinel;
+        _selectedLabelCorpusFolder = defaultFolder;
+        ReloadAvailableLabelFiles();
 
         _process.EventReceived += OnEvent;
         _process.StderrLine += line => Dispatcher.UIThread.Post(() => StatusText = line);
@@ -80,6 +72,84 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
     public ObservableCollection<double> WpmHistory { get; }
     public ObservableCollection<HarvestCandidate> HarvestCandidates { get; }
     public ObservableCollection<SelectableLabelFile> AvailableLabelFiles { get; }
+
+    public const string AllFoldersSentinel = "(all)";
+    public ObservableCollection<string> LabelCorpusFolders { get; }
+
+    private string _selectedLabelCorpusFolder = AllFoldersSentinel;
+    public string SelectedLabelCorpusFolder
+    {
+        get => _selectedLabelCorpusFolder;
+        set
+        {
+            if (Set(ref _selectedLabelCorpusFolder, value ?? AllFoldersSentinel))
+            {
+                ReloadAvailableLabelFiles();
+            }
+        }
+    }
+
+    public string LabelCorpusRootPath => CwDecoderProcess.GetLabelCorpusRoot();
+
+    public void RefreshLabelCorpus()
+    {
+        ReloadLabelCorpusFolders();
+        ReloadAvailableLabelFiles();
+    }
+
+    private void ReloadLabelCorpusFolders()
+    {
+        var current = _selectedLabelCorpusFolder;
+        LabelCorpusFolders.Clear();
+        LabelCorpusFolders.Add(AllFoldersSentinel);
+        foreach (var sub in CwDecoderProcess.ListLabelCorpusSubfolders())
+        {
+            LabelCorpusFolders.Add(sub);
+        }
+        if (!LabelCorpusFolders.Contains(current))
+        {
+            _selectedLabelCorpusFolder = AllFoldersSentinel;
+        }
+        OnPropertyChanged(nameof(SelectedLabelCorpusFolder));
+    }
+
+    private void ReloadAvailableLabelFiles()
+    {
+        var root = CwDecoderProcess.GetLabelCorpusRoot();
+        var folder = string.Equals(_selectedLabelCorpusFolder, AllFoldersSentinel, StringComparison.Ordinal) || string.IsNullOrEmpty(_selectedLabelCorpusFolder)
+            ? root
+            : System.IO.Path.Combine(root, _selectedLabelCorpusFolder);
+        AvailableLabelFiles.Clear();
+        if (string.IsNullOrEmpty(root)) return;
+
+        foreach (var path in CwDecoderProcess.ListAvailableLabelFiles(folder))
+        {
+            string display;
+            try
+            {
+                display = System.IO.Path.GetRelativePath(root, path).Replace('\\', '/');
+            }
+            catch { display = System.IO.Path.GetFileName(path); }
+            var file = new SelectableLabelFile(path, display);
+            file.PropertyChanged += (_, args) =>
+            {
+                if (string.Equals(args.PropertyName, nameof(SelectableLabelFile.IsSelected), StringComparison.Ordinal))
+                {
+                    OnPropertyChanged(nameof(SelectedLabelFilesSummary));
+                    OnPropertyChanged(nameof(ShowSelectedLabelPicker));
+                    OnPropertyChanged(nameof(LabelEvaluationTargetLabel));
+                    OnPropertyChanged(nameof(CanRunLabelScore));
+                    OnPropertyChanged(nameof(CanRunLabelSweep));
+                }
+            };
+            AvailableLabelFiles.Add(file);
+        }
+        OnPropertyChanged(nameof(SelectedLabelFilesSummary));
+        OnPropertyChanged(nameof(ShowSelectedLabelPicker));
+        OnPropertyChanged(nameof(LabelEvaluationTargetLabel));
+        OnPropertyChanged(nameof(CanRunLabelScore));
+        OnPropertyChanged(nameof(CanRunLabelSweep));
+    }
 
     private string? _selectedDevice;
     public string? SelectedDevice { get => _selectedDevice; set => Set(ref _selectedDevice, value); }
@@ -111,6 +181,20 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
 
     public string DeviceListLabel => _useLoopback ? "OUTPUT (loopback)" : "INPUT (mic)";
 
+    private double _pinWpm;
+    /// <summary>
+    /// Pin the WPM hint passed to ditdah's whole-buffer (v2) decoder. 0 = auto.
+    /// Only takes effect on the next live-capture start (passed via --pin-wpm).
+    /// Useful when ditdah's auto-WPM locks onto a wrong value on noisy live
+    /// signals — pinning forces theoretical dot-length timing instead of the
+    /// median-element-length self-calibration.
+    /// </summary>
+    public double PinWpm
+    {
+        get => _pinWpm;
+        set => Set(ref _pinWpm, value < 0 ? 0 : value);
+    }
+
     private string _selectedDecoderMode = CustomDecoderModeLabel;
     public string SelectedDecoderMode
     {
@@ -121,6 +205,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
             {
                 OnPropertyChanged(nameof(IsCustomDecoderMode));
                 OnPropertyChanged(nameof(IsBaselineDecoderMode));
+                OnPropertyChanged(nameof(IsV2DecoderMode));
                 OnPropertyChanged(nameof(BaselineDecoderSummary));
             }
         }
@@ -745,6 +830,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
             if (Set(ref _trainingSetSubset, sanitized))
             {
                 OnPropertyChanged(nameof(CanToggleLabelingRecord));
+                OnPropertyChanged(nameof(CanExportSelectionToTrainingSet));
             }
         }
     }
@@ -819,6 +905,10 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
         {
             if (Set(ref _useSelectedLabelFiles, value))
             {
+                if (value && EvaluateAllLabels)
+                {
+                    EvaluateAllLabels = false;
+                }
                 OnPropertyChanged(nameof(ShowSelectedLabelPicker));
                 OnPropertyChanged(nameof(SelectedLabelFilesSummary));
                 OnPropertyChanged(nameof(LabelEvaluationTargetLabel));
@@ -828,7 +918,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
         }
     }
 
-    public bool ShowSelectedLabelPicker => !EvaluateAllLabels && UseSelectedLabelFiles && AvailableLabelFiles.Count > 0;
+    public bool ShowSelectedLabelPicker => UseSelectedLabelFiles && AvailableLabelFiles.Count > 0;
     public string SelectedLabelFilesSummary
     {
         get
@@ -978,6 +1068,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
 
     public bool IsCustomDecoderMode => string.Equals(SelectedDecoderMode, CustomDecoderModeLabel, StringComparison.Ordinal);
     public bool IsBaselineDecoderMode => string.Equals(SelectedDecoderMode, BaselineDecoderModeLabel, StringComparison.Ordinal);
+    public bool IsV2DecoderMode => string.Equals(SelectedDecoderMode, V2DecoderModeLabel, StringComparison.Ordinal);
     public string BaselineDecoderSummary => $"Baseline uses Tuning settings: {CurrentBaselineConfig().WindowSeconds:F1}s window / {CurrentBaselineConfig().MinWindowSeconds:F1}s min / {CurrentBaselineConfig().DecodeEveryMs}ms cadence / {CurrentBaselineConfig().Confirmations} confirmations.";
     public bool CanApplyTopSweep => _topSweepResult is not null && !IsEvaluationBusy;
     public string TopSweepSummary => _topSweepResult is null
@@ -995,6 +1086,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
                 OnPropertyChanged(nameof(CanHarvestCandidates));
                 OnPropertyChanged(nameof(CanPreviewCandidate));
                 OnPropertyChanged(nameof(CanSaveLabel));
+            OnPropertyChanged(nameof(CanExportSelectionToTrainingSet));
                 OnPropertyChanged(nameof(CanResetAdjustedSpan));
                 OnPropertyChanged(nameof(CanUseSuggestedSpan));
                 OnPropertyChanged(nameof(CanRunLabelScore));
@@ -1042,6 +1134,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
             {
                 OnPropertyChanged(nameof(CanPreviewCandidate));
                 OnPropertyChanged(nameof(CanSaveLabel));
+            OnPropertyChanged(nameof(CanExportSelectionToTrainingSet));
                 OnPropertyChanged(nameof(CanResetAdjustedSpan));
                 OnPropertyChanged(nameof(CanUseSuggestedSpan));
                 OnPropertyChanged(nameof(CanRunLabelScore));
@@ -1086,6 +1179,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
                 OnPropertyChanged(nameof(AdjustedRangeLabel));
                 OnPropertyChanged(nameof(CanPreviewCandidate));
                 OnPropertyChanged(nameof(CanSaveLabel));
+            OnPropertyChanged(nameof(CanExportSelectionToTrainingSet));
                 OnPropertyChanged(nameof(CanResetAdjustedSpan));
                 OnPropertyChanged(nameof(CanUseSuggestedSpan));
                 if (value is not null && !hasCachedProfile)
@@ -1105,6 +1199,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
             var normalized = (value ?? string.Empty).ToUpperInvariant();
             if (Set(ref _correctCopy, normalized))
                 OnPropertyChanged(nameof(CanSaveLabel));
+            OnPropertyChanged(nameof(CanExportSelectionToTrainingSet));
         }
     }
 
@@ -1200,6 +1295,13 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
     public bool CanSaveLabel => SelectedCandidate is not null
         && !string.IsNullOrWhiteSpace(HarvestFilePath)
         && !string.IsNullOrWhiteSpace(CorrectCopy)
+        && !IsAdvancedBusy
+        && !IsProfileBusy
+        && AdjustedEndSeconds > AdjustedStartSeconds;
+    public bool CanExportSelectionToTrainingSet => SelectedCandidate is not null
+        && !string.IsNullOrWhiteSpace(HarvestFilePath)
+        && !string.IsNullOrWhiteSpace(CorrectCopy)
+        && !string.IsNullOrWhiteSpace(TrainingSetSubset)
         && !IsAdvancedBusy
         && !IsProfileBusy
         && AdjustedEndSeconds > AdjustedStartSeconds;
@@ -1353,7 +1455,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
         ReplayStatus = null;
         ReplayCer = null;
 
-        _process.StartLive(SelectedDevice, CurrentConfig(), CurrentBaselineConfig(), IsBaselineDecoderMode, recordPath, UseLoopback);
+        _process.StartLive(SelectedDevice, CurrentConfig(), CurrentBaselineConfig(), IsBaselineDecoderMode, recordPath, UseLoopback, IsV2DecoderMode, IsV2DecoderMode ? PinWpm : 0);
         IsRunning = true;
     }
 
@@ -1803,6 +1905,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
         OnPropertyChanged(nameof(LabelEvaluationTargetLabel));
         OnPropertyChanged(nameof(CanPreviewCandidate));
         OnPropertyChanged(nameof(CanSaveLabel));
+            OnPropertyChanged(nameof(CanExportSelectionToTrainingSet));
         OnPropertyChanged(nameof(CanRunLabelScore));
         OnPropertyChanged(nameof(CanRunLabelSweep));
     }
@@ -1940,7 +2043,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
 
         try
         {
-            _process.StartLive(SelectedDevice, CurrentConfig(), CurrentBaselineConfig(), IsBaselineDecoderMode, targetPath, UseLoopback);
+            _process.StartLive(SelectedDevice, CurrentConfig(), CurrentBaselineConfig(), IsBaselineDecoderMode, targetPath, UseLoopback, IsV2DecoderMode, IsV2DecoderMode ? PinWpm : 0);
             IsRunning = true;
             IsLabelingRecording = true;
         }
@@ -2093,6 +2196,180 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
         }
     }
 
+    /// <summary>
+    /// One-click export of the currently-selected window to the training-set
+    /// subdirectory. Slices the source WAV between
+    /// <see cref="AdjustedStartSeconds"/> and <see cref="AdjustedEndSeconds"/>,
+    /// writes a fresh standalone WAV, and emits a sibling
+    /// <c>.labels.jsonl</c> + <c>.truth.txt</c> referencing the new clip
+    /// (start_s = 0, end_s = clip duration). The destination is
+    /// <c>data/cw-samples/{TrainingSetSubset}/</c>.
+    /// </summary>
+    public void ExportSelectionToTrainingSet()
+    {
+        if (!CanExportSelectionToTrainingSet)
+        {
+            AdvancedStatusText = "Select a candidate, type the verified copy, and set a training-set subdirectory first.";
+            return;
+        }
+
+        var sourcePath = HarvestFilePath!;
+        var startS = AdjustedStartSeconds;
+        var endS = AdjustedEndSeconds;
+        var subset = TrainingSetSubset;
+        var truth = CorrectCopy.Trim();
+
+        try
+        {
+            var targetDir = LocateTrainingSetDirectory(subset);
+            Directory.CreateDirectory(targetDir);
+
+            var srcBase = Path.GetFileNameWithoutExtension(sourcePath);
+            var startMs = (int)Math.Round(startS * 1000.0);
+            var endMs = (int)Math.Round(endS * 1000.0);
+            var clipBase = $"{srcBase}-{startMs:D6}ms-{endMs:D6}ms";
+            var clipWav = Path.Combine(targetDir, clipBase + ".wav");
+            var clipLabels = Path.Combine(targetDir, clipBase + ".labels.jsonl");
+            var clipTruth = Path.Combine(targetDir, clipBase + ".truth.txt");
+
+            var (channels, sampleRate, bitsPerSample, audioFormat, payloadBytes) = SliceWavWindow(sourcePath, startS, endS);
+            WriteWavFile(clipWav, channels, sampleRate, bitsPerSample, audioFormat, payloadBytes);
+
+            var clipDurationS = endS - startS;
+            var label = new CandidateLabel
+            {
+                // Self-referencing relative path so the labels file is portable
+                // when the directory is checked into the corpus.
+                Source = clipBase + ".wav",
+                StartSeconds = 0,
+                EndSeconds = clipDurationS,
+                HarvestStartSeconds = 0,
+                HarvestEndSeconds = clipDurationS,
+                LabelScope = CandidateLabel.ExactWindowScope,
+                CorrectCopy = truth,
+                ClipStart = ClipStart,
+                ClipEnd = ClipEnd,
+                Needles = SelectedCandidate?.MatchedNeedles ?? Array.Empty<string>(),
+                OfflineText = SelectedCandidate?.Offline.Text ?? string.Empty,
+                StreamText = SelectedCandidate?.Stream.Text ?? string.Empty,
+                OfflinePitchHz = SelectedCandidate?.Offline.PitchHz,
+                StreamPitchHz = SelectedCandidate?.Stream.PitchHz,
+                OfflineWpm = SelectedCandidate?.Offline.Wpm,
+                StreamWpm = SelectedCandidate?.Stream.Wpm,
+                SavedAtUtc = DateTime.UtcNow.ToString("O"),
+            };
+            File.WriteAllText(clipLabels, JsonSerializer.Serialize(label) + Environment.NewLine);
+            try { File.WriteAllText(clipTruth, truth); }
+            catch { /* sidecar truth is best-effort */ }
+
+            AdvancedStatusText = $"Exported {Path.GetFileName(clipWav)} ({clipDurationS:F2}s) + labels + truth to {subset}.";
+            OnPropertyChanged(nameof(CanRunLabelScore));
+            OnPropertyChanged(nameof(CanRunLabelSweep));
+            OnPropertyChanged(nameof(LabelEvaluationTargetLabel));
+        }
+        catch (Exception ex)
+        {
+            AdvancedStatusText = $"Export failed: {ex.Message}";
+        }
+    }
+
+    /// <summary>
+    /// Read a sub-window of a canonical PCM/Float WAV file into a raw
+    /// payload byte buffer (just the data chunk contents, sample-aligned).
+    /// Returns the format metadata so the caller can re-emit a self-contained
+    /// WAV. Only handles PCM (audioFormat=1) and IEEE Float (audioFormat=3).
+    /// </summary>
+    private static (short channels, int sampleRate, short bitsPerSample, short audioFormat, byte[] payload)
+        SliceWavWindow(string path, double startS, double endS)
+    {
+        using var fs = File.OpenRead(path);
+        using var br = new BinaryReader(fs);
+        if (fs.Length < 44) throw new InvalidDataException("File too small to be a WAV.");
+        var riff = new string(br.ReadChars(4));
+        if (riff != "RIFF") throw new InvalidDataException("Not a RIFF file.");
+        br.ReadInt32();
+        var wave = new string(br.ReadChars(4));
+        if (wave != "WAVE") throw new InvalidDataException("Not a WAVE file.");
+
+        short audioFormat = 0, channels = 0, bitsPerSample = 0, blockAlign = 0;
+        int sampleRate = 0;
+        long dataStart = -1;
+        int dataSize = 0;
+        while (fs.Position + 8 <= fs.Length)
+        {
+            var id = new string(br.ReadChars(4));
+            var size = br.ReadInt32();
+            if (id == "fmt ")
+            {
+                var fmtStart = fs.Position;
+                audioFormat = br.ReadInt16();
+                channels = br.ReadInt16();
+                sampleRate = br.ReadInt32();
+                br.ReadInt32(); // byteRate
+                blockAlign = br.ReadInt16();
+                bitsPerSample = br.ReadInt16();
+                fs.Position = fmtStart + size;
+            }
+            else if (id == "data")
+            {
+                dataStart = fs.Position;
+                dataSize = size;
+                break;
+            }
+            else
+            {
+                fs.Position += size;
+            }
+        }
+
+        if (dataStart < 0 || sampleRate <= 0 || blockAlign <= 0)
+            throw new InvalidDataException("Missing fmt/data chunks.");
+        if (audioFormat != 1 && audioFormat != 3)
+            throw new InvalidDataException($"Unsupported WAV audio format {audioFormat} (only PCM and IEEE Float are supported).");
+
+        var totalFrames = dataSize / blockAlign;
+        var startFrame = (long)Math.Round(startS * sampleRate);
+        var endFrame = (long)Math.Round(endS * sampleRate);
+        startFrame = Math.Max(0, Math.Min(startFrame, totalFrames));
+        endFrame = Math.Max(startFrame, Math.Min(endFrame, totalFrames));
+        var frameCount = endFrame - startFrame;
+        if (frameCount <= 0) throw new InvalidDataException("Selected window is empty.");
+
+        var payload = new byte[frameCount * blockAlign];
+        fs.Position = dataStart + startFrame * blockAlign;
+        var read = fs.Read(payload, 0, payload.Length);
+        if (read != payload.Length)
+            throw new InvalidDataException($"Short read while slicing WAV: expected {payload.Length}, got {read}.");
+
+        return (channels, sampleRate, bitsPerSample, audioFormat, payload);
+    }
+
+    /// <summary>
+    /// Write a minimal canonical WAV file (RIFF + fmt + data) given the
+    /// raw payload bytes. Matches what hound emits on the Rust side.
+    /// </summary>
+    private static void WriteWavFile(string path, short channels, int sampleRate, short bitsPerSample, short audioFormat, byte[] payload)
+    {
+        var blockAlign = (short)(channels * (bitsPerSample / 8));
+        var byteRate = sampleRate * blockAlign;
+        using var fs = File.Create(path);
+        using var bw = new BinaryWriter(fs);
+        bw.Write(System.Text.Encoding.ASCII.GetBytes("RIFF"));
+        bw.Write(36 + payload.Length);
+        bw.Write(System.Text.Encoding.ASCII.GetBytes("WAVE"));
+        bw.Write(System.Text.Encoding.ASCII.GetBytes("fmt "));
+        bw.Write(16); // fmt chunk size for PCM/Float without extension
+        bw.Write(audioFormat);
+        bw.Write(channels);
+        bw.Write(sampleRate);
+        bw.Write(byteRate);
+        bw.Write(blockAlign);
+        bw.Write(bitsPerSample);
+        bw.Write(System.Text.Encoding.ASCII.GetBytes("data"));
+        bw.Write(payload.Length);
+        bw.Write(payload);
+    }
+
     public async Task RunLabelScoreAsync()
     {
         if (!TryResolveLabelEvaluationTarget(out var labelPaths))
@@ -2224,6 +2501,159 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
             IsEvaluationBusy = false;
             IsAdvancedBusy = false;
         }
+    }
+
+    private string _strategySweepWpms = "auto,28,region28,env,env28";
+    /// <summary>Comma-separated list of pin-WPM values to sweep alongside auto.
+    /// Editable by the operator. "auto" is always included.</summary>
+    public string StrategySweepWpms
+    {
+        get => _strategySweepWpms;
+        set => Set(ref _strategySweepWpms, value);
+    }
+
+    private StrategySweepResult? _strategySweepResult;
+    public StrategySweepResult? StrategySweepResult
+    {
+        get => _strategySweepResult;
+        private set
+        {
+            if (Set(ref _strategySweepResult, value))
+            {
+                OnPropertyChanged(nameof(HasStrategySweepResult));
+                OnPropertyChanged(nameof(StrategySweepSummaryText));
+                RebuildStrategySweepRows();
+            }
+        }
+    }
+
+    public bool HasStrategySweepResult => _strategySweepResult is not null;
+
+    public ObservableCollection<StrategySweepRowView> StrategySweepRows { get; } = new();
+
+    public string StrategySweepSummaryText
+    {
+        get
+        {
+            if (_strategySweepResult is null) return string.Empty;
+            var parts = _strategySweepResult.Summary.Select(s =>
+                $"{s.Strategy}: weighted CER {s.WeightedCer:F2}, exact {s.Exact}/{_strategySweepResult.Labels}");
+            return "EXACT-WINDOW (v2 whole-buffer ditdah on the labeled audio slice — measures decode quality, not streaming acquisition)\n"
+                 + string.Join("  ·  ", parts);
+        }
+    }
+
+    private void RebuildStrategySweepRows()
+    {
+        StrategySweepRows.Clear();
+        if (_strategySweepResult is null) return;
+        foreach (var clip in _strategySweepResult.Clips)
+        {
+            var cells = _strategySweepResult.Strategies
+                .Select(name => clip.Strategies.TryGetValue(name, out var cell)
+                    ? new StrategySweepCellView(name, cell.Cer, cell.Decoded, cell.Exact)
+                    : new StrategySweepCellView(name, double.NaN, "", false))
+                .ToArray();
+            var bestCer = cells.Where(c => !double.IsNaN(c.Cer)).Select(c => c.Cer).DefaultIfEmpty(double.NaN).Min();
+            foreach (var c in cells)
+            {
+                c.IsBest = !double.IsNaN(c.Cer) && Math.Abs(c.Cer - bestCer) < 1e-9;
+            }
+            StrategySweepRows.Add(new StrategySweepRowView(clip.Name, clip.TruthLen, clip.Truth, cells));
+        }
+    }
+
+    public async Task RunStrategySweepAsync()
+    {
+        if (!TryResolveLabelEvaluationTarget(out var labelPaths))
+        {
+            return;
+        }
+
+        // Always include "auto" plus operator-supplied pin values.
+        var strategies = new List<string> { "auto" };
+        foreach (var tok in (StrategySweepWpms ?? string.Empty).Split(','))
+        {
+            var t = tok.Trim();
+            if (string.IsNullOrEmpty(t) || t.Equals("auto", StringComparison.OrdinalIgnoreCase)) continue;
+            if (double.TryParse(t, NumberStyles.Float, CultureInfo.InvariantCulture, out var v) && v > 0)
+            {
+                strategies.Add(v.ToString("0.##", CultureInfo.InvariantCulture));
+            }
+        }
+
+        CancelAndDisposeEvaluation();
+        var cts = new CancellationTokenSource();
+        _evaluationCts = cts;
+
+        try
+        {
+            IsAdvancedBusy = true;
+            IsEvaluationBusy = true;
+            LabelEvaluationStatusText = $"Running strategy sweep ({string.Join(", ", strategies)})…";
+            StrategySweepResult = null;
+            var result = await _process.RunStrategySweepAsync(
+                EvaluateAllLabels,
+                labelPaths,
+                strategies,
+                cts.Token).ConfigureAwait(true);
+            StrategySweepResult = result;
+            LabelEvaluationStatusText = $"Strategy sweep done — {result.Labels} labels × {result.Strategies.Length} strategies.";
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex)
+        {
+            LabelEvaluationStatusText = $"Strategy sweep failed: {ex.Message}";
+        }
+        finally
+        {
+            if (ReferenceEquals(_evaluationCts, cts))
+            {
+                _evaluationCts = null;
+            }
+            cts.Dispose();
+            IsEvaluationBusy = false;
+            IsAdvancedBusy = false;
+        }
+    }
+
+    public string BuildStrategySweepMarkdown()
+    {
+        if (_strategySweepResult is null) return string.Empty;
+        var sb = new StringBuilder();
+        var s = _strategySweepResult;
+        sb.Append("| clip | len |");
+        foreach (var name in s.Strategies) sb.Append(' ').Append(name).Append(" |");
+        sb.AppendLine();
+        sb.Append("|---|---:|");
+        foreach (var _ in s.Strategies) sb.Append("---:|");
+        sb.AppendLine();
+        foreach (var clip in s.Clips)
+        {
+            sb.Append("| ").Append(clip.Name).Append(" | ").Append(clip.TruthLen).Append(" |");
+            foreach (var name in s.Strategies)
+            {
+                if (clip.Strategies.TryGetValue(name, out var cell))
+                {
+                    sb.Append(' ').Append(cell.Cer.ToString("F2", CultureInfo.InvariantCulture));
+                    if (cell.Exact) sb.Append("✓");
+                    sb.Append(" |");
+                }
+                else
+                {
+                    sb.Append(" - |");
+                }
+            }
+            sb.AppendLine();
+        }
+        sb.Append("| **weighted CER** |  |");
+        foreach (var name in s.Strategies)
+        {
+            var sum = s.Summary.FirstOrDefault(x => x.Strategy == name);
+            sb.Append(' ').Append(sum?.WeightedCer.ToString("F2", CultureInfo.InvariantCulture) ?? "-").Append(" |");
+        }
+        sb.AppendLine();
+        return sb.ToString();
     }
 
     public void ApplyTopSweepResult()
@@ -2375,6 +2805,32 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
                     _liveTranscriptBuilder.Append(' ');
                 break;
             case "garbled":
+                break;
+            case "transcript":
+                if (ev.Text is string txt)
+                {
+                    Cells.Clear();
+                    _liveTranscriptBuilder.Clear();
+                    foreach (var c in txt)
+                    {
+                        if (c == ' ')
+                        {
+                            Cells.Add(TranscriptCell.Word());
+                            _liveTranscriptBuilder.Append(' ');
+                        }
+                        else
+                        {
+                            Cells.Add(TranscriptCell.Char(c.ToString(), " ", null, null));
+                            _liveTranscriptBuilder.Append(c);
+                        }
+                    }
+                }
+                break;
+            case "lock":
+                if (!string.IsNullOrEmpty(ev.State))
+                {
+                    ConfidenceState = ev.State!;
+                }
                 break;
             case "power":
                 if (ev.Power is double p && ev.Threshold is double th)
@@ -2655,6 +3111,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
             OnPropertyChanged(nameof(AdjustedRangeLabel));
             OnPropertyChanged(nameof(CanPreviewCandidate));
             OnPropertyChanged(nameof(CanSaveLabel));
+            OnPropertyChanged(nameof(CanExportSelectionToTrainingSet));
             OnPropertyChanged(nameof(CanResetAdjustedSpan));
             OnPropertyChanged(nameof(CanUseSuggestedSpan));
         }
@@ -3223,4 +3680,45 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
         double MinWindowSeconds,
         int DecodeEveryMs,
         int Confirmations);
+
+    public sealed class StrategySweepCellView
+    {
+        public StrategySweepCellView(string strategy, double cer, string decoded, bool exact)
+        {
+            Strategy = strategy;
+            Cer = cer;
+            Decoded = decoded;
+            Exact = exact;
+        }
+
+        public string Strategy { get; }
+        public double Cer { get; }
+        public string Decoded { get; }
+        public bool Exact { get; }
+        public bool IsBest { get; set; }
+        public string CerDisplay => double.IsNaN(Cer) ? "-" : Cer.ToString("F2", CultureInfo.InvariantCulture);
+    }
+
+    public sealed class StrategySweepRowView
+    {
+        public StrategySweepRowView(string clip, int truthLen, string truth, StrategySweepCellView[] cells)
+        {
+            Clip = clip;
+            TruthLen = truthLen;
+            Truth = truth;
+            Cells = cells;
+        }
+
+        public string Clip { get; }
+        public int TruthLen { get; }
+        public string Truth { get; }
+        public StrategySweepCellView[] Cells { get; }
+
+        public StrategySweepCellView? Cell0 => Cells.Length > 0 ? Cells[0] : null;
+        public StrategySweepCellView? Cell1 => Cells.Length > 1 ? Cells[1] : null;
+        public StrategySweepCellView? Cell2 => Cells.Length > 2 ? Cells[2] : null;
+        public StrategySweepCellView? Cell3 => Cells.Length > 3 ? Cells[3] : null;
+        public StrategySweepCellView? Cell4 => Cells.Length > 4 ? Cells[4] : null;
+        public StrategySweepCellView? Cell5 => Cells.Length > 5 ? Cells[5] : null;
+    }
 }

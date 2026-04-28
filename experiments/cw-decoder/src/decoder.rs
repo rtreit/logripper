@@ -2,7 +2,7 @@
 //! installed log subscriber, and exposes a "decode this slice" helper.
 
 use anyhow::Result;
-use ditdah::decode_samples;
+use ditdah::{decode_samples, decode_samples_with_params};
 
 use crate::log_capture::{DitdahLogCapture, DitdahStats};
 
@@ -15,6 +15,16 @@ pub fn decode_text(samples: &[f32], sample_rate: u32) -> String {
     decode_samples(samples, sample_rate).unwrap_or_default()
 }
 
+/// Decode with a pinned WPM. The WPM hint is now authoritative inside the
+/// vendored ditdah and overrides the median-element-length self-calibration,
+/// which dramatically improves accuracy on real-world live signals where the
+/// auto-detected WPM is wrong.
+pub fn decode_text_pinned(samples: &[f32], sample_rate: u32, pin_wpm: f32) -> String {
+    decode_samples_with_params(samples, sample_rate, Some(pin_wpm), None)
+        .map(|(text, _, _)| text)
+        .unwrap_or_default()
+}
+
 /// Run ditdah on a slice of samples. The log capture is shared, so the most
 /// recent WPM/pitch stats are returned alongside the decoded text.
 pub fn decode_window(
@@ -22,9 +32,26 @@ pub fn decode_window(
     sample_rate: u32,
     capture: &DitdahLogCapture,
 ) -> Result<DecodeOutcome> {
-    let text = decode_text(samples, sample_rate); // ditdah bails on tiny/empty buffers; treat as "no decode"
+    decode_window_with_pin(samples, sample_rate, capture, None)
+}
+
+/// Same as `decode_window`, but optionally pins the WPM hint.
+pub fn decode_window_with_pin(
+    samples: &[f32],
+    sample_rate: u32,
+    capture: &DitdahLogCapture,
+    pin_wpm: Option<f32>,
+) -> Result<DecodeOutcome> {
+    let text = match pin_wpm {
+        Some(w) => decode_text_pinned(samples, sample_rate, w),
+        None => decode_text(samples, sample_rate),
+    };
     let stats = capture.snapshot();
-    let text = focused_long_capture_decode(samples, sample_rate, capture, &text).unwrap_or(text);
+    let text = if pin_wpm.is_none() {
+        focused_long_capture_decode(samples, sample_rate, capture, &text).unwrap_or(text)
+    } else {
+        text
+    };
     Ok(DecodeOutcome { text, stats })
 }
 

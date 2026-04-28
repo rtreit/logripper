@@ -234,9 +234,24 @@ impl PrefixStabilizer {
                 return String::new();
             };
             normalized = anchored;
-        } else if !has_stream_anchor(&normalized, true) {
+        } else if !self.committed.is_empty()
+            && !has_stream_anchor(&normalized, true)
+            && !snapshot_continues_committed(&self.committed, &normalized)
+        {
+            // Active stream but the new snapshot has no anchor token AND no
+            // recognizable token-overlap with the committed transcript tail.
+            // That's the signature of a decoder that has wandered off into
+            // garbage during silence/QSB. Reject it; PrefixStabilizer's
+            // confirmations gate cannot rescue text that does not connect to
+            // what we already know.
             return String::new();
         }
+        // Once `self.committed` has content the stream is "active". We no
+        // longer require every snapshot to contain CQ/DE/73/etc — many real
+        // QSOs go a long time between explicit anchor tokens (e.g. an
+        // operator running through abbreviations like "BT OM FB PSE NAME
+        // QTH RIG ANT WX HR FER ES BK"). Continuity with the committed
+        // transcript suffix is enough to accept the snapshot.
 
         self.latest_snapshot = normalized.clone();
         self.recent_snapshots.push_back(normalized);
@@ -290,16 +305,19 @@ fn is_noise_dominated_snapshot(text: &str) -> bool {
         return true;
     }
 
-    if alnum_count > 64 {
-        return true;
-    }
-
+    // Distribution-based filter: noisy decodes are dominated by single-element
+    // characters (E/T) or unknown markers ('?'). A clean 20-second window of
+    // 30 WPM CW can legitimately contain 100+ alphanumeric characters, so the
+    // filter is purely on character composition, not on absolute count.
     let single_fraction = single_element_count as f32 / alnum_count as f32;
     let unknown_fraction = unknown_count as f32 / (alnum_count + unknown_count).max(1) as f32;
 
     alnum_count > 16 && (single_fraction > 0.45 || unknown_fraction > 0.15)
 }
 
+/// Anchor heuristic used when (a) acquiring the stream from cold or (b)
+/// validating an active-stream continuation alongside
+/// [`snapshot_continues_committed`].
 fn has_stream_anchor(text: &str, stream_is_active: bool) -> bool {
     let normalized = text.to_ascii_uppercase();
     let tokens: Vec<&str> = normalized.split_whitespace().collect();
@@ -351,6 +369,37 @@ fn is_stream_anchor_token(token: &str) -> bool {
         || token == "73"
 }
 
+/// True iff `snapshot` shares at least two contiguous tokens with the tail
+/// of `committed`. This is the "continuity" gate that lets active-stream
+/// snapshots through without requiring a fresh anchor token, while still
+/// rejecting completely unrelated snapshots produced when the decoder
+/// wanders off into noise during silence/QSB.
+fn snapshot_continues_committed(committed: &str, snapshot: &str) -> bool {
+    let committed_tokens: Vec<&str> = committed.split_whitespace().collect();
+    let snap_tokens: Vec<&str> = snapshot.split_whitespace().collect();
+    if committed_tokens.is_empty() || snap_tokens.is_empty() {
+        return false;
+    }
+    // Look at the last 16 committed tokens and the first 16 snapshot
+    // tokens. If any 2-token contiguous run from the snapshot prefix
+    // appears verbatim in the committed tail, treat the snapshot as a
+    // continuation.
+    let tail_len = committed_tokens.len().min(16);
+    let head_len = snap_tokens.len().min(16);
+    let tail = &committed_tokens[committed_tokens.len() - tail_len..];
+    let head = &snap_tokens[..head_len];
+    for window_start in 0..head_len.saturating_sub(1) {
+        let pair = (head[window_start], head[window_start + 1]);
+        for tail_start in 0..tail_len.saturating_sub(1) {
+            if tail[tail_start] == pair.0 && tail[tail_start + 1] == pair.1 {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+#[allow(dead_code)]
 fn looks_like_callsign_token(token: &str) -> bool {
     looks_like_strong_callsign_token(token)
 }
@@ -706,6 +755,89 @@ mod tests {
             "CQ CQ DE K5KV"
         );
         assert_eq!(stabilizer.transcript(), "CQ CQ DE K5KV");
+    }
+
+    #[test]
+    fn prefix_stabilizer_accepts_dense_clean_snapshot_after_anchor() {
+        // Regression: a 20-second window of 30 WPM CW can hold ~100+ valid
+        // alphanumeric characters. Earlier versions hard-rejected any
+        // snapshot with alnum_count > 64 as "noise dominated" which silently
+        // dropped clean middles. The decoder must accept dense clean text
+        // once the stream is anchored.
+        let mut stabilizer = PrefixStabilizer::new(2);
+        let head = "CQ DE K1ABC TNX RST 599";
+        let mut dense = head.to_string();
+        for token in [
+            "BT", "OM", "FB", "PSE", "NAME", "QTH", "RIG", "ANT", "WX", "HR", "FER", "ES", "BK",
+            "CUL", "AGN", "GUD", "HPE", "NW", "QSL", "QRM", "QRN", "QRP", "DX", "HW", "SRI", "STN",
+            "OP", "WKD", "HI", "GA", "GE", "GM", "DR", "GL", "SN", "TMW", "VY", "WID", "XYL", "YL",
+        ] {
+            dense.push(' ');
+            dense.push_str(token);
+        }
+        assert!(
+            dense.chars().filter(|c| c.is_ascii_alphanumeric()).count() > 80,
+            "test setup: dense should have >80 alnum chars; was {}",
+            dense.chars().filter(|c| c.is_ascii_alphanumeric()).count()
+        );
+        // Two confirmations of the same clean snapshot should commit a
+        // common prefix that is non-empty and contains text past the anchor.
+        let _ = stabilizer.push_snapshot(&dense);
+        let appended = stabilizer.push_snapshot(&dense);
+        assert!(
+            !stabilizer.transcript().is_empty(),
+            "dense clean snapshot must commit some text; transcript was empty"
+        );
+        assert!(
+            stabilizer.transcript().contains("BT") || appended.contains("BT"),
+            "transcript should reach into mid-stream tokens; got {}",
+            stabilizer.transcript(),
+        );
+    }
+
+    #[test]
+    fn prefix_stabilizer_active_stream_continues_without_anchor() {
+        // Regression: after the stream is anchored, continuing snapshots
+        // must not require a fresh CQ/DE/73 anchor token. A real QSO can
+        // spend tens of seconds between explicit anchors as the operator
+        // sends abbreviations. Continuity with the committed transcript
+        // tail is sufficient.
+        let mut stabilizer = PrefixStabilizer::new(2);
+        let _ = stabilizer.push_snapshot("CQ DE K1ABC TEST QSO");
+        let _ = stabilizer.push_snapshot("CQ DE K1ABC TEST QSO BT OM");
+        assert!(!stabilizer.transcript().is_empty(), "anchor should commit");
+        // Subsequent snapshots in real audio overlap with what's committed
+        // because the rolling window slides slowly; the snapshot starts
+        // with the same tail tokens that ended the previous decode.
+        let _ = stabilizer.push_snapshot("TEST QSO BT OM FB PSE NAME QTH");
+        let _ = stabilizer.push_snapshot("TEST QSO BT OM FB PSE NAME QTH RIG ANT");
+        assert!(
+            stabilizer.transcript().contains("FB"),
+            "active stream should accept anchor-less continuations; got {}",
+            stabilizer.transcript(),
+        );
+    }
+
+    #[test]
+    fn prefix_stabilizer_active_stream_rejects_unrelated_garbage() {
+        // Continuity gate teeth: an active stream must NOT accept a
+        // snapshot that has neither an anchor token nor token-overlap with
+        // the committed transcript tail.
+        let mut stabilizer = PrefixStabilizer::new(2);
+        let _ = stabilizer.push_snapshot("CQ DE K1ABC");
+        let _ = stabilizer.push_snapshot("CQ DE K1ABC TEST");
+        assert!(
+            stabilizer.transcript().contains("K1ABC"),
+            "anchor should commit before garbage push"
+        );
+        let before = stabilizer.transcript().to_string();
+        let _ = stabilizer.push_snapshot("EEE TT III SSS NNN MMM");
+        let _ = stabilizer.push_snapshot("EEE TT III SSS NNN MMM");
+        assert_eq!(
+            stabilizer.transcript(),
+            before,
+            "unrelated garbage with no anchor and no overlap must be rejected"
+        );
     }
 
     #[test]

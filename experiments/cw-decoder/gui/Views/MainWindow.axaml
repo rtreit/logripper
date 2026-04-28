@@ -69,7 +69,7 @@
     </Style>
   </Window.Styles>
 
-  <Grid RowDefinitions="Auto,Auto,Auto,Auto,Auto,*,Auto">
+  <Grid RowDefinitions="Auto,Auto,*,Auto">
     <!-- Header -->
     <Border Grid.Row="0" Padding="18,14" Background="{StaticResource BgPanel}" BorderBrush="{StaticResource EdgeGlow}" BorderThickness="0,0,0,1">
       <Grid ColumnDefinitions="Auto,*,Auto">
@@ -98,8 +98,17 @@
         </StackPanel>
         <StackPanel Grid.Column="1" Orientation="Vertical" Spacing="2">
           <TextBlock Text="DECODER MODE" Classes="label" />
-          <ComboBox Width="180" ItemsSource="{Binding DecoderModes}" SelectedItem="{Binding SelectedDecoderMode}"
-                    Background="{StaticResource BgPanel}" Foreground="{StaticResource TextHi}" />
+          <StackPanel Orientation="Horizontal" Spacing="6">
+            <ComboBox Width="180" ItemsSource="{Binding DecoderModes}" SelectedItem="{Binding SelectedDecoderMode}"
+                      Background="{StaticResource BgPanel}" Foreground="{StaticResource TextHi}" />
+            <StackPanel Orientation="Vertical" Spacing="0" IsVisible="{Binding IsV2DecoderMode}"
+                        ToolTip.Tip="Pin the WPM passed to ditdah's whole-buffer decoder. 0 = auto-detect. Use this when the auto-WPM locks onto a wrong value on noisy live signals (e.g. weak DX). Takes effect on next START LIVE.">
+              <TextBlock Text="PIN WPM" Classes="label" FontSize="9" />
+              <NumericUpDown Width="120" MinWidth="120" Value="{Binding PinWpm, Mode=TwoWay}" Minimum="0" Maximum="60" Increment="1"
+                             FormatString="0" ShowButtonSpinner="True"
+                             Background="{StaticResource BgPanel}" Foreground="{StaticResource TextHi}" />
+            </StackPanel>
+          </StackPanel>
         </StackPanel>
         <StackPanel Grid.Column="2" Margin="0,16,0,0" Spacing="2" VerticalAlignment="Center">
           <TextBlock Text="OPEN FILE decodes that file immediately. START LIVE captures from the selected input device." Classes="label" TextWrapping="Wrap" MaxWidth="360" />
@@ -120,9 +129,14 @@
       </Grid>
     </Border>
 
+
+    <TabControl Grid.Row="2" Margin="14,12,14,4">
+      <TabItem Header="DECODE">
+        <Border Classes="panel">
+          <Grid RowDefinitions="Auto,Auto,Auto,Auto,*,Auto">
     <!-- Sensitivity panel: 3 sliders + signal-quality readout + reset.
           Sends config-update commands to the decoder over stdin in real time. -->
-    <Border Grid.Row="2" Padding="18,10" Background="{StaticResource BgPanel}"
+    <Border Grid.Row="0" Padding="18,10" Background="{StaticResource BgPanel}"
             BorderBrush="{StaticResource GridLine}" BorderThickness="0,0,0,1">
       <Grid>
         <StackPanel IsVisible="{Binding IsCustomDecoderMode}" Spacing="8">
@@ -245,7 +259,7 @@
     </Border>
 
     <!-- Telemetry row: signal meter + WPM panel + sparkline -->
-    <Grid Grid.Row="3" ColumnDefinitions="*,*" Margin="14,12,14,0" >
+    <Grid Grid.Row="1" ColumnDefinitions="*,*" Margin="14,12,14,0" >
       <!-- Signal strength column -->
       <Border Classes="panel" Margin="0,0,7,0">
         <Grid RowDefinitions="Auto,Auto,Auto" RowSpacing="10">
@@ -334,7 +348,7 @@
     </Grid>
 
     <!-- Transcript + review surfaces -->
-    <Border Grid.Row="4" Margin="14,12,14,0" Classes="panel"
+    <Border Grid.Row="2" Margin="14,12,14,0" Classes="panel"
             IsVisible="{Binding HasPlaybackSource}">
       <Grid RowDefinitions="Auto,Auto,Auto,Auto" RowSpacing="8">
         <Grid ColumnDefinitions="Auto,Auto,*,Auto,Auto,Auto,Auto,Auto,Auto" ColumnSpacing="10">
@@ -401,16 +415,11 @@
         </Grid>
       </Grid>
     </Border>
-
-    <TabControl Grid.Row="5" Margin="14,12,14,4">
-      <TabItem Header="DECODE">
-        <Border Classes="panel">
-          <Grid RowDefinitions="Auto,*,Auto">
-            <Grid ColumnDefinitions="*,Auto">
+            <Grid Grid.Row="3" ColumnDefinitions="*,Auto">
               <TextBlock Text="DECODED MESSAGE" Classes="label" />
               <TextBlock Grid.Column="1" Text="morse always visible · letters blur with HIDE DECODING" Classes="label" />
             </Grid>
-            <ScrollViewer Grid.Row="1" Margin="0,8,0,0" HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+            <ScrollViewer Grid.Row="4" Margin="0,8,0,0" HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
               <ItemsControl ItemsSource="{Binding Cells}" x:Name="CellsHost">
                 <ItemsControl.ItemsPanel>
                   <ItemsPanelTemplate>
@@ -458,7 +467,7 @@
                 </ItemsControl.ItemTemplate>
               </ItemsControl>
             </ScrollViewer>
-            <Border Grid.Row="2" Margin="0,8,0,0" Padding="10,8"
+            <Border Grid.Row="5" Margin="0,8,0,0" Padding="10,8"
                     Background="{StaticResource BgDeep}"
                     BorderBrush="{StaticResource GridLine}" BorderThickness="1"
                     IsVisible="{Binding HasLastRecording}">
@@ -689,9 +698,13 @@
                       <TextBlock Grid.Column="2" Text="Saved labels are exact-window truth (`label_scope = exact_window`)." Classes="label" VerticalAlignment="Center" />
                     </Grid>
                   </StackPanel>
-                  <Grid Grid.Row="5" ColumnDefinitions="*,Auto" ColumnSpacing="10">
+                  <Grid Grid.Row="5" ColumnDefinitions="*,Auto,Auto" ColumnSpacing="10">
                     <TextBlock Text="{Binding LabelFilePath}" Classes="label" TextWrapping="Wrap" />
-                    <Button Grid.Column="1" Classes="primary" Content="SAVE LABEL" Click="OnSaveLabelClick"
+                    <Button Grid.Column="1" Content="EXPORT TO TRAINING SET"
+                            Click="OnExportSelectionToTrainingSetClick"
+                            IsEnabled="{Binding CanExportSelectionToTrainingSet}"
+                            ToolTip.Tip="Slice the selected window into a fresh WAV under data/cw-samples/{TrainingSetSubset}/ with matching .labels.jsonl + .truth.txt." />
+                    <Button Grid.Column="2" Classes="primary" Content="SAVE LABEL" Click="OnSaveLabelClick"
                             IsEnabled="{Binding CanSaveLabel}" />
                   </Grid>
                 </Grid>
@@ -705,27 +718,60 @@
       <TabItem Header="TUNING">
         <Border Classes="panel">
           <Grid RowDefinitions="Auto,Auto,Auto,Auto,*" RowSpacing="10">
-            <Grid ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto" ColumnSpacing="10">
+            <Grid ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto" ColumnSpacing="10">
               <TextBlock Text="LABEL EVAL / SWEEP" Classes="label" VerticalAlignment="Center" />
               <CheckBox Grid.Column="1" Content="ALL LABELS" IsChecked="{Binding EvaluateAllLabels, Mode=TwoWay}" VerticalAlignment="Center" />
-              <CheckBox Grid.Column="2" Content="FULL STREAM" IsChecked="{Binding UseFullStreamScorer, Mode=TwoWay}" VerticalAlignment="Center" />
+              <CheckBox Grid.Column="2" Content="FULL STREAM" IsChecked="{Binding UseFullStreamScorer, Mode=TwoWay}" VerticalAlignment="Center"
+                        ToolTip.Tip="SCORE LABELS scoring mode. Off = exact-window (decode just the labeled slice; measures decoder quality). On = full-stream (run the streaming decoder over the whole file and align to the label window; measures live acquisition + lock behavior — much harsher, often CER 0.8+ on the same clip)." />
               <CheckBox Grid.Column="3" Content="WIDE SWEEP" IsChecked="{Binding UseWideSweep, Mode=TwoWay}" VerticalAlignment="Center" />
               <CheckBox Grid.Column="4" Content="USE CHECKED LABELS" IsChecked="{Binding UseSelectedLabelFiles, Mode=TwoWay}" VerticalAlignment="Center" />
-              <Button Grid.Column="5" Classes="primary" Content="SCORE LABELS" Click="OnRunLabelScoreClick"
-                      IsEnabled="{Binding CanRunLabelScore}" FontSize="11" Padding="14,4" />
-              <Button Grid.Column="6" Classes="primary" Content="SWEEP BASELINE" Click="OnRunLabelSweepClick"
-                      IsEnabled="{Binding CanRunLabelSweep}" FontSize="11" Padding="14,4" />
+              <Button Grid.Column="5" Classes="primary" Content="SCORE LABELS (v1 legacy)" Click="OnRunLabelScoreClick"
+                      IsEnabled="{Binding CanRunLabelScore}" FontSize="11" Padding="14,4"
+                      ToolTip.Tip="LEGACY label-eval harness that runs the v1 streaming decoder (window/decode_every/confirmations). The live decoder on the DECODE tab does NOT use this path — it uses Whole-buffer ditdah (v2) by default. Use STRATEGY SWEEP for honest decoder-quality numbers; this button is kept only for historical comparison." />
+              <Button Grid.Column="6" Classes="primary" Content="SWEEP BASELINE (v1 legacy)" Click="OnRunLabelSweepClick"
+                      IsEnabled="{Binding CanRunLabelSweep}" FontSize="11" Padding="14,4"
+                      ToolTip.Tip="LEGACY: tunes v1 streaming parameters. The live decoder doesn't use these. Kept for historical comparison." />
+              <StackPanel Grid.Column="7" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center"
+                          ToolTip.Tip="Comma-separated strategy tokens. auto / N (e.g. 28) = ditdah exact-window. region / regionN = region-stream pipeline + ditdah. env / envN = alternate envelope decoder. Example: auto,28,region28,env,env28">
+                <TextBlock Text="STRAT WPMS" Classes="label" VerticalAlignment="Center" />
+                <TextBox Width="240" Text="{Binding StrategySweepWpms, Mode=TwoWay}"
+                         Background="{StaticResource BgPanel}" Foreground="{StaticResource TextHi}"
+                         Watermark="auto,28,region28,env28" />
+              </StackPanel>
+              <Button Grid.Column="8" Classes="primary" Content="STRATEGY SWEEP" Click="OnRunStrategySweepClick"
+                      IsEnabled="{Binding CanRunLabelScore}" FontSize="11" Padding="14,4"
+                      ToolTip.Tip="Recommended decoder-quality test. Runs the bounded v2 decoder across the selected labels. auto/N = ditdah whole-buffer (the live default). region/regionN = region-stream pipeline + ditdah. env/envN = alternate envelope decoder. Outputs a per-clip × strategy CER table." />
             </Grid>
 
-            <Border Grid.Row="1" BorderBrush="{StaticResource GridLine}" BorderThickness="1" CornerRadius="2" Padding="8"
+            <Border Grid.Row="1" BorderBrush="{StaticResource AccentCyan}" BorderThickness="1" CornerRadius="2" Padding="8"
                     IsVisible="{Binding ShowSelectedLabelPicker}">
-              <Grid RowDefinitions="Auto,*" RowSpacing="6">
-                <TextBlock Text="{Binding SelectedLabelFilesSummary}" Classes="label" TextWrapping="Wrap" />
-                <ScrollViewer Grid.Row="1" MaxHeight="120" HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+              <Grid RowDefinitions="Auto,Auto,Auto,*" RowSpacing="6">
+                <TextBlock Text="LABEL FILES — check the .labels.jsonl files to include in SCORE LABELS / SWEEP BASELINE / STRATEGY SWEEP"
+                           Classes="label" Foreground="{StaticResource AccentCyan}" TextWrapping="Wrap" />
+                <Grid Grid.Row="1" ColumnDefinitions="Auto,Auto,Auto,Auto,*" ColumnSpacing="8">
+                  <TextBlock Text="FOLDER" Classes="label" VerticalAlignment="Center" />
+                  <ComboBox Grid.Column="1" Width="220" ItemsSource="{Binding LabelCorpusFolders}"
+                            SelectedItem="{Binding SelectedLabelCorpusFolder, Mode=TwoWay}"
+                            Background="{StaticResource BgPanel}" Foreground="{StaticResource TextHi}"
+                            ToolTip.Tip="Subfolder under data/cw-samples to scan for .labels.jsonl files. '(all)' scans the whole corpus recursively." />
+                  <Button Grid.Column="2" Content="REFRESH" Click="OnRefreshLabelCorpusClick"
+                          FontSize="11" Padding="10,4"
+                          ToolTip.Tip="Re-scan the folder and rebuild the list (pick this up after labeling new clips)." />
+                  <TextBlock Grid.Column="4" Text="{Binding LabelCorpusRootPath, StringFormat=root: {0}}"
+                             Classes="label" Foreground="{StaticResource TextDim}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                </Grid>
+                <TextBlock Grid.Row="2" Text="{Binding SelectedLabelFilesSummary}" Classes="label" TextWrapping="Wrap" />
+                <ScrollViewer Grid.Row="3" MaxHeight="180" HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
                    <ItemsControl ItemsSource="{Binding AvailableLabelFiles}">
                      <ItemsControl.ItemTemplate>
                        <DataTemplate x:DataType="m:SelectableLabelFile">
-                         <CheckBox Content="{Binding DisplayName}" IsChecked="{Binding IsSelected, Mode=TwoWay}" Margin="0,0,0,4" />
+                         <Grid ColumnDefinitions="Auto,*" ColumnSpacing="10" Margin="0,0,0,4">
+                           <CheckBox Content="{Binding DisplayName}" IsChecked="{Binding IsSelected, Mode=TwoWay}" MinWidth="320" />
+                           <TextBlock Grid.Column="1" Text="{Binding TruthPreview}" Foreground="{StaticResource TextDim}"
+                                      FontFamily="Consolas" FontSize="11" VerticalAlignment="Center"
+                                      TextTrimming="CharacterEllipsis"
+                                      ToolTip.Tip="{Binding TruthPreview}" />
+                         </Grid>
                        </DataTemplate>
                      </ItemsControl.ItemTemplate>
                    </ItemsControl>
@@ -886,9 +932,56 @@
                   </StackPanel>
                 </Border>
 
-                <Expander Header="RAW RESULT JSON"
+                <Border BorderBrush="{StaticResource GridLine}" BorderThickness="1" CornerRadius="2" Padding="8"
+                        IsVisible="{Binding HasStrategySweepResult}">
+                  <StackPanel Spacing="8">
+                    <TextBlock Text="STRATEGY SWEEP — bounded v2 decoder (the same one the live DECODE tab uses by default). auto/N = whole-buffer ditdah. region/regionN = region-stream pipeline. env/envN = alternate envelope decoder."
+                               Foreground="{StaticResource AccentAmber}" FontSize="11" TextWrapping="Wrap" />
+                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
+                      <TextBlock Text="{Binding StrategySweepSummaryText}" Foreground="{StaticResource AccentCyan}" TextWrapping="Wrap" />
+                      <Button Grid.Column="1" Classes="primary" Content="COPY MARKDOWN" Click="OnCopyStrategySweepMarkdownClick"
+                              FontSize="11" Padding="14,4"
+                              ToolTip.Tip="Copy a markdown table of per-clip × strategy CER to the clipboard." />
+                    </Grid>
+                    <Grid ColumnDefinitions="2*,Auto,Auto,Auto,Auto,Auto,Auto" ColumnSpacing="6" Margin="0,4,0,2">
+                      <TextBlock Text="CLIP" Classes="label" />
+                      <TextBlock Grid.Column="1" Text="LEN" Classes="label" Width="38" TextAlignment="Right" />
+                      <TextBlock Grid.Column="2" Text="{Binding StrategySweepResult.Strategies[0]}" Classes="label" Width="60" TextAlignment="Right" />
+                      <TextBlock Grid.Column="3" Text="{Binding StrategySweepResult.Strategies[1]}" Classes="label" Width="60" TextAlignment="Right" />
+                      <TextBlock Grid.Column="4" Text="{Binding StrategySweepResult.Strategies[2]}" Classes="label" Width="60" TextAlignment="Right" />
+                      <TextBlock Grid.Column="5" Text="{Binding StrategySweepResult.Strategies[3]}" Classes="label" Width="60" TextAlignment="Right" />
+                      <TextBlock Grid.Column="6" Text="{Binding StrategySweepResult.Strategies[4]}" Classes="label" Width="60" TextAlignment="Right" />
+                    </Grid>
+                    <ItemsControl ItemsSource="{Binding StrategySweepRows}">
+                      <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="vm:MainWindowViewModel+StrategySweepRowView">
+                          <Border BorderBrush="{StaticResource GridLine}" BorderThickness="1" CornerRadius="2" Padding="6" Margin="0,0,0,4" Background="#0C1A28">
+                            <StackPanel Spacing="2">
+                              <Grid ColumnDefinitions="2*,Auto,Auto,Auto,Auto,Auto,Auto" ColumnSpacing="6">
+                                <TextBlock Text="{Binding Clip}" FontFamily="Consolas" Foreground="{StaticResource AccentCyan}" />
+                                <TextBlock Grid.Column="1" Text="{Binding TruthLen}" FontFamily="Consolas" Foreground="{StaticResource TextDim}" Width="38" TextAlignment="Right" />
+                                <TextBlock Grid.Column="2" Text="{Binding Cell0.CerDisplay}" FontFamily="Consolas" Foreground="{StaticResource AccentAmber}" Width="60" TextAlignment="Right" />
+                                <TextBlock Grid.Column="3" Text="{Binding Cell1.CerDisplay}" FontFamily="Consolas" Foreground="{StaticResource AccentAmber}" Width="60" TextAlignment="Right" />
+                                <TextBlock Grid.Column="4" Text="{Binding Cell2.CerDisplay}" FontFamily="Consolas" Foreground="{StaticResource AccentAmber}" Width="60" TextAlignment="Right" />
+                                <TextBlock Grid.Column="5" Text="{Binding Cell3.CerDisplay}" FontFamily="Consolas" Foreground="{StaticResource AccentAmber}" Width="60" TextAlignment="Right" />
+                                <TextBlock Grid.Column="6" Text="{Binding Cell4.CerDisplay}" FontFamily="Consolas" Foreground="{StaticResource AccentAmber}" Width="60" TextAlignment="Right" />
+                              </Grid>
+                              <TextBlock Text="{Binding Truth}" FontFamily="Consolas" FontSize="10" Foreground="{StaticResource TextDim}" TextWrapping="Wrap" />
+                              <TextBlock Text="{Binding Cell0.Decoded, StringFormat=auto: {0}}" FontFamily="Consolas" FontSize="10" Foreground="{StaticResource TextHi}" TextWrapping="Wrap" />
+                            </StackPanel>
+                          </Border>
+                        </DataTemplate>
+                      </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                  </StackPanel>
+                </Border>
+
+                <Expander Header="RAW RESULT JSON — SCORE LABELS (v1 legacy harness)"
                           IsVisible="{Binding LabelEvaluationOutputText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
-                  <TextBox Text="{Binding LabelEvaluationOutputText}"
+                  <StackPanel Spacing="6">
+                    <TextBlock Text="LEGACY: this is from the v1 streaming label-eval harness, not the live decoder. The live decoder defaults to Whole-buffer ditdah (v2) which gets near-zero CER on these same clips — see STRATEGY SWEEP above."
+                               Foreground="{StaticResource AccentAmber}" FontSize="11" TextWrapping="Wrap" />
+                    <TextBox Text="{Binding LabelEvaluationOutputText}"
                            IsReadOnly="True"
                            AcceptsReturn="True"
                            TextWrapping="NoWrap"
@@ -897,6 +990,7 @@
                            FontSize="12"
                            Background="#0C1A28"
                            Foreground="{StaticResource TextHi}" />
+                  </StackPanel>
                 </Expander>
               </StackPanel>
             </ScrollViewer>
@@ -1005,10 +1099,117 @@
           </Grid>
         </Border>
       </TabItem>
+      <TabItem Header="VISUALIZER">
+        <Border Padding="14" Background="{StaticResource BgPanel}">
+          <Grid RowDefinitions="Auto,Auto,*,Auto" ColumnDefinitions="*">
+            <!-- Controls row -->
+            <Grid Grid.Row="0" ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,*,Auto"
+                  Margin="0,0,0,8">
+              <Button Grid.Column="0" Classes="primary"
+                      Content="{Binding VizStartStopLabel}"
+                      Click="OnVizStartStopClick"
+                      MinWidth="120" />
+              <Button Grid.Column="1" Margin="8,0,0,0"
+                      Content="PLAY FILE..."
+                      Click="OnVizPlayFileClick"
+                      MinWidth="110" />
+              <CheckBox Grid.Column="2" Margin="14,0,0,0"
+                        Content="LOOPBACK"
+                        IsChecked="{Binding VizUseLoopback}"
+                        VerticalAlignment="Center" />
+              <TextBlock Grid.Column="3" Margin="20,0,6,0"
+                         Text="WINDOW"
+                         FontFamily="Consolas"
+                         VerticalAlignment="Center"
+                         Foreground="{StaticResource TextDim}" />
+              <Slider Grid.Column="4" Width="160"
+                      Minimum="2" Maximum="30"
+                      TickFrequency="2" IsSnapToTickEnabled="True"
+                      Value="{Binding VizWindowSeconds}" />
+              <TextBlock Grid.Column="5" Margin="6,0,0,0"
+                         Text="{Binding VizWindowSeconds, StringFormat='{}{0:F0}s'}"
+                         FontFamily="Consolas"
+                         VerticalAlignment="Center" />
+              <TextBlock Grid.Column="7"
+                         Text="{Binding VizStatus}"
+                         FontFamily="Consolas"
+                         FontSize="11"
+                         Foreground="{StaticResource TextDim}"
+                         VerticalAlignment="Center" />
+            </Grid>
+
+            <!-- WPM big readout -->
+            <Border Grid.Row="1" Background="{StaticResource BgDeep}" CornerRadius="4"
+                    BorderBrush="{StaticResource EdgeGlow}" BorderThickness="1"
+                    Padding="14,8" Margin="0,0,0,8">
+              <Grid ColumnDefinitions="Auto,*,Auto">
+                <TextBlock Grid.Column="0"
+                           Text="WPM"
+                           FontFamily="Consolas"
+                           FontSize="14"
+                           Foreground="{StaticResource TextDim}"
+                           LetterSpacing="3"
+                           VerticalAlignment="Center" />
+                <TextBlock Grid.Column="1" Margin="14,0,0,0"
+                           Text="{Binding VizCurrentWpm, StringFormat='{}{0:F1}'}"
+                           FontFamily="Consolas"
+                           FontSize="42"
+                           FontWeight="Bold"
+                           Foreground="#22D3EE"
+                           VerticalAlignment="Center" />
+                <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                  <TextBlock Text="PIN HZ"
+                             FontFamily="Consolas"
+                             FontSize="11"
+                             Foreground="{StaticResource TextDim}"
+                             VerticalAlignment="Center" />
+                  <NumericUpDown Margin="6,0,12,0" Width="110" MinWidth="110"
+                                 Minimum="0" Maximum="2000" Increment="50"
+                                 FormatString="0" ShowButtonSpinner="True"
+                                 Value="{Binding VizPinHz, Mode=TwoWay}" />
+                  <TextBlock Text="PIN WPM"
+                             FontFamily="Consolas"
+                             FontSize="11"
+                             Foreground="{StaticResource TextDim}"
+                             VerticalAlignment="Center" />
+                  <NumericUpDown Margin="6,0,0,0" Width="100" MinWidth="100"
+                                 Minimum="0" Maximum="60" Increment="1"
+                                 FormatString="0" ShowButtonSpinner="True"
+                                 Value="{Binding VizPinWpm, Mode=TwoWay}" />
+                </StackPanel>
+              </Grid>
+            </Border>
+
+            <!-- Visualizer canvas -->
+            <Border Grid.Row="2" Background="{StaticResource BgDeep}" CornerRadius="4"
+                    BorderBrush="{StaticResource EdgeGlow}" BorderThickness="1"
+                    Padding="4">
+              <v:VisualizerCanvas Frame="{Binding VizFrame}"
+                                  WindowSeconds="{Binding VizWindowSeconds}"
+                                  MinHeight="320" />
+            </Border>
+
+            <!-- Live transcript -->
+            <Border Grid.Row="3" Background="{StaticResource BgDeep}" CornerRadius="4"
+                    BorderBrush="{StaticResource EdgeGlow}" BorderThickness="1"
+                    Padding="10,8" Margin="0,8,0,0">
+              <ScrollViewer HorizontalScrollBarVisibility="Auto"
+                            VerticalScrollBarVisibility="Auto"
+                            MaxHeight="120">
+                <TextBlock Text="{Binding VizTranscript}"
+                           FontFamily="Consolas"
+                           FontSize="14"
+                           TextWrapping="Wrap"
+                           Foreground="{StaticResource TextHi}" />
+              </ScrollViewer>
+            </Border>
+          </Grid>
+        </Border>
+      </TabItem>
     </TabControl>
 
     <!-- Status -->
-    <Border Grid.Row="6" Padding="18,8" Background="{StaticResource BgPanel}" BorderBrush="{StaticResource EdgeGlow}" BorderThickness="0,1,0,0">
+    <Border Grid.Row="3" Padding="18,8" Background="{StaticResource BgPanel}" BorderBrush="{StaticResource EdgeGlow}" BorderThickness="0,1,0,0">
       <DockPanel LastChildFill="True">
         <Border DockPanel.Dock="Right"
                 Padding="10,3"

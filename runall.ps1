@@ -77,6 +77,37 @@ function Stop-ProcessByName([string]$Name) {
     Start-Sleep -Milliseconds 500
 }
 
+# Names of every process that can hold a lock on a published artifact under
+# artifacts/publish/. Killing these before invoking build.ps1 prevents
+# Copy-Item failures of the form "the process cannot access the file ...
+# because it is being used by another process" when an earlier runall left
+# binaries running.
+$ManagedProcessNames = @(
+    'qsoripper-server',
+    'QsoRipper.Engine.DotNet',
+    'QsoRipper.DebugHost',
+    'QsoRipper.Gui',
+    'QsoRipper.Cli',
+    'CwDecoderGui',
+    'qsoripper-tui',
+    'qsoripper-stress-tui',
+    'qsoripper-win32'
+)
+
+function Stop-AllManagedProcesses {
+    # Try to stop the engines politely first so they release their gRPC
+    # listening sockets and SQLite handles, then force-kill anything that
+    # is still alive (GUIs, leftover children, etc.).
+    try {
+        & "$PSScriptRoot\stop-qsoripper.ps1" -All | Out-Null
+    } catch {
+        Write-Host "  stop-qsoripper.ps1 reported: $_" -ForegroundColor Yellow
+    }
+    foreach ($name in $ManagedProcessNames) {
+        Stop-ProcessByName $name
+    }
+}
+
 function Start-Detached([string]$Path, [string[]]$Arguments, [string]$WorkingDirectory) {
     if (-not (Test-Path -LiteralPath $Path)) {
         throw "Cannot launch '$Path' — file not found. Did the build step run?"
@@ -106,6 +137,11 @@ $guiDir                   = Join-Path $publishRoot 'qsoripper-gui'           | J
 $guiExe                   = Join-Path $guiDir ($IsWindows ? 'QsoRipper.Gui.exe' : 'QsoRipper.Gui')
 $cwScopeDir               = Join-Path $publishRoot 'cw-decoder-gui'          | Join-Path -ChildPath $Configuration
 $cwScopeExe               = Join-Path $cwScopeDir ($IsWindows ? 'CwDecoderGui.exe' : 'CwDecoderGui')
+
+# --- Step 0: stop anything that could lock published artifacts ---------------
+
+Write-Step 'Stopping any running QsoRipper processes (release artifact locks)'
+Stop-AllManagedProcesses
 
 # --- Step 1: build -----------------------------------------------------------
 
