@@ -52,6 +52,8 @@ internal sealed class DecoderEvent
     [JsonPropertyName("signal_floor")] public double? SignalFloor { get; set; }
     [JsonPropertyName("hyst_high")] public double? HystHigh { get; set; }
     [JsonPropertyName("hyst_low")] public double? HystLow { get; set; }
+    [JsonPropertyName("snr_db")] public double? SnrDb { get; set; }
+    [JsonPropertyName("snr_suppressed")] public bool? SnrSuppressed { get; set; }
     [JsonPropertyName("buffer_seconds")] public double? BufferSeconds { get; set; }
     [JsonPropertyName("frame_step_s")] public double? FrameStepS { get; set; }
     [JsonPropertyName("dot_seconds")] public double? DotSeconds { get; set; }
