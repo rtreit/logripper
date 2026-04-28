@@ -19,6 +19,8 @@ public sealed class VizFrameVm
     public double EnvelopeMax { get; }
     public double NoiseFloor { get; }
     public double SignalFloor { get; }
+    public double SnrDb { get; }
+    public bool SnrSuppressed { get; }
     public double HystHigh { get; }
     public double HystLow { get; }
     public double BufferSeconds { get; }
@@ -38,6 +40,8 @@ public sealed class VizFrameVm
         EnvelopeMax = ev.EnvelopeMax ?? 0;
         NoiseFloor = ev.NoiseFloor ?? 0;
         SignalFloor = ev.SignalFloor ?? 0;
+        SnrDb = ev.SnrDb ?? 0;
+        SnrSuppressed = ev.SnrSuppressed ?? false;
         HystHigh = ev.HystHigh ?? 0;
         HystLow = ev.HystLow ?? 0;
         BufferSeconds = ev.BufferSeconds ?? 0;

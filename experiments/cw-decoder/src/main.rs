@@ -526,6 +526,14 @@ enum Cmd {
         /// detector locks onto a noise/harmonic peak instead of the CW tone.
         #[arg(long, default_value_t = 0.0)]
         pin_hz: f32,
+        /// Minimum signal-to-noise ratio (dB) required to emit text.
+        /// Computed as 20*log10(signal_floor / noise_floor) from envelope
+        /// percentiles. Frames below this threshold still produce
+        /// visualizer data but no transcript, suppressing the
+        /// noise-locked dit-spam failure mode. Default 6.0 dB. Set 0 to
+        /// disable.
+        #[arg(long, default_value_t = cw_decoder_poc::envelope_decoder::DEFAULT_MIN_SNR_DB)]
+        min_snr_db: f32,
         /// Decode an audio file (mp3/wav/m4a/...) instead of live capture.
         /// Samples are streamed at real-time pace into the same envelope
         /// pipeline so the visualizer behaves identically to live audio.
@@ -1005,6 +1013,7 @@ fn main() -> Result<()> {
             loopback,
             pin_wpm,
             pin_hz,
+            min_snr_db,
             file,
         } => run_stream_live_v3(
             device.as_deref(),
@@ -1016,6 +1025,7 @@ fn main() -> Result<()> {
             loopback,
             (pin_wpm > 0.0).then_some(pin_wpm),
             (pin_hz > 0.0).then_some(pin_hz),
+            min_snr_db,
             file.as_deref(),
         ),
         Cmd::ProbeFisher {
@@ -3613,10 +3623,19 @@ fn run_stream_live_v3(
     loopback: bool,
     pin_wpm: Option<f32>,
     pin_hz: Option<f32>,
+    min_snr_db: f32,
     file: Option<&std::path::Path>,
 ) -> Result<()> {
     if let Some(path) = file {
-        return run_stream_live_v3_file(path, seconds, json, decode_every_ms, pin_wpm, pin_hz);
+        return run_stream_live_v3_file(
+            path,
+            seconds,
+            json,
+            decode_every_ms,
+            pin_wpm,
+            pin_hz,
+            min_snr_db,
+        );
     }
     use cw_decoder_poc::envelope_decoder::{
         LiveEnvelopeStreamer, VizEventKind, MAX_VIZ_ENVELOPE_SAMPLES,
@@ -3634,6 +3653,7 @@ fn run_stream_live_v3(
         let mut streamer = LiveEnvelopeStreamer::new(capture.sample_rate);
         streamer.set_pinned_hz(pin_hz);
         streamer.set_pinned_wpm(pin_wpm);
+        streamer.set_min_snr_db(min_snr_db);
         streamer
     };
     let mut streamer = new_streamer();
@@ -3791,6 +3811,8 @@ fn run_stream_live_v3(
                         "envelope_max": viz.envelope_max,
                         "noise_floor": viz.noise_floor,
                         "signal_floor": viz.signal_floor,
+                        "snr_db": viz.snr_db,
+                        "snr_suppressed": viz.snr_suppressed,
                         "hyst_high": viz.hyst_high,
                         "hyst_low": viz.hyst_low,
                         "events": events_json,
@@ -3836,6 +3858,7 @@ fn run_stream_live_v3_file(
     decode_every_ms: u64,
     pin_wpm: Option<f32>,
     pin_hz: Option<f32>,
+    min_snr_db: f32,
 ) -> Result<()> {
     use cw_decoder_poc::envelope_decoder::{
         LiveEnvelopeStreamer, VizEventKind, MAX_VIZ_ENVELOPE_SAMPLES,
@@ -3849,6 +3872,7 @@ fn run_stream_live_v3_file(
     let mut streamer = LiveEnvelopeStreamer::new(sr);
     streamer.set_pinned_hz(pin_hz);
     streamer.set_pinned_wpm(pin_wpm);
+    streamer.set_min_snr_db(min_snr_db);
 
     let mut emitter = if json {
         Some(json::JsonEmitter::new())
@@ -3949,6 +3973,8 @@ fn run_stream_live_v3_file(
                         "envelope_max": viz.envelope_max,
                         "noise_floor": viz.noise_floor,
                         "signal_floor": viz.signal_floor,
+                        "snr_db": viz.snr_db,
+                        "snr_suppressed": viz.snr_suppressed,
                         "hyst_high": viz.hyst_high,
                         "hyst_low": viz.hyst_low,
                         "events": events_json,
