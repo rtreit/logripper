@@ -68,6 +68,7 @@ public sealed record VizEventVm(double StartS, double EndS, double DurationS, st
 public sealed partial class MainWindowViewModel
 {
     private readonly CwDecoderProcess _vizProcess = new();
+    private readonly AudioPlaybackProcess _vizPlayback = new();
     private bool _vizWired;
 
     private VizFrameVm _vizFrame = VizFrameVm.Empty;
@@ -106,6 +107,17 @@ public sealed partial class MainWindowViewModel
 
     private double _vizPinHz;
     public double VizPinHz { get => _vizPinHz; set => Set(ref _vizPinHz, value); }
+
+    private bool _vizMute;
+    /// <summary>
+    /// When true, PLAY FILE on the visualizer tab still drives the decoder
+    /// pipeline but does not stream the WAV audio to the default output
+    /// device. Useful for screen capture or unattended runs. Defaults to
+    /// false so the operator can hear the file and watch the visualizer
+    /// react to it together (without this they get a silent visualizer,
+    /// which earlier looked like a missing-feature bug).
+    /// </summary>
+    public bool VizMute { get => _vizMute; set => Set(ref _vizMute, value); }
 
     public string VizStartStopLabel => VizRunning ? "STOP" : "START LIVE";
 
@@ -168,6 +180,7 @@ public sealed partial class MainWindowViewModel
     public void StopViz()
     {
         try { _vizProcess.Stop(); } catch { /* best effort */ }
+        try { _vizPlayback.Stop(); } catch { /* best effort */ }
         VizRunning = false;
         VizStatus = "stopped";
     }
@@ -183,6 +196,29 @@ public sealed partial class MainWindowViewModel
             VizStatus = $"file: {System.IO.Path.GetFileName(filePath)}";
             _vizProcess.StartFileV3(filePath, decodeEveryMs: 250,
                 pinWpm: VizPinWpm, pinHz: VizPinHz);
+
+            // The visualizer pipeline only reads samples from the WAV; it
+            // does not touch the audio output device. Start a second
+            // cw-decoder.exe process (`play-file`) in parallel so the
+            // operator can hear the file while watching the visualizer
+            // decode it. Honor VizMute so screen captures and unattended
+            // runs stay silent.
+            try { _vizPlayback.Stop(); } catch { /* best effort */ }
+            if (!VizMute)
+            {
+                try
+                {
+                    _vizPlayback.Start(filePath);
+                }
+                catch (Exception audioEx)
+                {
+                    // Audio is best-effort: a missing output device or a
+                    // failed cw-decoder.exe play-file launch must not stop
+                    // the visualizer from running.
+                    VizStatus = $"file: {System.IO.Path.GetFileName(filePath)} (audio off: {audioEx.Message})";
+                }
+            }
+
             VizRunning = true;
         }
         catch (Exception ex)
@@ -200,6 +236,7 @@ public sealed partial class MainWindowViewModel
         _vizProcess.Exited += _ => Dispatcher.UIThread.Post(() =>
         {
             VizRunning = false;
+            try { _vizPlayback.Stop(); } catch { /* best effort */ }
             if (VizStatus.StartsWith("live", StringComparison.OrdinalIgnoreCase))
             {
                 VizStatus = "process exited";
