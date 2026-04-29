@@ -74,8 +74,6 @@ public sealed partial class MainWindowViewModel
     private readonly CwDecoderProcess _vizProcess = new();
     private readonly AudioPlaybackProcess _vizPlayback = new();
     private bool _vizWired;
-    private readonly System.Text.StringBuilder _vizTranscriptBuilder = new();
-    private string _lastVizSnapshotText = "";
 
     private VizFrameVm _vizFrame = VizFrameVm.Empty;
     public VizFrameVm VizFrame { get => _vizFrame; set => Set(ref _vizFrame, value); }
@@ -260,7 +258,8 @@ public sealed partial class MainWindowViewModel
                     VizStatus = $"ready @ {ev.Rate ?? 0} Hz";
                     break;
                 case "transcript":
-                    if (ev.Text is not null) AppendVizTranscriptSnapshot(ev.Text);
+                    if (ev.Transcript is not null) VizTranscript = ev.Transcript;
+                    else if (ev.Text is not null) VizTranscript = ev.Text;
                     if (ev.Wpm.HasValue) VizCurrentWpm = ev.Wpm.Value;
                     break;
                 case "viz":
@@ -268,7 +267,7 @@ public sealed partial class MainWindowViewModel
                     if (ev.Wpm.HasValue) VizCurrentWpm = ev.Wpm.Value;
                     break;
                 case "end":
-                    if (ev.Transcript is not null) AppendVizTranscriptSnapshot(ev.Transcript);
+                    if (ev.Transcript is not null) VizTranscript = ev.Transcript;
                     VizRunning = false;
                     VizStatus = "ended";
                     break;
@@ -278,66 +277,6 @@ public sealed partial class MainWindowViewModel
 
     private void ResetVizTranscript()
     {
-        _vizTranscriptBuilder.Clear();
-        _lastVizSnapshotText = "";
         VizTranscript = "";
-    }
-
-    private void AppendVizTranscriptSnapshot(string snapshot)
-    {
-        var normalized = NormalizeVizTranscript(snapshot);
-        if (string.IsNullOrEmpty(normalized))
-        {
-            return;
-        }
-
-        var suffix = FindVizTranscriptSuffix(_lastVizSnapshotText, normalized);
-        _lastVizSnapshotText = normalized;
-        if (string.IsNullOrEmpty(suffix))
-        {
-            return;
-        }
-
-        if (_vizTranscriptBuilder.Length > 0
-            && !char.IsWhiteSpace(_vizTranscriptBuilder[^1])
-            && !char.IsWhiteSpace(suffix[0]))
-        {
-            _vizTranscriptBuilder.Append(' ');
-        }
-        _vizTranscriptBuilder.Append(suffix);
-        VizTranscript = _vizTranscriptBuilder.ToString().TrimStart();
-    }
-
-    private static string NormalizeVizTranscript(string value) =>
-        string.Join(' ', value.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
-
-    private static string FindVizTranscriptSuffix(string previous, string current)
-    {
-        if (string.IsNullOrEmpty(previous))
-        {
-            return current;
-        }
-        if (previous.Equals(current, StringComparison.Ordinal))
-        {
-            return "";
-        }
-        if (current.StartsWith(previous, StringComparison.Ordinal))
-        {
-            return current[previous.Length..].TrimStart();
-        }
-        if (previous.StartsWith(current, StringComparison.Ordinal))
-        {
-            return "";
-        }
-
-        var maxOverlap = Math.Min(previous.Length, current.Length);
-        for (var overlap = maxOverlap; overlap > 0; overlap--)
-        {
-            if (previous.AsSpan(previous.Length - overlap, overlap).SequenceEqual(current.AsSpan(0, overlap)))
-            {
-                return current[overlap..].TrimStart();
-            }
-        }
-        return current;
     }
 }

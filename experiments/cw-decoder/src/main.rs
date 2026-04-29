@@ -3739,7 +3739,7 @@ fn run_stream_live_v3(
     let mut last_drain_at: u64 = 0;
     let mut last_decode_at = Instant::now();
     let decode_period = Duration::from_millis(decode_every_ms);
-    let mut last_transcript: Option<String> = None;
+    let mut session_transcript = String::new();
 
     loop {
         if stop.load(Ordering::Relaxed) {
@@ -3756,7 +3756,7 @@ fn run_stream_live_v3(
                     streamer = new_streamer();
                     multi_streamer = new_multi();
                     last_drain_at = capture.buffer.lock().written;
-                    last_transcript = None;
+                    session_transcript.clear();
                     if let Some(em) = emitter.as_mut() {
                         em.emit(
                             started.elapsed().as_secs_f32(),
@@ -3797,15 +3797,22 @@ fn run_stream_live_v3(
         // Force a viz-producing decode now.
         let snap = streamer.flush_with_viz();
         let t = started.elapsed().as_secs_f32();
-        last_transcript = Some(snap.transcript.clone());
+        let stable_snapshot =
+            stable_v3_snapshot_text(&snap.transcript, session_transcript.is_empty());
+        let appended = stable_snapshot
+            .as_deref()
+            .map(|text| ditdah_streaming::append_snapshot_text(&mut session_transcript, text))
+            .unwrap_or_default();
+        let display_text = stable_snapshot.unwrap_or_default();
 
         if let Some(em) = emitter.as_mut() {
             em.emit(
                 t,
                 serde_json::json!({
                     "type": "transcript",
-                    "text": snap.transcript,
-                    "appended": snap.appended,
+                    "text": display_text,
+                    "transcript": session_transcript.as_str(),
+                    "appended": appended,
                     "wpm": snap.wpm,
                 }),
             );
@@ -3882,7 +3889,10 @@ fn run_stream_live_v3(
                 }
             }
         } else {
-            println!("[t={:>6.2}s wpm={:>5.1}] {}", t, snap.wpm, snap.transcript);
+            println!(
+                "[t={:>6.2}s wpm={:>5.1}] {}",
+                t, snap.wpm, session_transcript
+            );
             if let Some(m) = multi_streamer.as_mut() {
                 let snaps = m.flush();
                 for s in snaps {
@@ -3904,16 +3914,94 @@ fn run_stream_live_v3(
             started.elapsed().as_secs_f32(),
             serde_json::json!({
                 "type": "end",
-                "transcript": last_transcript.unwrap_or_default(),
+                "transcript": session_transcript,
                 "recording": recording_saved.or(recording_path),
             }),
         );
     } else {
         println!();
         println!("Final transcript (v3):");
-        println!("{}", last_transcript.unwrap_or_default());
+        println!("{session_transcript}");
     }
     Ok(())
+}
+
+fn stable_v3_snapshot_text(text: &str, require_anchor: bool) -> Option<String> {
+    let normalized = ditdah_streaming::normalize_snapshot_text(text);
+    if normalized.is_empty()
+        || is_v3_noise_dominated_snapshot(&normalized)
+        || (require_anchor && !has_v3_qso_anchor(&normalized))
+    {
+        None
+    } else {
+        Some(normalized)
+    }
+}
+
+fn has_v3_qso_anchor(text: &str) -> bool {
+    text.split_whitespace().any(|token| {
+        let token = token
+            .trim_matches(|ch: char| !ch.is_ascii_alphanumeric())
+            .to_ascii_uppercase();
+        matches!(
+            token.as_str(),
+            "CQ" | "DE" | "POTA" | "TEST" | "QSB" | "QST" | "73"
+        ) || looks_like_v3_callsign(&token)
+    })
+}
+
+fn looks_like_v3_callsign(token: &str) -> bool {
+    let len = token.len();
+    len >= 3
+        && len <= 8
+        && token
+            .chars()
+            .next()
+            .is_some_and(|ch| ch.is_ascii_alphabetic())
+        && token.chars().any(|ch| ch.is_ascii_digit())
+        && token.chars().all(|ch| ch.is_ascii_alphanumeric())
+}
+
+fn is_v3_noise_dominated_snapshot(text: &str) -> bool {
+    let tokens: Vec<&str> = text.split_whitespace().collect();
+    if tokens.is_empty() {
+        return true;
+    }
+
+    let mut alnum_count = 0usize;
+    let mut e_t_i_count = 0usize;
+    let mut unknown_count = 0usize;
+    for ch in text.chars() {
+        if ch == '*' || ch == '?' {
+            unknown_count += 1;
+        } else if ch.is_ascii_alphanumeric() {
+            alnum_count += 1;
+            if matches!(ch.to_ascii_uppercase(), 'E' | 'T' | 'I') {
+                e_t_i_count += 1;
+            }
+        }
+    }
+
+    if alnum_count == 0 {
+        return true;
+    }
+
+    let single_token_count = tokens
+        .iter()
+        .filter(|token| token.chars().filter(|c| c.is_ascii_alphanumeric()).count() == 1)
+        .count();
+    let max_token_len = tokens
+        .iter()
+        .map(|token| token.chars().filter(|c| c.is_ascii_alphanumeric()).count())
+        .max()
+        .unwrap_or(0);
+    let single_token_fraction = single_token_count as f32 / tokens.len() as f32;
+    let e_t_i_fraction = e_t_i_count as f32 / alnum_count as f32;
+    let unknown_fraction = unknown_count as f32 / (alnum_count + unknown_count).max(1) as f32;
+
+    (alnum_count >= 16 && e_t_i_fraction >= 0.65 && single_token_fraction >= 0.45)
+        || (tokens.len() >= 8 && single_token_fraction >= 0.75 && max_token_len <= 3)
+        || (alnum_count >= 12 && unknown_fraction >= 0.20)
 }
 
 fn run_stream_live_v3_file(
@@ -3985,7 +4073,7 @@ fn run_stream_live_v3_file(
     let chunk_period = Duration::from_millis(50);
     let chunk_samples = ((sr as u64 * 50) / 1000) as usize;
     let mut cursor = 0usize;
-    let mut last_transcript: Option<String> = None;
+    let mut session_transcript = String::new();
 
     while cursor < total_samples {
         if seconds > 0.0 && started.elapsed().as_secs_f32() >= seconds {
@@ -4008,15 +4096,22 @@ fn run_stream_live_v3_file(
 
         let snap = streamer.flush_with_viz();
         let t = started.elapsed().as_secs_f32();
-        last_transcript = Some(snap.transcript.clone());
+        let stable_snapshot =
+            stable_v3_snapshot_text(&snap.transcript, session_transcript.is_empty());
+        let appended = stable_snapshot
+            .as_deref()
+            .map(|text| ditdah_streaming::append_snapshot_text(&mut session_transcript, text))
+            .unwrap_or_default();
+        let display_text = stable_snapshot.unwrap_or_default();
 
         if let Some(em) = emitter.as_mut() {
             em.emit(
                 t,
                 serde_json::json!({
                     "type": "transcript",
-                    "text": snap.transcript,
-                    "appended": snap.appended,
+                    "text": display_text,
+                    "transcript": session_transcript.as_str(),
+                    "appended": appended,
                     "wpm": snap.wpm,
                 }),
             );
@@ -4091,7 +4186,10 @@ fn run_stream_live_v3_file(
                 }
             }
         } else {
-            println!("[t={:>6.2}s wpm={:>5.1}] {}", t, snap.wpm, snap.transcript);
+            println!(
+                "[t={:>6.2}s wpm={:>5.1}] {}",
+                t, snap.wpm, session_transcript
+            );
             if let Some(m) = multi_streamer.as_mut() {
                 let snaps = m.flush();
                 for s in snaps {
@@ -4109,14 +4207,14 @@ fn run_stream_live_v3_file(
             started.elapsed().as_secs_f32(),
             serde_json::json!({
                 "type": "end",
-                "transcript": last_transcript.unwrap_or_default(),
+                "transcript": session_transcript,
                 "recording": serde_json::Value::Null,
             }),
         );
     } else {
         println!();
         println!("Final transcript (v3 file):");
-        println!("{}", last_transcript.unwrap_or_default());
+        println!("{session_transcript}");
     }
     Ok(())
 }
