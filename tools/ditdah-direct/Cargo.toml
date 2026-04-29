@@ -1,0 +1,18 @@
+[package]
+name = "ditdah-direct"
+version = "0.0.0"
+edition = "2021"
+
+[dependencies]
+ditdah = { path = "../../experiments/cw-decoder/vendor/ditdah" }
+hound = "3"
+
+[[bin]]
+name = "ditdah-direct"
+path = "main.rs"
+
+[[bin]]
+name = "pin-wpm-test"
+path = "pin_wpm_test.rs"
+
+[workspace]
