@@ -27,6 +27,8 @@ const FRAME_STEP_S: f32 = 0.005; // 5 ms hop.
 const HYST_HIGH: f32 = 0.55; // Fraction of (signal - noise) to enter key-on.
 const HYST_LOW: f32 = 0.35; // Fraction of (signal - noise) to leave key-on.
 const MIN_ELEMENT_S: f32 = 0.012; // Reject sub-12ms blips as noise (~50 WPM dot).
+const MAX_AUTO_WPM: f32 = 45.0;
+const MIN_AUTO_DOT_S: f32 = 1.2 / MAX_AUTO_WPM;
 /// Default SNR floor (dB) below which the decode is suppressed and the
 /// pipeline returns empty text. 20*log10(2.0) ≈ 6 dB; CW signals worth
 /// decoding sit comfortably above this. Tuned to filter out the
@@ -235,6 +237,10 @@ pub fn decode_envelope(samples: &[f32], sample_rate: u32, cfg: &EnvelopeConfig) 
         estimate_dot_kmeans(&ons).max(MIN_ELEMENT_S)
     };
 
+    if suppress_implausible_auto_wpm(cfg, dot_s) {
+        return String::new();
+    }
+
     // 5) Decode events into morse + gap tokens, then to text.
     decode_events(&ons, &offs, dot_s)
 }
@@ -342,9 +348,18 @@ pub fn decode_envelope_with_stats(
     } else {
         estimate_dot_kmeans(&ons).max(MIN_ELEMENT_S)
     };
+    let wpm = if dot_s > 0.0 { 1.2 / dot_s } else { 0.0 };
+
+    if suppress_implausible_auto_wpm(cfg, dot_s) {
+        return EnvelopeDecode {
+            text: String::new(),
+            dot_seconds: dot_s,
+            wpm,
+            elements: 0,
+        };
+    }
 
     let text = decode_events(&ons, &offs, dot_s);
-    let wpm = if dot_s > 0.0 { 1.2 / dot_s } else { 0.0 };
     EnvelopeDecode {
         text,
         dot_seconds: dot_s,
@@ -514,7 +529,11 @@ impl LiveEnvelopeStreamer {
             pinned_hz: None,
             min_snr_db: DEFAULT_MIN_SNR_DB,
             min_dyn_range_ratio: DEFAULT_MIN_DYN_RANGE_RATIO,
-            preprocess: PreprocessConfig::default(),
+            // The compander is useful for offline bake-offs, but live V3
+            // currently over-amplifies receiver noise into short-pulse
+            // chatter. Keep the live visualizer conservative until the
+            // preprocessing stage has a stronger live quality gate.
+            preprocess: PreprocessConfig::disabled(),
             // Live decode: only the most recent 3s drive the gate, hysteresis,
             // and decode. Insulates the gate from QSO turn-taking — when a
             // strong station finishes and a weaker one starts, the strong
@@ -641,7 +660,7 @@ impl LiveEnvelopeStreamer {
             && self.locked_wpm.is_none()
             && elements >= self.lock_after_elements
             && wpm > 5.0
-            && wpm < 60.0
+            && wpm <= MAX_AUTO_WPM
         {
             self.locked_wpm = Some(wpm);
         }
@@ -831,8 +850,12 @@ pub fn decode_envelope_with_viz(
     };
     let (centroid_dot, centroid_dah) = kmeans_centroids(&on_durations);
 
-    let text = decode_events(&on_durations, &off_durations, dot_s);
     let wpm = if dot_s > 0.0 { 1.2 / dot_s } else { 0.0 };
+    let text = if suppress_implausible_auto_wpm(cfg, dot_s) {
+        String::new()
+    } else {
+        decode_events(&on_durations, &off_durations, dot_s)
+    };
 
     let elem_split = 2.0 * dot_s;
     let char_gap = 2.0 * dot_s;
@@ -1041,6 +1064,10 @@ fn kmeans_centroids(durations: &[f32]) -> (f32, f32) {
 fn dot_seconds_from_wpm(wpm: f32) -> f32 {
     // PARIS standard: 1 word = 50 dot units => dot = 1.2 / wpm seconds.
     (1.2_f32 / wpm.max(1.0)).max(MIN_ELEMENT_S)
+}
+
+fn suppress_implausible_auto_wpm(cfg: &EnvelopeConfig, dot_s: f32) -> bool {
+    cfg.pin_wpm.is_none() && dot_s.is_finite() && dot_s > 0.0 && dot_s < MIN_AUTO_DOT_S
 }
 
 /// Returns `(on_durations_s, off_durations_s)` aligned so that
@@ -1779,6 +1806,34 @@ mod tests {
             final_snap.transcript
         );
         assert_eq!(final_snap.viz.and_then(|viz| viz.locked_wpm), Some(20.0));
+    }
+
+    #[test]
+    fn auto_wpm_gate_suppresses_implausibly_fast_chatter() {
+        let rate = 8000u32;
+        let s = synth_morse(rate, 0.020, 700.0, "..."); // 60 WPM "S"
+
+        let (text, viz) = decode_envelope_with_viz(&s, rate, &EnvelopeConfig::default());
+
+        assert_eq!(
+            text, "",
+            "un-pinned auto decode should suppress implausibly fast chatter"
+        );
+        assert!(
+            viz.wpm > MAX_AUTO_WPM,
+            "test fixture should measure as too fast, got {} WPM",
+            viz.wpm
+        );
+
+        let pinned = decode_envelope(
+            &s,
+            rate,
+            &EnvelopeConfig {
+                pin_wpm: Some(60.0),
+                ..Default::default()
+            },
+        );
+        assert_eq!(pinned, "S", "explicit high-speed pin should still decode");
     }
 
     #[test]
