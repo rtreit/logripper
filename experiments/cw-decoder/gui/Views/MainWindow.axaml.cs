@@ -1,16 +1,50 @@
 using Avalonia.Controls;
 using Avalonia.Markup.Xaml;
 using Avalonia.Platform.Storage;
+using Avalonia.Threading;
 using CwDecoderGui.ViewModels;
+using System.ComponentModel;
 using System.Linq;
 
 namespace CwDecoderGui.Views;
 
 public partial class MainWindow : Window
 {
-    public MainWindow() => InitializeComponent();
+    public MainWindow()
+    {
+        InitializeComponent();
+        DataContextChanged += (_, _) => HookVmForTranscriptScroll();
+    }
 
     private void InitializeComponent() => AvaloniaXamlLoader.Load(this);
+
+    private MainWindowViewModel? _hookedVm;
+
+    private void HookVmForTranscriptScroll()
+    {
+        if (_hookedVm is not null)
+        {
+            _hookedVm.PropertyChanged -= OnVmPropertyChanged;
+            _hookedVm = null;
+        }
+        if (DataContext is MainWindowViewModel vm)
+        {
+            _hookedVm = vm;
+            vm.PropertyChanged += OnVmPropertyChanged;
+        }
+    }
+
+    private void OnVmPropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName != nameof(MainWindowViewModel.VizTranscript)) return;
+        Dispatcher.UIThread.Post(() =>
+        {
+            if (this.FindControl<ScrollViewer>("VizTranscriptScroll") is { } sv)
+            {
+                sv.ScrollToEnd();
+            }
+        }, DispatcherPriority.Background);
+    }
 
     private MainWindowViewModel? Vm => DataContext as MainWindowViewModel;
 

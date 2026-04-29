@@ -258,7 +258,12 @@ public sealed partial class MainWindowViewModel
                     VizStatus = $"ready @ {ev.Rate ?? 0} Hz";
                     break;
                 case "transcript":
-                    if (ev.Text is not null) VizTranscript = ev.Text;
+                    // Prefer the durable session transcript that the Rust
+                    // streamer accumulates via suffix-prefix overlap.
+                    // Fall back to ev.Text (the rolling-window snapshot)
+                    // for backwards compatibility with older binaries.
+                    if (ev.Transcript is not null) VizTranscript = ev.Transcript;
+                    else if (ev.Text is not null) VizTranscript = ev.Text;
                     if (ev.Wpm.HasValue) VizCurrentWpm = ev.Wpm.Value;
                     break;
                 case "viz":

@@ -3739,7 +3739,7 @@ fn run_stream_live_v3(
     let mut last_drain_at: u64 = 0;
     let mut last_decode_at = Instant::now();
     let decode_period = Duration::from_millis(decode_every_ms);
-    let mut last_transcript: Option<String> = None;
+    let mut session_transcript = String::new();
 
     loop {
         if stop.load(Ordering::Relaxed) {
@@ -3756,7 +3756,7 @@ fn run_stream_live_v3(
                     streamer = new_streamer();
                     multi_streamer = new_multi();
                     last_drain_at = capture.buffer.lock().written;
-                    last_transcript = None;
+                    session_transcript.clear();
                     if let Some(em) = emitter.as_mut() {
                         em.emit(
                             started.elapsed().as_secs_f32(),
@@ -3797,7 +3797,9 @@ fn run_stream_live_v3(
         // Force a viz-producing decode now.
         let snap = streamer.flush_with_viz();
         let t = started.elapsed().as_secs_f32();
-        last_transcript = Some(snap.transcript.clone());
+        let appended_session =
+            ditdah_streaming::append_snapshot_text(&mut session_transcript, &snap.transcript);
+        cap_session_transcript(&mut session_transcript, MAX_V3_SESSION_TRANSCRIPT_CHARS);
 
         if let Some(em) = emitter.as_mut() {
             em.emit(
@@ -3805,7 +3807,8 @@ fn run_stream_live_v3(
                 serde_json::json!({
                     "type": "transcript",
                     "text": snap.transcript,
-                    "appended": snap.appended,
+                    "appended": appended_session,
+                    "transcript": session_transcript.as_str(),
                     "wpm": snap.wpm,
                 }),
             );
@@ -3882,7 +3885,10 @@ fn run_stream_live_v3(
                 }
             }
         } else {
-            println!("[t={:>6.2}s wpm={:>5.1}] {}", t, snap.wpm, snap.transcript);
+            println!(
+                "[t={:>6.2}s wpm={:>5.1}] {}",
+                t, snap.wpm, session_transcript
+            );
             if let Some(m) = multi_streamer.as_mut() {
                 let snaps = m.flush();
                 for s in snaps {
@@ -3904,14 +3910,14 @@ fn run_stream_live_v3(
             started.elapsed().as_secs_f32(),
             serde_json::json!({
                 "type": "end",
-                "transcript": last_transcript.unwrap_or_default(),
+                "transcript": session_transcript,
                 "recording": recording_saved.or(recording_path),
             }),
         );
     } else {
         println!();
         println!("Final transcript (v3):");
-        println!("{}", last_transcript.unwrap_or_default());
+        println!("{session_transcript}");
     }
     Ok(())
 }
@@ -3985,7 +3991,7 @@ fn run_stream_live_v3_file(
     let chunk_period = Duration::from_millis(50);
     let chunk_samples = ((sr as u64 * 50) / 1000) as usize;
     let mut cursor = 0usize;
-    let mut last_transcript: Option<String> = None;
+    let mut session_transcript = String::new();
 
     while cursor < total_samples {
         if seconds > 0.0 && started.elapsed().as_secs_f32() >= seconds {
@@ -4008,7 +4014,9 @@ fn run_stream_live_v3_file(
 
         let snap = streamer.flush_with_viz();
         let t = started.elapsed().as_secs_f32();
-        last_transcript = Some(snap.transcript.clone());
+        let appended_session =
+            ditdah_streaming::append_snapshot_text(&mut session_transcript, &snap.transcript);
+        cap_session_transcript(&mut session_transcript, MAX_V3_SESSION_TRANSCRIPT_CHARS);
 
         if let Some(em) = emitter.as_mut() {
             em.emit(
@@ -4016,7 +4024,8 @@ fn run_stream_live_v3_file(
                 serde_json::json!({
                     "type": "transcript",
                     "text": snap.transcript,
-                    "appended": snap.appended,
+                    "appended": appended_session,
+                    "transcript": session_transcript.as_str(),
                     "wpm": snap.wpm,
                 }),
             );
@@ -4091,7 +4100,10 @@ fn run_stream_live_v3_file(
                 }
             }
         } else {
-            println!("[t={:>6.2}s wpm={:>5.1}] {}", t, snap.wpm, snap.transcript);
+            println!(
+                "[t={:>6.2}s wpm={:>5.1}] {}",
+                t, snap.wpm, session_transcript
+            );
             if let Some(m) = multi_streamer.as_mut() {
                 let snaps = m.flush();
                 for s in snaps {
@@ -4109,14 +4121,101 @@ fn run_stream_live_v3_file(
             started.elapsed().as_secs_f32(),
             serde_json::json!({
                 "type": "end",
-                "transcript": last_transcript.unwrap_or_default(),
+                "transcript": session_transcript,
                 "recording": serde_json::Value::Null,
             }),
         );
     } else {
         println!();
         println!("Final transcript (v3 file):");
-        println!("{}", last_transcript.unwrap_or_default());
+        println!("{session_transcript}");
     }
     Ok(())
+}
+
+/// Soft cap on the V3 visualizer session transcript. Keeps the rolling
+/// log bounded for live runs that go on for hours while still preserving
+/// enough context to read recent QSOs. We trim from the front on
+/// whitespace boundaries so we don't tear words in half.
+const MAX_V3_SESSION_TRANSCRIPT_CHARS: usize = 12_000;
+
+fn cap_session_transcript(transcript: &mut String, max_chars: usize) {
+    if transcript.chars().count() <= max_chars {
+        return;
+    }
+    let target_keep = max_chars * 4 / 5;
+    let total_chars = transcript.chars().count();
+    let drop_chars = total_chars - target_keep;
+    let drop_byte_idx = transcript
+        .char_indices()
+        .nth(drop_chars)
+        .map(|(idx, _)| idx)
+        .unwrap_or(0);
+    let trimmed = &transcript[drop_byte_idx..];
+    let cut = trimmed
+        .find(' ')
+        .map(|p| drop_byte_idx + p + 1)
+        .unwrap_or(drop_byte_idx);
+    transcript.replace_range(0..cut, "");
+}
+
+#[cfg(test)]
+mod v3_session_transcript_tests {
+    use super::cap_session_transcript;
+    use cw_decoder_poc::ditdah_streaming::append_snapshot_text;
+
+    #[test]
+    fn rolling_snapshots_grow_session_via_token_overlap() {
+        let mut session = String::new();
+        append_snapshot_text(&mut session, "CQ CQ DE W7LXN W7LXN");
+        append_snapshot_text(&mut session, "DE W7LXN W7LXN K");
+        append_snapshot_text(&mut session, "W7LXN K KC7AVA DE W7LXN");
+        assert!(session.contains("CQ CQ DE W7LXN W7LXN"));
+        assert!(session.contains("KC7AVA"));
+        assert!(session.ends_with("DE W7LXN"));
+    }
+
+    #[test]
+    fn rolling_snapshots_dont_double_repeat_callsigns() {
+        let mut session = String::new();
+        append_snapshot_text(&mut session, "CQ CQ CQ DE W7LXN W7LXN K");
+        append_snapshot_text(&mut session, "DE W7LXN W7LXN K");
+        append_snapshot_text(&mut session, "W7LXN K");
+        let count = session.matches("W7LXN").count();
+        assert_eq!(count, 2, "session={session:?}");
+    }
+
+    #[test]
+    fn unrelated_garbage_snapshot_is_appended_not_filtered() {
+        // We deliberately do NOT gate on anchors. Garbage rolling-window
+        // snapshots still flow through; the operator can see what the
+        // decoder is producing in noise. The cap eventually evicts old
+        // garbage as fresh copy arrives.
+        let mut session = String::new();
+        append_snapshot_text(&mut session, "CQ CQ DE K5KV");
+        let appended = append_snapshot_text(&mut session, "E2VI J VR T E");
+        assert!(!appended.is_empty());
+        assert!(session.contains("CQ CQ DE K5KV"));
+        assert!(session.contains("E2VI"));
+    }
+
+    #[test]
+    fn cap_session_transcript_keeps_recent_tail_on_word_boundary() {
+        let mut session = "AAA BBB CCC DDD EEE FFF GGG HHH III JJJ".to_string();
+        cap_session_transcript(&mut session, 16);
+        assert!(session.len() <= 16);
+        assert!(!session.starts_with(' '));
+        assert!(session.contains("JJJ"));
+        // Make sure we did not truncate mid-token.
+        assert!(session
+            .split_whitespace()
+            .all(|t| t.chars().all(|c| c.is_ascii_uppercase())));
+    }
+
+    #[test]
+    fn cap_session_transcript_noop_when_under_limit() {
+        let mut session = "CQ CQ DE W7LXN".to_string();
+        cap_session_transcript(&mut session, 100);
+        assert_eq!(session, "CQ CQ DE W7LXN");
+    }
 }
