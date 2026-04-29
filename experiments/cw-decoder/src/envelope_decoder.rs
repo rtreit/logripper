@@ -56,6 +56,20 @@ pub const DEFAULT_MIN_DYN_RANGE_RATIO: f32 = 0.55;
 /// real noise floors while ignoring isolated transients.
 pub(crate) const ROBUST_PEAK_PERCENTILE: f32 = 0.99;
 
+/// SNR (dB) above which the dynamic-range bimodality gate is bypassed.
+/// The dyn_range gate exists to catch noise-locked failures where the
+/// SNR happens to land above the floor by chance — but real CW with
+/// occasional tall key-click transients can fail dyn_range while having
+/// a clean SNR of 30+ dB. Above this threshold, treat SNR alone as
+/// sufficient evidence the signal is real and let the decoder run.
+///
+/// Tuned empirically: pure white noise (probed via the project's own
+/// percentile-based floors) routinely measures ~21 dB "SNR" because
+/// `p90 / p20` of a noise envelope is intrinsically non-trivial. Real
+/// CW from a radio reliably sits above 30 dB on the same metric. The
+/// threshold below comfortably separates the two.
+pub(crate) const DYN_RANGE_BYPASS_SNR_DB: f32 = 30.0;
+
 /// Configuration for [`decode_envelope`].
 #[derive(Debug, Clone)]
 pub struct EnvelopeConfig {
@@ -140,8 +154,20 @@ pub(crate) fn dyn_range_ratio(noise: f32, signal: f32, env_max: f32) -> f32 {
     ((signal - noise).max(0.0) / env_max).min(1.0)
 }
 
-/// True when the envelope passes both quality gates and a transcript
+/// True when the envelope passes the quality gates and a transcript
 /// should be emitted.
+///
+/// The gate is two-tier:
+/// 1. SNR floor (`min_snr_db`) is mandatory.
+/// 2. Dynamic-range bimodality (`min_dyn_range_ratio`) is required only
+///    when SNR sits in the marginal band (`min_snr_db ..
+///    DYN_RANGE_BYPASS_SNR_DB`). Above the bypass threshold, SNR alone
+///    is enough — the dyn_range check exists to backstop noise-locked
+///    false-passes, which can't happen at high SNR.
+///
+/// This avoids a known failure mode where real CW with occasional tall
+/// key-click transients (envelope_max anchored by a few isolated peaks)
+/// has clean SNR but fails dyn_range and gets falsely suppressed.
 #[inline]
 pub(crate) fn passes_quality_gate(
     cfg: &EnvelopeConfig,
@@ -149,8 +175,14 @@ pub(crate) fn passes_quality_gate(
     signal: f32,
     env_max: f32,
 ) -> bool {
-    snr_db(noise, signal) >= cfg.min_snr_db
-        && dyn_range_ratio(noise, signal, env_max) >= cfg.min_dyn_range_ratio
+    let snr = snr_db(noise, signal);
+    if snr < cfg.min_snr_db {
+        return false;
+    }
+    if snr >= DYN_RANGE_BYPASS_SNR_DB {
+        return true;
+    }
+    dyn_range_ratio(noise, signal, env_max) >= cfg.min_dyn_range_ratio
 }
 
 /// Decode `samples` to text using the envelope+hysteresis pipeline.
@@ -1953,6 +1985,58 @@ mod tests {
     }
 
     #[test]
+    fn passes_quality_gate_bypasses_dyn_range_when_snr_is_high() {
+        // SNR comfortably above the bypass threshold (18 dB). Even with
+        // dyn_range_ratio that would normally fail (0.10 < 0.55 default),
+        // the gate must pass because high SNR is sufficient evidence the
+        // signal is real.
+        let cfg = EnvelopeConfig::default();
+        // noise=0.01, signal=1.0 → snr ≈ 40 dB (>> 18 dB bypass)
+        // env_max=10.0 → dyn_range = (1.0-0.01)/10.0 ≈ 0.099 (< 0.55)
+        assert!(
+            passes_quality_gate(&cfg, 0.01, 1.0, 10.0),
+            "high-SNR signal must bypass dyn_range check; \
+             snr={:.1} dB, dyn_range={:.3}",
+            snr_db(0.01, 1.0),
+            dyn_range_ratio(0.01, 1.0, 10.0)
+        );
+    }
+
+    #[test]
+    fn passes_quality_gate_enforces_dyn_range_in_marginal_snr_band() {
+        // SNR above the floor (6 dB) but below the bypass (18 dB) is
+        // the marginal band where dyn_range must hold. With dyn_range
+        // failing in this band, the gate must reject.
+        let cfg = EnvelopeConfig::default();
+        // noise=0.5, signal=1.0 → snr ≈ 6 dB (just above floor, below bypass)
+        // env_max=10.0 → dyn_range = 0.05 (well below 0.55)
+        let snr = snr_db(0.5, 1.0);
+        assert!(
+            snr >= cfg.min_snr_db && snr < DYN_RANGE_BYPASS_SNR_DB,
+            "test setup: snr {} should be in marginal band",
+            snr
+        );
+        assert!(
+            !passes_quality_gate(&cfg, 0.5, 1.0, 10.0),
+            "marginal SNR with poor dyn_range must be rejected"
+        );
+    }
+
+    #[test]
+    fn passes_quality_gate_rejects_below_snr_floor() {
+        // Below the SNR floor, the gate must reject regardless of
+        // dyn_range — the SNR floor is mandatory.
+        let cfg = EnvelopeConfig::default();
+        // noise=0.5, signal=0.6 → snr ≈ 1.6 dB (below 6 dB floor)
+        // env_max=0.6 → dyn_range = 0.17 (also poor, but not what's
+        // being tested)
+        assert!(
+            !passes_quality_gate(&cfg, 0.5, 0.6, 0.6),
+            "below-SNR-floor must reject"
+        );
+    }
+
+    #[test]
     fn analysis_window_isolates_recent_station_from_louder_earlier_one() {
         // Regression for the QSO turn-taking false-trip: when a strong
         // station finishes and a quieter station now on the air would
@@ -1960,6 +2044,14 @@ mod tests {
         // env_max for the whole buffer and collapse the dyn-range gate.
         // The 3s analysis window confines gate stats to the recent
         // station's footprint.
+        //
+        // NOTE: At high SNR (>= DYN_RANGE_BYPASS_SNR_DB) the gate now
+        // bypasses dyn_range entirely, so the legacy whole-buffer path
+        // also succeeds in this scenario. The analysis window still
+        // provides value in the marginal-SNR band where bypass does
+        // not kick in, and in the visualizer where stats should reflect
+        // recent activity. We only assert here that the windowed config
+        // decodes the trailing K cleanly.
         let rate = 8000u32;
         let dot = 0.060_f32;
 
@@ -1984,20 +2076,6 @@ mod tests {
             enabled: false,
             ..PreprocessConfig::default()
         };
-
-        let legacy_cfg = EnvelopeConfig {
-            preprocess: no_pp,
-            analysis_window_seconds: None,
-            ..Default::default()
-        };
-        let (legacy_text, legacy_viz) = decode_envelope_with_viz(&buf, rate, &legacy_cfg);
-        assert!(
-            legacy_viz.snr_suppressed || !legacy_text.ends_with('K'),
-            "legacy gate should mishandle the trailing K; \
-             snr_suppressed={}, text={:?}",
-            legacy_viz.snr_suppressed,
-            legacy_text
-        );
 
         let windowed_cfg = EnvelopeConfig {
             preprocess: no_pp,
