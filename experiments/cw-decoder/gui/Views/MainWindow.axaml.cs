@@ -1,16 +1,49 @@
 using Avalonia.Controls;
 using Avalonia.Markup.Xaml;
 using Avalonia.Platform.Storage;
+using Avalonia.Threading;
 using CwDecoderGui.ViewModels;
+using System.ComponentModel;
 using System.Linq;
 
 namespace CwDecoderGui.Views;
 
 public partial class MainWindow : Window
 {
-    public MainWindow() => InitializeComponent();
+    public MainWindow()
+    {
+        InitializeComponent();
+        DataContextChanged += OnDataContextChanged;
+        HookVmForTranscriptScroll(DataContext as MainWindowViewModel);
+    }
 
     private void InitializeComponent() => AvaloniaXamlLoader.Load(this);
+
+    private MainWindowViewModel? _vmHooked;
+
+    private void OnDataContextChanged(object? sender, System.EventArgs e)
+    {
+        HookVmForTranscriptScroll(DataContext as MainWindowViewModel);
+    }
+
+    private void HookVmForTranscriptScroll(MainWindowViewModel? vm)
+    {
+        if (ReferenceEquals(_vmHooked, vm)) return;
+        if (_vmHooked is not null) _vmHooked.PropertyChanged -= OnVmPropertyChanged;
+        _vmHooked = vm;
+        if (_vmHooked is not null) _vmHooked.PropertyChanged += OnVmPropertyChanged;
+    }
+
+    private void OnVmPropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName != nameof(MainWindowViewModel.VizTranscript)) return;
+        // Defer to keep the scroll-extent updated after layout so we land at the bottom.
+        Dispatcher.UIThread.Post(() =>
+        {
+            if (this.FindControl<ScrollViewer>("VizTranscriptScroll") is { } sv)
+                sv.ScrollToEnd();
+        }, DispatcherPriority.Background);
+    }
 
     private MainWindowViewModel? Vm => DataContext as MainWindowViewModel;
 

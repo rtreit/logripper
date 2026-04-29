@@ -27,6 +27,11 @@ const FRAME_STEP_S: f32 = 0.005; // 5 ms hop.
 const HYST_HIGH: f32 = 0.55; // Fraction of (signal - noise) to enter key-on.
 const HYST_LOW: f32 = 0.35; // Fraction of (signal - noise) to leave key-on.
 const MIN_ELEMENT_S: f32 = 0.012; // Reject sub-12ms blips as noise (~50 WPM dot).
+                                  // Cap auto-detected WPM. Above this the dot estimate is almost always
+                                  // noise-locked rather than real CW; blank the transcript instead of
+                                  // emitting dit-spam. Pinned WPM bypasses this gate.
+const MAX_AUTO_WPM: f32 = 45.0;
+
 /// Default SNR floor (dB) below which the decode is suppressed and the
 /// pipeline returns empty text. 20*log10(2.0) ≈ 6 dB; CW signals worth
 /// decoding sit comfortably above this. Tuned to filter out the
@@ -641,7 +646,7 @@ impl LiveEnvelopeStreamer {
             && self.locked_wpm.is_none()
             && elements >= self.lock_after_elements
             && wpm > 5.0
-            && wpm < 60.0
+            && wpm <= MAX_AUTO_WPM
         {
             self.locked_wpm = Some(wpm);
         }

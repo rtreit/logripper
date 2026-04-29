@@ -258,7 +258,13 @@ public sealed partial class MainWindowViewModel
                     VizStatus = $"ready @ {ev.Rate ?? 0} Hz";
                     break;
                 case "transcript":
-                    if (ev.Text is not null) VizTranscript = ev.Text;
+                    // Prefer the cumulative session transcript (Rust side maintains
+                    // it via ditdah_streaming::append_snapshot_text). Fall back to
+                    // the rolling-window snapshot text if older builds emit only
+                    // the legacy field.
+                    var sess = ev.Transcript;
+                    if (!string.IsNullOrEmpty(sess)) VizTranscript = sess!;
+                    else if (ev.Text is not null) VizTranscript = ev.Text;
                     if (ev.Wpm.HasValue) VizCurrentWpm = ev.Wpm.Value;
                     break;
                 case "viz":
