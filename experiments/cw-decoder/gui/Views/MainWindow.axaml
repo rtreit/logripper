@@ -1193,12 +1193,15 @@
             <Border Grid.Row="3" Background="{StaticResource BgDeep}" CornerRadius="4"
                     BorderBrush="{StaticResource EdgeGlow}" BorderThickness="1"
                     Padding="10,8" Margin="0,8,0,0">
-              <ScrollViewer HorizontalScrollBarVisibility="Auto"
+              <ScrollViewer Name="VizTranscriptScroll"
+                            HorizontalScrollBarVisibility="Disabled"
                             VerticalScrollBarVisibility="Auto"
-                            MaxHeight="120">
+                            MinHeight="120"
+                            MaxHeight="240">
                 <TextBlock Text="{Binding VizTranscript}"
                            FontFamily="Consolas"
-                           FontSize="14"
+                           FontSize="16"
+                           LineHeight="22"
                            TextWrapping="Wrap"
                            Foreground="{StaticResource TextHi}" />
               </ScrollViewer>
