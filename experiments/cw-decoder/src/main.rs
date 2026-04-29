@@ -526,11 +526,28 @@ enum Cmd {
         /// detector locks onto a noise/harmonic peak instead of the CW tone.
         #[arg(long, default_value_t = 0.0)]
         pin_hz: f32,
+        /// Minimum signal-to-noise ratio (dB) required to emit text.
+        /// Computed as 20*log10(signal_floor / noise_floor) from envelope
+        /// percentiles. Frames below this threshold still produce
+        /// visualizer data but no transcript, suppressing the
+        /// noise-locked dit-spam failure mode. Default 6.0 dB. Set 0 to
+        /// disable.
+        #[arg(long, default_value_t = cw_decoder_poc::envelope_decoder::DEFAULT_MIN_SNR_DB)]
+        min_snr_db: f32,
         /// Decode an audio file (mp3/wav/m4a/...) instead of live capture.
         /// Samples are streamed at real-time pace into the same envelope
         /// pipeline so the visualizer behaves identically to live audio.
         #[arg(long)]
         file: Option<PathBuf>,
+
+        /// Multi-pitch (CW Skimmer-style) decode: also run K parallel
+        /// per-pitch decoders alongside the existing single-pitch
+        /// pipeline. K=0 disables multi-pitch (default; preserves the
+        /// legacy single-track behavior). When K > 0, an additional
+        /// `multi_track_transcript` JSON event is emitted per cycle
+        /// alongside the single-track `transcript` event.
+        #[arg(long, alias = "multi", default_value_t = 0)]
+        multi_pitch: usize,
     },
     /// Diagnostic: scan candidate pitches across an audio file and print
     /// the trial-decode Fisher score per pitch. Use this to compare
@@ -1005,7 +1022,9 @@ fn main() -> Result<()> {
             loopback,
             pin_wpm,
             pin_hz,
+            min_snr_db,
             file,
+            multi_pitch,
         } => run_stream_live_v3(
             device.as_deref(),
             seconds,
@@ -1016,7 +1035,9 @@ fn main() -> Result<()> {
             loopback,
             (pin_wpm > 0.0).then_some(pin_wpm),
             (pin_hz > 0.0).then_some(pin_hz),
+            min_snr_db,
             file.as_deref(),
+            multi_pitch,
         ),
         Cmd::ProbeFisher {
             path,
@@ -3613,13 +3634,24 @@ fn run_stream_live_v3(
     loopback: bool,
     pin_wpm: Option<f32>,
     pin_hz: Option<f32>,
+    min_snr_db: f32,
     file: Option<&std::path::Path>,
+    multi_pitch: usize,
 ) -> Result<()> {
     if let Some(path) = file {
-        return run_stream_live_v3_file(path, seconds, json, decode_every_ms, pin_wpm, pin_hz);
+        return run_stream_live_v3_file(
+            path,
+            seconds,
+            json,
+            decode_every_ms,
+            pin_wpm,
+            pin_hz,
+            min_snr_db,
+            multi_pitch,
+        );
     }
     use cw_decoder_poc::envelope_decoder::{
-        LiveEnvelopeStreamer, VizEventKind, MAX_VIZ_ENVELOPE_SAMPLES,
+        LiveEnvelopeStreamer, LiveMultiPitchStreamer, VizEventKind, MAX_VIZ_ENVELOPE_SAMPLES,
     };
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
@@ -3634,9 +3666,22 @@ fn run_stream_live_v3(
         let mut streamer = LiveEnvelopeStreamer::new(capture.sample_rate);
         streamer.set_pinned_hz(pin_hz);
         streamer.set_pinned_wpm(pin_wpm);
+        streamer.set_min_snr_db(min_snr_db);
         streamer
     };
     let mut streamer = new_streamer();
+
+    let new_multi = || {
+        if multi_pitch == 0 {
+            None
+        } else {
+            let mut s = LiveMultiPitchStreamer::new(capture.sample_rate, multi_pitch);
+            s.set_pinned_wpm(pin_wpm);
+            s.set_min_snr_db(min_snr_db);
+            Some(s)
+        }
+    };
+    let mut multi_streamer = new_multi();
 
     let stop = Arc::new(AtomicBool::new(false));
     {
@@ -3709,6 +3754,7 @@ fn run_stream_live_v3(
             while let Ok(msg) = rx.try_recv() {
                 if matches!(msg, StdinControlMessage::ResetLock) {
                     streamer = new_streamer();
+                    multi_streamer = new_multi();
                     last_drain_at = capture.buffer.lock().written;
                     session_transcript.clear();
                     if let Some(em) = emitter.as_mut() {
@@ -3738,6 +3784,9 @@ fn run_stream_live_v3(
         if !chunk.is_empty() {
             // Buffer the audio without forcing a viz decode (cheap path).
             streamer.feed(&chunk);
+            if let Some(m) = multi_streamer.as_mut() {
+                let _ = m.feed(&chunk);
+            }
         }
 
         if last_decode_at.elapsed() < decode_period {
@@ -3794,6 +3843,8 @@ fn run_stream_live_v3(
                         "envelope_max": viz.envelope_max,
                         "noise_floor": viz.noise_floor,
                         "signal_floor": viz.signal_floor,
+                        "snr_db": viz.snr_db,
+                        "snr_suppressed": viz.snr_suppressed,
                         "hyst_high": viz.hyst_high,
                         "hyst_low": viz.hyst_low,
                         "events": events_json,
@@ -3806,8 +3857,44 @@ fn run_stream_live_v3(
                     }),
                 );
             }
+            // Multi-pitch event: emit alongside the single-track
+            // events so back-compat consumers keep working.
+            if let Some(m) = multi_streamer.as_mut() {
+                let snaps = m.flush_with_viz();
+                if !snaps.is_empty() {
+                    let tracks_json: Vec<serde_json::Value> = snaps
+                        .iter()
+                        .map(|s| {
+                            serde_json::json!({
+                                "track_id": s.track_id,
+                                "pitch_hz": s.pitch_hz,
+                                "wpm": s.wpm,
+                                "transcript": s.transcript,
+                                "appended": s.appended,
+                            })
+                        })
+                        .collect();
+                    em.emit(
+                        t,
+                        serde_json::json!({
+                            "event": "multi_track_transcript",
+                            "type": "multi_track_transcript",
+                            "tracks": tracks_json,
+                        }),
+                    );
+                }
+            }
         } else {
             println!("[t={:>6.2}s wpm={:>5.1}] {}", t, snap.wpm, snap.transcript);
+            if let Some(m) = multi_streamer.as_mut() {
+                let snaps = m.flush();
+                for s in snaps {
+                    println!(
+                        "  track {} @ {:>5.1} Hz wpm={:>5.1}: {}",
+                        s.track_id, s.pitch_hz, s.wpm, s.transcript
+                    );
+                }
+            }
         }
     }
 
@@ -3839,9 +3926,11 @@ fn run_stream_live_v3_file(
     decode_every_ms: u64,
     pin_wpm: Option<f32>,
     pin_hz: Option<f32>,
+    min_snr_db: f32,
+    multi_pitch: usize,
 ) -> Result<()> {
     use cw_decoder_poc::envelope_decoder::{
-        LiveEnvelopeStreamer, VizEventKind, MAX_VIZ_ENVELOPE_SAMPLES,
+        LiveEnvelopeStreamer, LiveMultiPitchStreamer, VizEventKind, MAX_VIZ_ENVELOPE_SAMPLES,
     };
     use std::time::{Duration, Instant};
 
@@ -3852,6 +3941,16 @@ fn run_stream_live_v3_file(
     let mut streamer = LiveEnvelopeStreamer::new(sr);
     streamer.set_pinned_hz(pin_hz);
     streamer.set_pinned_wpm(pin_wpm);
+    streamer.set_min_snr_db(min_snr_db);
+
+    let mut multi_streamer = if multi_pitch == 0 {
+        None
+    } else {
+        let mut s = LiveMultiPitchStreamer::new(sr, multi_pitch);
+        s.set_pinned_wpm(pin_wpm);
+        s.set_min_snr_db(min_snr_db);
+        Some(s)
+    };
 
     let mut emitter = if json {
         Some(json::JsonEmitter::new())
@@ -3899,6 +3998,9 @@ fn run_stream_live_v3_file(
         let end = (cursor + chunk_samples).min(total_samples);
         if end > cursor {
             streamer.feed(&decoded.samples[cursor..end]);
+            if let Some(m) = multi_streamer.as_mut() {
+                let _ = m.feed(&decoded.samples[cursor..end]);
+            }
             cursor = end;
         }
 
@@ -3955,6 +4057,8 @@ fn run_stream_live_v3_file(
                         "envelope_max": viz.envelope_max,
                         "noise_floor": viz.noise_floor,
                         "signal_floor": viz.signal_floor,
+                        "snr_db": viz.snr_db,
+                        "snr_suppressed": viz.snr_suppressed,
                         "hyst_high": viz.hyst_high,
                         "hyst_low": viz.hyst_low,
                         "events": events_json,
@@ -3967,8 +4071,42 @@ fn run_stream_live_v3_file(
                     }),
                 );
             }
+            if let Some(m) = multi_streamer.as_mut() {
+                let snaps = m.flush_with_viz();
+                if !snaps.is_empty() {
+                    let tracks_json: Vec<serde_json::Value> = snaps
+                        .iter()
+                        .map(|s| {
+                            serde_json::json!({
+                                "track_id": s.track_id,
+                                "pitch_hz": s.pitch_hz,
+                                "wpm": s.wpm,
+                                "transcript": s.transcript,
+                                "appended": s.appended,
+                            })
+                        })
+                        .collect();
+                    em.emit(
+                        t,
+                        serde_json::json!({
+                            "event": "multi_track_transcript",
+                            "type": "multi_track_transcript",
+                            "tracks": tracks_json,
+                        }),
+                    );
+                }
+            }
         } else {
             println!("[t={:>6.2}s wpm={:>5.1}] {}", t, snap.wpm, snap.transcript);
+            if let Some(m) = multi_streamer.as_mut() {
+                let snaps = m.flush();
+                for s in snaps {
+                    println!(
+                        "  track {} @ {:>5.1} Hz wpm={:>5.1}: {}",
+                        s.track_id, s.pitch_hz, s.wpm, s.transcript
+                    );
+                }
+            }
         }
     }
 

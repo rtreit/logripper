@@ -109,6 +109,7 @@ fn main() -> Result<()> {
             pre_roll_s: arg_value_f32(&args, "--pre-roll-ms").unwrap_or(0.0) / 1000.0,
             post_roll_s: arg_value_f32(&args, "--post-roll-ms").unwrap_or(0.0) / 1000.0,
             streaming_cfg: parse_streaming_decoder_config(&args),
+            preprocess: parse_preprocess_config(&args),
         };
         let top = arg_value_usize(&args, "--top").unwrap_or(10);
         if args.iter().any(|a| a == "--strategy-sweep") {
@@ -246,6 +247,7 @@ struct LabelScoreConfig {
     pre_roll_s: f32,
     post_roll_s: f32,
     streaming_cfg: DecoderConfig,
+    preprocess: cw_decoder_poc::preprocess::PreprocessConfig,
 }
 
 impl LabelScoreMode {
@@ -1005,6 +1007,8 @@ fn score_labels_strategy(
                         &cw_decoder_poc::envelope_decoder::EnvelopeConfig {
                             pin_wpm: pin,
                             pin_hz: None,
+                            preprocess: score_cfg.preprocess,
+                            ..Default::default()
                         },
                     )
                 }
@@ -1018,6 +1022,7 @@ fn score_labels_strategy(
                     let mut streamer = cw_decoder_poc::envelope_decoder::LiveEnvelopeStreamer::new(
                         audio.sample_rate,
                     );
+                    streamer.set_preprocess(score_cfg.preprocess);
                     // Feed in 100 ms chunks to simulate a live capture path.
                     let chunk = (audio.sample_rate as usize) / 10;
                     let mut i = 0;
@@ -1560,6 +1565,20 @@ fn parse_streaming_decoder_config(args: &[String]) -> DecoderConfig {
             .unwrap_or(0.0),
         cfar_keying: args.iter().any(|a| a == "--cfar-keying"),
     }
+}
+
+fn parse_preprocess_config(args: &[String]) -> cw_decoder_poc::preprocess::PreprocessConfig {
+    let mut cfg = cw_decoder_poc::preprocess::PreprocessConfig::default();
+    if args.iter().any(|a| a == "--no-preprocess") {
+        cfg.enabled = false;
+    }
+    if let Some(w) = arg_value_f32(args, "--preprocess-bw-hz") {
+        cfg.bandpass_width_hz = w.max(1.0);
+    }
+    if let Some(g) = arg_value_f32(args, "--preprocess-gain-db") {
+        cfg.gain_db = g;
+    }
+    cfg
 }
 
 fn arg_value_f32(args: &[String], key: &str) -> Option<f32> {

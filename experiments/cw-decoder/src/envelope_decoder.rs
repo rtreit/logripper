@@ -19,6 +19,7 @@
 //! use of the streaming v1 path, and minimal tunable knobs so any
 //! regressions are localised.
 
+use crate::preprocess::{self, PreprocessConfig};
 use crate::region_stream::{self, estimate_dominant_pitch, goertzel_power, RegionStreamConfig};
 
 const FRAME_LEN_S: f32 = 0.010; // 10 ms — fine enough for 40 WPM dits.
@@ -31,6 +32,30 @@ const MIN_ELEMENT_S: f32 = 0.012; // Reject sub-12ms blips as noise (~50 WPM dot
                                   // emitting dit-spam. Pinned WPM bypasses this gate.
 const MAX_AUTO_WPM: f32 = 45.0;
 
+/// Default SNR floor (dB) below which the decode is suppressed and the
+/// pipeline returns empty text. 20*log10(2.0) ≈ 6 dB; CW signals worth
+/// decoding sit comfortably above this. Tuned to filter out the
+/// noise-locked failure mode where the auto-pitch detector locks onto a
+/// harmonic peak and the envelope is essentially noise.
+pub const DEFAULT_MIN_SNR_DB: f32 = 6.0;
+/// Default fraction of `envelope_max` that the dynamic range
+/// (`signal_floor - noise_floor`) must exceed to pass the bimodality
+/// gate. Real CW with intentional silence between elements produces a
+/// dynamic range close to `envelope_max`. Random noise has random
+/// transient peaks that dominate `envelope_max` while the bulk of the
+/// envelope hovers near the mean, giving a much smaller fraction. The
+/// 0.55 default cleanly rejects pure white noise (~0.30 in tests) while
+/// passing weak but legitimate CW (>0.7).
+pub const DEFAULT_MIN_DYN_RANGE_RATIO: f32 = 0.55;
+
+/// Percentile used as the "robust peak" for the dynamic-range gate. We
+/// deliberately do NOT use the literal `env_max` because a single
+/// key-click transient or QRN spike can dwarf the rest of the envelope
+/// and collapse the bimodality ratio even when the underlying CW is
+/// obviously bimodal. The 99th percentile keeps the gate sensitive to
+/// real noise floors while ignoring isolated transients.
+pub(crate) const ROBUST_PEAK_PERCENTILE: f32 = 0.99;
+
 /// Configuration for [`decode_envelope`].
 #[derive(Debug, Clone)]
 pub struct EnvelopeConfig {
@@ -42,6 +67,35 @@ pub struct EnvelopeConfig {
     /// bypassed and the envelope is computed at the supplied frequency.
     /// Useful when the auto-detector locks onto a noise/harmonic peak.
     pub pin_hz: Option<f32>,
+    /// Minimum signal-to-noise ratio (dB) required to emit a transcript.
+    /// Computed as `20 * log10(signal_floor / noise_floor)` from the 90th
+    /// and 20th percentiles of the envelope. When the gate trips the
+    /// pipeline still populates the visualizer frame so an operator can
+    /// see *why* nothing decoded — only the text is suppressed.
+    pub min_snr_db: f32,
+    /// Minimum bimodality ratio: `(signal_floor - noise_floor) /
+    /// envelope_max`. Real CW with intentional silence has a value near
+    /// 1.0; pure noise is ~0.3 because random transient peaks dominate
+    /// `envelope_max` while the percentiles cluster near the mean. This
+    /// gate catches the noise-locked failure mode that high-variance
+    /// noise sneaks past the percentile-ratio SNR check.
+    pub min_dyn_range_ratio: f32,
+    /// Front-end audio preprocessing (bandpass + compander). Defaults
+    /// match the recipe that cut CER from 0.380 → 0.130 on real-radio
+    /// CW. Disable for synthetic test fixtures that already feed the
+    /// decoder a pristine tone.
+    pub preprocess: PreprocessConfig,
+    /// When `Some(s)`, only the most recent `s` seconds of the envelope
+    /// drive the quality gate, hysteresis thresholds, and decode. The
+    /// visualizer envelope still reflects the full input buffer. This
+    /// makes the live decoder robust to QSO turn-taking: when a strong
+    /// station finishes and a weaker one starts, the strong station's
+    /// peaks no longer anchor `env_max` and collapse the dynamic-range
+    /// gate. It also lets a sparse burst at the end of a long buffer
+    /// pass the gate as if the buffer were short. `None` keeps the
+    /// legacy behavior (gate over the entire buffer); preferred for
+    /// offline whole-file decode and synthetic test fixtures.
+    pub analysis_window_seconds: Option<f32>,
 }
 
 impl Default for EnvelopeConfig {
@@ -49,8 +103,54 @@ impl Default for EnvelopeConfig {
         Self {
             pin_wpm: None,
             pin_hz: None,
+            min_snr_db: DEFAULT_MIN_SNR_DB,
+            min_dyn_range_ratio: DEFAULT_MIN_DYN_RANGE_RATIO,
+            preprocess: PreprocessConfig::default(),
+            analysis_window_seconds: None,
         }
     }
+}
+
+/// Compute SNR (dB) from envelope noise and signal floor estimates.
+/// - `signal <= 0` → 0 dB (no signal at all).
+/// - `noise <= 0` and `signal > 0` → +∞ dB (a literal-zero noise floor
+///   means the signal is infinitely above the noise; happens with
+///   synthetic test inputs and very clean recordings).
+#[inline]
+pub(crate) fn snr_db(noise: f32, signal: f32) -> f32 {
+    if signal <= 0.0 {
+        return 0.0;
+    }
+    if noise <= 0.0 {
+        return f32::INFINITY;
+    }
+    20.0 * (signal / noise).log10()
+}
+
+/// Bimodality ratio: dynamic range relative to envelope peak.
+/// `(signal_floor - noise_floor) / envelope_max`. 1.0 means the
+/// percentiles span the full peak range (clean bimodal CW). Low values
+/// mean the percentiles cluster near the mean while a few random
+/// transient peaks dominate `envelope_max` (white noise).
+#[inline]
+pub(crate) fn dyn_range_ratio(noise: f32, signal: f32, env_max: f32) -> f32 {
+    if env_max <= 0.0 {
+        return 0.0;
+    }
+    ((signal - noise).max(0.0) / env_max).min(1.0)
+}
+
+/// True when the envelope passes both quality gates and a transcript
+/// should be emitted.
+#[inline]
+pub(crate) fn passes_quality_gate(
+    cfg: &EnvelopeConfig,
+    noise: f32,
+    signal: f32,
+    env_max: f32,
+) -> bool {
+    snr_db(noise, signal) >= cfg.min_snr_db
+        && dyn_range_ratio(noise, signal, env_max) >= cfg.min_dyn_range_ratio
 }
 
 /// Decode `samples` to text using the envelope+hysteresis pipeline.
@@ -70,18 +170,30 @@ pub fn decode_envelope(samples: &[f32], sample_rate: u32, cfg: &EnvelopeConfig) 
         .pin_hz
         .unwrap_or_else(|| estimate_dominant_pitch(samples, sample_rate, &pitch_cfg));
 
+    // 0) Front-end preprocessing. Bandpass narrows to the detected
+    //    pitch (rejects QRM/hum) and the compander pulls element
+    //    amplitudes together so a single hysteresis threshold cleanly
+    //    separates key-on from key-off on real-radio audio.
+    let preprocessed: Vec<f32>;
+    let work: &[f32] = if cfg.preprocess.enabled {
+        preprocessed = preprocess::apply(samples, sample_rate, pitch, &cfg.preprocess);
+        &preprocessed
+    } else {
+        samples
+    };
+
     let frame_len = ((FRAME_LEN_S * sample_rate as f32).round() as usize).max(32);
     let frame_step = ((FRAME_STEP_S * sample_rate as f32).round() as usize).max(8);
-    if samples.len() < frame_len {
+    if work.len() < frame_len {
         return String::new();
     }
 
     // 1) Per-frame Goertzel power envelope.
-    let mut env: Vec<f32> = Vec::with_capacity(samples.len() / frame_step + 1);
+    let mut env: Vec<f32> = Vec::with_capacity(work.len() / frame_step + 1);
     let mut offset = 0usize;
-    while offset + frame_len <= samples.len() {
+    while offset + frame_len <= work.len() {
         env.push(goertzel_power(
-            &samples[offset..offset + frame_len],
+            &work[offset..offset + frame_len],
             sample_rate,
             pitch,
         ));
@@ -92,14 +204,29 @@ pub fn decode_envelope(samples: &[f32], sample_rate: u32, cfg: &EnvelopeConfig) 
     }
 
     // 2) Estimate noise / signal floor as 20th / 90th percentiles.
-    let (noise, signal) = percentile_pair(&env, 0.20, 0.90);
+    //    Use a robust 99th-percentile peak instead of the literal max
+    //    so a single key-click transient or QRN spike does not collapse
+    //    the dynamic-range bimodality ratio. When `analysis_window_seconds`
+    //    is set, only the most recent slice drives the gate so older
+    //    transmissions cannot anchor `env_max`.
+    let frame_dt = frame_step as f32 / sample_rate as f32;
+    let (analysis_env, _) = analysis_slice(&env, frame_dt, cfg);
+    let env_max = robust_peak(analysis_env, ROBUST_PEAK_PERCENTILE);
+    let (noise, signal) = percentile_pair(analysis_env, 0.20, 0.90);
+    // 2a) Quality gate: combine an SNR floor with a dynamic-range
+    //     bimodality check. The latter is what kills the noise-locked
+    //     failure mode (random envelope variance can clear the SNR ratio
+    //     gate by itself but does not produce a clean bimodal envelope).
+    if !passes_quality_gate(cfg, noise, signal, env_max) {
+        return String::new();
+    }
     let span = (signal - noise).max(1e-9);
     let high = noise + HYST_HIGH * span;
     let low = noise + HYST_LOW * span;
 
-    // 3) Hysteresis state machine -> events.
-    let frame_dt = frame_step as f32 / sample_rate as f32;
-    let (ons, offs) = events_from_envelope(&env, high, low, frame_dt);
+    // 3) Hysteresis state machine -> events. Run on the analysis slice so
+    //    the thresholds derived from its stats apply to the same data.
+    let (ons, offs) = events_from_envelope(analysis_env, high, low, frame_dt);
     if ons.is_empty() {
         return String::new();
     }
@@ -151,9 +278,17 @@ pub fn decode_envelope_with_stats(
         .pin_hz
         .unwrap_or_else(|| estimate_dominant_pitch(samples, sample_rate, &pitch_cfg));
 
+    let preprocessed: Vec<f32>;
+    let work: &[f32] = if cfg.preprocess.enabled {
+        preprocessed = preprocess::apply(samples, sample_rate, pitch, &cfg.preprocess);
+        &preprocessed
+    } else {
+        samples
+    };
+
     let frame_len = ((FRAME_LEN_S * sample_rate as f32).round() as usize).max(32);
     let frame_step = ((FRAME_STEP_S * sample_rate as f32).round() as usize).max(8);
-    if samples.len() < frame_len {
+    if work.len() < frame_len {
         return EnvelopeDecode {
             text: String::new(),
             dot_seconds: 0.0,
@@ -162,11 +297,11 @@ pub fn decode_envelope_with_stats(
         };
     }
 
-    let mut env: Vec<f32> = Vec::with_capacity(samples.len() / frame_step + 1);
+    let mut env: Vec<f32> = Vec::with_capacity(work.len() / frame_step + 1);
     let mut offset = 0usize;
-    while offset + frame_len <= samples.len() {
+    while offset + frame_len <= work.len() {
         env.push(goertzel_power(
-            &samples[offset..offset + frame_len],
+            &work[offset..offset + frame_len],
             sample_rate,
             pitch,
         ));
@@ -181,13 +316,23 @@ pub fn decode_envelope_with_stats(
         };
     }
 
-    let (noise, signal) = percentile_pair(&env, 0.20, 0.90);
+    let frame_dt = frame_step as f32 / sample_rate as f32;
+    let (analysis_env, _) = analysis_slice(&env, frame_dt, cfg);
+    let env_max = robust_peak(analysis_env, ROBUST_PEAK_PERCENTILE);
+    let (noise, signal) = percentile_pair(analysis_env, 0.20, 0.90);
+    if !passes_quality_gate(cfg, noise, signal, env_max) {
+        return EnvelopeDecode {
+            text: String::new(),
+            dot_seconds: 0.0,
+            wpm: 0.0,
+            elements: 0,
+        };
+    }
     let span = (signal - noise).max(1e-9);
     let high = noise + HYST_HIGH * span;
     let low = noise + HYST_LOW * span;
 
-    let frame_dt = frame_step as f32 / sample_rate as f32;
-    let (ons, offs) = events_from_envelope(&env, high, low, frame_dt);
+    let (ons, offs) = events_from_envelope(analysis_env, high, low, frame_dt);
     if ons.is_empty() {
         return EnvelopeDecode {
             text: String::new(),
@@ -288,6 +433,10 @@ pub struct LiveEnvelopeStreamer {
     last_text: String,
     last_wpm: f32,
     pinned_hz: Option<f32>,
+    min_snr_db: f32,
+    min_dyn_range_ratio: f32,
+    preprocess: PreprocessConfig,
+    analysis_window_seconds: Option<f32>,
 }
 
 #[derive(Debug, Clone)]
@@ -335,6 +484,12 @@ pub struct VizFrame {
     pub envelope_max: f32,
     pub noise_floor: f32,
     pub signal_floor: f32,
+    /// 20*log10(signal_floor / noise_floor). 0 when either is non-positive.
+    pub snr_db: f32,
+    /// True when the SNR gate suppressed text emission for this frame.
+    /// The visualizer should still render the envelope so the operator
+    /// can see *why* nothing was decoded.
+    pub snr_suppressed: bool,
     pub hyst_high: f32,
     pub hyst_low: f32,
     pub events: Vec<VizEvent>,
@@ -362,7 +517,29 @@ impl LiveEnvelopeStreamer {
             last_text: String::new(),
             last_wpm: 0.0,
             pinned_hz: None,
+            min_snr_db: DEFAULT_MIN_SNR_DB,
+            min_dyn_range_ratio: DEFAULT_MIN_DYN_RANGE_RATIO,
+            preprocess: PreprocessConfig::default(),
+            // Live decode: only the most recent 3s drive the gate, hysteresis,
+            // and decode. Insulates the gate from QSO turn-taking — when a
+            // strong station finishes and a weaker one starts, the strong
+            // station's peaks no longer anchor `env_max` and falsely trip
+            // the dynamic-range gate. Visualizer envelope still spans the
+            // full buffer.
+            analysis_window_seconds: Some(3.0),
         }
+    }
+
+    /// Override the rolling analysis-window length used for gate +
+    /// decode (see [`EnvelopeConfig::analysis_window_seconds`]). Pass
+    /// `None` to gate over the entire buffer (legacy behavior).
+    pub fn set_analysis_window_seconds(&mut self, seconds: Option<f32>) {
+        self.analysis_window_seconds = seconds.filter(|s| *s > 0.0);
+    }
+
+    /// Override the front-end audio preprocessing (bandpass + compander).
+    pub fn set_preprocess(&mut self, preprocess: PreprocessConfig) {
+        self.preprocess = preprocess;
     }
 
     /// Pin the pitch detector to a specific frequency (Hz). When `None`,
@@ -376,6 +553,20 @@ impl LiveEnvelopeStreamer {
     pub fn set_pinned_wpm(&mut self, pinned_wpm: Option<f32>) {
         self.pinned_wpm = pinned_wpm.filter(|w| *w > 0.0);
         self.locked_wpm = self.pinned_wpm;
+    }
+
+    /// Set the minimum signal-to-noise ratio (dB) required to emit text.
+    /// Below this floor the streamer still produces visualizer frames but
+    /// returns an empty transcript so the noise-locked failure mode does
+    /// not pollute the output.
+    pub fn set_min_snr_db(&mut self, min_snr_db: f32) {
+        self.min_snr_db = min_snr_db;
+    }
+
+    /// Set the minimum dynamic-range bimodality ratio. See
+    /// [`EnvelopeConfig::min_dyn_range_ratio`].
+    pub fn set_min_dyn_range_ratio(&mut self, ratio: f32) {
+        self.min_dyn_range_ratio = ratio;
     }
 
     /// Feed a chunk of audio. Returns one snapshot per decode cycle (may be
@@ -434,6 +625,10 @@ impl LiveEnvelopeStreamer {
         let cfg = EnvelopeConfig {
             pin_wpm: self.pinned_wpm.or(self.locked_wpm),
             pin_hz: self.pinned_hz,
+            min_snr_db: self.min_snr_db,
+            min_dyn_range_ratio: self.min_dyn_range_ratio,
+            preprocess: self.preprocess,
+            analysis_window_seconds: self.analysis_window_seconds,
         };
         let (text, wpm, elements, viz) = if with_viz {
             let (text, frame) = decode_envelope_with_viz(&self.buffer, self.sample_rate, &cfg);
@@ -472,6 +667,35 @@ impl LiveEnvelopeStreamer {
     }
 }
 
+/// Returns the suffix of the envelope that should drive the quality
+/// gate, hysteresis thresholds, and decode, plus the frame offset of
+/// that suffix from the start of the full envelope.
+///
+/// When `cfg.analysis_window_seconds` is `None` (default), the full
+/// envelope is used (legacy behavior). When `Some(s)`, only the most
+/// recent `s` seconds drive decoding while the visualizer still
+/// displays the entire buffer. This insulates the gate from older
+/// stations whose peaks would otherwise anchor `env_max` and falsely
+/// suppress a quieter station now on the air.
+fn analysis_slice<'a>(
+    full_env: &'a [f32],
+    frame_dt: f32,
+    cfg: &EnvelopeConfig,
+) -> (&'a [f32], usize) {
+    match cfg.analysis_window_seconds {
+        Some(s) if s > 0.0 && frame_dt > 0.0 => {
+            let target_frames = ((s / frame_dt).ceil() as usize).max(1);
+            if full_env.len() > target_frames {
+                let offset = full_env.len() - target_frames;
+                (&full_env[offset..], offset)
+            } else {
+                (full_env, 0)
+            }
+        }
+        _ => (full_env, 0),
+    }
+}
+
 /// Like [`decode_envelope_with_stats`] but also returns a [`VizFrame`] with
 /// envelope, thresholds, classified events and k-means centroids for the
 /// visualizer. Slightly more expensive than the plain decode (it builds the
@@ -490,6 +714,8 @@ pub fn decode_envelope_with_viz(
         envelope_max: 0.0,
         noise_floor: 0.0,
         signal_floor: 0.0,
+        snr_db: 0.0,
+        snr_suppressed: false,
         hyst_high: 0.0,
         hyst_low: 0.0,
         events: Vec::new(),
@@ -514,19 +740,27 @@ pub fn decode_envelope_with_viz(
         .pin_hz
         .unwrap_or_else(|| estimate_dominant_pitch(samples, sample_rate, &pitch_cfg));
 
+    let preprocessed: Vec<f32>;
+    let work: &[f32] = if cfg.preprocess.enabled {
+        preprocessed = preprocess::apply(samples, sample_rate, pitch, &cfg.preprocess);
+        &preprocessed
+    } else {
+        samples
+    };
+
     let frame_len = ((FRAME_LEN_S * sample_rate as f32).round() as usize).max(32);
     let frame_step = ((FRAME_STEP_S * sample_rate as f32).round() as usize).max(8);
-    if samples.len() < frame_len {
+    if work.len() < frame_len {
         let mut v = empty_viz();
         v.pitch_hz = pitch;
         return (String::new(), v);
     }
 
-    let mut env: Vec<f32> = Vec::with_capacity(samples.len() / frame_step + 1);
+    let mut env: Vec<f32> = Vec::with_capacity(work.len() / frame_step + 1);
     let mut offset = 0usize;
-    while offset + frame_len <= samples.len() {
+    while offset + frame_len <= work.len() {
         env.push(goertzel_power(
-            &samples[offset..offset + frame_len],
+            &work[offset..offset + frame_len],
             sample_rate,
             pitch,
         ));
@@ -539,14 +773,37 @@ pub fn decode_envelope_with_viz(
         return (String::new(), v);
     }
 
-    let env_max = env.iter().copied().fold(0.0_f32, f32::max);
-    let (noise, signal) = percentile_pair(&env, 0.20, 0.90);
+    let frame_dt = frame_step as f32 / sample_rate as f32;
+    let (analysis_env, analysis_offset_frames) = analysis_slice(&env, frame_dt, cfg);
+    let analysis_offset_s = analysis_offset_frames as f32 * frame_dt;
+
+    let env_max = robust_peak(analysis_env, ROBUST_PEAK_PERCENTILE);
+    let (noise, signal) = percentile_pair(analysis_env, 0.20, 0.90);
+    let snr = snr_db(noise, signal);
+    if !passes_quality_gate(cfg, noise, signal, env_max) {
+        // Quality gate: envelope is essentially noise. Return empty
+        // text but a populated viz frame so the operator can SEE why
+        // the decoder refused to emit text (the visualizer dashed
+        // lines should sit close together, and the noise/signal
+        // floors hover near the mean of the envelope).
+        let mut v = empty_viz();
+        v.pitch_hz = pitch;
+        v.envelope = downsample_envelope(&env);
+        v.envelope_max = env_max;
+        v.noise_floor = noise;
+        v.signal_floor = signal;
+        v.snr_db = snr;
+        v.snr_suppressed = true;
+        let span = (signal - noise).max(1e-9);
+        v.hyst_high = noise + HYST_HIGH * span;
+        v.hyst_low = noise + HYST_LOW * span;
+        return (String::new(), v);
+    }
     let span = (signal - noise).max(1e-9);
     let high = noise + HYST_HIGH * span;
     let low = noise + HYST_LOW * span;
 
-    let frame_dt = frame_step as f32 / sample_rate as f32;
-    let timed = events_with_times(&env, high, low, frame_dt);
+    let timed = events_with_times(analysis_env, high, low, frame_dt);
 
     let on_durations: Vec<f32> = timed
         .iter()
@@ -566,6 +823,7 @@ pub fn decode_envelope_with_viz(
         v.envelope_max = env_max;
         v.noise_floor = noise;
         v.signal_floor = signal;
+        v.snr_db = snr;
         v.hyst_high = high;
         v.hyst_low = low;
         return (String::new(), v);
@@ -602,8 +860,8 @@ pub fn decode_envelope_with_viz(
                 VizEventKind::OffIntra
             };
             VizEvent {
-                start_s: e.start_s,
-                end_s: e.end_s,
+                start_s: e.start_s + analysis_offset_s,
+                end_s: e.end_s + analysis_offset_s,
                 duration_s: e.duration_s,
                 kind,
             }
@@ -619,6 +877,8 @@ pub fn decode_envelope_with_viz(
         envelope_max: env_max,
         noise_floor: noise,
         signal_floor: signal,
+        snr_db: snr,
+        snr_suppressed: false,
         hyst_high: high,
         hyst_low: low,
         events,
@@ -884,6 +1144,19 @@ fn percentile_pair(values: &[f32], p_lo: f32, p_hi: f32) -> (f32, f32) {
     )
 }
 
+/// Robust peak: high percentile of the envelope rather than the literal
+/// max. Insulates the dynamic-range gate from single-sample QRN spikes
+/// or key-click transients that would otherwise dwarf the true CW
+/// peaks and falsely collapse the bimodality ratio.
+pub(crate) fn robust_peak(values: &[f32], percentile: f32) -> f32 {
+    if values.is_empty() {
+        return 0.0;
+    }
+    let mut sorted: Vec<f32> = values.iter().copied().collect();
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    region_stream::percentile_sorted(&sorted, percentile)
+}
+
 fn median_lower_half(values: &[f32]) -> f32 {
     if values.is_empty() {
         return 0.0;
@@ -954,6 +1227,449 @@ fn morse_to_char(s: &str) -> Option<char> {
     }
 }
 
+/// Per-track decode result from [`decode_envelope_multi`].
+#[derive(Debug, Clone)]
+pub struct MultiPitchTrack {
+    /// Pitch (Hz) the track was decoded at.
+    pub pitch_hz: f32,
+    /// Average per-frame Goertzel power at this pitch (sweep units).
+    pub power: f32,
+    /// Decoded text for this pitch.
+    pub transcript: String,
+    /// Estimated WPM for this pitch.
+    pub wpm: f32,
+    /// Visualizer payload from the underlying envelope decode.
+    pub viz: VizFrame,
+}
+
+/// Default narrow bandpass width for multi-pitch decode (Hz).
+///
+/// The single-pitch default in [`PreprocessConfig`] is 300 Hz, which is
+/// too wide when we are deliberately separating stations 50–200 Hz
+/// apart in audio pitch — at 300 Hz, two adjacent stations land in the
+/// same passband. 100 Hz is narrow enough to isolate stations spaced
+/// ≥ 60 Hz apart while still preserving CW key-click risetime.
+pub const DEFAULT_MULTI_PITCH_BANDPASS_WIDTH_HZ: f32 = 100.0;
+
+/// Decode the same buffer at each of the top-`cfg.k` spectral peaks
+/// and return one [`MultiPitchTrack`] per peak. Each track runs the
+/// existing single-pitch envelope pipeline pinned to its detected
+/// pitch.
+///
+/// `env_cfg` is cloned per track and mutated to set
+/// `pin_hz = Some(peak.pitch_hz)`. The caller is responsible for
+/// configuring `env_cfg.preprocess.bandpass_width_hz` to a narrow
+/// value (suggested
+/// [`DEFAULT_MULTI_PITCH_BANDPASS_WIDTH_HZ`]) so each pinned pitch
+/// gets its own filtered audio rather than a shared 300-Hz passband.
+///
+/// Peak detection runs on the recent analysis window (the last
+/// `env_cfg.analysis_window_seconds`) so old transients in the
+/// rolling buffer can't dominate the goertzel sweep.
+pub fn decode_envelope_multi(
+    samples: &[f32],
+    sample_rate: u32,
+    multi_cfg: &crate::region_stream::MultiPitchConfig,
+    env_cfg: &EnvelopeConfig,
+) -> Vec<MultiPitchTrack> {
+    if samples.is_empty() || sample_rate == 0 || multi_cfg.k == 0 {
+        return Vec::new();
+    }
+    // Slice the buffer down to the analysis window before the sweep so
+    // peaks reflect what the per-track decoder will actually see.
+    let window_samples = match env_cfg.analysis_window_seconds {
+        Some(s) if s > 0.0 => {
+            let n = (s * sample_rate as f32) as usize;
+            if samples.len() > n {
+                &samples[samples.len() - n..]
+            } else {
+                samples
+            }
+        }
+        _ => samples,
+    };
+    let peaks = crate::region_stream::find_top_pitch_peaks(window_samples, sample_rate, multi_cfg);
+    let mut tracks = Vec::with_capacity(peaks.len());
+    for peak in peaks {
+        let mut cfg = env_cfg.clone();
+        cfg.pin_hz = Some(peak.pitch_hz);
+        let (text, viz) = decode_envelope_with_viz(samples, sample_rate, &cfg);
+        tracks.push(MultiPitchTrack {
+            pitch_hz: peak.pitch_hz,
+            power: peak.power,
+            transcript: text,
+            wpm: viz.wpm,
+            viz,
+        });
+    }
+    tracks
+}
+
+/// Per-track snapshot from [`LiveMultiPitchStreamer`].
+#[derive(Debug, Clone)]
+pub struct TrackSnapshot {
+    /// Stable track id assigned by the streamer. The id persists
+    /// across cycles when the same pitch keeps being detected (within
+    /// the matching tolerance).
+    pub track_id: u32,
+    /// Pitch (Hz) the track was decoded at this cycle.
+    pub pitch_hz: f32,
+    pub wpm: f32,
+    pub transcript: String,
+    /// Difference from this track's prior transcript. When the
+    /// current transcript starts with the prior one, this is the
+    /// suffix; otherwise it's the full new transcript.
+    pub appended: String,
+    pub viz: Option<VizFrame>,
+}
+
+/// Internal per-track state kept by [`LiveMultiPitchStreamer`].
+struct TrackState {
+    track_id: u32,
+    pitch_hz: f32,
+    last_transcript: String,
+    /// Cycles since this track was last matched. Tracks that go
+    /// unmatched for more than `expiry_cycles` are dropped.
+    cycles_unmatched: u32,
+}
+
+/// Live cousin of [`LiveEnvelopeStreamer`] that maintains one
+/// transcript per detected pitch with stable track ids across cycles.
+///
+/// Audio buffering is reused via an internal [`LiveEnvelopeStreamer`]
+/// so the existing single-pitch decode keeps running unchanged. On
+/// each cycle the streamer also runs [`decode_envelope_multi`] and
+/// matches the resulting peaks to existing tracks via a globally-
+/// optimal assignment (brute-force over `k!` permutations), keeping
+/// track ids stable when stations cross over in pitch.
+pub struct LiveMultiPitchStreamer {
+    sample_rate: u32,
+    buffer: Vec<f32>,
+    decode_every_samples: usize,
+    since_last_decode: usize,
+    multi_cfg: crate::region_stream::MultiPitchConfig,
+    preprocess: PreprocessConfig,
+    pinned_wpm: Option<f32>,
+    min_snr_db: f32,
+    min_dyn_range_ratio: f32,
+    analysis_window_seconds: Option<f32>,
+    /// Maximum pitch difference (Hz) tolerated when matching a peak
+    /// to an existing track.
+    match_tolerance_hz: f32,
+    /// Cycles a track survives without a matching peak before it is
+    /// removed. Three cycles ≈ 750 ms at the default cadence — long
+    /// enough to ride out a single short dropout but short enough to
+    /// reclaim the id when a station goes silent for good.
+    expiry_cycles: u32,
+    next_track_id: u32,
+    tracks: Vec<TrackState>,
+}
+
+impl LiveMultiPitchStreamer {
+    pub fn new(sample_rate: u32, k: usize) -> Self {
+        let preprocess = PreprocessConfig {
+            bandpass_width_hz: DEFAULT_MULTI_PITCH_BANDPASS_WIDTH_HZ,
+            ..PreprocessConfig::default()
+        };
+        Self {
+            sample_rate,
+            buffer: Vec::new(),
+            decode_every_samples: ((0.25 * sample_rate as f32) as usize).max(1024),
+            since_last_decode: 0,
+            multi_cfg: crate::region_stream::MultiPitchConfig {
+                k,
+                ..crate::region_stream::MultiPitchConfig::default()
+            },
+            preprocess,
+            pinned_wpm: None,
+            min_snr_db: DEFAULT_MIN_SNR_DB,
+            min_dyn_range_ratio: DEFAULT_MIN_DYN_RANGE_RATIO,
+            analysis_window_seconds: Some(3.0),
+            match_tolerance_hz: 40.0,
+            expiry_cycles: 3,
+            next_track_id: 0,
+            tracks: Vec::new(),
+        }
+    }
+
+    pub fn set_k(&mut self, k: usize) {
+        self.multi_cfg.k = k;
+    }
+
+    pub fn set_match_tolerance_hz(&mut self, tol: f32) {
+        self.match_tolerance_hz = tol.max(0.0);
+    }
+
+    pub fn set_expiry_cycles(&mut self, cycles: u32) {
+        self.expiry_cycles = cycles;
+    }
+
+    pub fn set_min_snr_db(&mut self, db: f32) {
+        self.min_snr_db = db;
+    }
+
+    pub fn set_min_dyn_range_ratio(&mut self, r: f32) {
+        self.min_dyn_range_ratio = r;
+    }
+
+    pub fn set_pinned_wpm(&mut self, wpm: Option<f32>) {
+        self.pinned_wpm = wpm.filter(|w| *w > 0.0);
+    }
+
+    pub fn set_preprocess(&mut self, preprocess: PreprocessConfig) {
+        self.preprocess = preprocess;
+    }
+
+    pub fn set_analysis_window_seconds(&mut self, seconds: Option<f32>) {
+        self.analysis_window_seconds = seconds.filter(|s| *s > 0.0);
+    }
+
+    /// Feed audio. Returns `Some(snapshots)` once a decode cycle
+    /// fires; `None` while the buffer is still filling.
+    pub fn feed(&mut self, samples: &[f32]) -> Option<Vec<TrackSnapshot>> {
+        self.push_samples(samples);
+        self.since_last_decode += samples.len();
+        if self.since_last_decode >= self.decode_every_samples {
+            self.since_last_decode = 0;
+            Some(self.decode_now(false))
+        } else {
+            None
+        }
+    }
+
+    /// Like [`feed`] but viz frames are populated.
+    pub fn feed_with_viz(&mut self, samples: &[f32]) -> Option<Vec<TrackSnapshot>> {
+        self.push_samples(samples);
+        self.since_last_decode += samples.len();
+        if self.since_last_decode >= self.decode_every_samples {
+            self.since_last_decode = 0;
+            Some(self.decode_now(true))
+        } else {
+            None
+        }
+    }
+
+    pub fn flush(&mut self) -> Vec<TrackSnapshot> {
+        self.decode_now(false)
+    }
+
+    pub fn flush_with_viz(&mut self) -> Vec<TrackSnapshot> {
+        self.decode_now(true)
+    }
+
+    fn push_samples(&mut self, samples: &[f32]) {
+        self.buffer.extend_from_slice(samples);
+        let max_samples = (self.sample_rate as usize * MAX_LIVE_ENVELOPE_BUFFER_SECONDS)
+            .max(self.decode_every_samples * 2);
+        if self.buffer.len() > max_samples {
+            let excess = self.buffer.len() - max_samples;
+            self.buffer.drain(0..excess);
+        }
+    }
+
+    fn decode_now(&mut self, with_viz: bool) -> Vec<TrackSnapshot> {
+        let env_cfg = EnvelopeConfig {
+            pin_wpm: self.pinned_wpm,
+            pin_hz: None,
+            min_snr_db: self.min_snr_db,
+            min_dyn_range_ratio: self.min_dyn_range_ratio,
+            preprocess: self.preprocess,
+            analysis_window_seconds: self.analysis_window_seconds,
+        };
+        let tracks =
+            decode_envelope_multi(&self.buffer, self.sample_rate, &self.multi_cfg, &env_cfg);
+
+        // Build assignment of new tracks (peaks) to existing track ids.
+        let assignment = assign_tracks(&self.tracks, &tracks, self.match_tolerance_hz);
+
+        // Apply assignment: matched tracks reuse ids, unmatched peaks
+        // mint new ids, unmatched existing tracks tick toward expiry.
+        let mut new_states: Vec<TrackState> = Vec::with_capacity(tracks.len());
+        let mut snapshots: Vec<TrackSnapshot> = Vec::with_capacity(tracks.len());
+        let mut existing_matched = vec![false; self.tracks.len()];
+
+        for (new_idx, decoded) in tracks.iter().enumerate() {
+            let matched_existing = assignment[new_idx];
+            let (track_id, prior_transcript) = match matched_existing {
+                Some(old_idx) => {
+                    existing_matched[old_idx] = true;
+                    (
+                        self.tracks[old_idx].track_id,
+                        self.tracks[old_idx].last_transcript.clone(),
+                    )
+                }
+                None => {
+                    let id = self.next_track_id;
+                    self.next_track_id = self.next_track_id.wrapping_add(1);
+                    (id, String::new())
+                }
+            };
+            let appended = if decoded.transcript.starts_with(&prior_transcript) {
+                decoded.transcript[prior_transcript.len()..].to_string()
+            } else {
+                decoded.transcript.clone()
+            };
+            snapshots.push(TrackSnapshot {
+                track_id,
+                pitch_hz: decoded.pitch_hz,
+                wpm: decoded.wpm,
+                transcript: decoded.transcript.clone(),
+                appended,
+                viz: if with_viz {
+                    Some(decoded.viz.clone())
+                } else {
+                    None
+                },
+            });
+            new_states.push(TrackState {
+                track_id,
+                pitch_hz: decoded.pitch_hz,
+                last_transcript: decoded.transcript.clone(),
+                cycles_unmatched: 0,
+            });
+        }
+
+        // Carry forward unmatched existing tracks until they expire.
+        for (i, state) in self.tracks.iter().enumerate() {
+            if existing_matched[i] {
+                continue;
+            }
+            let aged = state.cycles_unmatched + 1;
+            if aged < self.expiry_cycles {
+                new_states.push(TrackState {
+                    track_id: state.track_id,
+                    pitch_hz: state.pitch_hz,
+                    last_transcript: state.last_transcript.clone(),
+                    cycles_unmatched: aged,
+                });
+            }
+        }
+
+        self.tracks = new_states;
+        snapshots
+    }
+}
+
+/// Returns `assignment[new_idx] = Some(old_idx)` when the new peak
+/// matches an existing track, otherwise `None`. Brute-force over all
+/// permutations subject to `tolerance_hz`. K is bounded by the
+/// `MultiPitchConfig::k` (≤4 in practice), so the K!*K cost is
+/// negligible.
+fn assign_tracks(
+    existing: &[TrackState],
+    new_peaks: &[MultiPitchTrack],
+    tolerance_hz: f32,
+) -> Vec<Option<usize>> {
+    let n_new = new_peaks.len();
+    let n_old = existing.len();
+    let mut assignment = vec![None; n_new];
+    if n_new == 0 || n_old == 0 || tolerance_hz <= 0.0 {
+        return assignment;
+    }
+
+    // Build cost matrix; INF where the diff exceeds tolerance.
+    let mut cost = vec![vec![f32::INFINITY; n_old]; n_new];
+    for (i, peak) in new_peaks.iter().enumerate() {
+        for (j, state) in existing.iter().enumerate() {
+            let d = (peak.pitch_hz - state.pitch_hz).abs();
+            if d <= tolerance_hz {
+                cost[i][j] = d;
+            }
+        }
+    }
+
+    // Enumerate assignments. We pick a subset of new peaks (up to
+    // n_old) to match against existing tracks via permutation.
+    // Equivalent: pick a permutation `perm` of length n_new whose
+    // entries are either an old index (each used at most once) or
+    // None (unmatched). Try every such mapping.
+    let n_choices = n_old + 1; // n_old slots + "unmatched"
+    let total: u64 = (n_choices as u64).saturating_pow(n_new as u32);
+    let mut best_cost = f32::INFINITY;
+    let mut best: Vec<Option<usize>> = vec![None; n_new];
+
+    // Hard cap to keep this bounded; K should never be > 6 in practice.
+    if total > 100_000 {
+        // Fall back to greedy nearest-pairing.
+        return greedy_assignment(&cost);
+    }
+
+    for mut code in 0..total {
+        let mut used = vec![false; n_old];
+        let mut try_assign = vec![None; n_new];
+        let mut total_cost = 0.0_f32;
+        let mut valid = true;
+        for slot in try_assign.iter_mut().take(n_new) {
+            let pick = (code % n_choices as u64) as usize;
+            code /= n_choices as u64;
+            if pick == n_old {
+                *slot = None;
+            } else {
+                if used[pick] {
+                    valid = false;
+                    break;
+                }
+                used[pick] = true;
+                *slot = Some(pick);
+            }
+        }
+        if !valid {
+            continue;
+        }
+        for (i, slot) in try_assign.iter().enumerate() {
+            if let Some(j) = slot {
+                let c = cost[i][*j];
+                if !c.is_finite() {
+                    valid = false;
+                    break;
+                }
+                total_cost += c;
+            } else {
+                // Unmatched — soft penalty so we prefer matching when
+                // possible. Use tolerance as the constant penalty so a
+                // legit match (cost ≤ tolerance) always beats leaving
+                // a track unmatched if a match is available.
+                total_cost += tolerance_hz;
+            }
+        }
+        if !valid {
+            continue;
+        }
+        if total_cost < best_cost {
+            best_cost = total_cost;
+            best = try_assign;
+        }
+    }
+    if best_cost.is_finite() {
+        assignment = best;
+    }
+    assignment
+}
+
+fn greedy_assignment(cost: &[Vec<f32>]) -> Vec<Option<usize>> {
+    let n_new = cost.len();
+    let n_old = cost.first().map(|r| r.len()).unwrap_or(0);
+    let mut assignment = vec![None; n_new];
+    let mut used = vec![false; n_old];
+    // Sort all (i, j, cost) ascending and greedily pick.
+    let mut pairs: Vec<(usize, usize, f32)> = Vec::new();
+    for (i, row) in cost.iter().enumerate() {
+        for (j, &c) in row.iter().enumerate() {
+            if c.is_finite() {
+                pairs.push((i, j, c));
+            }
+        }
+    }
+    pairs.sort_by(|a, b| a.2.partial_cmp(&b.2).unwrap_or(std::cmp::Ordering::Equal));
+    for (i, j, _) in pairs {
+        if assignment[i].is_none() && !used[j] {
+            assignment[i] = Some(j);
+            used[j] = true;
+        }
+    }
+    assignment
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1017,6 +1733,10 @@ mod tests {
             &EnvelopeConfig {
                 pin_wpm: Some(20.0),
                 pin_hz: None,
+                min_snr_db: DEFAULT_MIN_SNR_DB,
+                min_dyn_range_ratio: DEFAULT_MIN_DYN_RANGE_RATIO,
+                preprocess: PreprocessConfig::default(),
+                analysis_window_seconds: None,
             },
         );
         assert_eq!(txt, "K", "got {:?}", txt);
@@ -1123,5 +1843,357 @@ mod tests {
             "wpm out of range: {}",
             viz.wpm
         );
+        assert!(
+            viz.snr_db > DEFAULT_MIN_SNR_DB,
+            "clean signal SNR should clear the gate, got {} dB",
+            viz.snr_db
+        );
+        assert!(
+            !viz.snr_suppressed,
+            "clean signal should not trigger SNR gate"
+        );
+    }
+
+    /// Deterministic pseudo-random noise so tests don't depend on
+    /// `rand`. Uses a tiny LCG for reproducibility.
+    fn noise_buf(rate: u32, seconds: f32, seed: u64, amplitude: f32) -> Vec<f32> {
+        let n = (rate as f32 * seconds) as usize;
+        let mut state = seed;
+        let mut out = Vec::with_capacity(n);
+        for _ in 0..n {
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            let v = ((state >> 33) as u32) as f32 / u32::MAX as f32;
+            out.push((v * 2.0 - 1.0) * amplitude);
+        }
+        out
+    }
+
+    #[test]
+    fn noise_only_signal_is_suppressed_by_snr_gate() {
+        let rate = 8000u32;
+        let s = noise_buf(rate, 5.0, 0x5EED, 0.05);
+        // Probe the actual SNR of pure noise to validate the default
+        // threshold discriminates noise from real CW.
+        let probe_cfg = EnvelopeConfig {
+            min_snr_db: 0.0,
+            min_dyn_range_ratio: 0.0,
+            ..Default::default()
+        };
+        let (_, probe_viz) = decode_envelope_with_viz(&s, rate, &probe_cfg);
+        eprintln!(
+            "noise probe: snr_db = {:.2}, dyn_range = {:.3}, noise_floor = {:.6}, signal_floor = {:.6}, env_max = {:.6}",
+            probe_viz.snr_db,
+            dyn_range_ratio(probe_viz.noise_floor, probe_viz.signal_floor, probe_viz.envelope_max),
+            probe_viz.noise_floor,
+            probe_viz.signal_floor,
+            probe_viz.envelope_max,
+        );
+
+        let cfg = EnvelopeConfig::default();
+        let (text, viz) = decode_envelope_with_viz(&s, rate, &cfg);
+        assert_eq!(
+            text, "",
+            "noise-only signal must not emit text (got {:?})",
+            text
+        );
+        assert!(
+            viz.snr_suppressed,
+            "expected snr_suppressed = true; snr_db = {}, threshold = {}",
+            viz.snr_db, cfg.min_snr_db
+        );
+        // Visualizer payload must still be populated so the operator
+        // can see *why* nothing decoded.
+        assert!(
+            !viz.envelope.is_empty(),
+            "envelope should remain populated when SNR gate fires"
+        );
+        assert!(
+            viz.signal_floor > 0.0 && viz.noise_floor > 0.0,
+            "noise/signal floors should be measured even when gated"
+        );
+        // Stats-path mirrors the gate.
+        let stats = decode_envelope_with_stats(&s, rate, &cfg);
+        assert_eq!(stats.text, "");
+        assert_eq!(stats.elements, 0);
+    }
+
+    #[test]
+    fn snr_gate_can_be_disabled() {
+        let rate = 8000u32;
+        let s = noise_buf(rate, 2.0, 0x5EED, 0.05);
+        let cfg = EnvelopeConfig {
+            pin_wpm: None,
+            pin_hz: None,
+            min_snr_db: 0.0,
+            min_dyn_range_ratio: 0.0,
+            preprocess: PreprocessConfig::default(),
+            analysis_window_seconds: None,
+        };
+        let (_text, viz) = decode_envelope_with_viz(&s, rate, &cfg);
+        // With the gate disabled the viz frame is the full happy-path
+        // shape (snr_suppressed = false), even on noise.
+        assert!(!viz.snr_suppressed);
+    }
+
+    #[test]
+    fn live_streamer_set_min_snr_db_propagates() {
+        let rate = 8000u32;
+        let mut streamer = LiveEnvelopeStreamer::new(rate);
+        streamer.set_min_snr_db(0.0);
+        streamer.set_min_dyn_range_ratio(0.0);
+        // Feed pure noise; with both gates disabled the streamer reaches
+        // the classifier (which may emit garbage chars). Important: it
+        // must not return immediately due to SNR.
+        streamer.feed(&noise_buf(rate, 1.5, 0xC0FFEE, 0.05));
+        let snap = streamer.flush_with_viz();
+        let viz = snap.viz.expect("viz frame requested");
+        assert!(!viz.snr_suppressed, "gate should be disabled");
+    }
+
+    #[test]
+    fn analysis_window_isolates_recent_station_from_louder_earlier_one() {
+        // Regression for the QSO turn-taking false-trip: when a strong
+        // station finishes and a quieter station now on the air would
+        // otherwise pass on its own, the loud earlier transients anchor
+        // env_max for the whole buffer and collapse the dyn-range gate.
+        // The 3s analysis window confines gate stats to the recent
+        // station's footprint.
+        let rate = 8000u32;
+        let dot = 0.060_f32;
+
+        // Loud burst first (amp ~3x the K below).
+        let loud_pitch = 700.0_f32;
+        let mut buf: Vec<f32> = synth_morse(rate, dot, loud_pitch, "-.- -.-");
+        for s in &mut buf {
+            *s *= 3.0;
+        }
+        // ~6 s of low background noise simulates inter-transmission silence.
+        buf.extend_from_slice(&noise_buf(rate, 6.0, 0xCAFE_BABE, 0.01));
+        // Quieter later transmission ("K") that we *want* decoded.
+        let mut later = synth_morse(rate, dot, 700.0, "-.-");
+        for s in &mut later {
+            *s *= 0.4;
+        }
+        buf.extend_from_slice(&later);
+
+        // Disable preprocessing so the test isolates gate behavior from
+        // compander gain (compander would equalize the two amplitudes).
+        let no_pp = PreprocessConfig {
+            enabled: false,
+            ..PreprocessConfig::default()
+        };
+
+        let legacy_cfg = EnvelopeConfig {
+            preprocess: no_pp,
+            analysis_window_seconds: None,
+            ..Default::default()
+        };
+        let (legacy_text, legacy_viz) = decode_envelope_with_viz(&buf, rate, &legacy_cfg);
+        assert!(
+            legacy_viz.snr_suppressed || !legacy_text.ends_with('K'),
+            "legacy gate should mishandle the trailing K; \
+             snr_suppressed={}, text={:?}",
+            legacy_viz.snr_suppressed,
+            legacy_text
+        );
+
+        let windowed_cfg = EnvelopeConfig {
+            preprocess: no_pp,
+            analysis_window_seconds: Some(3.0),
+            ..Default::default()
+        };
+        let (windowed_text, windowed_viz) = decode_envelope_with_viz(&buf, rate, &windowed_cfg);
+        assert!(
+            !windowed_viz.snr_suppressed,
+            "windowed gate should pass the recent K, got snr_db={}",
+            windowed_viz.snr_db
+        );
+        assert!(
+            windowed_text.contains('K'),
+            "expected decoded text to contain 'K', got {:?}",
+            windowed_text
+        );
+    }
+
+    // ---- Multi-pitch tests --------------------------------------------------
+
+    fn synth_continuous_tone(rate: u32, secs: f32, pitch: f32, amp: f32) -> Vec<f32> {
+        let n = (rate as f32 * secs) as usize;
+        (0..n)
+            .map(|i| (TAU * pitch * i as f32 / rate as f32).sin() * amp)
+            .collect()
+    }
+
+    fn mix(a: &[f32], b: &[f32]) -> Vec<f32> {
+        let n = a.len().max(b.len());
+        (0..n)
+            .map(|i| a.get(i).copied().unwrap_or(0.0) + b.get(i).copied().unwrap_or(0.0))
+            .collect()
+    }
+
+    #[test]
+    fn decode_envelope_multi_decodes_two_simultaneous_morse() {
+        let rate = 8000u32;
+        let dot = 0.060_f32;
+        let a = synth_morse(rate, dot, 600.0, "-.- -.- -.-"); // K K K
+        let b = synth_morse(rate, dot, 850.0, "- . ... -"); // T E S T
+        let buf = mix(&a, &b);
+        let multi_cfg = crate::region_stream::MultiPitchConfig {
+            k: 4,
+            min_separation_hz: 40.0,
+            min_relative_power: 0.10,
+            sweep: crate::region_stream::RegionStreamConfig {
+                pitch_step_hz: 10.0,
+                ..Default::default()
+            },
+        };
+        // Use the narrower bandpass for multi-pitch.
+        let preprocess = PreprocessConfig {
+            bandpass_width_hz: DEFAULT_MULTI_PITCH_BANDPASS_WIDTH_HZ,
+            ..PreprocessConfig::default()
+        };
+        let env_cfg = EnvelopeConfig {
+            preprocess,
+            analysis_window_seconds: None,
+            ..Default::default()
+        };
+        let tracks = decode_envelope_multi(&buf, rate, &multi_cfg, &env_cfg);
+        assert_eq!(tracks.len(), 2, "expected 2 tracks, got {tracks:?}");
+
+        // Identify which track corresponds to which pitch.
+        let mut by_pitch = tracks.clone();
+        by_pitch.sort_by(|a, b| a.pitch_hz.partial_cmp(&b.pitch_hz).unwrap());
+        let lo = &by_pitch[0];
+        let hi = &by_pitch[1];
+        assert!(
+            (lo.pitch_hz - 600.0).abs() < 25.0,
+            "lo pitch {}",
+            lo.pitch_hz
+        );
+        assert!(
+            (hi.pitch_hz - 850.0).abs() < 25.0,
+            "hi pitch {}",
+            hi.pitch_hz
+        );
+        // Each track should contain at least one of its expected
+        // characters. Decoding mixed tones is fragile so we keep the
+        // assertion weak — the goal is to prove the two tracks
+        // produce distinct, non-empty transcripts.
+        assert!(
+            !lo.transcript.is_empty(),
+            "low-pitch transcript empty: {:?}",
+            lo.transcript
+        );
+        assert!(
+            !hi.transcript.is_empty(),
+            "high-pitch transcript empty: {:?}",
+            hi.transcript
+        );
+    }
+
+    #[test]
+    fn live_multi_pitch_streamer_track_ids_persist_across_cycles() {
+        let rate = 8000u32;
+        let mut streamer = LiveMultiPitchStreamer::new(rate, 2);
+        // First cycle: feed continuous 700 Hz tone (long enough that
+        // the 250 ms cadence fires once).
+        let chunk = synth_continuous_tone(rate, 0.6, 700.0, 0.5);
+        let snaps1 = streamer.feed(&chunk).expect("cycle 1 should fire");
+        assert!(!snaps1.is_empty(), "cycle 1 produced no tracks");
+        let id1 = snaps1[0].track_id;
+        // Second cycle: same pitch — id should stick.
+        let snaps2 = streamer
+            .feed(&synth_continuous_tone(rate, 0.6, 700.0, 0.5))
+            .expect("cycle 2 should fire");
+        assert!(!snaps2.is_empty());
+        assert_eq!(snaps2[0].track_id, id1, "track id changed across cycles");
+    }
+
+    #[test]
+    fn live_multi_pitch_streamer_new_pitch_gets_new_track_id() {
+        let rate = 8000u32;
+        let mut streamer = LiveMultiPitchStreamer::new(rate, 4);
+        let _ = streamer.feed(&synth_continuous_tone(rate, 0.6, 700.0, 0.5));
+        let mix2 = mix(
+            &synth_continuous_tone(rate, 0.6, 700.0, 0.5),
+            &synth_continuous_tone(rate, 0.6, 900.0, 0.5),
+        );
+        let snaps = streamer.feed(&mix2).expect("cycle should fire");
+        let pitches: Vec<f32> = snaps.iter().map(|s| s.pitch_hz).collect();
+        assert!(
+            pitches.iter().any(|p| (p - 900.0).abs() < 30.0),
+            "new pitch missing: {pitches:?}"
+        );
+        // Distinct ids for each track.
+        let ids: std::collections::HashSet<u32> = snaps.iter().map(|s| s.track_id).collect();
+        assert_eq!(ids.len(), snaps.len(), "track ids not unique: {snaps:?}");
+    }
+
+    #[test]
+    fn live_multi_pitch_streamer_track_id_persists_through_dropout_and_reappearance() {
+        let rate = 8000u32;
+        let mut streamer = LiveMultiPitchStreamer::new(rate, 2);
+        streamer.set_expiry_cycles(5);
+        let snaps1 = streamer
+            .feed(&synth_continuous_tone(rate, 0.6, 700.0, 0.5))
+            .expect("cycle 1");
+        let id1 = snaps1[0].track_id;
+        // One cycle of silence (still within expiry window).
+        let _ = streamer.feed(&vec![0.0_f32; (rate as f32 * 0.6) as usize]);
+        // Pitch reappears.
+        let snaps3 = streamer
+            .feed(&synth_continuous_tone(rate, 0.6, 700.0, 0.5))
+            .expect("cycle 3");
+        assert!(!snaps3.is_empty());
+        assert_eq!(
+            snaps3[0].track_id, id1,
+            "track id should be reused across short dropout"
+        );
+    }
+
+    #[test]
+    fn live_multi_pitch_streamer_handles_track_crossing() {
+        // Two tracks whose pitches cross over time: A drifts up while
+        // B drifts down, ending swapped. With global assignment the
+        // ids should still follow the *closest* match each cycle —
+        // this test verifies the assignment is at least not arbitrary
+        // by checking that both starting ids survive through a small
+        // separation cycle.
+        let rate = 8000u32;
+        let mut streamer = LiveMultiPitchStreamer::new(rate, 2);
+        let cycle = mix(
+            &synth_continuous_tone(rate, 0.6, 700.0, 0.5),
+            &synth_continuous_tone(rate, 0.6, 900.0, 0.5),
+        );
+        let snaps1 = streamer.feed(&cycle).expect("cycle 1");
+        assert_eq!(snaps1.len(), 2, "expected 2 starting tracks");
+        let mut starting: std::collections::HashMap<u32, f32> = std::collections::HashMap::new();
+        for s in &snaps1 {
+            starting.insert(s.track_id, s.pitch_hz);
+        }
+        // Slightly drifted pitches — 700→720, 900→880. Minimum-cost
+        // assignment should keep ids tied to the closer pitch (still
+        // 700-ish vs 900-ish), not flip them.
+        let cycle2 = mix(
+            &synth_continuous_tone(rate, 0.6, 720.0, 0.5),
+            &synth_continuous_tone(rate, 0.6, 880.0, 0.5),
+        );
+        let snaps2 = streamer.feed(&cycle2).expect("cycle 2");
+        assert_eq!(snaps2.len(), 2);
+        for s in &snaps2 {
+            let prior_pitch = starting
+                .get(&s.track_id)
+                .copied()
+                .expect("id should match a starting track");
+            assert!(
+                (s.pitch_hz - prior_pitch).abs() <= 60.0,
+                "track {} jumped from {} to {} — assignment should pick nearest",
+                s.track_id,
+                prior_pitch,
+                s.pitch_hz
+            );
+        }
     }
 }

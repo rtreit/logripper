@@ -23,7 +23,7 @@
 
 param(
     [Parameter(Position = 0)]
-    [ValidateSet('build', 'check', 'rust', 'dotnet', 'win32', 'check-rust', 'check-dotnet', 'proto', 'help')]
+    [ValidateSet('build', 'check', 'rust', 'cw-decoder', 'dotnet', 'win32', 'check-rust', 'check-dotnet', 'proto', 'help')]
     [string]$Command = 'build',
 
     [ValidateSet('Release', 'Debug')]
@@ -90,6 +90,10 @@ $DotnetEngineProject = Join-Path $PSScriptRoot 'src' 'dotnet' 'QsoRipper.Engine.
 $DotnetDebugHostProject = Join-Path $PSScriptRoot 'src' 'dotnet' 'QsoRipper.DebugHost' 'QsoRipper.DebugHost.csproj'
 $CwScopeGuiProject = Join-Path $PSScriptRoot 'experiments' 'cw-decoder' 'gui' 'CwDecoderGui.csproj'
 $ServerBinary = if ($IsWindows) { 'qsoripper-server.exe' } else { 'qsoripper-server' }
+$CwDecoderRustManifest = Join-Path $PSScriptRoot 'experiments' 'cw-decoder' 'Cargo.toml'
+$CwDecoderRustTargetDir = Join-Path $PSScriptRoot 'experiments' 'cw-decoder' 'target' | Join-Path -ChildPath $RustTargetProfile
+$CwDecoderRustBinary = if ($IsWindows) { 'cw-decoder.exe' } else { 'cw-decoder' }
+$CwDecoderEvalBinary = if ($IsWindows) { 'eval.exe' } else { 'eval' }
 
 function Build-Rust {
     $arguments = @('build', '--manifest-path', $RustManifest)
@@ -350,8 +354,40 @@ cl /W4 /WX /analyze $optFlags /DUNICODE /D_UNICODE /I"$ffiInclude" /I"$Win32Reso
     Write-Host "  -> $Win32PublishDir"
 }
 
+function Build-CwDecoderRust {
+    # The CW Scope GUI (CwDecoderGui) shells out to experiments/cw-decoder's
+    # Rust binaries (cw-decoder.exe and eval.exe). Those live in a separate
+    # cargo workspace from src/rust/ and are NOT touched by Build-Rust, so
+    # without this step runall.ps1 would happily relaunch the GUI on top of
+    # a stale cw-decoder.exe and silently miss source changes (see e.g. the
+    # default pitch-sweep range fix). Build them explicitly here so that
+    # build.ps1 is the single source of truth for "what is on disk".
+    if (-not (Test-Path -LiteralPath $CwDecoderRustManifest)) {
+        Write-Step "Skipping CW decoder Rust build (manifest not found at $CwDecoderRustManifest)"
+        return
+    }
+
+    $arguments = @('build', '--manifest-path', $CwDecoderRustManifest, '--bins')
+    if ($IsReleaseBuild) {
+        $arguments += '--release'
+    }
+
+    Invoke-Build "Building CW decoder Rust binaries ($Configuration)" cargo $arguments
+
+    foreach ($binaryName in @($CwDecoderRustBinary, $CwDecoderEvalBinary)) {
+        $binaryPath = Join-Path $CwDecoderRustTargetDir $binaryName
+        if (Test-Path -LiteralPath $binaryPath) {
+            Write-Host "  -> $binaryPath"
+        }
+        else {
+            Write-Host "  Warning: expected $binaryName at $binaryPath but it was not found." -ForegroundColor Yellow
+        }
+    }
+}
+
 function Build-All {
     Build-Rust
+    Build-CwDecoderRust
     Build-Dotnet
     Build-Win32
 }
@@ -504,9 +540,10 @@ QsoRipper Build Script
 Usage: ./build.ps1 [command] [-Configuration Release|Debug]
 
 Commands:
-  build         Build Rust, .NET, and Win32 apps (default: Release)
+  build         Build Rust, .NET, Win32 apps, and the experiments/cw-decoder Rust binaries (default: Release)
   check         Full CI-equivalent quality check
   rust          Build Rust only (copies qsoripper-tui and qsoripper-stress-tui binaries to artifacts)
+  cw-decoder    Build the experiments/cw-decoder Rust binaries (cw-decoder + eval) only
   dotnet        Publish the CLI and GUI apps only
   win32         Build the Win32 C GUI app only
   check-rust    Rust quality: fmt, clippy, test + coverage threshold, buf lint, cargo deny
@@ -527,6 +564,7 @@ switch ($Command) {
     'build'        { Build-All }
     'check'        { Check-All }
     'rust'         { Build-Rust }
+    'cw-decoder'   { Build-CwDecoderRust }
     'dotnet'       { Build-Dotnet }
     'win32'        { Build-Win32 }
     'check-rust'   { Check-Rust }

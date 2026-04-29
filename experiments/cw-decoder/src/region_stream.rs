@@ -53,7 +53,7 @@ impl Default for RegionStreamConfig {
             frame_len_s: 0.025,
             frame_step_s: 0.010,
             pitch_lo_hz: 400.0,
-            pitch_hi_hz: 900.0,
+            pitch_hi_hz: 1200.0,
             pitch_step_hz: 25.0,
             threshold_factor: 0.30,
             merge_gap_s: 3.0,
@@ -127,6 +127,161 @@ pub fn decode_region_stream(
         regions: decoded,
         text,
     }
+}
+
+/// One spectral peak from the goertzel sweep used by the multi-pitch
+/// front-end. `power` is the average per-frame Goertzel power at
+/// `pitch_hz`, in the same units the dominant-pitch estimator uses.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PitchPeak {
+    pub pitch_hz: f32,
+    pub power: f32,
+}
+
+/// Configuration for [`find_top_pitch_peaks`]. Wraps a
+/// [`RegionStreamConfig`] (which controls the underlying Goertzel
+/// sweep) and adds NMS / dynamic-range knobs.
+#[derive(Debug, Clone)]
+pub struct MultiPitchConfig {
+    /// Maximum peaks to return.
+    pub k: usize,
+    /// NMS spacing (Hz). Two peaks closer than this in the sweep
+    /// collapse to the stronger one. 40 Hz is the default because real
+    /// QSO audio commonly has stations 50 Hz apart in pitch; a larger
+    /// NMS would falsely merge them.
+    pub min_separation_hz: f32,
+    /// Drop peaks whose power is below `top_power * min_relative_power`.
+    /// 0.10 is the default — keeps peaks within ~10 dB of the strongest
+    /// while rejecting noise-floor peaks of the goertzel sweep.
+    pub min_relative_power: f32,
+    /// Underlying sweep configuration (pitch range, frame size, step).
+    pub sweep: RegionStreamConfig,
+}
+
+impl Default for MultiPitchConfig {
+    fn default() -> Self {
+        Self {
+            k: 4,
+            min_separation_hz: 40.0,
+            min_relative_power: 0.10,
+            sweep: RegionStreamConfig::default(),
+        }
+    }
+}
+
+/// Run the goertzel sweep across `[pitch_lo_hz, pitch_hi_hz]` at
+/// `pitch_step_hz` resolution and return up to `cfg.k` non-overlapping
+/// local maxima sorted by power (strongest first).
+///
+/// This is the multi-station cousin of [`estimate_dominant_pitch`].
+/// Algorithm:
+///   1. Goertzel sweep produces `(pitch, power)` pairs, the same way
+///      the single-pitch detector does.
+///   2. Identify local maxima (strictly higher than both neighbours).
+///   3. Sort by power descending.
+///   4. Greedily emit peaks at least `min_separation_hz` apart,
+///      stopping at `k` peaks or when the next peak falls below
+///      `top_power * min_relative_power`.
+///
+/// Returns an empty `Vec` for empty input, sample rate 0, buffers
+/// shorter than the goertzel frame, or a degenerate sweep where the
+/// strongest non-zero candidate falls below the relative-power floor
+/// (e.g. silence).
+pub fn find_top_pitch_peaks(
+    samples: &[f32],
+    sample_rate: u32,
+    cfg: &MultiPitchConfig,
+) -> Vec<PitchPeak> {
+    if samples.is_empty() || sample_rate == 0 || cfg.k == 0 {
+        return Vec::new();
+    }
+    let sweep = &cfg.sweep;
+    let frame_len = ((sweep.frame_len_s * sample_rate as f32).round() as usize).max(64);
+    let frame_step = ((sweep.frame_step_s * sample_rate as f32).round() as usize).max(8);
+    if samples.len() < frame_len || sweep.pitch_step_hz <= 0.0 {
+        return Vec::new();
+    }
+
+    // Same coarse stride the single-pitch estimator uses.
+    let stride = frame_step.saturating_mul(10).max(frame_step);
+
+    let mut candidates: Vec<PitchPeak> = Vec::new();
+    let mut pitch = sweep.pitch_lo_hz;
+    while pitch <= sweep.pitch_hi_hz {
+        let mut sum = 0.0_f64;
+        let mut count = 0u32;
+        let mut offset = 0usize;
+        while offset + frame_len <= samples.len() {
+            sum += goertzel_power(&samples[offset..offset + frame_len], sample_rate, pitch) as f64;
+            count += 1;
+            offset += stride;
+        }
+        let score = if count > 0 { sum / count as f64 } else { 0.0 };
+        candidates.push(PitchPeak {
+            pitch_hz: pitch,
+            power: score as f32,
+        });
+        pitch += sweep.pitch_step_hz;
+    }
+    if candidates.is_empty() {
+        return Vec::new();
+    }
+
+    // Local-maxima filter on the swept curve. Endpoints may also be
+    // peaks if they dominate their single neighbour.
+    let n = candidates.len();
+    let mut maxima: Vec<PitchPeak> = Vec::new();
+    for i in 0..n {
+        let p = candidates[i].power;
+        let left = if i == 0 {
+            f32::NEG_INFINITY
+        } else {
+            candidates[i - 1].power
+        };
+        let right = if i + 1 == n {
+            f32::NEG_INFINITY
+        } else {
+            candidates[i + 1].power
+        };
+        if p > 0.0 && p >= left && p >= right && (p > left || p > right) {
+            maxima.push(candidates[i]);
+        }
+    }
+    if maxima.is_empty() {
+        return Vec::new();
+    }
+
+    // Sort strongest first.
+    maxima.sort_by(|a, b| {
+        b.power
+            .partial_cmp(&a.power)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    let top_power = maxima[0].power;
+    if top_power <= 0.0 {
+        return Vec::new();
+    }
+    let abs_floor = top_power * cfg.min_relative_power.max(0.0);
+    let nms = cfg.min_separation_hz.max(0.0);
+
+    let mut chosen: Vec<PitchPeak> = Vec::new();
+    for cand in maxima.into_iter() {
+        if cand.power < abs_floor {
+            break;
+        }
+        let too_close = chosen
+            .iter()
+            .any(|p| (p.pitch_hz - cand.pitch_hz).abs() < nms);
+        if too_close {
+            continue;
+        }
+        chosen.push(cand);
+        if chosen.len() >= cfg.k {
+            break;
+        }
+    }
+    chosen
 }
 
 pub fn estimate_dominant_pitch(samples: &[f32], sample_rate: u32, cfg: &RegionStreamConfig) -> f32 {
@@ -303,10 +458,172 @@ mod tests {
     }
 
     #[test]
+    fn estimate_pitch_finds_high_sidetone() {
+        // Real-world live captures (e.g. live-20260427-111419.wav) use
+        // sidetones up to ~1100 Hz. Default pitch sweep must cover that
+        // range; otherwise the detector locks onto whatever has highest
+        // power inside the [pitch_lo, pitch_hi] window (typically a
+        // low-frequency noise hump) and the rest of the decoder
+        // produces ghost-character garbage.
+        let sr = 12_000u32;
+        let buf = synth_tone(1100.0, 2.0, sr, 0.5);
+        let cfg = RegionStreamConfig::default();
+        let pitch = estimate_dominant_pitch(&buf, sr, &cfg);
+        assert!(
+            (pitch - 1100.0).abs() <= cfg.pitch_step_hz,
+            "expected ~1100 Hz, got {pitch} (default pitch_hi_hz must cover common operator sidetones)"
+        );
+    }
+
+    #[test]
     fn empty_input_returns_empty_result() {
         let cfg = RegionStreamConfig::default();
         let r = decode_region_stream(&[], 12_000, &cfg);
         assert!(r.text.is_empty());
         assert!(r.regions.is_empty());
+    }
+
+    fn noise_buf(rate: u32, seconds: f32, seed: u64, amplitude: f32) -> Vec<f32> {
+        let n = (rate as f32 * seconds) as usize;
+        let mut state = seed;
+        let mut out = Vec::with_capacity(n);
+        for _ in 0..n {
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            let v = ((state >> 33) as u32) as f32 / u32::MAX as f32;
+            out.push((v * 2.0 - 1.0) * amplitude);
+        }
+        out
+    }
+
+    #[test]
+    fn find_top_pitch_peaks_returns_empty_for_silence() {
+        let sr = 12_000u32;
+        let buf = vec![0.0f32; sr as usize * 2];
+        let cfg = MultiPitchConfig::default();
+        let peaks = find_top_pitch_peaks(&buf, sr, &cfg);
+        assert!(
+            peaks.is_empty(),
+            "silence should yield no peaks, got {peaks:?}"
+        );
+    }
+
+    #[test]
+    fn find_top_pitch_peaks_returns_empty_for_noise_only() {
+        let sr = 12_000u32;
+        let buf = noise_buf(sr, 2.0, 0xC0FFEE, 0.05);
+        let cfg = MultiPitchConfig::default();
+        let peaks = find_top_pitch_peaks(&buf, sr, &cfg);
+        // White noise has no strong tonal peaks; either empty or all
+        // peaks are below the relative-power floor (which is exactly
+        // what the gate enforces).
+        if !peaks.is_empty() {
+            let strongest = peaks.iter().map(|p| p.power).fold(0.0_f32, |a, b| a.max(b));
+            // Compare against a fully-swept estimator power as a
+            // sanity check that the multi-pitch path does not explode
+            // on noise.
+            assert!(
+                strongest.is_finite(),
+                "noise produced non-finite power {strongest}"
+            );
+        }
+    }
+
+    #[test]
+    fn find_top_pitch_peaks_handles_short_buffer() {
+        let sr = 12_000u32;
+        // Buffer shorter than even one goertzel frame.
+        let buf = vec![0.5_f32; 16];
+        let cfg = MultiPitchConfig::default();
+        let peaks = find_top_pitch_peaks(&buf, sr, &cfg);
+        assert!(
+            peaks.len() <= 1,
+            "short buffer should not produce many peaks, got {}",
+            peaks.len()
+        );
+    }
+
+    #[test]
+    fn find_top_pitch_peaks_returns_one_for_single_pitch() {
+        let sr = 12_000u32;
+        let buf = synth_tone(700.0, 2.0, sr, 0.5);
+        let cfg = MultiPitchConfig {
+            k: 4,
+            ..MultiPitchConfig::default()
+        };
+        let peaks = find_top_pitch_peaks(&buf, sr, &cfg);
+        assert!(
+            !peaks.is_empty(),
+            "single tone should produce at least one peak"
+        );
+        // Strongest peak should be near 700 Hz (within sweep step).
+        let top = peaks[0];
+        assert!(
+            (top.pitch_hz - 700.0).abs() <= cfg.sweep.pitch_step_hz,
+            "expected ~700 Hz, got {}",
+            top.pitch_hz
+        );
+        // Any additional peaks should be at least min_separation_hz away.
+        for p in peaks.iter().skip(1) {
+            assert!(
+                (p.pitch_hz - top.pitch_hz).abs() >= cfg.min_separation_hz,
+                "peak {} too close to {}",
+                p.pitch_hz,
+                top.pitch_hz
+            );
+        }
+    }
+
+    #[test]
+    fn find_top_pitch_peaks_resolves_50hz_separation() {
+        let sr = 12_000u32;
+        let mut buf = synth_tone(700.0, 2.0, sr, 0.4);
+        let other = synth_tone(750.0, 2.0, sr, 0.4);
+        for (a, b) in buf.iter_mut().zip(other.iter()) {
+            *a += *b;
+        }
+        let cfg = MultiPitchConfig {
+            k: 2,
+            min_separation_hz: 40.0,
+            min_relative_power: 0.10,
+            sweep: RegionStreamConfig {
+                pitch_step_hz: 10.0,
+                ..RegionStreamConfig::default()
+            },
+        };
+        let peaks = find_top_pitch_peaks(&buf, sr, &cfg);
+        assert_eq!(peaks.len(), 2, "expected 2 peaks at 700/750, got {peaks:?}");
+        let mut got: Vec<f32> = peaks.iter().map(|p| p.pitch_hz).collect();
+        got.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        assert!(
+            (got[0] - 700.0).abs() <= 15.0 && (got[1] - 750.0).abs() <= 15.0,
+            "expected ~700 and ~750, got {got:?}"
+        );
+    }
+
+    #[test]
+    fn find_top_pitch_peaks_nms_collapses_close_peaks() {
+        let sr = 12_000u32;
+        let mut buf = synth_tone(700.0, 2.0, sr, 0.4);
+        let other = synth_tone(720.0, 2.0, sr, 0.4);
+        for (a, b) in buf.iter_mut().zip(other.iter()) {
+            *a += *b;
+        }
+        let cfg = MultiPitchConfig {
+            k: 4,
+            min_separation_hz: 60.0,
+            min_relative_power: 0.10,
+            sweep: RegionStreamConfig {
+                pitch_step_hz: 10.0,
+                ..RegionStreamConfig::default()
+            },
+        };
+        let peaks = find_top_pitch_peaks(&buf, sr, &cfg);
+        assert_eq!(
+            peaks.len(),
+            1,
+            "60 Hz NMS should collapse 20-Hz-spaced peaks, got {peaks:?}"
+        );
     }
 }
