@@ -3797,8 +3797,17 @@ fn run_stream_live_v3(
         // Force a viz-producing decode now.
         let snap = streamer.flush_with_viz();
         let t = started.elapsed().as_secs_f32();
-        let appended_session =
-            ditdah_streaming::append_snapshot_text(&mut session_transcript, &snap.transcript);
+        // Gate session-transcript stitching on the streamer's lock state
+        // so ACQUIRING-mode garbage and SNR-suppressed cycles do not
+        // pollute the persistent operator-visible transcript. The
+        // per-cycle `text` field still carries the raw snapshot for
+        // anyone who wants to see what the decoder was emitting before
+        // it locked.
+        let appended_session = if should_stitch_to_session(&snap) {
+            ditdah_streaming::append_snapshot_text(&mut session_transcript, &snap.transcript)
+        } else {
+            String::new()
+        };
         cap_session_transcript(&mut session_transcript, MAX_V3_SESSION_TRANSCRIPT_CHARS);
 
         if let Some(em) = emitter.as_mut() {
@@ -4011,8 +4020,14 @@ fn run_stream_live_v3_file(
 
         let snap = streamer.flush_with_viz();
         let t = started.elapsed().as_secs_f32();
-        let appended_session =
-            ditdah_streaming::append_snapshot_text(&mut session_transcript, &snap.transcript);
+        // Same lock-state gate as the live capture path: only stitch
+        // into the session transcript once the decoder has locked and
+        // the SNR gate is not suppressing.
+        let appended_session = if should_stitch_to_session(&snap) {
+            ditdah_streaming::append_snapshot_text(&mut session_transcript, &snap.transcript)
+        } else {
+            String::new()
+        };
         cap_session_transcript(&mut session_transcript, MAX_V3_SESSION_TRANSCRIPT_CHARS);
 
         if let Some(em) = emitter.as_mut() {
@@ -4127,6 +4142,27 @@ fn run_stream_live_v3_file(
     Ok(())
 }
 
+/// Returns true when the per-cycle decoder snapshot is trustworthy
+/// enough to be stitched into the persistent session transcript.
+///
+/// The streamer enters `LOCKED` (i.e. `viz.locked_wpm = Some(_)`) only
+/// after `lock_after_elements` consistent symbol observations. Cycles
+/// before that point are still useful for the live envelope viz but
+/// their `text` is typically classifier garbage from the keying
+/// hysteresis sliding around. SNR-suppressed cycles are also skipped
+/// even if locked, because by definition they emitted no transcript.
+///
+/// This intentionally does NOT inspect the snapshot text itself — the
+/// "operator sees what the decoder is making" principle from PR #362
+/// still applies to *which characters* end up in the session. We are
+/// only filtering *which cycles* are allowed to contribute.
+fn should_stitch_to_session(snap: &cw_decoder_poc::envelope_decoder::LiveEnvelopeSnapshot) -> bool {
+    let Some(viz) = snap.viz.as_ref() else {
+        return false;
+    };
+    viz.locked_wpm.is_some() && !viz.snr_suppressed
+}
+
 /// Maximum characters retained in the V3 visualizer's session transcript.
 /// When exceeded, [`cap_session_transcript`] trims back to ~80% on a
 /// whitespace boundary so old garbage is evicted as fresh copy lands.
@@ -4160,6 +4196,7 @@ fn cap_session_transcript(transcript: &mut String, max_chars: usize) {
 #[cfg(test)]
 mod v3_session_transcript_tests {
     use super::*;
+    use cw_decoder_poc::envelope_decoder;
 
     #[test]
     fn rolling_snapshots_grow_session_via_token_overlap() {
@@ -4224,5 +4261,74 @@ mod v3_session_transcript_tests {
         let mut s = original.clone();
         cap_session_transcript(&mut s, 12_000);
         assert_eq!(s, original);
+    }
+
+    fn make_snapshot(
+        text: &str,
+        viz: Option<envelope_decoder::VizFrame>,
+    ) -> envelope_decoder::LiveEnvelopeSnapshot {
+        envelope_decoder::LiveEnvelopeSnapshot {
+            transcript: text.to_string(),
+            appended: text.to_string(),
+            wpm: 20.0,
+            viz,
+        }
+    }
+
+    fn make_viz(locked: bool, suppressed: bool) -> envelope_decoder::VizFrame {
+        envelope_decoder::VizFrame {
+            sample_rate: 8000,
+            frame_step_s: 0.005,
+            buffer_seconds: 1.0,
+            pitch_hz: 700.0,
+            envelope: vec![],
+            envelope_max: 1.0,
+            noise_floor: 0.05,
+            signal_floor: 0.5,
+            snr_db: 20.0,
+            snr_suppressed: suppressed,
+            hyst_high: 0.55,
+            hyst_low: 0.35,
+            events: vec![],
+            on_durations: vec![],
+            dot_seconds: 0.06,
+            wpm: 20.0,
+            centroid_dot: 0.06,
+            centroid_dah: 0.18,
+            locked_wpm: if locked { Some(20.0) } else { None },
+        }
+    }
+
+    #[test]
+    fn should_stitch_to_session_requires_lock() {
+        // ACQUIRING (locked_wpm = None) → no stitch even if the cycle
+        // produced text. This filters the per-cycle classifier garbage
+        // that PR #362 made visible in the operator-facing transcript.
+        let snap = make_snapshot("US AS USE", Some(make_viz(false, false)));
+        assert!(!should_stitch_to_session(&snap));
+    }
+
+    #[test]
+    fn should_stitch_to_session_blocks_snr_suppressed_cycles() {
+        // Even if the streamer is locked, an SNR-suppressed cycle
+        // contributed nothing meaningful. Don't stitch (and avoid
+        // race conditions where text is non-empty due to leftover
+        // state but the gate fired).
+        let snap = make_snapshot("CQ", Some(make_viz(true, true)));
+        assert!(!should_stitch_to_session(&snap));
+    }
+
+    #[test]
+    fn should_stitch_to_session_allows_locked_clean_cycles() {
+        let snap = make_snapshot("CQ DE K7XYZ", Some(make_viz(true, false)));
+        assert!(should_stitch_to_session(&snap));
+    }
+
+    #[test]
+    fn should_stitch_to_session_skips_when_viz_absent() {
+        // Snapshots produced by the non-viz path have no information
+        // about lock state, so be conservative and skip.
+        let snap = make_snapshot("CQ", None);
+        assert!(!should_stitch_to_session(&snap));
     }
 }

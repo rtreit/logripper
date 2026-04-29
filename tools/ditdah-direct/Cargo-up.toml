@@ -1,0 +1,13 @@
+[package]
+name = "ditdah-direct-up"
+version = "0.0.0"
+edition = "2021"
+
+[dependencies]
+ditdah = { path = "../ditdah-upstream" }
+
+[[bin]]
+name = "ditdah-direct-up"
+path = "main.rs"
+
+[workspace]

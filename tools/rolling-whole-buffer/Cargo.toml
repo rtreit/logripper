@@ -1,0 +1,14 @@
+[package]
+name = "rolling-whole-buffer"
+version = "0.0.0"
+edition = "2021"
+
+[dependencies]
+ditdah = { path = "../ditdah-upstream" }
+hound = "3.5"
+
+[[bin]]
+name = "rolling-whole-buffer"
+path = "main.rs"
+
+[workspace]
