@@ -3798,6 +3798,16 @@ fn run_stream_live_v3(
     let mut last_drain_at: u64 = 0;
     let mut last_decode_at = Instant::now();
     let decode_period = Duration::from_millis(decode_every_ms);
+    // V3 no longer stitches successive rolling-buffer decodes into a
+    // long-running session transcript. Each cycle re-decodes the entire
+    // rolling buffer; when re-segmentation produces slightly different
+    // characters at the join point, the old `append_snapshot_text` path
+    // failed to recognize the overlap and re-emitted the same audio's
+    // text, creating phantom duplicates on screen
+    // ("...UHUEAB EEABSS HSSS5E S5VS..."). The user-visible transcript
+    // now mirrors the current rolling buffer's interpretation directly:
+    // it scrolls naturally as old audio ages off the buffer and never
+    // duplicates a phrase from a re-decode.
     let mut session_transcript: String = String::new();
     let mut diag = DiagWriter::from_env();
 
@@ -3857,19 +3867,15 @@ fn run_stream_live_v3(
         // Force a viz-producing decode now.
         let snap = streamer.flush_with_viz();
         let t = started.elapsed().as_secs_f32();
-        // Gate session-transcript stitching on the streamer's lock state
-        // so ACQUIRING-mode garbage and SNR-suppressed cycles do not
-        // pollute the persistent operator-visible transcript. The
-        // per-cycle `text` field still carries the raw snapshot for
-        // anyone who wants to see what the decoder was emitting before
-        // it locked.
-        let stitched = should_stitch_to_session(&snap);
-        let appended_session = if stitched {
-            ditdah_streaming::append_snapshot_text(&mut session_transcript, &snap.transcript)
-        } else {
-            String::new()
-        };
-        cap_session_transcript(&mut session_transcript, MAX_V3_SESSION_TRANSCRIPT_CHARS);
+        // V3 visualizer no longer stitches re-decodes. The transcript shown
+        // to the operator is the current rolling-buffer interpretation, full
+        // stop. The `stitched` and `appended_session` diag fields are kept
+        // for backward compatibility with the diag log format, but
+        // `appended_session` will always be empty under the new model.
+        let stitched = false;
+        let appended_session = String::new();
+        session_transcript.clear();
+        session_transcript.push_str(&snap.transcript);
         if let Some(d) = diag.as_mut() {
             d.record(
                 t,
@@ -4092,16 +4098,11 @@ fn run_stream_live_v3_file(
 
         let snap = streamer.flush_with_viz();
         let t = started.elapsed().as_secs_f32();
-        // Same lock-state gate as the live capture path: only stitch
-        // into the session transcript once the decoder has locked and
-        // the SNR gate is not suppressing.
-        let stitched = should_stitch_to_session(&snap);
-        let appended_session = if stitched {
-            ditdah_streaming::append_snapshot_text(&mut session_transcript, &snap.transcript)
-        } else {
-            String::new()
-        };
-        cap_session_transcript(&mut session_transcript, MAX_V3_SESSION_TRANSCRIPT_CHARS);
+        // V3 visualizer no longer stitches re-decodes (see live path above).
+        let stitched = false;
+        let appended_session = String::new();
+        session_transcript.clear();
+        session_transcript.push_str(&snap.transcript);
         if let Some(d) = diag.as_mut() {
             d.record(
                 t,
@@ -4239,6 +4240,7 @@ fn run_stream_live_v3_file(
 /// "operator sees what the decoder is making" principle from PR #362
 /// still applies to *which characters* end up in the session. We are
 /// only filtering *which cycles* are allowed to contribute.
+#[allow(dead_code)] // retained for legacy tests; V3 no longer stitches
 fn should_stitch_to_session(snap: &cw_decoder_poc::envelope_decoder::LiveEnvelopeSnapshot) -> bool {
     let Some(viz) = snap.viz.as_ref() else {
         return false;
@@ -4349,11 +4351,13 @@ impl DiagWriter {
 /// Maximum characters retained in the V3 visualizer's session transcript.
 /// When exceeded, [`cap_session_transcript`] trims back to ~80% on a
 /// whitespace boundary so old garbage is evicted as fresh copy lands.
+#[allow(dead_code)] // retained for legacy tests + future reuse
 const MAX_V3_SESSION_TRANSCRIPT_CHARS: usize = 12_000;
 
 /// Cap the running session transcript at `max_chars`. When over the limit,
 /// keep roughly the last 80% of the buffer, snapping the trim point to the
 /// nearest whitespace so we don't shear a token in half.
+#[allow(dead_code)] // retained for legacy tests + future reuse
 fn cap_session_transcript(transcript: &mut String, max_chars: usize) {
     if transcript.chars().count() <= max_chars {
         return;
