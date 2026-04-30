@@ -125,6 +125,35 @@ public sealed class QrzLogbookClient : IQrzLogbookApi, IDisposable
     }
 
     /// <inheritdoc />
+    public async Task<string> UploadQsoWithReplaceAsync(QsoRecord qso, string? bookOwner = null)
+    {
+        ArgumentNullException.ThrowIfNull(qso);
+
+        var prepared = qso.Clone();
+        AdifCodec.RewriteStationCallsignForBook(prepared, bookOwner);
+        var adifRecord = AdifCodec.SerializeSingleQso(prepared);
+
+        var formFields = new List<KeyValuePair<string, string>>(4)
+        {
+            new("ACTION", "INSERT"),
+            new("OPTION", "REPLACE"),
+            new("KEY", _apiKey),
+            new("ADIF", adifRecord),
+        };
+
+        var body = await PostFormAsync(formFields).ConfigureAwait(false);
+        var map = QrzResponseParser.ParseKeyValueResponse(body);
+        QrzResponseParser.CheckResult(map);
+
+        if (!map.TryGetValue("LOGID", out var logid) || string.IsNullOrWhiteSpace(logid))
+        {
+            throw new QrzLogbookException("INSERT+REPLACE response missing LOGID.");
+        }
+
+        return logid;
+    }
+
+    /// <inheritdoc />
     public async Task<string> UpdateQsoAsync(QsoRecord qso, string? bookOwner = null)
     {
         ArgumentNullException.ThrowIfNull(qso);

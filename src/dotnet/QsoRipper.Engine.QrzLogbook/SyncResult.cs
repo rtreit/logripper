@@ -40,4 +40,10 @@ public sealed record SyncResult
     /// matches a soft-deleted local row. Counted in Phase 1.
     /// </summary>
     public uint DeletesSkippedRemote { get; init; }
+
+    /// <summary>
+    /// Number of uploads retried with <c>OPTION=REPLACE</c> because QRZ
+    /// already had a matching QSO (duplicate INSERT → auto-matched REPLACE).
+    /// </summary>
+    public uint DuplicateReplaceCount { get; init; }
 }
