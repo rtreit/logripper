@@ -3739,7 +3739,9 @@ fn run_stream_live_v3(
     let mut last_drain_at: u64 = 0;
     let mut last_decode_at = Instant::now();
     let decode_period = Duration::from_millis(decode_every_ms);
-    let mut session_transcript: String = String::new();
+    let decode_every_s = decode_every_ms as f32 / 1000.0;
+    let mut commit_cursor =
+        ditdah_streaming::LiveCommitCursor::new(MAX_V3_SESSION_TRANSCRIPT_CHARS);
     let mut diag = DiagWriter::from_env();
 
     loop {
@@ -3757,7 +3759,7 @@ fn run_stream_live_v3(
                     streamer = new_streamer();
                     multi_streamer = new_multi();
                     last_drain_at = capture.buffer.lock().written;
-                    session_transcript.clear();
+                    commit_cursor.reset_all();
                     if let Some(em) = emitter.as_mut() {
                         em.emit(
                             started.elapsed().as_secs_f32(),
@@ -3798,19 +3800,31 @@ fn run_stream_live_v3(
         // Force a viz-producing decode now.
         let snap = streamer.flush_with_viz();
         let t = started.elapsed().as_secs_f32();
-        // Gate session-transcript stitching on the streamer's lock state
-        // so ACQUIRING-mode garbage and SNR-suppressed cycles do not
-        // pollute the persistent operator-visible transcript. The
-        // per-cycle `text` field still carries the raw snapshot for
-        // anyone who wants to see what the decoder was emitting before
-        // it locked.
-        let stitched = should_stitch_to_session(&snap);
-        let appended_session = if stitched {
-            ditdah_streaming::append_snapshot_text(&mut session_transcript, &snap.transcript)
+        // Approach A+: event-driven commit cursor (sample-indexed,
+        // idempotent across re-decodes) replaces the old
+        // string-stitching path that produced ghost-repeats like
+        // "TSA USA EE   SA USA EE   ..." when the rolling window's
+        // first character drifted between cycles.
+        let commit = if let Some(viz) = snap.viz.as_ref() {
+            commit_cursor.update_from_viz(viz, decode_every_s)
         } else {
-            String::new()
+            ditdah_streaming::CommitUpdate::default()
         };
-        cap_session_transcript(&mut session_transcript, MAX_V3_SESSION_TRANSCRIPT_CHARS);
+        let session_transcript: String = format!(
+            "{}{}{}",
+            commit.committed_text,
+            if !commit.committed_text.is_empty()
+                && !commit.provisional_tail.is_empty()
+                && !commit.committed_text.ends_with(' ')
+            {
+                " "
+            } else {
+                ""
+            },
+            commit.provisional_tail
+        );
+        let stitched = !commit.committed_text.is_empty() || !commit.provisional_tail.is_empty();
+        let appended_session = String::new();
         if let Some(d) = diag.as_mut() {
             d.record(
                 t,
@@ -3830,6 +3844,9 @@ fn run_stream_live_v3(
                     "text": snap.transcript,
                     "appended": appended_session,
                     "transcript": session_transcript.clone(),
+                    "committed": commit.committed_text,
+                    "provisional": commit.provisional_tail,
+                    "window_text": snap.transcript,
                     "wpm": snap.wpm,
                 }),
             );
@@ -3928,14 +3945,15 @@ fn run_stream_live_v3(
             started.elapsed().as_secs_f32(),
             serde_json::json!({
                 "type": "end",
-                "transcript": session_transcript.clone(),
+                "transcript": commit_cursor.committed_text(),
+                "committed": commit_cursor.committed_text(),
                 "recording": recording_saved.or(recording_path),
             }),
         );
     } else {
         println!();
         println!("Final transcript (v3):");
-        println!("{}", session_transcript);
+        println!("{}", commit_cursor.committed_text());
     }
     Ok(())
 }
@@ -4009,7 +4027,9 @@ fn run_stream_live_v3_file(
     let chunk_period = Duration::from_millis(50);
     let chunk_samples = ((sr as u64 * 50) / 1000) as usize;
     let mut cursor = 0usize;
-    let mut session_transcript: String = String::new();
+    let decode_every_s = decode_every_ms as f32 / 1000.0;
+    let mut commit_cursor =
+        ditdah_streaming::LiveCommitCursor::new(MAX_V3_SESSION_TRANSCRIPT_CHARS);
     let mut diag = DiagWriter::from_env();
 
     while cursor < total_samples {
@@ -4033,16 +4053,32 @@ fn run_stream_live_v3_file(
 
         let snap = streamer.flush_with_viz();
         let t = started.elapsed().as_secs_f32();
-        // Same lock-state gate as the live capture path: only stitch
-        // into the session transcript once the decoder has locked and
-        // the SNR gate is not suppressing.
-        let stitched = should_stitch_to_session(&snap);
-        let appended_session = if stitched {
-            ditdah_streaming::append_snapshot_text(&mut session_transcript, &snap.transcript)
+        // Approach A+: drive the event-driven commit cursor instead of
+        // string-stitching. The cursor is sample-indexed and idempotent
+        // across re-decodes of the same audio region, so the
+        // "TSA USA EE   SA USA EE   ..." ghost-repeat pattern that the
+        // old `append_snapshot_text` produced is structurally
+        // impossible.
+        let commit = if let Some(viz) = snap.viz.as_ref() {
+            commit_cursor.update_from_viz(viz, decode_every_s)
         } else {
-            String::new()
+            ditdah_streaming::CommitUpdate::default()
         };
-        cap_session_transcript(&mut session_transcript, MAX_V3_SESSION_TRANSCRIPT_CHARS);
+        let session_transcript: String = format!(
+            "{}{}{}",
+            commit.committed_text,
+            if !commit.committed_text.is_empty()
+                && !commit.provisional_tail.is_empty()
+                && !commit.committed_text.ends_with(' ')
+            {
+                " "
+            } else {
+                ""
+            },
+            commit.provisional_tail
+        );
+        let stitched = !commit.committed_text.is_empty() || !commit.provisional_tail.is_empty();
+        let appended_session = String::new();
         if let Some(d) = diag.as_mut() {
             d.record(
                 t,
@@ -4062,6 +4098,9 @@ fn run_stream_live_v3_file(
                     "text": snap.transcript,
                     "appended": appended_session,
                     "transcript": session_transcript.clone(),
+                    "committed": commit.committed_text,
+                    "provisional": commit.provisional_tail,
+                    "window_text": snap.transcript,
                     "wpm": snap.wpm,
                 }),
             );
@@ -4154,14 +4193,15 @@ fn run_stream_live_v3_file(
             started.elapsed().as_secs_f32(),
             serde_json::json!({
                 "type": "end",
-                "transcript": session_transcript.clone(),
+                "transcript": commit_cursor.committed_text(),
+                "committed": commit_cursor.committed_text(),
                 "recording": serde_json::Value::Null,
             }),
         );
     } else {
         println!();
         println!("Final transcript (v3 file):");
-        println!("{}", session_transcript);
+        println!("{}", commit_cursor.committed_text());
     }
     Ok(())
 }
@@ -4180,6 +4220,7 @@ fn run_stream_live_v3_file(
 /// "operator sees what the decoder is making" principle from PR #362
 /// still applies to *which characters* end up in the session. We are
 /// only filtering *which cycles* are allowed to contribute.
+#[allow(dead_code)] // Retained for legacy tests; V3 now uses LiveCommitCursor.
 fn should_stitch_to_session(snap: &cw_decoder_poc::envelope_decoder::LiveEnvelopeSnapshot) -> bool {
     let Some(viz) = snap.viz.as_ref() else {
         return false;
@@ -4295,6 +4336,7 @@ const MAX_V3_SESSION_TRANSCRIPT_CHARS: usize = 12_000;
 /// Cap the running session transcript at `max_chars`. When over the limit,
 /// keep roughly the last 80% of the buffer, snapping the trim point to the
 /// nearest whitespace so we don't shear a token in half.
+#[allow(dead_code)] // Retained for legacy tests; V3 now uses LiveCommitCursor.
 fn cap_session_transcript(transcript: &mut String, max_chars: usize) {
     if transcript.chars().count() <= max_chars {
         return;
@@ -4420,6 +4462,8 @@ mod v3_session_transcript_tests {
             centroid_dot: 0.06,
             centroid_dah: 0.18,
             locked_wpm: if locked { Some(20.0) } else { None },
+            window_start_sample: 0,
+            window_end_sample: 8000,
         }
     }
 

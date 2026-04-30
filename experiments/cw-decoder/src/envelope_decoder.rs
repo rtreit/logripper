@@ -479,6 +479,12 @@ pub struct LiveEnvelopeStreamer {
     min_dyn_range_ratio: f32,
     preprocess: PreprocessConfig,
     analysis_window_seconds: Option<f32>,
+    /// Total samples ever pushed into [`push_samples`], counted across
+    /// the entire streaming session (NOT capped to the rolling
+    /// `buffer.len()`). Drives the absolute sample anchors on
+    /// [`VizFrame`] so downstream commit cursors can identify the same
+    /// audio region across overlapping rolling-window re-decodes.
+    samples_fed_total: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -541,6 +547,22 @@ pub struct VizFrame {
     pub centroid_dot: f32,
     pub centroid_dah: f32,
     pub locked_wpm: Option<f32>,
+    /// Absolute sample index of the FIRST sample in the analysis slice
+    /// that produced this frame, counted from the start of the streaming
+    /// session (i.e., total samples ever fed into the streamer minus
+    /// the slice length). Stable across re-decodes of the same audio
+    /// region: an event whose `start_s` is `t` lives at absolute sample
+    /// `window_start_sample + round(t * sample_rate)`.
+    ///
+    /// Both `window_start_sample` and `window_end_sample` are populated
+    /// by `LiveEnvelopeStreamer`; standalone callers of
+    /// `decode_envelope_with_viz` get `0`/`buffer_len` because they do
+    /// not maintain a persistent session.
+    pub window_start_sample: u64,
+    /// Absolute sample index of the ONE-PAST-END sample of the analysis
+    /// slice. `window_end_sample - window_start_sample` equals the
+    /// number of samples in the analysed region.
+    pub window_end_sample: u64,
 }
 
 pub const MAX_VIZ_ENVELOPE_SAMPLES: usize = 1500;
@@ -577,7 +599,15 @@ impl LiveEnvelopeStreamer {
             // the dynamic-range gate. Visualizer envelope still spans the
             // full buffer.
             analysis_window_seconds: Some(3.0),
+            samples_fed_total: 0,
         }
+    }
+
+    /// Absolute number of samples ever pushed into this streamer since
+    /// construction. Monotonically increasing; not affected by the
+    /// internal rolling-buffer cap.
+    pub fn samples_fed_total(&self) -> u64 {
+        self.samples_fed_total
     }
 
     /// Override the rolling analysis-window length used for gate +
@@ -663,6 +693,7 @@ impl LiveEnvelopeStreamer {
 
     fn push_samples(&mut self, samples: &[f32]) {
         self.buffer.extend_from_slice(samples);
+        self.samples_fed_total = self.samples_fed_total.saturating_add(samples.len() as u64);
         let max_samples = (self.sample_rate as usize * MAX_LIVE_ENVELOPE_BUFFER_SECONDS)
             .max(self.decode_every_samples * 2);
         if self.buffer.len() > max_samples {
@@ -684,6 +715,16 @@ impl LiveEnvelopeStreamer {
             let (text, frame) = decode_envelope_with_viz(&self.buffer, self.sample_rate, &cfg);
             let mut frame = frame;
             frame.locked_wpm = self.pinned_wpm.or(self.locked_wpm);
+            // Anchor the rolling buffer in absolute session time so a
+            // downstream commit cursor can identify the same audio
+            // region across overlapping re-decodes. Events on the frame
+            // already carry buffer-relative `start_s`/`end_s`; absolute
+            // sample = `window_start_sample + round(start_s * sr)`.
+            let buffer_start_abs = self
+                .samples_fed_total
+                .saturating_sub(self.buffer.len() as u64);
+            frame.window_start_sample = buffer_start_abs;
+            frame.window_end_sample = self.samples_fed_total;
             let elem_count = frame.on_durations.len();
             let wpm = frame.wpm;
             (text, wpm, elem_count, Some(frame))
@@ -783,6 +824,8 @@ pub fn decode_envelope_with_viz(
         centroid_dot: 0.0,
         centroid_dah: 0.0,
         locked_wpm: None,
+        window_start_sample: 0,
+        window_end_sample: samples.len() as u64,
     };
 
     if samples.is_empty() {
@@ -946,6 +989,8 @@ pub fn decode_envelope_with_viz(
         centroid_dot,
         centroid_dah,
         locked_wpm: None,
+        window_start_sample: 0,
+        window_end_sample: samples.len() as u64,
     };
     (text, frame)
 }
@@ -1225,7 +1270,7 @@ fn median_lower_half(values: &[f32]) -> f32 {
     sorted[cutoff / 2]
 }
 
-fn morse_to_char(s: &str) -> Option<char> {
+pub(crate) fn morse_to_char(s: &str) -> Option<char> {
     match s {
         ".-" => Some('A'),
         "-..." => Some('B'),
