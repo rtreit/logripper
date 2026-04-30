@@ -279,9 +279,28 @@ public sealed class QrzSyncEngine
         {
             try
             {
-                var logid = qso.SyncStatus == SyncStatus.Modified && !string.IsNullOrWhiteSpace(qso.QrzLogid)
-                    ? await _client.UpdateQsoAsync(qso, bookOwner).ConfigureAwait(false)
-                    : await _client.UploadQsoAsync(qso, bookOwner).ConfigureAwait(false);
+                string logid;
+                var hasExistingLogid = !string.IsNullOrWhiteSpace(qso.QrzLogid);
+
+                if (qso.SyncStatus == SyncStatus.Modified && hasExistingLogid)
+                {
+                    logid = await _client.UpdateQsoAsync(qso, bookOwner).ConfigureAwait(false);
+                }
+                else
+                {
+                    try
+                    {
+                        logid = await _client.UploadQsoAsync(qso, bookOwner).ConfigureAwait(false);
+                    }
+                    catch (QrzLogbookException ex) when (!hasExistingLogid && IsDuplicateError(ex.Message))
+                    {
+                        // QSO already exists on QRZ (e.g. uploaded via web UI) but we
+                        // don't have the logid locally. Retry with OPTION=REPLACE to
+                        // auto-match and adopt the remote logid.
+                        logid = await _client.UploadQsoWithReplaceAsync(qso, bookOwner).ConfigureAwait(false);
+                    }
+                }
+
                 var synced = qso.Clone();
                 synced.QrzLogid = logid;
                 synced.SyncStatus = SyncStatus.Synced;
@@ -558,4 +577,10 @@ public sealed class QrzSyncEngine
 
         return lastSync.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
     }
+
+    /// <summary>
+    /// Check whether a QRZ API error message indicates a duplicate QSO.
+    /// </summary>
+    private static bool IsDuplicateError(string message) =>
+        message.Contains("duplicate", StringComparison.OrdinalIgnoreCase);
 }

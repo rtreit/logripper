@@ -70,6 +70,14 @@ pub(crate) trait QrzLogbookApi: Send + Sync {
         book_owner: Option<&str>,
     ) -> Result<QrzUploadResult, QrzLogbookError>;
 
+    /// Upload a single QSO with `OPTION=REPLACE`, auto-matching any existing
+    /// duplicate on QRZ without requiring a known logid.
+    async fn upload_qso_with_replace(
+        &self,
+        qso: &QsoRecord,
+        book_owner: Option<&str>,
+    ) -> Result<QrzUploadResult, QrzLogbookError>;
+
     /// Replace an existing QSO on the remote logbook (preserves logid).
     ///
     /// `book_owner` has the same semantics as in [`Self::upload_qso`].
@@ -100,6 +108,14 @@ impl QrzLogbookApi for QrzLogbookClient {
         book_owner: Option<&str>,
     ) -> Result<QrzUploadResult, QrzLogbookError> {
         QrzLogbookClient::upload_qso(self, qso, book_owner).await
+    }
+
+    async fn upload_qso_with_replace(
+        &self,
+        qso: &QsoRecord,
+        book_owner: Option<&str>,
+    ) -> Result<QrzUploadResult, QrzLogbookError> {
+        QrzLogbookClient::upload_qso_with_replace(self, qso, book_owner).await
     }
 
     async fn replace_qso(
@@ -557,6 +573,9 @@ pub(crate) async fn resolve_book_owner_for_upload(
 ///   so QRZ keeps the same row (no duplicate). This applies regardless of
 ///   whether `sync_status` is Modified or Synced.
 /// * Otherwise INSERT a new remote row and adopt the returned logid.
+/// * If INSERT fails with a "duplicate" error (the QSO already exists on
+///   QRZ but we don't have its logid), retry with `OPTION=REPLACE` to
+///   auto-match the existing record and adopt its logid.
 ///
 /// Returns the locally-persisted `QsoRecord` on success (with refreshed
 /// `qrz_logid` and `sync_status = Synced`). Returns a human-readable error
@@ -575,10 +594,27 @@ pub(crate) async fn sync_single_qso(
         None => client.upload_qso(qso, book_owner).await,
     };
 
-    let upload = result.map_err(|err| format!("QRZ upload failed: {err}"))?;
+    // When a plain INSERT fails because QRZ already has a matching QSO
+    // (e.g. uploaded via the QRZ web UI), retry with OPTION=REPLACE so we
+    // can adopt the remote logid and stop re-attempting on every sync.
+    let result = match result {
+        Err(QrzLogbookError::ApiError(ref reason))
+            if existing_logid.is_none() && is_duplicate_error(reason) =>
+        {
+            eprintln!(
+                "[sync] INSERT for {} got duplicate; retrying with OPTION=REPLACE",
+                qso.worked_callsign
+            );
+            client
+                .upload_qso_with_replace(qso, book_owner)
+                .await
+                .map_err(|err| format!("QRZ upload failed (REPLACE retry): {err}"))
+        }
+        other => other.map_err(|err| format!("QRZ upload failed: {err}")),
+    }?;
 
     let mut synced = qso.clone();
-    synced.qrz_logid = Some(upload.logid);
+    synced.qrz_logid = Some(result.logid);
     synced.sync_status = SyncStatus::Synced as i32;
 
     store
@@ -587,6 +623,12 @@ pub(crate) async fn sync_single_qso(
         .map_err(|err| format!("QRZ upload succeeded but local update failed: {err}"))?;
 
     Ok(synced)
+}
+
+/// Check whether a QRZ API error reason indicates a duplicate QSO.
+fn is_duplicate_error(reason: &str) -> bool {
+    let lower = reason.to_ascii_lowercase();
+    lower.contains("duplicate")
 }
 
 // ---------------------------------------------------------------------------
@@ -1037,6 +1079,8 @@ mod tests {
         fetch_result: Mutex<Option<Result<Vec<QsoRecord>, QrzLogbookError>>>,
         upload_results: Mutex<Vec<Result<QrzUploadResult, QrzLogbookError>>>,
         upload_calls: Mutex<Vec<(QsoRecord, Option<String>)>>,
+        upload_replace_results: Mutex<Vec<Result<QrzUploadResult, QrzLogbookError>>>,
+        upload_replace_calls: Mutex<Vec<(QsoRecord, Option<String>)>>,
         replace_calls: Mutex<Vec<(String, String)>>, // (logid, local_id)
         replace_results: Mutex<Vec<Result<QrzUploadResult, QrzLogbookError>>>,
         status_result: Mutex<Option<Result<QrzLogbookStatus, QrzLogbookError>>>,
@@ -1053,6 +1097,8 @@ mod tests {
                 fetch_result: Mutex::new(Some(fetch)),
                 upload_results: Mutex::new(uploads),
                 upload_calls: Mutex::new(Vec::new()),
+                upload_replace_results: Mutex::new(Vec::new()),
+                upload_replace_calls: Mutex::new(Vec::new()),
                 replace_calls: Mutex::new(Vec::new()),
                 replace_results: Mutex::new(Vec::new()),
                 status_result: Mutex::new(Some(Ok(QrzLogbookStatus {
@@ -1097,6 +1143,26 @@ mod tests {
                 Err(QrzLogbookError::ApiError(
                     "no more mock upload results".into(),
                 ))
+            } else {
+                results.remove(0)
+            }
+        }
+
+        async fn upload_qso_with_replace(
+            &self,
+            qso: &QsoRecord,
+            book_owner: Option<&str>,
+        ) -> Result<QrzUploadResult, QrzLogbookError> {
+            self.upload_replace_calls
+                .lock()
+                .unwrap()
+                .push((qso.clone(), book_owner.map(str::to_owned)));
+            let mut results = self.upload_replace_results.lock().unwrap();
+            if results.is_empty() {
+                // Default: succeed with a synthetic logid.
+                Ok(QrzUploadResult {
+                    logid: "REPLACE_LOGID".into(),
+                })
             } else {
                 results.remove(0)
             }
@@ -1160,6 +1226,16 @@ mod tests {
         }
 
         async fn upload_qso(
+            &self,
+            _qso: &QsoRecord,
+            _book_owner: Option<&str>,
+        ) -> Result<QrzUploadResult, QrzLogbookError> {
+            Ok(QrzUploadResult {
+                logid: "ignored".into(),
+            })
+        }
+
+        async fn upload_qso_with_replace(
             &self,
             _qso: &QsoRecord,
             _book_owner: Option<&str>,
@@ -2527,5 +2603,102 @@ mod tests {
             "pending flag must remain set so the next sync retries"
         );
         assert_eq!(after[0].qrz_logid.as_deref(), Some("LOG-FAIL"));
+    }
+
+    #[tokio::test]
+    async fn duplicate_insert_retries_with_replace_and_syncs() {
+        // Scenario: a local QSO has sync_status = LocalOnly and no qrz_logid,
+        // but the same QSO already exists on QRZ (uploaded via web UI). The
+        // plain INSERT fails with "duplicate". The sync should automatically
+        // retry with OPTION=REPLACE, adopt the returned LOGID, and mark the
+        // QSO as Synced.
+        let store = MemoryStorage::new();
+
+        let local = make_qso("W1AW", "AK7S", Band::Band20m, Mode::Ft8, 1_700_000_000);
+        assert!(local.qrz_logid.is_none());
+        assert_eq!(local.sync_status, SyncStatus::LocalOnly as i32);
+        store.insert_qso(&local).await.unwrap();
+
+        // INSERT returns duplicate error, then REPLACE retry should succeed.
+        let api = MockQrzApi::new(
+            Ok(vec![]),
+            vec![Err(QrzLogbookError::ApiError(
+                "Unable to add QSO to database: duplicate".into(),
+            ))],
+        );
+        // Pre-load the upload_replace_results with a success.
+        api.upload_replace_results
+            .lock()
+            .unwrap()
+            .push(Ok(QrzUploadResult {
+                logid: "QRZ_ADOPTED_123".into(),
+            }));
+
+        let (tx, rx) = mpsc::channel(16);
+        execute_sync(&api, &store, false, ConflictPolicy::LastWriteWins, &tx).await;
+        drop(tx);
+        let final_msg = collect_final(rx).await;
+
+        // Should have no errors — the duplicate was handled gracefully.
+        assert!(
+            final_msg.error.is_none(),
+            "expected no sync error but got: {:?}",
+            final_msg.error
+        );
+        assert_eq!(final_msg.uploaded_records, 1);
+
+        // Verify upload_qso_with_replace was called.
+        {
+            let replace_calls = api.upload_replace_calls.lock().unwrap();
+            assert_eq!(replace_calls.len(), 1, "expected one REPLACE retry call");
+            assert_eq!(replace_calls[0].0.worked_callsign, "AK7S");
+        }
+
+        // Verify the local QSO is now Synced with the adopted LOGID.
+        let qsos = store.list_qsos(&QsoListQuery::default()).await.unwrap();
+        assert_eq!(qsos.len(), 1);
+        assert_eq!(qsos[0].sync_status, SyncStatus::Synced as i32);
+        assert_eq!(qsos[0].qrz_logid.as_deref(), Some("QRZ_ADOPTED_123"));
+    }
+
+    #[tokio::test]
+    async fn non_duplicate_upload_error_still_reported() {
+        // A non-duplicate API error should still be reported as a sync error
+        // and must NOT trigger the REPLACE retry path.
+        let store = MemoryStorage::new();
+
+        let local = make_qso("W1AW", "K3SEW", Band::Band40m, Mode::Ssb, 1_700_000_000);
+        store.insert_qso(&local).await.unwrap();
+
+        let api = MockQrzApi::new(
+            Ok(vec![]),
+            vec![Err(QrzLogbookError::ApiError("invalid ADIF record".into()))],
+        );
+
+        let (tx, rx) = mpsc::channel(16);
+        execute_sync(&api, &store, false, ConflictPolicy::LastWriteWins, &tx).await;
+        drop(tx);
+        let final_msg = collect_final(rx).await;
+
+        assert!(
+            final_msg.error.is_some(),
+            "expected a sync error for non-duplicate API failure"
+        );
+        assert!(
+            final_msg
+                .error
+                .as_deref()
+                .unwrap_or_default()
+                .contains("invalid ADIF record"),
+            "error should mention the original reason"
+        );
+        assert_eq!(final_msg.uploaded_records, 0);
+
+        // REPLACE retry must NOT have been called.
+        let replace_calls = api.upload_replace_calls.lock().unwrap();
+        assert!(
+            replace_calls.is_empty(),
+            "REPLACE retry should not fire for non-duplicate errors"
+        );
     }
 }
