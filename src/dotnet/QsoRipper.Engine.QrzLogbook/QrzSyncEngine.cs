@@ -66,6 +66,7 @@ public sealed class QrzSyncEngine
         uint conflicts = 0;
         uint remoteDeletesPushed = 0;
         uint deletesSkippedRemote = 0;
+        uint duplicateReplaces = 0;
 
         // ---------------------------------------------------------------
         // Phase 1 — Download from QRZ
@@ -298,6 +299,7 @@ public sealed class QrzSyncEngine
                         // don't have the logid locally. Retry with OPTION=REPLACE to
                         // auto-match and adopt the remote logid.
                         logid = await _client.UploadQsoWithReplaceAsync(qso, bookOwner).ConfigureAwait(false);
+                        duplicateReplaces++;
                     }
                 }
 
@@ -438,6 +440,7 @@ public sealed class QrzSyncEngine
             ErrorSummary = errors.Count > 0 ? string.Join("; ", errors) : null,
             RemoteDeletesPushed = remoteDeletesPushed,
             DeletesSkippedRemote = deletesSkippedRemote,
+            DuplicateReplaceCount = duplicateReplaces,
         };
     }
 

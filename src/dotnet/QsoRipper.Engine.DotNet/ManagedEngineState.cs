@@ -698,6 +698,7 @@ internal sealed class ManagedEngineState
                     Complete = true,
                     RemoteDeletesPushed = result.RemoteDeletesPushed,
                     DeletesSkippedRemote = result.DeletesSkippedRemote,
+                    DuplicateReplaces = result.DuplicateReplaceCount,
                 };
 
                 if (result.ErrorSummary is not null)
