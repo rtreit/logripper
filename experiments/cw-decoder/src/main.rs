@@ -539,6 +539,12 @@ enum Cmd {
         /// pipeline so the visualizer behaves identically to live audio.
         #[arg(long)]
         file: Option<PathBuf>,
+        /// When used with --file, play the file through the default output
+        /// device and use the playback stream position as the decoder clock.
+        /// This keeps visualizer bars/transcript aligned with audible audio
+        /// instead of a separate wall-clock replay loop.
+        #[arg(long)]
+        play: bool,
 
         /// Multi-pitch (CW Skimmer-style) decode: also run K parallel
         /// per-pitch decoders alongside the existing single-pitch
@@ -1024,6 +1030,7 @@ fn main() -> Result<()> {
             pin_hz,
             min_snr_db,
             file,
+            play,
             multi_pitch,
         } => run_stream_live_v3(
             device.as_deref(),
@@ -1037,6 +1044,7 @@ fn main() -> Result<()> {
             (pin_hz > 0.0).then_some(pin_hz),
             min_snr_db,
             file.as_deref(),
+            play,
             multi_pitch,
         ),
         Cmd::ProbeFisher {
@@ -3636,6 +3644,7 @@ fn run_stream_live_v3(
     pin_hz: Option<f32>,
     min_snr_db: f32,
     file: Option<&std::path::Path>,
+    play_file_audio: bool,
     multi_pitch: usize,
 ) -> Result<()> {
     if let Some(path) = file {
@@ -3647,6 +3656,7 @@ fn run_stream_live_v3(
             pin_wpm,
             pin_hz,
             min_snr_db,
+            play_file_audio,
             multi_pitch,
         );
     }
@@ -3969,6 +3979,7 @@ fn run_stream_live_v3_file(
     pin_wpm: Option<f32>,
     pin_hz: Option<f32>,
     min_snr_db: f32,
+    play_file_audio: bool,
     multi_pitch: usize,
 ) -> Result<()> {
     use cw_decoder_poc::envelope_decoder::{
@@ -3980,6 +3991,14 @@ fn run_stream_live_v3_file(
     let sr = decoded.sample_rate;
     let total_samples = decoded.samples.len();
     let duration_s = total_samples as f32 / sr as f32;
+    let playback = if play_file_audio {
+        Some(
+            audio::play_samples_with_control(decoded.samples.clone(), sr)
+                .context("starting file playback")?,
+        )
+    } else {
+        None
+    };
     let mut streamer = LiveEnvelopeStreamer::new(sr);
     streamer.set_pinned_hz(pin_hz);
     streamer.set_pinned_wpm(pin_wpm);
@@ -4007,6 +4026,7 @@ fn run_stream_live_v3_file(
                 "source": "live-v3-file",
                 "device": format!("file:{}", path.display()),
                 "rate": sr,
+                "playback_device": playback.as_ref().map(|p| p.device_name.as_str()),
                 "decode_every_ms": decode_every_ms,
                 "max_viz_envelope_samples": MAX_VIZ_ENVELOPE_SAMPLES,
                 "recording": serde_json::Value::Null,
@@ -4029,6 +4049,11 @@ fn run_stream_live_v3_file(
     let decode_period = Duration::from_millis(decode_every_ms);
     let chunk_period = Duration::from_millis(50);
     let chunk_samples = ((sr as u64 * 50) / 1000) as usize;
+    let pump_period = if playback.is_some() {
+        Duration::from_millis(8)
+    } else {
+        chunk_period
+    };
     let mut cursor = 0usize;
     let decode_every_s = decode_every_ms as f32 / 1000.0;
     let mut commit_cursor =
@@ -4039,8 +4064,12 @@ fn run_stream_live_v3_file(
         if seconds > 0.0 && started.elapsed().as_secs_f32() >= seconds {
             break;
         }
-        std::thread::sleep(chunk_period);
-        let end = (cursor + chunk_samples).min(total_samples);
+        std::thread::sleep(pump_period);
+        let end = if let Some(p) = playback.as_ref() {
+            (p.position_input_frames() as usize).min(total_samples)
+        } else {
+            (cursor + chunk_samples).min(total_samples)
+        };
         if end > cursor {
             streamer.feed(&decoded.samples[cursor..end]);
             if let Some(m) = multi_streamer.as_mut() {

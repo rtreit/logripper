@@ -216,29 +216,8 @@ public sealed partial class MainWindowViewModel
             VizStatus = $"file: {System.IO.Path.GetFileName(filePath)}";
             VizBarMonitor.Reset(System.IO.Path.GetFileNameWithoutExtension(filePath));
             _vizProcess.StartFileV3(filePath, decodeEveryMs: 250,
-                pinWpm: VizPinWpm, pinHz: VizPinHz);
-
-            // The visualizer pipeline only reads samples from the WAV; it
-            // does not touch the audio output device. Start a second
-            // cw-decoder.exe process (`play-file`) in parallel so the
-            // operator can hear the file while watching the visualizer
-            // decode it. Honor VizMute so screen captures and unattended
-            // runs stay silent.
+                pinWpm: VizPinWpm, pinHz: VizPinHz, playAudio: !VizMute);
             try { _vizPlayback.Stop(); } catch { /* best effort */ }
-            if (!VizMute)
-            {
-                try
-                {
-                    _vizPlayback.Start(filePath);
-                }
-                catch (Exception audioEx)
-                {
-                    // Audio is best-effort: a missing output device or a
-                    // failed cw-decoder.exe play-file launch must not stop
-                    // the visualizer from running.
-                    VizStatus = $"file: {System.IO.Path.GetFileName(filePath)} (audio off: {audioEx.Message})";
-                }
-            }
 
             VizRunning = true;
         }
