@@ -241,12 +241,7 @@ pub(crate) async fn execute_sync(
         counters.errors.len(),
     );
 
-    send_complete(
-        progress_tx,
-        &counters,
-        error_summary,
-    )
-    .await;
+    send_complete(progress_tx, &counters, error_summary).await;
 }
 
 // ---------------------------------------------------------------------------
