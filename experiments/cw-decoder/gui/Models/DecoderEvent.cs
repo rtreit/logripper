@@ -46,6 +46,9 @@ internal sealed class DecoderEvent
     [JsonPropertyName("recording")] public string? Recording { get; set; }
 
     // viz (from stream-live-v3)
+    [JsonPropertyName("sample_rate")] public int? SampleRate { get; set; }
+    [JsonPropertyName("window_start_sample")] public ulong? WindowStartSample { get; set; }
+    [JsonPropertyName("window_end_sample")] public ulong? WindowEndSample { get; set; }
     [JsonPropertyName("envelope")] public double[]? Envelope { get; set; }
     [JsonPropertyName("envelope_max")] public double? EnvelopeMax { get; set; }
     [JsonPropertyName("noise_floor")] public double? NoiseFloor { get; set; }

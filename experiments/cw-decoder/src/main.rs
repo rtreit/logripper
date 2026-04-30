@@ -3874,6 +3874,9 @@ fn run_stream_live_v3(
                     t,
                     serde_json::json!({
                         "type": "viz",
+                        "sample_rate": viz.sample_rate,
+                        "window_start_sample": viz.window_start_sample,
+                        "window_end_sample": viz.window_end_sample,
                         "buffer_seconds": viz.buffer_seconds,
                         "frame_step_s": viz.frame_step_s,
                         "pitch_hz": viz.pitch_hz,
@@ -4128,6 +4131,9 @@ fn run_stream_live_v3_file(
                     t,
                     serde_json::json!({
                         "type": "viz",
+                        "sample_rate": viz.sample_rate,
+                        "window_start_sample": viz.window_start_sample,
+                        "window_end_sample": viz.window_end_sample,
                         "buffer_seconds": viz.buffer_seconds,
                         "frame_step_s": viz.frame_step_s,
                         "pitch_hz": viz.pitch_hz,

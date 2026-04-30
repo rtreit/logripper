@@ -123,6 +123,19 @@ public sealed partial class MainWindowViewModel
     /// </summary>
     public bool VizMute { get => _vizMute; set => Set(ref _vizMute, value); }
 
+    private bool _vizAppendDecode;
+    public bool VizAppendDecode
+    {
+        get => _vizAppendDecode;
+        set
+        {
+            if (Set(ref _vizAppendDecode, value) && value)
+            {
+                VizTranscript = VizBarMonitor.DecodedText;
+            }
+        }
+    }
+
     public string VizStartStopLabel => VizRunning ? "STOP" : "START LIVE";
 
     /// <summary>Resolves the persistent capture directory and ensures it exists.</summary>
@@ -163,6 +176,7 @@ public sealed partial class MainWindowViewModel
             VizFrame = VizFrameVm.Empty;
             VizCurrentWpm = 0;
             VizStatus = "starting…";
+            VizBarMonitor.Reset("live");
             // Auto-save every live capture so it can be labeled later.
             var stamp = DateTime.Now.ToString("yyyyMMdd-HHmmss-fff");
             var captureDir = ResolveVizCaptureDir();
@@ -187,6 +201,8 @@ public sealed partial class MainWindowViewModel
         try { _vizPlayback.Stop(); } catch { /* best effort */ }
         VizRunning = false;
         VizStatus = "stopped";
+        var flushed = VizBarMonitor.Flush();
+        if (flushed is not null) VizStatus = $"stopped → {System.IO.Path.GetFileName(flushed)}";
     }
 
     public void StartVizFile(string filePath)
@@ -198,6 +214,7 @@ public sealed partial class MainWindowViewModel
             VizFrame = VizFrameVm.Empty;
             VizCurrentWpm = 0;
             VizStatus = $"file: {System.IO.Path.GetFileName(filePath)}";
+            VizBarMonitor.Reset(System.IO.Path.GetFileNameWithoutExtension(filePath));
             _vizProcess.StartFileV3(filePath, decodeEveryMs: 250,
                 pinWpm: VizPinWpm, pinHz: VizPinHz);
 
@@ -241,10 +258,12 @@ public sealed partial class MainWindowViewModel
         {
             VizRunning = false;
             try { _vizPlayback.Stop(); } catch { /* best effort */ }
+            var flushed = VizBarMonitor.Flush();
             if (VizStatus.StartsWith("live", StringComparison.OrdinalIgnoreCase))
             {
                 VizStatus = "process exited";
             }
+            if (flushed is not null) VizStatus += $" → {System.IO.Path.GetFileName(flushed)}";
         });
     }
 
@@ -258,23 +277,39 @@ public sealed partial class MainWindowViewModel
                     VizStatus = $"ready @ {ev.Rate ?? 0} Hz";
                     break;
                 case "transcript":
-                    // Prefer the cumulative session transcript (Rust side maintains
-                    // it via ditdah_streaming::append_snapshot_text). Fall back to
-                    // the rolling-window snapshot text if older builds emit only
-                    // the legacy field.
+                    // PR #370 (Approach A+): the Rust side now emits a
+                    // sample-indexed cumulative transcript via
+                    // LiveCommitCursor (`transcript` = committed +
+                    // provisional). It is monotonic and idempotent.
+                    //
+                    // Do NOT fall back to `ev.Text` (the rolling-window
+                    // re-decode). That field is produced by a different
+                    // decode path and can disagree with the cursor's
+                    // text; switching between the two between the
+                    // pre-lock and post-lock cycles makes the
+                    // transcript appear to vanish and get replaced when
+                    // the cursor first commits. Show the cursor text
+                    // only — empty until the streamer locks is
+                    // expected and accurate.
                     var sess = ev.Transcript;
-                    if (!string.IsNullOrEmpty(sess)) VizTranscript = sess!;
-                    else if (ev.Text is not null) VizTranscript = ev.Text;
+                    if (!VizAppendDecode && sess is not null) VizTranscript = sess;
                     if (ev.Wpm.HasValue) VizCurrentWpm = ev.Wpm.Value;
                     break;
                 case "viz":
                     VizFrame = new VizFrameVm(ev);
+                    if (VizBarMonitor.Ingest(ev) && VizAppendDecode)
+                    {
+                        VizTranscript = VizBarMonitor.DecodedText;
+                    }
                     if (ev.Wpm.HasValue) VizCurrentWpm = ev.Wpm.Value;
                     break;
                 case "end":
-                    if (ev.Transcript is not null) VizTranscript = ev.Transcript;
+                    if (VizAppendDecode) VizTranscript = VizBarMonitor.DecodedText;
+                    else if (ev.Transcript is not null) VizTranscript = ev.Transcript;
                     VizRunning = false;
                     VizStatus = "ended";
+                    var flushed = VizBarMonitor.Flush();
+                    if (flushed is not null) VizStatus = $"ended → {System.IO.Path.GetFileName(flushed)}";
                     break;
             }
         });
