@@ -648,6 +648,11 @@ enum Cmd {
         /// inside the noise itself. Issue #322.
         #[arg(long, default_value_t = false)]
         cfar_keying: bool,
+        /// Use the append-only V3 event-stream foundation instead of the
+        /// legacy streaming decoder. For --from-file this reports transcript
+        /// quality against truth; latency-specific fields are left empty.
+        #[arg(long, default_value_t = false)]
+        foundation: bool,
         /// Emit one NDJSON record per scenario in addition to the table
         /// (handy for collecting comparison runs into a file).
         #[arg(long, default_value_t = false)]
@@ -692,7 +697,25 @@ enum Cmd {
     },
 }
 
+const CLI_THREAD_STACK_BYTES: usize = 16 * 1024 * 1024;
+
 fn main() -> Result<()> {
+    std::thread::Builder::new()
+        .name("cw-decoder-cli".to_string())
+        .stack_size(CLI_THREAD_STACK_BYTES)
+        .spawn(run_cli)?
+        .join()
+        .map_err(|panic| {
+            let message = panic
+                .downcast_ref::<&str>()
+                .copied()
+                .or_else(|| panic.downcast_ref::<String>().map(String::as_str))
+                .unwrap_or("cw-decoder CLI thread panicked");
+            anyhow::anyhow!(message.to_string())
+        })?
+}
+
+fn run_cli() -> Result<()> {
     let cli = Cli::parse();
 
     // Always install the log capture so we can read ditdah's WPM/pitch lines.
@@ -1070,6 +1093,7 @@ fn main() -> Result<()> {
             min_gap_dot_fraction,
             min_pulse_dot_fraction,
             cfar_keying,
+            foundation,
             json,
         } => run_bench_latency(
             from_file.as_deref(),
@@ -1087,6 +1111,7 @@ fn main() -> Result<()> {
             min_gap_dot_fraction,
             min_pulse_dot_fraction,
             cfar_keying,
+            foundation,
             json,
         ),
         Cmd::GenRoughFist {
@@ -1167,6 +1192,7 @@ fn run_bench_latency(
     min_gap_dot_fraction: f32,
     min_pulse_dot_fraction: f32,
     cfar_keying: bool,
+    foundation: bool,
     json: bool,
 ) -> Result<()> {
     let mut cfg = streaming::DecoderConfig::defaults();
@@ -1232,7 +1258,29 @@ fn run_bench_latency(
 
     let mut results = Vec::with_capacity(scenarios.len());
     for scen in &scenarios {
-        let r = bench_latency::run_scenario(scen, cfg, chunk_ms, stable_n, label)?;
+        let r = if foundation {
+            let transcript = cw_decoder_poc::append_decode::decode_samples_append(
+                &scen.audio.samples,
+                scen.audio.sample_rate,
+                None,
+                None,
+                cw_decoder_poc::envelope_decoder::DEFAULT_MIN_SNR_DB,
+            )
+            .decoded_text
+            .trim()
+            .to_string();
+            bench_latency::BenchResult {
+                scenario: scen.name.clone(),
+                config_label: label.to_string(),
+                cw_onset_ms: scen.cw_onset_ms,
+                truth: scen.truth.clone(),
+                transcript,
+                stable_n,
+                ..Default::default()
+            }
+        } else {
+            bench_latency::run_scenario(scen, cfg, chunk_ms, stable_n, label)?
+        };
         if json {
             // Compact NDJSON record for off-line comparison/aggregation.
             let rec = serde_json::json!({
@@ -3752,6 +3800,7 @@ fn run_stream_live_v3(
     let decode_every_s = decode_every_ms as f32 / 1000.0;
     let mut commit_cursor =
         ditdah_streaming::LiveCommitCursor::new(MAX_V3_SESSION_TRANSCRIPT_CHARS);
+    let mut append_decoder = cw_decoder_poc::append_decode::AppendEventDecoder::new();
     let mut diag = DiagWriter::from_env();
 
     loop {
@@ -3770,6 +3819,7 @@ fn run_stream_live_v3(
                     multi_streamer = new_multi();
                     last_drain_at = capture.buffer.lock().written;
                     commit_cursor.reset_all();
+                    append_decoder = cw_decoder_poc::append_decode::AppendEventDecoder::new();
                     if let Some(em) = emitter.as_mut() {
                         em.emit(
                             started.elapsed().as_secs_f32(),
@@ -3820,6 +3870,11 @@ fn run_stream_live_v3(
         } else {
             ditdah_streaming::CommitUpdate::default()
         };
+        let append = if let Some(viz) = snap.viz.as_ref() {
+            append_decoder.ingest_viz(viz)
+        } else {
+            cw_decoder_poc::append_decode::AppendDecodeUpdate::default()
+        };
         let session_transcript: String = format!(
             "{}{}{}",
             commit.committed_text,
@@ -3851,11 +3906,13 @@ fn run_stream_live_v3(
                 t,
                 serde_json::json!({
                     "type": "transcript",
-                    "text": snap.transcript,
+                    "text": append.decoded_text,
                     "appended": appended_session,
-                    "transcript": session_transcript.clone(),
+                    "transcript": append.decoded_text,
                     "committed": commit.committed_text,
                     "provisional": commit.provisional_tail,
+                    "cursor_transcript": session_transcript.clone(),
+                    "raw_morse": append.raw_stream,
                     "window_text": snap.transcript,
                     "wpm": snap.wpm,
                 }),
@@ -4058,6 +4115,7 @@ fn run_stream_live_v3_file(
     let decode_every_s = decode_every_ms as f32 / 1000.0;
     let mut commit_cursor =
         ditdah_streaming::LiveCommitCursor::new(MAX_V3_SESSION_TRANSCRIPT_CHARS);
+    let mut append_decoder = cw_decoder_poc::append_decode::AppendEventDecoder::new();
     let mut diag = DiagWriter::from_env();
 
     while cursor < total_samples {
@@ -4096,6 +4154,11 @@ fn run_stream_live_v3_file(
         } else {
             ditdah_streaming::CommitUpdate::default()
         };
+        let append = if let Some(viz) = snap.viz.as_ref() {
+            append_decoder.ingest_viz(viz)
+        } else {
+            cw_decoder_poc::append_decode::AppendDecodeUpdate::default()
+        };
         let session_transcript: String = format!(
             "{}{}{}",
             commit.committed_text,
@@ -4127,11 +4190,13 @@ fn run_stream_live_v3_file(
                 t,
                 serde_json::json!({
                     "type": "transcript",
-                    "text": snap.transcript,
+                    "text": append.decoded_text,
                     "appended": appended_session,
-                    "transcript": session_transcript.clone(),
+                    "transcript": append.decoded_text,
                     "committed": commit.committed_text,
                     "provisional": commit.provisional_tail,
+                    "cursor_transcript": session_transcript.clone(),
+                    "raw_morse": append.raw_stream,
                     "window_text": snap.transcript,
                     "wpm": snap.wpm,
                 }),

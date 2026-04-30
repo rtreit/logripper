@@ -14,11 +14,10 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use anyhow::Result;
+use cw_decoder_poc::append_decode;
 use cw_decoder_poc::audio;
 use cw_decoder_poc::decoder::{decode_text, decode_text_pinned};
-use cw_decoder_poc::ditdah_streaming::{
-    run_causal_baseline, run_causal_baseline_trace, CausalBaselineConfig, CausalBaselineTrace,
-};
+use cw_decoder_poc::ditdah_streaming::CausalBaselineConfig;
 use cw_decoder_poc::streaming::{DecoderConfig, StreamEvent, StreamingDecoder};
 use rayon::prelude::*;
 use serde::Deserialize;
@@ -745,8 +744,14 @@ fn score_labels_exact_window(
             } else {
                 &[]
             };
-            let outcome = run_causal_baseline(samples, audio.sample_rate, score_cfg.baseline);
-            build_label_score(example, &normalize_copy(&outcome.transcript))
+            let outcome = append_decode::decode_samples_append(
+                samples,
+                audio.sample_rate,
+                None,
+                None,
+                cw_decoder_poc::envelope_decoder::DEFAULT_MIN_SNR_DB,
+            );
+            build_label_score(example, &normalize_copy(&outcome.decoded_text))
         })
         .collect()
 }
@@ -790,7 +795,7 @@ fn score_labels_full_stream(
             let audio = audio_cache
                 .get(&source)
                 .expect("audio cache missing source");
-            run_causal_baseline_trace(&audio.samples, audio.sample_rate, score_cfg.baseline)
+            run_append_trace(&audio.samples, audio.sample_rate)
         });
     }
 
@@ -802,8 +807,8 @@ fn score_labels_full_stream(
                 .expect("audio cache missing source");
             let trace = traces.get(&example.source).expect("trace missing source");
             let (start, end) = expanded_sample_bounds(audio, example, score_cfg);
-            let before = transcript_at_or_before(trace, start);
-            let after = transcript_at_or_before(trace, end);
+            let before = transcript_at_or_before_streaming(trace, start);
+            let after = transcript_at_or_before_streaming(trace, end);
             let decoded = normalize_copy(&extract_transcript_delta(before, after));
             build_label_score(example, &decoded)
         })
@@ -846,6 +851,8 @@ fn score_labels_full_stream_streaming(
 
 #[derive(Debug, Clone, Copy)]
 enum Strategy {
+    /// Stable append-only event-stream foundation used by all GUI surfaces.
+    Foundation,
     /// v2 whole-buffer ditdah on the (expanded) labeled slice. Auto WPM.
     ExactAuto,
     /// v2 whole-buffer ditdah on the (expanded) labeled slice. Pinned WPM.
@@ -874,7 +881,9 @@ fn parse_strategy_list(args: &[String]) -> Vec<Strategy> {
         if t.is_empty() {
             continue;
         }
-        if t.eq_ignore_ascii_case("auto") || t == "0" {
+        if t.eq_ignore_ascii_case("foundation") || t.eq_ignore_ascii_case("append") {
+            out.push(Strategy::Foundation);
+        } else if t.eq_ignore_ascii_case("auto") || t == "0" {
             out.push(Strategy::ExactAuto);
         } else if t.eq_ignore_ascii_case("region") {
             out.push(Strategy::RegionAuto);
@@ -977,6 +986,22 @@ fn score_labels_strategy(
                         Strategy::ExactPin(w) => decode_text_pinned(samples, audio.sample_rate, w),
                         _ => unreachable!(),
                     }
+                }
+                Strategy::Foundation => {
+                    let (start, end) = expanded_sample_bounds(audio, example, score_cfg);
+                    let samples = if end > start {
+                        &audio.samples[start..end]
+                    } else {
+                        &[][..]
+                    };
+                    append_decode::decode_samples_append(
+                        samples,
+                        audio.sample_rate,
+                        None,
+                        None,
+                        cw_decoder_poc::envelope_decoder::DEFAULT_MIN_SNR_DB,
+                    )
+                    .decoded_text
                 }
                 Strategy::RegionAuto | Strategy::RegionPin(_) => {
                     let pin = if let Strategy::RegionPin(w) = strategy {
@@ -1108,6 +1133,7 @@ fn decode_label_via_region(
 fn strategy_label(strategy: Strategy) -> String {
     match strategy {
         Strategy::ExactAuto => "auto".to_string(),
+        Strategy::Foundation => "foundation".to_string(),
         Strategy::ExactPin(w) => format!("pin{:.0}", w),
         Strategy::RegionAuto => "region".to_string(),
         Strategy::RegionPin(w) => format!("region{:.0}", w),
@@ -1303,17 +1329,6 @@ fn expanded_sample_bounds(
     (start, end.max(start))
 }
 
-fn transcript_at_or_before(trace: &CausalBaselineTrace, sample_index: usize) -> &str {
-    let index = trace
-        .snapshots
-        .partition_point(|snapshot| snapshot.end_sample <= sample_index);
-    if index == 0 {
-        ""
-    } else {
-        trace.snapshots[index - 1].transcript.as_str()
-    }
-}
-
 #[derive(Debug, Clone)]
 struct StreamingTraceSnapshot {
     end_sample: usize,
@@ -1363,6 +1378,50 @@ fn run_streaming_trace(
         transcript: transcript.trim().to_string(),
         snapshots,
     })
+}
+
+fn run_append_trace(samples: &[f32], sample_rate: u32) -> StreamingTrace {
+    let mut streamer = cw_decoder_poc::envelope_decoder::LiveEnvelopeStreamer::new(sample_rate);
+    let mut decoder = append_decode::AppendEventDecoder::new();
+    let chunk_samples = (sample_rate as usize / 20).max(64);
+    let mut consumed = 0usize;
+    let mut snapshots = Vec::new();
+
+    for chunk in samples.chunks(chunk_samples) {
+        streamer.feed(chunk);
+        consumed += chunk.len();
+        if let Some(viz) = streamer.flush_with_viz().viz {
+            let update = decoder.ingest_viz(&viz);
+            if update.changed {
+                snapshots.push(StreamingTraceSnapshot {
+                    end_sample: consumed,
+                    transcript: update.decoded_text.trim().to_string(),
+                });
+            }
+        }
+    }
+
+    if let Some(viz) = streamer.flush_with_viz().viz {
+        let update = decoder.ingest_viz(&viz);
+        if update.changed {
+            snapshots.push(StreamingTraceSnapshot {
+                end_sample: consumed,
+                transcript: update.decoded_text.trim().to_string(),
+            });
+        }
+    }
+    let final_update = decoder.flush();
+    if final_update.changed {
+        snapshots.push(StreamingTraceSnapshot {
+            end_sample: consumed,
+            transcript: final_update.decoded_text.trim().to_string(),
+        });
+    }
+
+    StreamingTrace {
+        transcript: decoder.decoded_text().trim().to_string(),
+        snapshots,
+    }
 }
 
 fn append_stream_event_to_transcript(transcript: &mut String, ev: &StreamEvent) -> bool {

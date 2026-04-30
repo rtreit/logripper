@@ -2,6 +2,7 @@
 //! sibling binaries (CLI, eval harness, GUI bridge). Keeps the crate
 //! single-target while letting `src/bin/*.rs` reuse the heavy modules.
 
+pub mod append_decode;
 pub mod audio;
 pub mod bench_latency;
 pub mod decoder;
