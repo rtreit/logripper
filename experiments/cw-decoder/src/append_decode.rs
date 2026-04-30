@@ -133,7 +133,7 @@ pub fn decode_samples_append(
     streamer.set_pinned_hz(pin_hz);
     streamer.set_min_snr_db(min_snr_db);
 
-    let chunk = ((sample_rate as usize) / 20).max(1);
+    let chunk = ((sample_rate as usize) / 4).max(1);
     let mut decoder = AppendEventDecoder::new();
     let mut cursor = 0usize;
     while cursor < samples.len() {
@@ -147,6 +147,25 @@ pub fn decode_samples_append(
     if let Some(viz) = streamer.flush_with_viz().viz {
         decoder.ingest_viz(&viz);
     }
+    decoder.flush()
+}
+
+pub fn decode_samples_append_exact_window(
+    samples: &[f32],
+    sample_rate: u32,
+    pin_wpm: Option<f32>,
+    pin_hz: Option<f32>,
+    min_snr_db: f32,
+) -> AppendDecodeUpdate {
+    let cfg = envelope_decoder::EnvelopeConfig {
+        pin_wpm,
+        pin_hz,
+        min_snr_db,
+        ..envelope_decoder::EnvelopeConfig::default()
+    };
+    let (_, viz) = envelope_decoder::decode_envelope_with_viz(samples, sample_rate, &cfg);
+    let mut decoder = AppendEventDecoder::new();
+    decoder.ingest_viz(&viz);
     decoder.flush()
 }
 

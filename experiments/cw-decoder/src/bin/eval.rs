@@ -744,7 +744,7 @@ fn score_labels_exact_window(
             } else {
                 &[]
             };
-            let outcome = append_decode::decode_samples_append(
+            let outcome = append_decode::decode_samples_append_exact_window(
                 samples,
                 audio.sample_rate,
                 None,
@@ -994,7 +994,7 @@ fn score_labels_strategy(
                     } else {
                         &[][..]
                     };
-                    append_decode::decode_samples_append(
+                    append_decode::decode_samples_append_exact_window(
                         samples,
                         audio.sample_rate,
                         None,
@@ -1348,7 +1348,7 @@ fn run_streaming_trace(
 ) -> Result<StreamingTrace> {
     let mut decoder = StreamingDecoder::new(sample_rate)?;
     decoder.set_config(cfg);
-    let chunk_samples = (sample_rate as usize / 20).max(64);
+    let chunk_samples = (sample_rate as usize / 4).max(64);
     let mut transcript = String::new();
     let mut consumed = 0usize;
     let mut snapshots = Vec::new();
@@ -1571,7 +1571,7 @@ fn collect_labels_from_dir(files: &mut Vec<PathBuf>, dir: PathBuf) -> Result<()>
 }
 
 fn resolve_label_source(source: &std::path::Path, label_dir: &std::path::Path) -> PathBuf {
-    if source.is_absolute() {
+    if source.is_absolute() || source.exists() {
         source.to_path_buf()
     } else {
         label_dir.join(source)
