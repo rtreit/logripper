@@ -31,6 +31,11 @@ const MIN_ELEMENT_S: f32 = 0.012; // Reject sub-12ms blips as noise (~50 WPM dot
                                   // noise-locked rather than real CW; blank the transcript instead of
                                   // emitting dit-spam. Pinned WPM bypasses this gate.
 const MAX_AUTO_WPM: f32 = 45.0;
+/// Maximum cycle-to-cycle WPM delta (WPM) for the auto-lock to fire.
+/// Empirically clean/weak/qrn fixtures sit at p50 ~0.55 WPM and p90
+/// ~2.95 WPM; chaos sits at p90 ~7.7 WPM. ±2 WPM admits stable signals
+/// while rejecting noise-induced bounces.
+const LOCK_WPM_TOLERANCE: f32 = 2.0;
 
 /// Default SNR floor (dB) below which the decode is suppressed and the
 /// pipeline returns empty text. 20*log10(2.0) ≈ 6 dB; CW signals worth
@@ -462,6 +467,11 @@ pub struct LiveEnvelopeStreamer {
     locked_wpm: Option<f32>,
     pinned_wpm: Option<f32>,
     lock_after_elements: usize,
+    /// WPM observed on the prior decode cycle. The auto-lock requires
+    /// the current cycle's WPM to be within `LOCK_WPM_TOLERANCE` of this
+    /// value so noise-induced WPM bounces (e.g., chaos QRM) cannot
+    /// promote a single noisy cycle to a sticky lock.
+    prev_decode_wpm: Option<f32>,
     last_text: String,
     last_wpm: f32,
     pinned_hz: Option<f32>,
@@ -545,7 +555,15 @@ impl LiveEnvelopeStreamer {
             since_last_decode: 0,
             locked_wpm: None,
             pinned_wpm: None,
-            lock_after_elements: 30,
+            // Lowered from 30 because the 3-second rolling analysis
+            // window structurally caps `on_durations` at ~20 at 30 WPM,
+            // making a 30-element threshold unreachable on healthy
+            // signals. Empirical sweep across clean/weak/qrn fixtures
+            // showed >95% of cycles satisfy >=10. False locks on chaos
+            // are gated by the WPM-consistency check below combined
+            // with the existing `wpm <= MAX_AUTO_WPM` filter.
+            lock_after_elements: 10,
+            prev_decode_wpm: None,
             last_text: String::new(),
             last_wpm: 0.0,
             pinned_hz: None,
@@ -679,8 +697,16 @@ impl LiveEnvelopeStreamer {
             && elements >= self.lock_after_elements
             && wpm > 5.0
             && wpm <= MAX_AUTO_WPM
+            && self
+                .prev_decode_wpm
+                .is_some_and(|prev| (wpm - prev).abs() <= LOCK_WPM_TOLERANCE)
         {
             self.locked_wpm = Some(wpm);
+        }
+        if wpm > 5.0 && wpm <= MAX_AUTO_WPM {
+            self.prev_decode_wpm = Some(wpm);
+        } else {
+            self.prev_decode_wpm = None;
         }
 
         let appended = if text.starts_with(&self.last_text) {
@@ -1816,6 +1842,63 @@ mod tests {
             final_snap.transcript
         );
         assert_eq!(final_snap.viz.and_then(|viz| viz.locked_wpm), Some(20.0));
+    }
+
+    #[test]
+    fn live_streamer_auto_locks_after_consistent_wpm_window() {
+        let rate = 8000u32;
+        let dot = 0.060_f32;
+        // 30 dits provides plenty of on-durations and a stable WPM
+        // across multiple decode cycles; the lock should fire once
+        // the rolling analysis window observes >= 10 elements with
+        // a WPM consistent (within +/- LOCK_WPM_TOLERANCE) across
+        // two consecutive decode cycles.
+        let s = synth_morse(rate, dot, 700.0, &". ".repeat(30));
+        let mut streamer = LiveEnvelopeStreamer::new(rate);
+        let chunk = (rate as usize) / 20; // 50 ms
+        let mut i = 0;
+        while i < s.len() {
+            let end = (i + chunk).min(s.len());
+            streamer.feed(&s[i..end]);
+            i = end;
+        }
+        let final_snap = streamer.flush_with_viz();
+        let locked = final_snap
+            .viz
+            .as_ref()
+            .and_then(|viz| viz.locked_wpm)
+            .expect("lock should fire on a long stable PARIS-like dit train");
+        assert!(
+            (15.0..=30.0).contains(&locked),
+            "locked_wpm out of expected range: {locked}"
+        );
+    }
+
+    #[test]
+    fn live_streamer_does_not_auto_lock_above_max_auto_wpm() {
+        let rate = 8000u32;
+        // Synthesize an extremely fast tone train (well above
+        // MAX_AUTO_WPM == 45). Even though many elements appear,
+        // the auto-lock must not promote a noisy/runaway WPM.
+        let dot = 0.015_f32; // ~80 wpm-ish
+        let s = synth_morse(rate, dot, 700.0, &". ".repeat(40));
+        let mut streamer = LiveEnvelopeStreamer::new(rate);
+        let chunk = (rate as usize) / 20;
+        let mut i = 0;
+        while i < s.len() {
+            let end = (i + chunk).min(s.len());
+            streamer.feed(&s[i..end]);
+            i = end;
+        }
+        let final_snap = streamer.flush_with_viz();
+        assert!(
+            final_snap
+                .viz
+                .as_ref()
+                .and_then(|viz| viz.locked_wpm)
+                .is_none(),
+            "lock unexpectedly fired above MAX_AUTO_WPM"
+        );
     }
 
     #[test]

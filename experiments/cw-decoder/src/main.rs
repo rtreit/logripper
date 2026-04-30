@@ -3740,6 +3740,7 @@ fn run_stream_live_v3(
     let mut last_decode_at = Instant::now();
     let decode_period = Duration::from_millis(decode_every_ms);
     let mut session_transcript: String = String::new();
+    let mut diag = DiagWriter::from_env();
 
     loop {
         if stop.load(Ordering::Relaxed) {
@@ -3803,12 +3804,23 @@ fn run_stream_live_v3(
         // per-cycle `text` field still carries the raw snapshot for
         // anyone who wants to see what the decoder was emitting before
         // it locked.
-        let appended_session = if should_stitch_to_session(&snap) {
+        let stitched = should_stitch_to_session(&snap);
+        let appended_session = if stitched {
             ditdah_streaming::append_snapshot_text(&mut session_transcript, &snap.transcript)
         } else {
             String::new()
         };
         cap_session_transcript(&mut session_transcript, MAX_V3_SESSION_TRANSCRIPT_CHARS);
+        if let Some(d) = diag.as_mut() {
+            d.record(
+                t,
+                &snap,
+                stitched,
+                &appended_session,
+                &session_transcript,
+                "live",
+            );
+        }
 
         if let Some(em) = emitter.as_mut() {
             em.emit(
@@ -3998,6 +4010,7 @@ fn run_stream_live_v3_file(
     let chunk_samples = ((sr as u64 * 50) / 1000) as usize;
     let mut cursor = 0usize;
     let mut session_transcript: String = String::new();
+    let mut diag = DiagWriter::from_env();
 
     while cursor < total_samples {
         if seconds > 0.0 && started.elapsed().as_secs_f32() >= seconds {
@@ -4023,12 +4036,23 @@ fn run_stream_live_v3_file(
         // Same lock-state gate as the live capture path: only stitch
         // into the session transcript once the decoder has locked and
         // the SNR gate is not suppressing.
-        let appended_session = if should_stitch_to_session(&snap) {
+        let stitched = should_stitch_to_session(&snap);
+        let appended_session = if stitched {
             ditdah_streaming::append_snapshot_text(&mut session_transcript, &snap.transcript)
         } else {
             String::new()
         };
         cap_session_transcript(&mut session_transcript, MAX_V3_SESSION_TRANSCRIPT_CHARS);
+        if let Some(d) = diag.as_mut() {
+            d.record(
+                t,
+                &snap,
+                stitched,
+                &appended_session,
+                &session_transcript,
+                "file",
+            );
+        }
 
         if let Some(em) = emitter.as_mut() {
             em.emit(
@@ -4161,6 +4185,106 @@ fn should_stitch_to_session(snap: &cw_decoder_poc::envelope_decoder::LiveEnvelop
         return false;
     };
     viz.locked_wpm.is_some() && !viz.snr_suppressed
+}
+
+/// Per-cycle diagnostic recorder for the V3 live path.
+///
+/// TEMPORARY — added under #364 follow-up to gather rich data before
+/// hypothesizing about why locked windows still drop characters into
+/// the session transcript. Remove or gate behind a build flag once the
+/// transcript-fidelity work is done.
+///
+/// Activated by setting the env var `QSORIPPER_CW_DIAG_LOG` to a file
+/// path before launching `cw-decoder.exe stream-live-v3` (directly or
+/// via the GUI). One JSON line per decode cycle is appended.
+struct DiagWriter {
+    file: std::fs::File,
+    cycle: u64,
+}
+
+impl DiagWriter {
+    fn from_env() -> Option<Self> {
+        let path = std::env::var("QSORIPPER_CW_DIAG_LOG").ok()?;
+        let path = path.trim();
+        if path.is_empty() {
+            return None;
+        }
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+            .map_err(|e| eprintln!("[diag] cannot open {path}: {e}"))
+            .ok()?;
+        eprintln!("[diag] writing per-cycle diagnostics to {path}");
+        Some(Self { file, cycle: 0 })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn record(
+        &mut self,
+        t_seconds: f32,
+        snap: &cw_decoder_poc::envelope_decoder::LiveEnvelopeSnapshot,
+        stitched: bool,
+        appended_session: &str,
+        session_transcript: &str,
+        source: &str,
+    ) {
+        use std::io::Write;
+        let viz = snap.viz.as_ref();
+        let locked = viz.is_some_and(|v| v.locked_wpm.is_some());
+        let locked_wpm = viz.and_then(|v| v.locked_wpm);
+        let snr_db = viz.map(|v| v.snr_db).unwrap_or(0.0);
+        let snr_suppressed = viz.is_some_and(|v| v.snr_suppressed);
+        let pitch_hz = viz.map(|v| v.pitch_hz).unwrap_or(0.0);
+        let signal_floor = viz.map(|v| v.signal_floor).unwrap_or(0.0);
+        let noise_floor = viz.map(|v| v.noise_floor).unwrap_or(0.0);
+        let envelope_max = viz.map(|v| v.envelope_max).unwrap_or(0.0);
+        let dyn_range = if envelope_max > 0.0 {
+            (signal_floor - noise_floor) / envelope_max
+        } else {
+            0.0
+        };
+        let dot_seconds = viz.map(|v| v.dot_seconds).unwrap_or(0.0);
+        let viz_wpm = viz.map(|v| v.wpm).unwrap_or(0.0);
+        let n_events = viz.map(|v| v.events.len()).unwrap_or(0);
+        let n_on_durations = viz.map(|v| v.on_durations.len()).unwrap_or(0);
+        let session_len = session_transcript.chars().count();
+        let line = serde_json::json!({
+            "type": "diag_cycle",
+            "source": source,
+            "cycle": self.cycle,
+            "t_s": t_seconds,
+            "snap": {
+                "text": snap.transcript,
+                "appended": snap.appended,
+                "wpm": snap.wpm,
+            },
+            "viz": {
+                "locked": locked,
+                "locked_wpm": locked_wpm,
+                "snr_db": snr_db,
+                "snr_suppressed": snr_suppressed,
+                "dyn_range_ratio": dyn_range,
+                "signal_floor": signal_floor,
+                "noise_floor": noise_floor,
+                "envelope_max": envelope_max,
+                "pitch_hz": pitch_hz,
+                "dot_seconds": dot_seconds,
+                "wpm": viz_wpm,
+                "n_events": n_events,
+                "n_on_durations": n_on_durations,
+            },
+            "session": {
+                "stitched": stitched,
+                "appended": appended_session,
+                "len_chars": session_len,
+            },
+        });
+        if let Err(e) = writeln!(self.file, "{line}") {
+            eprintln!("[diag] write failed: {e}");
+        }
+        self.cycle += 1;
+    }
 }
 
 /// Maximum characters retained in the V3 visualizer's session transcript.
