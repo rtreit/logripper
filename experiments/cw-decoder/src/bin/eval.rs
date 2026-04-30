@@ -1134,11 +1134,11 @@ fn strategy_label(strategy: Strategy) -> String {
     match strategy {
         Strategy::ExactAuto => "auto".to_string(),
         Strategy::Foundation => "foundation".to_string(),
-        Strategy::ExactPin(w) => format!("pin{:.0}", w),
+        Strategy::ExactPin(w) => format!("pin{w:.0}"),
         Strategy::RegionAuto => "region".to_string(),
-        Strategy::RegionPin(w) => format!("region{:.0}", w),
+        Strategy::RegionPin(w) => format!("region{w:.0}"),
         Strategy::EnvelopeAuto => "env".to_string(),
-        Strategy::EnvelopePin(w) => format!("env{:.0}", w),
+        Strategy::EnvelopePin(w) => format!("env{w:.0}"),
         Strategy::LiveEnvelopeAuto => "live-env".to_string(),
     }
 }
@@ -1228,7 +1228,7 @@ fn run_strategy_sweep(
         println!("{}", "=".repeat(96));
         let header_strategies: String = per_strategy
             .iter()
-            .map(|(name, _)| format!("{:>10}", name))
+            .map(|(name, _)| format!("{name:>10}"))
             .collect::<Vec<_>>()
             .join(" ");
         println!("{:30} {:>4}  {}", "clip", "len", header_strategies);
@@ -1257,7 +1257,7 @@ fn run_strategy_sweep(
                 } else {
                     total_distance as f32 / total_truth as f32
                 };
-                format!("{:>10.2}", weighted)
+                format!("{weighted:>10.2}")
             })
             .collect::<Vec<_>>()
             .join(" ");

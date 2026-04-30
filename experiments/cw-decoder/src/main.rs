@@ -2070,7 +2070,7 @@ fn apply_input_gain(
         });
         let p99 = abs[idx].max(1e-6);
         // Allow target up to 4.0 so the tanh deliberately saturates.
-        let target = auto_gain_target.max(0.05).min(4.0);
+        let target = auto_gain_target.clamp(0.05, 4.0);
         let scale = target / p99;
         for s in samples.iter_mut() {
             *s = (*s * scale).tanh();
@@ -2140,7 +2140,7 @@ fn run_stream_file(
             audio.samples.len()
         );
         if let Some(g) = applied_gain_db {
-            println!("Input gain applied: {:+.1} dB", g);
+            println!("Input gain applied: {g:+.1} dB");
         }
     }
 
@@ -3676,7 +3676,7 @@ fn run_gen_rough_fist(
         noise,
     );
     println!("Truth: {}", truth_path.display());
-    println!("Text:  {}", canonical_text);
+    println!("Text:  {canonical_text}");
     Ok(())
 }
 

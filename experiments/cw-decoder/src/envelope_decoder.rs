@@ -405,7 +405,7 @@ fn estimate_dot_kmeans(durations: &[f32]) -> f32 {
     if durations.len() < 4 {
         return median_lower_half(durations);
     }
-    let mut sorted: Vec<f32> = durations.iter().copied().collect();
+    let mut sorted: Vec<f32> = durations.to_vec();
     sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     let lo_seed = sorted[sorted.len() / 4];
     let hi_seed = sorted[(3 * sorted.len()) / 4];
@@ -1080,7 +1080,7 @@ fn downsample_envelope(env: &[f32]) -> Vec<f32> {
     if env.len() <= MAX_VIZ_ENVELOPE_SAMPLES {
         return env.to_vec();
     }
-    let bucket = (env.len() + MAX_VIZ_ENVELOPE_SAMPLES - 1) / MAX_VIZ_ENVELOPE_SAMPLES;
+    let bucket = env.len().div_ceil(MAX_VIZ_ENVELOPE_SAMPLES);
     let mut out = Vec::with_capacity(env.len() / bucket + 1);
     let mut i = 0;
     while i < env.len() {
@@ -1104,7 +1104,7 @@ fn kmeans_centroids(durations: &[f32]) -> (f32, f32) {
         let v = durations.first().copied().unwrap_or(0.0);
         return (v, v);
     }
-    let mut sorted: Vec<f32> = durations.iter().copied().collect();
+    let mut sorted: Vec<f32> = durations.to_vec();
     sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     let mut c_lo = sorted[sorted.len() / 4];
     let mut c_hi = sorted[(3 * sorted.len()) / 4];
@@ -1239,7 +1239,7 @@ fn decode_events(ons: &[f32], offs: &[f32], dot_s: f32) -> String {
 }
 
 fn percentile_pair(values: &[f32], p_lo: f32, p_hi: f32) -> (f32, f32) {
-    let mut sorted: Vec<f32> = values.iter().copied().collect();
+    let mut sorted: Vec<f32> = values.to_vec();
     sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     (
         region_stream::percentile_sorted(&sorted, p_lo),
@@ -1255,7 +1255,7 @@ pub(crate) fn robust_peak(values: &[f32], percentile: f32) -> f32 {
     if values.is_empty() {
         return 0.0;
     }
-    let mut sorted: Vec<f32> = values.iter().copied().collect();
+    let mut sorted: Vec<f32> = values.to_vec();
     sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     region_stream::percentile_sorted(&sorted, percentile)
 }
@@ -1264,7 +1264,7 @@ fn median_lower_half(values: &[f32]) -> f32 {
     if values.is_empty() {
         return 0.0;
     }
-    let mut sorted: Vec<f32> = values.iter().copied().collect();
+    let mut sorted: Vec<f32> = values.to_vec();
     sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     let cutoff = (sorted.len() / 2).max(1);
     sorted[cutoff / 2]
@@ -1822,7 +1822,7 @@ mod tests {
                              // PARIS = .--. .- .-. .. ...
         let s = synth_morse(rate, dot, 700.0, ".--. .- .-. .. ...");
         let txt = decode_envelope(&s, rate, &EnvelopeConfig::default());
-        assert_eq!(txt, "PARIS", "got {:?}", txt);
+        assert_eq!(txt, "PARIS", "got {txt:?}");
     }
 
     #[test]
@@ -1842,7 +1842,7 @@ mod tests {
                 analysis_window_seconds: None,
             },
         );
-        assert_eq!(txt, "K", "got {:?}", txt);
+        assert_eq!(txt, "K", "got {txt:?}");
     }
 
     #[test]
@@ -1962,13 +1962,8 @@ mod tests {
 
     #[test]
     fn kmeans_dot_estimate_separates_dits_and_dahs() {
-        let mut durs = Vec::new();
-        for _ in 0..6 {
-            durs.push(0.060);
-        }
-        for _ in 0..6 {
-            durs.push(0.180);
-        }
+        let mut durs = vec![0.060; 6];
+        durs.extend([0.180; 6]);
         let dot = estimate_dot_kmeans(&durs);
         assert!((dot - 0.060).abs() < 0.005, "expected ~0.060, got {dot}");
     }
@@ -2055,8 +2050,7 @@ mod tests {
         let (text, viz) = decode_envelope_with_viz(&s, rate, &cfg);
         assert_eq!(
             text, "",
-            "noise-only signal must not emit text (got {:?})",
-            text
+            "noise-only signal must not emit text (got {text:?})"
         );
         assert!(
             viz.snr_suppressed,
@@ -2141,8 +2135,7 @@ mod tests {
         let snr = snr_db(0.5, 1.0);
         assert!(
             snr >= cfg.min_snr_db && snr < DYN_RANGE_BYPASS_SNR_DB,
-            "test setup: snr {} should be in marginal band",
-            snr
+            "test setup: snr {snr} should be in marginal band"
         );
         assert!(
             !passes_quality_gate(&cfg, 0.5, 1.0, 10.0),
@@ -2218,8 +2211,7 @@ mod tests {
         );
         assert!(
             windowed_text.contains('K'),
-            "expected decoded text to contain 'K', got {:?}",
-            windowed_text
+            "expected decoded text to contain 'K', got {windowed_text:?}"
         );
     }
 
