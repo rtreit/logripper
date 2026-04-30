@@ -4309,6 +4309,32 @@ impl DiagWriter {
         let viz_wpm = viz.map(|v| v.wpm).unwrap_or(0.0);
         let n_events = viz.map(|v| v.events.len()).unwrap_or(0);
         let n_on_durations = viz.map(|v| v.on_durations.len()).unwrap_or(0);
+        let centroid_dot = viz.map(|v| v.centroid_dot).unwrap_or(0.0);
+        let centroid_dah = viz.map(|v| v.centroid_dah).unwrap_or(0.0);
+        let on_durations: Vec<f32> = viz.map(|v| v.on_durations.clone()).unwrap_or_default();
+        // Independent histogram-derived WPM: the median of the dot-cluster.
+        // Compared against `viz.wpm` to detect streamer/visualizer drift.
+        let median_dot_seconds = if !on_durations.is_empty() && centroid_dot > 0.0 {
+            let split = (centroid_dot + centroid_dah) * 0.5;
+            let mut dots: Vec<f32> = on_durations
+                .iter()
+                .copied()
+                .filter(|d| *d > 0.0 && *d <= split)
+                .collect();
+            if dots.is_empty() {
+                0.0
+            } else {
+                dots.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+                dots[dots.len() / 2]
+            }
+        } else {
+            0.0
+        };
+        let histogram_wpm = if median_dot_seconds > 0.0 {
+            1.2 / median_dot_seconds
+        } else {
+            0.0
+        };
         let session_len = session_transcript.chars().count();
         let line = serde_json::json!({
             "type": "diag_cycle",
@@ -4334,6 +4360,11 @@ impl DiagWriter {
                 "wpm": viz_wpm,
                 "n_events": n_events,
                 "n_on_durations": n_on_durations,
+                "centroid_dot": centroid_dot,
+                "centroid_dah": centroid_dah,
+                "on_durations": on_durations,
+                "histogram_dot_seconds": median_dot_seconds,
+                "histogram_wpm": histogram_wpm,
             },
             "session": {
                 "stitched": stitched,
