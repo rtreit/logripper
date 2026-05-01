@@ -1143,9 +1143,9 @@
                         IsChecked="{Binding VizUseLoopback}"
                         VerticalAlignment="Center" />
               <CheckBox Grid.Column="4" Margin="14,0,0,0"
-                        Content="APPEND DECODE"
-                        IsChecked="{Binding VizAppendDecode}"
-                        ToolTip.Tip="Show append-only characters decoded from stable dit/dah/gap events instead of the rolling-window transcript."
+                        Content="PERIOD WPM (FIX)"
+                        IsChecked="{Binding VizUsePeriodWpm}"
+                        ToolTip.Tip="When ON (default), the displayed WPM uses the period-based dot estimator (rising-edge intervals, invariant to compander/threshold bias). When OFF, shows the legacy k-means dot WPM. The decoder always classifies dits/dahs/gaps from the same k-means dot — this toggle ONLY changes the displayed WPM number."
                         VerticalAlignment="Center" />
               <TextBlock Grid.Column="5" Margin="20,0,6,0"
                          Text="WINDOW"

@@ -386,9 +386,14 @@ pub fn decode_envelope_with_stats(
     };
 
     let text = decode_events(&ons, &offs, dot_s);
-    // For the reported dot/WPM use the period-based estimator (rising-edge
-    // intervals) which is invariant to threshold/decay bias. Falls back to
-    // the classification dot_s when there are too few onsets.
+    // Classification (`dot_seconds`) keeps the k-means estimate so downstream
+    // consumers (bar monitor, append decoder, ditdah streaming) classify
+    // dits/dahs/gaps from the SAME dot the decoder used.
+    //
+    // The reported WPM uses the period-based estimator (rising-edge
+    // intervals) which is invariant to threshold/compander bias. Falls back
+    // to the k-means dot when the fix can't be applied (too few onsets, or
+    // no intra-element pairs).
     let wpm_dot_s = if cfg.pin_wpm.is_some() {
         dot_s
     } else {
@@ -402,7 +407,7 @@ pub fn decode_envelope_with_stats(
     };
     EnvelopeDecode {
         text,
-        dot_seconds: wpm_dot_s,
+        dot_seconds: dot_s,
         wpm,
         elements: ons.len(),
     }
@@ -557,6 +562,10 @@ pub struct VizFrame {
     pub on_durations: Vec<f32>,
     pub dot_seconds: f32,
     pub wpm: f32,
+    /// Legacy k-means-derived WPM kept alongside `wpm` so consumers can
+    /// compare the period-based fix to the original biased estimate. Equals
+    /// `wpm` when the period estimator falls back (no intra-element pairs).
+    pub wpm_kmeans: f32,
     pub centroid_dot: f32,
     pub centroid_dah: f32,
     pub locked_wpm: Option<f32>,
@@ -834,6 +843,7 @@ pub fn decode_envelope_with_viz(
         on_durations: Vec::new(),
         dot_seconds: 0.0,
         wpm: 0.0,
+        wpm_kmeans: 0.0,
         centroid_dot: 0.0,
         centroid_dah: 0.0,
         locked_wpm: None,
@@ -958,6 +968,10 @@ pub fn decode_envelope_with_viz(
     // the off-gap thresholds preserves decode quality. See
     // `estimate_dot_period` docs and the bench in
     // `tools/wpm-measure` for the verification corpus.
+    //
+    // `wpm_kmeans` is kept alongside the period-based `wpm` so the GUI
+    // (and any A/B comparison code) can show the legacy biased number.
+    let wpm_kmeans = if dot_s > 0.0 { 1.2 / dot_s } else { 0.0 };
     let wpm_dot_s = if cfg.pin_wpm.is_some() {
         dot_s
     } else {
@@ -1013,8 +1027,9 @@ pub fn decode_envelope_with_viz(
         hyst_low: low,
         events,
         on_durations,
-        dot_seconds: wpm_dot_s,
+        dot_seconds: dot_s,
         wpm,
+        wpm_kmeans,
         centroid_dot,
         centroid_dah,
         locked_wpm: None,

@@ -25,6 +25,12 @@ internal sealed class DecoderEvent
 
     // wpm
     [JsonPropertyName("wpm")] public double? Wpm { get; set; }
+    /// <summary>
+    /// Legacy k-means-derived WPM emitted alongside <see cref="Wpm"/> by
+    /// the decoder so the visualizer can A/B compare the period-based fix
+    /// against the original biased estimate.
+    /// </summary>
+    [JsonPropertyName("wpm_kmeans")] public double? WpmKmeans { get; set; }
 
     // char / garbled
     [JsonPropertyName("ch")] public string? Ch { get; set; }

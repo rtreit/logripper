@@ -27,6 +27,7 @@ public sealed class VizFrameVm
     public double FrameStepS { get; }
     public double DotSeconds { get; }
     public double Wpm { get; }
+    public double WpmKmeans { get; }
     public double? LockedWpm { get; }
     public double CentroidDot { get; }
     public double CentroidDah { get; }
@@ -48,6 +49,7 @@ public sealed class VizFrameVm
         FrameStepS = ev.FrameStepS ?? 0;
         DotSeconds = ev.DotSeconds ?? 0;
         Wpm = ev.Wpm ?? 0;
+        WpmKmeans = ev.WpmKmeans ?? (ev.Wpm ?? 0);
         LockedWpm = ev.LockedWpm;
         CentroidDot = ev.CentroidDot ?? 0;
         CentroidDah = ev.CentroidDah ?? 0;
@@ -123,18 +125,36 @@ public sealed partial class MainWindowViewModel
     /// </summary>
     public bool VizMute { get => _vizMute; set => Set(ref _vizMute, value); }
 
-    private bool _vizAppendDecode;
-    public bool VizAppendDecode
+    private bool _vizUsePeriodWpm = true;
+    /// <summary>
+    /// When true (default) the visualizer's "WPM" readout uses the
+    /// period-based dot estimator from the decoder (rising-edge intervals,
+    /// invariant to compander/threshold bias). When false it falls back
+    /// to the legacy k-means dot WPM emitted as <c>wpm_kmeans</c>.
+    /// Toggling does NOT restart the decoder; both values are emitted on
+    /// every viz frame so the swap is instant.
+    /// </summary>
+    public bool VizUsePeriodWpm
     {
-        get => _vizAppendDecode;
+        get => _vizUsePeriodWpm;
         set
         {
-            if (Set(ref _vizAppendDecode, value) && value)
+            if (Set(ref _vizUsePeriodWpm, value))
             {
-                VizTranscript = VizBarMonitor.DecodedText;
+                // Refresh the displayed WPM using the most recent frame
+                // so the change is visible immediately.
+                if (_lastVizWpmPeriod.HasValue || _lastVizWpmKmeans.HasValue)
+                {
+                    VizCurrentWpm = value
+                        ? (_lastVizWpmPeriod ?? _lastVizWpmKmeans ?? 0)
+                        : (_lastVizWpmKmeans ?? _lastVizWpmPeriod ?? 0);
+                }
             }
         }
     }
+
+    private double? _lastVizWpmPeriod;
+    private double? _lastVizWpmKmeans;
 
     public string VizStartStopLabel => VizRunning ? "STOP" : "START LIVE";
 
@@ -271,20 +291,30 @@ public sealed partial class MainWindowViewModel
                     // only — empty until the streamer locks is
                     // expected and accurate.
                     var sess = ev.Transcript;
-                    if (!VizAppendDecode && sess is not null) VizTranscript = sess;
-                    if (ev.Wpm.HasValue) VizCurrentWpm = ev.Wpm.Value;
+                    if (sess is not null) VizTranscript = sess;
+                    if (ev.Wpm.HasValue) _lastVizWpmPeriod = ev.Wpm.Value;
+                    if (ev.WpmKmeans.HasValue) _lastVizWpmKmeans = ev.WpmKmeans.Value;
+                    if (ev.Wpm.HasValue || ev.WpmKmeans.HasValue)
+                    {
+                        VizCurrentWpm = VizUsePeriodWpm
+                            ? (_lastVizWpmPeriod ?? _lastVizWpmKmeans ?? 0)
+                            : (_lastVizWpmKmeans ?? _lastVizWpmPeriod ?? 0);
+                    }
                     break;
                 case "viz":
                     VizFrame = new VizFrameVm(ev);
-                    if (VizBarMonitor.Ingest(ev) && VizAppendDecode)
+                    VizBarMonitor.Ingest(ev);
+                    if (ev.Wpm.HasValue) _lastVizWpmPeriod = ev.Wpm.Value;
+                    if (ev.WpmKmeans.HasValue) _lastVizWpmKmeans = ev.WpmKmeans.Value;
+                    if (ev.Wpm.HasValue || ev.WpmKmeans.HasValue)
                     {
-                        VizTranscript = VizBarMonitor.DecodedText;
+                        VizCurrentWpm = VizUsePeriodWpm
+                            ? (_lastVizWpmPeriod ?? _lastVizWpmKmeans ?? 0)
+                            : (_lastVizWpmKmeans ?? _lastVizWpmPeriod ?? 0);
                     }
-                    if (ev.Wpm.HasValue) VizCurrentWpm = ev.Wpm.Value;
                     break;
                 case "end":
-                    if (VizAppendDecode) VizTranscript = VizBarMonitor.DecodedText;
-                    else if (ev.Transcript is not null) VizTranscript = ev.Transcript;
+                    if (ev.Transcript is not null) VizTranscript = ev.Transcript;
                     VizRunning = false;
                     VizStatus = "ended";
                     var flushed = VizBarMonitor.Flush();
