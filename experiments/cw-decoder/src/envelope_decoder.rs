@@ -43,9 +43,10 @@ const LOCK_WPM_TOLERANCE: f32 = 2.0;
 /// `centroid_dot` (which reflects the actual on-duration distribution
 /// regardless of the pinned dot length), so a wrong lock acquired on a
 /// noise transient or weak operator before a stronger station starts
-/// will surrender within a few seconds rather than producing garbage
-/// indefinitely. At decode-every-ms = 1000 ms this is ~5 seconds of
-/// disagreement.
+/// will surrender within a couple of seconds rather than producing
+/// garbage indefinitely. Decode cadence is ~250 ms (see
+/// `decode_every_samples`), so 5 cycles is ~1.25 s of disagreement —
+/// longer than any single CW dah even at 12 WPM (~300 ms).
 const LOCK_RELOCK_AFTER_MISMATCHES: usize = 5;
 /// WPM delta (current-cycle measured WPM vs locked WPM) above which the
 /// cycle is counted toward [`LOCK_RELOCK_AFTER_MISMATCHES`]. Chosen
@@ -55,10 +56,11 @@ const LOCK_RELOCK_AFTER_MISMATCHES: usize = 5;
 const LOCK_RELOCK_DELTA_WPM: f32 = 5.0;
 /// Number of consecutive SNR-suppressed cycles after which the
 /// auto-lock is released so the next live signal can re-acquire fresh.
-/// At decode-every-ms = 1000 ms this is ~10 seconds of dead air —
-/// enough to ride through ordinary QSO turn-taking gaps without
-/// thrashing, but short enough that a stale lock from a finished QSO
-/// does not persist for the next operator on a new pitch/WPM.
+/// Decode cadence is ~250 ms (see `decode_every_samples`), so 10 cycles
+/// is ~2.5 s of dead air. Re-acquisition only needs ~2 agreeing cycles
+/// (~0.5 s) when the same operator returns at the same WPM, so this
+/// trades a small amount of between-overs slack for prompt release of
+/// stale locks when the QSO actually ends or moves to a new operator.
 const LOCK_RELEASE_AFTER_SUPPRESSED: usize = 10;
 
 /// Default SNR floor (dB) below which the decode is suppressed and the
