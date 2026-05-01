@@ -37,6 +37,32 @@ const MAX_AUTO_WPM: f32 = 45.0;
 /// while rejecting noise-induced bounces.
 const LOCK_WPM_TOLERANCE: f32 = 2.0;
 
+/// Number of consecutive cycles whose centroid-derived WPM must
+/// disagree with the locked WPM by more than [`LOCK_RELOCK_DELTA_WPM`]
+/// before the auto-lock is released. Computed from the unbiased
+/// `centroid_dot` (which reflects the actual on-duration distribution
+/// regardless of the pinned dot length), so a wrong lock acquired on a
+/// noise transient or weak operator before a stronger station starts
+/// will surrender within a couple of seconds rather than producing
+/// garbage indefinitely. Decode cadence is ~250 ms (see
+/// `decode_every_samples`), so 5 cycles is ~1.25 s of disagreement —
+/// longer than any single CW dah even at 12 WPM (~300 ms).
+const LOCK_RELOCK_AFTER_MISMATCHES: usize = 5;
+/// WPM delta (current-cycle measured WPM vs locked WPM) above which the
+/// cycle is counted toward [`LOCK_RELOCK_AFTER_MISMATCHES`]. Chosen
+/// generously so transient timing jitter inside a stable QSO does not
+/// trigger a relock; only sustained, structural mismatch (wrong WPM
+/// lock or QSY to a different operator) fires.
+const LOCK_RELOCK_DELTA_WPM: f32 = 5.0;
+/// Number of consecutive SNR-suppressed cycles after which the
+/// auto-lock is released so the next live signal can re-acquire fresh.
+/// Decode cadence is ~250 ms (see `decode_every_samples`), so 10 cycles
+/// is ~2.5 s of dead air. Re-acquisition only needs ~2 agreeing cycles
+/// (~0.5 s) when the same operator returns at the same WPM, so this
+/// trades a small amount of between-overs slack for prompt release of
+/// stale locks when the QSO actually ends or moves to a new operator.
+const LOCK_RELEASE_AFTER_SUPPRESSED: usize = 10;
+
 /// Default SNR floor (dB) below which the decode is suppressed and the
 /// pipeline returns empty text. 20*log10(2.0) ≈ 6 dB; CW signals worth
 /// decoding sit comfortably above this. Tuned to filter out the
@@ -490,6 +516,17 @@ pub struct LiveEnvelopeStreamer {
     /// value so noise-induced WPM bounces (e.g., chaos QRM) cannot
     /// promote a single noisy cycle to a sticky lock.
     prev_decode_wpm: Option<f32>,
+    /// Count of consecutive cycles whose unbiased centroid-derived WPM
+    /// disagreed with `locked_wpm` by more than
+    /// [`LOCK_RELOCK_DELTA_WPM`]. Resets to zero on any agreeing cycle.
+    /// When it reaches [`LOCK_RELOCK_AFTER_MISMATCHES`], the lock is
+    /// released so the next cycle can re-acquire on the actual signal.
+    locked_mismatch_count: usize,
+    /// Count of consecutive SNR-suppressed cycles since the lock was
+    /// acquired. Released after [`LOCK_RELEASE_AFTER_SUPPRESSED`] so a
+    /// stale lock from a finished QSO does not persist into a fresh
+    /// signal at a different WPM/pitch.
+    locked_suppressed_count: usize,
     last_text: String,
     last_wpm: f32,
     pinned_hz: Option<f32>,
@@ -608,6 +645,8 @@ impl LiveEnvelopeStreamer {
             // with the existing `wpm <= MAX_AUTO_WPM` filter.
             lock_after_elements: 10,
             prev_decode_wpm: None,
+            locked_mismatch_count: 0,
+            locked_suppressed_count: 0,
             last_text: String::new(),
             last_wpm: 0.0,
             pinned_hz: None,
@@ -655,6 +694,9 @@ impl LiveEnvelopeStreamer {
     pub fn set_pinned_wpm(&mut self, pinned_wpm: Option<f32>) {
         self.pinned_wpm = pinned_wpm.filter(|w| *w > 0.0);
         self.locked_wpm = self.pinned_wpm;
+        self.locked_mismatch_count = 0;
+        self.locked_suppressed_count = 0;
+        self.prev_decode_wpm = None;
     }
 
     /// Set the minimum signal-to-noise ratio (dB) required to emit text.
@@ -713,6 +755,26 @@ impl LiveEnvelopeStreamer {
         &self.last_text
     }
 
+    /// Test-only accessor for the current auto-lock state. Returns
+    /// the locked WPM (set by either auto-lock or `set_pinned_wpm`).
+    /// Used by relock unit tests.
+    #[cfg(test)]
+    pub(crate) fn locked_wpm(&self) -> Option<f32> {
+        self.locked_wpm
+    }
+
+    /// Test-only injection of a wrong lock so the relock-on-mismatch
+    /// path can be exercised without first having to drive a real
+    /// auto-lock at the wrong WPM. Bypasses the public `set_pinned_wpm`
+    /// API (which would set `pinned_wpm` and disable auto-release).
+    #[cfg(test)]
+    pub(crate) fn force_locked_wpm_for_test(&mut self, wpm: f32) {
+        self.locked_wpm = Some(wpm);
+        self.locked_mismatch_count = 0;
+        self.locked_suppressed_count = 0;
+        self.prev_decode_wpm = None;
+    }
+
     fn push_samples(&mut self, samples: &[f32]) {
         self.buffer.extend_from_slice(samples);
         self.samples_fed_total = self.samples_fed_total.saturating_add(samples.len() as u64);
@@ -755,6 +817,9 @@ impl LiveEnvelopeStreamer {
             (result.text, result.wpm, result.elements, None)
         };
 
+        // Auto-lock acquisition: requires not already pinned/locked,
+        // enough elements in this cycle, sane WPM range, and consensus
+        // with the prior cycle (LOCK_WPM_TOLERANCE).
         if self.pinned_wpm.is_none()
             && self.locked_wpm.is_none()
             && elements >= self.lock_after_elements
@@ -765,12 +830,71 @@ impl LiveEnvelopeStreamer {
                 .is_some_and(|prev| (wpm - prev).abs() <= LOCK_WPM_TOLERANCE)
         {
             self.locked_wpm = Some(wpm);
+            self.locked_mismatch_count = 0;
+            self.locked_suppressed_count = 0;
         }
+
+        // Auto-lock release. Once locked, `frame.wpm` simply echoes the
+        // pinned dot length, so we have to look at the unbiased
+        // `centroid_dot` (computed from the actual on_durations
+        // distribution, k-means with k=2) to detect whether the signal
+        // really matches the lock. Two release paths:
+        //   1) Sustained measurement mismatch (wrong lock vs real
+        //      signal, or QSY to a different operator).
+        //   2) Sustained SNR suppression (signal went away, stale lock
+        //      should not bleed into the next operator).
+        // Manual pin always overrides; we only auto-release when there
+        // is no explicit pin.
+        let mut released = false;
+        if let (Some(locked), None, Some(viz_ref)) =
+            (self.locked_wpm, self.pinned_wpm, viz.as_ref())
+        {
+            if viz_ref.snr_suppressed {
+                self.locked_suppressed_count += 1;
+            } else {
+                self.locked_suppressed_count = 0;
+            }
+            let measured_wpm = if viz_ref.centroid_dot > 0.0 {
+                1.2 / viz_ref.centroid_dot
+            } else {
+                0.0
+            };
+            let enough_evidence = viz_ref.on_durations.len() >= self.lock_after_elements
+                && !viz_ref.snr_suppressed
+                && measured_wpm > 5.0;
+            if enough_evidence && (measured_wpm - locked).abs() > LOCK_RELOCK_DELTA_WPM {
+                self.locked_mismatch_count += 1;
+            } else if enough_evidence {
+                self.locked_mismatch_count = 0;
+            }
+            if self.locked_mismatch_count >= LOCK_RELOCK_AFTER_MISMATCHES
+                || self.locked_suppressed_count >= LOCK_RELEASE_AFTER_SUPPRESSED
+            {
+                self.locked_wpm = None;
+                self.locked_mismatch_count = 0;
+                self.locked_suppressed_count = 0;
+                self.prev_decode_wpm = None;
+                released = true;
+            }
+        }
+
         if wpm > 5.0 && wpm <= MAX_AUTO_WPM {
             self.prev_decode_wpm = Some(wpm);
         } else {
             self.prev_decode_wpm = None;
         }
+
+        // If we just released the lock, reflect the unlocked state in
+        // the viz frame so should_stitch_to_session() and the GUI see
+        // it in the same cycle.
+        let viz = if released {
+            viz.map(|mut v| {
+                v.locked_wpm = None;
+                v
+            })
+        } else {
+            viz
+        };
 
         let appended = if text.starts_with(&self.last_text) {
             text[self.last_text.len()..].to_string()
@@ -2143,6 +2267,102 @@ mod tests {
                 .and_then(|viz| viz.locked_wpm)
                 .is_none(),
             "lock unexpectedly fired above MAX_AUTO_WPM"
+        );
+    }
+
+    #[test]
+    fn live_streamer_releases_wrong_lock_on_sustained_mismatch() {
+        // Regression: a stale wrong-WPM lock used to persist forever
+        // because once the streamer was locked, `frame.wpm` simply
+        // echoed the pinned dot length and there was no signal-derived
+        // measurement to detect mismatch. Now the unbiased
+        // `centroid_dot` (k-means on raw on_durations) is used to
+        // count consecutive cycles of disagreement and the lock is
+        // released after LOCK_RELOCK_AFTER_MISMATCHES.
+        let rate = 8000u32;
+        // Real signal at 30 WPM (dot = 40 ms). Inject a wrong lock at
+        // 14 WPM (dot = 85 ms), feed plenty of audio, and verify the
+        // lock surrenders.
+        let dot = 0.040_f32;
+        let s = synth_morse(
+            rate,
+            dot,
+            700.0,
+            &". - . - . - . - . - . - . - . - . - . - . - . - . - . - . - ".repeat(8),
+        );
+        let mut streamer = LiveEnvelopeStreamer::new(rate);
+        streamer.force_locked_wpm_for_test(14.0);
+        assert_eq!(streamer.locked_wpm(), Some(14.0));
+        let chunk = (rate as usize) / 20; // 50 ms
+        let mut i = 0;
+        let mut released = false;
+        while i < s.len() {
+            let end = (i + chunk).min(s.len());
+            for snap in streamer.feed_with_viz(&s[i..end]) {
+                if snap.viz.and_then(|v| v.locked_wpm).is_none() {
+                    released = true;
+                    break;
+                }
+            }
+            if released {
+                break;
+            }
+            i = end;
+        }
+        assert!(
+            released,
+            "wrong lock should have been released within the audio span"
+        );
+        assert_eq!(streamer.locked_wpm(), None);
+    }
+
+    #[test]
+    fn live_streamer_keeps_correct_lock_when_signal_matches() {
+        // Verify the relock logic does NOT thrash on a healthy locked
+        // signal where centroid_dot agrees with the locked WPM.
+        let rate = 8000u32;
+        let dot = 0.060_f32; // 20 WPM
+        let s = synth_morse(rate, dot, 700.0, &". - ".repeat(80));
+        let mut streamer = LiveEnvelopeStreamer::new(rate);
+        let chunk = (rate as usize) / 20;
+        let mut i = 0;
+        while i < s.len() {
+            let end = (i + chunk).min(s.len());
+            streamer.feed_with_viz(&s[i..end]);
+            i = end;
+        }
+        let lock = streamer.locked_wpm().expect("auto-lock should fire");
+        assert!(
+            (15.0..=25.0).contains(&lock),
+            "lock at unexpected WPM: {lock}"
+        );
+    }
+
+    #[test]
+    fn live_streamer_releases_lock_after_sustained_silence() {
+        // Once a stale lock has been carried through enough
+        // SNR-suppressed cycles (LOCK_RELEASE_AFTER_SUPPRESSED), it
+        // must release so a new operator on a different WPM/pitch
+        // can re-acquire fresh.
+        let rate = 8000u32;
+        let mut streamer = LiveEnvelopeStreamer::new(rate);
+        streamer.force_locked_wpm_for_test(20.0);
+        // Decode cadence is 0.25 sec; LOCK_RELEASE_AFTER_SUPPRESSED is
+        // 10 cycles, so feed 4 seconds of silence (16 cycles) to be
+        // safe. Silence is below the SNR floor and dyn-range gate, so
+        // every cycle should be suppressed.
+        let silence = vec![0.0_f32; (rate as f32 * 4.0) as usize];
+        let chunk = (rate as usize) / 20;
+        let mut i = 0;
+        while i < silence.len() {
+            let end = (i + chunk).min(silence.len());
+            streamer.feed_with_viz(&silence[i..end]);
+            i = end;
+        }
+        assert_eq!(
+            streamer.locked_wpm(),
+            None,
+            "lock should release after sustained silence"
         );
     }
 
