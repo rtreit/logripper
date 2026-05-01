@@ -249,9 +249,7 @@ mod tests {
         let secs = d.audio_secs();
         assert!(
             (secs - MAX_BUFFER_SECS).abs() < 1.0,
-            "expected ~{} s buffered, got {}",
-            MAX_BUFFER_SECS,
-            secs
+            "expected ~{MAX_BUFFER_SECS} s buffered, got {secs}"
         );
     }
 

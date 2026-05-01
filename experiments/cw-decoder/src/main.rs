@@ -539,6 +539,12 @@ enum Cmd {
         /// pipeline so the visualizer behaves identically to live audio.
         #[arg(long)]
         file: Option<PathBuf>,
+        /// When used with --file, play the file through the default output
+        /// device and use the playback stream position as the decoder clock.
+        /// This keeps visualizer bars/transcript aligned with audible audio
+        /// instead of a separate wall-clock replay loop.
+        #[arg(long)]
+        play: bool,
 
         /// Multi-pitch (CW Skimmer-style) decode: also run K parallel
         /// per-pitch decoders alongside the existing single-pitch
@@ -642,6 +648,11 @@ enum Cmd {
         /// inside the noise itself. Issue #322.
         #[arg(long, default_value_t = false)]
         cfar_keying: bool,
+        /// Use the append-only V3 event-stream foundation instead of the
+        /// legacy streaming decoder. For --from-file this reports transcript
+        /// quality against truth; latency-specific fields are left empty.
+        #[arg(long, default_value_t = false)]
+        foundation: bool,
         /// Emit one NDJSON record per scenario in addition to the table
         /// (handy for collecting comparison runs into a file).
         #[arg(long, default_value_t = false)]
@@ -686,7 +697,25 @@ enum Cmd {
     },
 }
 
+const CLI_THREAD_STACK_BYTES: usize = 16 * 1024 * 1024;
+
 fn main() -> Result<()> {
+    std::thread::Builder::new()
+        .name("cw-decoder-cli".to_string())
+        .stack_size(CLI_THREAD_STACK_BYTES)
+        .spawn(run_cli)?
+        .join()
+        .map_err(|panic| {
+            let message = panic
+                .downcast_ref::<&str>()
+                .copied()
+                .or_else(|| panic.downcast_ref::<String>().map(String::as_str))
+                .unwrap_or("cw-decoder CLI thread panicked");
+            anyhow::anyhow!(message.to_string())
+        })?
+}
+
+fn run_cli() -> Result<()> {
     let cli = Cli::parse();
 
     // Always install the log capture so we can read ditdah's WPM/pitch lines.
@@ -1024,6 +1053,7 @@ fn main() -> Result<()> {
             pin_hz,
             min_snr_db,
             file,
+            play,
             multi_pitch,
         } => run_stream_live_v3(
             device.as_deref(),
@@ -1037,6 +1067,7 @@ fn main() -> Result<()> {
             (pin_hz > 0.0).then_some(pin_hz),
             min_snr_db,
             file.as_deref(),
+            play,
             multi_pitch,
         ),
         Cmd::ProbeFisher {
@@ -1062,6 +1093,7 @@ fn main() -> Result<()> {
             min_gap_dot_fraction,
             min_pulse_dot_fraction,
             cfar_keying,
+            foundation,
             json,
         } => run_bench_latency(
             from_file.as_deref(),
@@ -1079,6 +1111,7 @@ fn main() -> Result<()> {
             min_gap_dot_fraction,
             min_pulse_dot_fraction,
             cfar_keying,
+            foundation,
             json,
         ),
         Cmd::GenRoughFist {
@@ -1159,6 +1192,7 @@ fn run_bench_latency(
     min_gap_dot_fraction: f32,
     min_pulse_dot_fraction: f32,
     cfar_keying: bool,
+    foundation: bool,
     json: bool,
 ) -> Result<()> {
     let mut cfg = streaming::DecoderConfig::defaults();
@@ -1224,7 +1258,29 @@ fn run_bench_latency(
 
     let mut results = Vec::with_capacity(scenarios.len());
     for scen in &scenarios {
-        let r = bench_latency::run_scenario(scen, cfg, chunk_ms, stable_n, label)?;
+        let r = if foundation {
+            let transcript = cw_decoder_poc::append_decode::decode_samples_append(
+                &scen.audio.samples,
+                scen.audio.sample_rate,
+                None,
+                None,
+                cw_decoder_poc::envelope_decoder::DEFAULT_MIN_SNR_DB,
+            )
+            .decoded_text
+            .trim()
+            .to_string();
+            bench_latency::BenchResult {
+                scenario: scen.name.clone(),
+                config_label: label.to_string(),
+                cw_onset_ms: scen.cw_onset_ms,
+                truth: scen.truth.clone(),
+                transcript,
+                stable_n,
+                ..Default::default()
+            }
+        } else {
+            bench_latency::run_scenario(scen, cfg, chunk_ms, stable_n, label)?
+        };
         if json {
             // Compact NDJSON record for off-line comparison/aggregation.
             let rec = serde_json::json!({
@@ -2014,7 +2070,7 @@ fn apply_input_gain(
         });
         let p99 = abs[idx].max(1e-6);
         // Allow target up to 4.0 so the tanh deliberately saturates.
-        let target = auto_gain_target.max(0.05).min(4.0);
+        let target = auto_gain_target.clamp(0.05, 4.0);
         let scale = target / p99;
         for s in samples.iter_mut() {
             *s = (*s * scale).tanh();
@@ -2084,7 +2140,7 @@ fn run_stream_file(
             audio.samples.len()
         );
         if let Some(g) = applied_gain_db {
-            println!("Input gain applied: {:+.1} dB", g);
+            println!("Input gain applied: {g:+.1} dB");
         }
     }
 
@@ -3679,7 +3735,7 @@ fn run_gen_rough_fist(
         noise,
     );
     println!("Truth: {}", truth_path.display());
-    println!("Text:  {}", canonical_text);
+    println!("Text:  {canonical_text}");
     Ok(())
 }
 
@@ -3695,6 +3751,7 @@ fn run_stream_live_v3(
     pin_hz: Option<f32>,
     min_snr_db: f32,
     file: Option<&std::path::Path>,
+    play_file_audio: bool,
     multi_pitch: usize,
 ) -> Result<()> {
     if let Some(path) = file {
@@ -3706,6 +3763,7 @@ fn run_stream_live_v3(
             pin_wpm,
             pin_hz,
             min_snr_db,
+            play_file_audio,
             multi_pitch,
         );
     }
@@ -3798,7 +3856,10 @@ fn run_stream_live_v3(
     let mut last_drain_at: u64 = 0;
     let mut last_decode_at = Instant::now();
     let decode_period = Duration::from_millis(decode_every_ms);
-    let mut session_transcript: String = String::new();
+    let decode_every_s = decode_every_ms as f32 / 1000.0;
+    let mut commit_cursor =
+        ditdah_streaming::LiveCommitCursor::new(MAX_V3_SESSION_TRANSCRIPT_CHARS);
+    let mut append_decoder = cw_decoder_poc::append_decode::AppendEventDecoder::new();
     let mut diag = DiagWriter::from_env();
 
     loop {
@@ -3816,7 +3877,8 @@ fn run_stream_live_v3(
                     streamer = new_streamer();
                     multi_streamer = new_multi();
                     last_drain_at = capture.buffer.lock().written;
-                    session_transcript.clear();
+                    commit_cursor.reset_all();
+                    append_decoder = cw_decoder_poc::append_decode::AppendEventDecoder::new();
                     if let Some(em) = emitter.as_mut() {
                         em.emit(
                             started.elapsed().as_secs_f32(),
@@ -3857,19 +3919,36 @@ fn run_stream_live_v3(
         // Force a viz-producing decode now.
         let snap = streamer.flush_with_viz();
         let t = started.elapsed().as_secs_f32();
-        // Gate session-transcript stitching on the streamer's lock state
-        // so ACQUIRING-mode garbage and SNR-suppressed cycles do not
-        // pollute the persistent operator-visible transcript. The
-        // per-cycle `text` field still carries the raw snapshot for
-        // anyone who wants to see what the decoder was emitting before
-        // it locked.
-        let stitched = should_stitch_to_session(&snap);
-        let appended_session = if stitched {
-            ditdah_streaming::append_snapshot_text(&mut session_transcript, &snap.transcript)
+        // Approach A+: event-driven commit cursor (sample-indexed,
+        // idempotent across re-decodes) replaces the old
+        // string-stitching path that produced ghost-repeats like
+        // "TSA USA EE   SA USA EE   ..." when the rolling window's
+        // first character drifted between cycles.
+        let commit = if let Some(viz) = snap.viz.as_ref() {
+            commit_cursor.update_from_viz(viz, decode_every_s)
         } else {
-            String::new()
+            ditdah_streaming::CommitUpdate::default()
         };
-        cap_session_transcript(&mut session_transcript, MAX_V3_SESSION_TRANSCRIPT_CHARS);
+        let append = if let Some(viz) = snap.viz.as_ref() {
+            append_decoder.ingest_viz(viz)
+        } else {
+            cw_decoder_poc::append_decode::AppendDecodeUpdate::default()
+        };
+        let session_transcript: String = format!(
+            "{}{}{}",
+            commit.committed_text,
+            if !commit.committed_text.is_empty()
+                && !commit.provisional_tail.is_empty()
+                && !commit.committed_text.ends_with(' ')
+            {
+                " "
+            } else {
+                ""
+            },
+            commit.provisional_tail
+        );
+        let stitched = !commit.committed_text.is_empty() || !commit.provisional_tail.is_empty();
+        let appended_session = String::new();
         if let Some(d) = diag.as_mut() {
             d.record(
                 t,
@@ -3886,9 +3965,14 @@ fn run_stream_live_v3(
                 t,
                 serde_json::json!({
                     "type": "transcript",
-                    "text": snap.transcript,
+                    "text": append.decoded_text,
                     "appended": appended_session,
-                    "transcript": session_transcript.clone(),
+                    "transcript": append.decoded_text,
+                    "committed": commit.committed_text,
+                    "provisional": commit.provisional_tail,
+                    "cursor_transcript": session_transcript.clone(),
+                    "raw_morse": append.raw_stream,
+                    "window_text": snap.transcript,
                     "wpm": snap.wpm,
                 }),
             );
@@ -3916,6 +4000,9 @@ fn run_stream_live_v3(
                     t,
                     serde_json::json!({
                         "type": "viz",
+                        "sample_rate": viz.sample_rate,
+                        "window_start_sample": viz.window_start_sample,
+                        "window_end_sample": viz.window_end_sample,
                         "buffer_seconds": viz.buffer_seconds,
                         "frame_step_s": viz.frame_step_s,
                         "pitch_hz": viz.pitch_hz,
@@ -3987,14 +4074,15 @@ fn run_stream_live_v3(
             started.elapsed().as_secs_f32(),
             serde_json::json!({
                 "type": "end",
-                "transcript": session_transcript.clone(),
+                "transcript": commit_cursor.committed_text(),
+                "committed": commit_cursor.committed_text(),
                 "recording": recording_saved.or(recording_path),
             }),
         );
     } else {
         println!();
         println!("Final transcript (v3):");
-        println!("{}", session_transcript);
+        println!("{}", commit_cursor.committed_text());
     }
     Ok(())
 }
@@ -4007,6 +4095,7 @@ fn run_stream_live_v3_file(
     pin_wpm: Option<f32>,
     pin_hz: Option<f32>,
     min_snr_db: f32,
+    play_file_audio: bool,
     multi_pitch: usize,
 ) -> Result<()> {
     use cw_decoder_poc::envelope_decoder::{
@@ -4018,6 +4107,14 @@ fn run_stream_live_v3_file(
     let sr = decoded.sample_rate;
     let total_samples = decoded.samples.len();
     let duration_s = total_samples as f32 / sr as f32;
+    let playback = if play_file_audio {
+        Some(
+            audio::play_samples_with_control(decoded.samples.clone(), sr)
+                .context("starting file playback")?,
+        )
+    } else {
+        None
+    };
     let mut streamer = LiveEnvelopeStreamer::new(sr);
     streamer.set_pinned_hz(pin_hz);
     streamer.set_pinned_wpm(pin_wpm);
@@ -4045,6 +4142,7 @@ fn run_stream_live_v3_file(
                 "source": "live-v3-file",
                 "device": format!("file:{}", path.display()),
                 "rate": sr,
+                "playback_device": playback.as_ref().map(|p| p.device_name.as_str()),
                 "decode_every_ms": decode_every_ms,
                 "max_viz_envelope_samples": MAX_VIZ_ENVELOPE_SAMPLES,
                 "recording": serde_json::Value::Null,
@@ -4067,16 +4165,28 @@ fn run_stream_live_v3_file(
     let decode_period = Duration::from_millis(decode_every_ms);
     let chunk_period = Duration::from_millis(50);
     let chunk_samples = ((sr as u64 * 50) / 1000) as usize;
+    let pump_period = if playback.is_some() {
+        Duration::from_millis(8)
+    } else {
+        chunk_period
+    };
     let mut cursor = 0usize;
-    let mut session_transcript: String = String::new();
+    let decode_every_s = decode_every_ms as f32 / 1000.0;
+    let mut commit_cursor =
+        ditdah_streaming::LiveCommitCursor::new(MAX_V3_SESSION_TRANSCRIPT_CHARS);
+    let mut append_decoder = cw_decoder_poc::append_decode::AppendEventDecoder::new();
     let mut diag = DiagWriter::from_env();
 
     while cursor < total_samples {
         if seconds > 0.0 && started.elapsed().as_secs_f32() >= seconds {
             break;
         }
-        std::thread::sleep(chunk_period);
-        let end = (cursor + chunk_samples).min(total_samples);
+        std::thread::sleep(pump_period);
+        let end = if let Some(p) = playback.as_ref() {
+            (p.position_input_frames() as usize).min(total_samples)
+        } else {
+            (cursor + chunk_samples).min(total_samples)
+        };
         if end > cursor {
             streamer.feed(&decoded.samples[cursor..end]);
             if let Some(m) = multi_streamer.as_mut() {
@@ -4092,16 +4202,37 @@ fn run_stream_live_v3_file(
 
         let snap = streamer.flush_with_viz();
         let t = started.elapsed().as_secs_f32();
-        // Same lock-state gate as the live capture path: only stitch
-        // into the session transcript once the decoder has locked and
-        // the SNR gate is not suppressing.
-        let stitched = should_stitch_to_session(&snap);
-        let appended_session = if stitched {
-            ditdah_streaming::append_snapshot_text(&mut session_transcript, &snap.transcript)
+        // Approach A+: drive the event-driven commit cursor instead of
+        // string-stitching. The cursor is sample-indexed and idempotent
+        // across re-decodes of the same audio region, so the
+        // "TSA USA EE   SA USA EE   ..." ghost-repeat pattern that the
+        // old `append_snapshot_text` produced is structurally
+        // impossible.
+        let commit = if let Some(viz) = snap.viz.as_ref() {
+            commit_cursor.update_from_viz(viz, decode_every_s)
         } else {
-            String::new()
+            ditdah_streaming::CommitUpdate::default()
         };
-        cap_session_transcript(&mut session_transcript, MAX_V3_SESSION_TRANSCRIPT_CHARS);
+        let append = if let Some(viz) = snap.viz.as_ref() {
+            append_decoder.ingest_viz(viz)
+        } else {
+            cw_decoder_poc::append_decode::AppendDecodeUpdate::default()
+        };
+        let session_transcript: String = format!(
+            "{}{}{}",
+            commit.committed_text,
+            if !commit.committed_text.is_empty()
+                && !commit.provisional_tail.is_empty()
+                && !commit.committed_text.ends_with(' ')
+            {
+                " "
+            } else {
+                ""
+            },
+            commit.provisional_tail
+        );
+        let stitched = !commit.committed_text.is_empty() || !commit.provisional_tail.is_empty();
+        let appended_session = String::new();
         if let Some(d) = diag.as_mut() {
             d.record(
                 t,
@@ -4118,9 +4249,14 @@ fn run_stream_live_v3_file(
                 t,
                 serde_json::json!({
                     "type": "transcript",
-                    "text": snap.transcript,
+                    "text": append.decoded_text,
                     "appended": appended_session,
-                    "transcript": session_transcript.clone(),
+                    "transcript": append.decoded_text,
+                    "committed": commit.committed_text,
+                    "provisional": commit.provisional_tail,
+                    "cursor_transcript": session_transcript.clone(),
+                    "raw_morse": append.raw_stream,
+                    "window_text": snap.transcript,
                     "wpm": snap.wpm,
                 }),
             );
@@ -4148,6 +4284,9 @@ fn run_stream_live_v3_file(
                     t,
                     serde_json::json!({
                         "type": "viz",
+                        "sample_rate": viz.sample_rate,
+                        "window_start_sample": viz.window_start_sample,
+                        "window_end_sample": viz.window_end_sample,
                         "buffer_seconds": viz.buffer_seconds,
                         "frame_step_s": viz.frame_step_s,
                         "pitch_hz": viz.pitch_hz,
@@ -4213,14 +4352,15 @@ fn run_stream_live_v3_file(
             started.elapsed().as_secs_f32(),
             serde_json::json!({
                 "type": "end",
-                "transcript": session_transcript.clone(),
+                "transcript": commit_cursor.committed_text(),
+                "committed": commit_cursor.committed_text(),
                 "recording": serde_json::Value::Null,
             }),
         );
     } else {
         println!();
         println!("Final transcript (v3 file):");
-        println!("{}", session_transcript);
+        println!("{}", commit_cursor.committed_text());
     }
     Ok(())
 }
@@ -4239,6 +4379,7 @@ fn run_stream_live_v3_file(
 /// "operator sees what the decoder is making" principle from PR #362
 /// still applies to *which characters* end up in the session. We are
 /// only filtering *which cycles* are allowed to contribute.
+#[allow(dead_code)] // Retained for legacy tests; V3 now uses LiveCommitCursor.
 fn should_stitch_to_session(snap: &cw_decoder_poc::envelope_decoder::LiveEnvelopeSnapshot) -> bool {
     let Some(viz) = snap.viz.as_ref() else {
         return false;
@@ -4354,6 +4495,7 @@ const MAX_V3_SESSION_TRANSCRIPT_CHARS: usize = 12_000;
 /// Cap the running session transcript at `max_chars`. When over the limit,
 /// keep roughly the last 80% of the buffer, snapping the trim point to the
 /// nearest whitespace so we don't shear a token in half.
+#[allow(dead_code)] // Retained for legacy tests; V3 now uses LiveCommitCursor.
 fn cap_session_transcript(transcript: &mut String, max_chars: usize) {
     if transcript.chars().count() <= max_chars {
         return;
@@ -4479,6 +4621,8 @@ mod v3_session_transcript_tests {
             centroid_dot: 0.06,
             centroid_dah: 0.18,
             locked_wpm: if locked { Some(20.0) } else { None },
+            window_start_sample: 0,
+            window_end_sample: 8000,
         }
     }
 

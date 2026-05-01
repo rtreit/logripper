@@ -4,10 +4,10 @@ This folder is the current sandbox for improving QsoRipper CW decoding on real o
 
 The project has converged on two parallel goals:
 
-1. keep a **boring, label-driven reference path** that we can score and tune honestly, and
-2. keep iterating on a **faster custom streaming path** for eventual live use.
+1. keep a **simple append-only event-stream foundation** that behaves like what the operator actually hears and sees, and
+2. layer more ambitious signal-processing experiments on top without allowing them to regress that foundation.
 
-Today, the reference path is the causal `ditdah` baseline. The custom streaming decoder has improved substantially, but it is still not the only truth source and should not replace corpus-driven evaluation yet.
+The current breakthrough is that the best live behavior did **not** come from rolling transcript windows, overlap stitching, or commit heuristics. It came from consuming the same stable dit/dah/gap event stream that paints the Visualizer bars and appending each matured event once in audio order. That path is now the "line in the sand": Decode, Labeling, Tuning, Bench, and Visualizer should all key off it first, while experimental decoders are compared against it rather than silently replacing it.
 
 > **Integration status (round 1, issue #321)**: the production GUI now hosts the
 > `cw-decoder` binary as a subprocess and auto-fills `QsoRecord.cw_decode_rx_wpm`
@@ -85,11 +85,11 @@ Main experiment executable. It currently exposes several surfaces:
 - **Custom streaming decoder**
   - `stream-file` — file-driven streaming decode with optional NDJSON event output and live `--stdin-control` config updates
   - `stream-live` — live capture through the streaming Goertzel decoder, with optional `--record` WAV mirror and `--stdin-control`
-  - `stream-live-v2` — **current GUI default.** Live capture into an append-only audio buffer; re-runs pristine `ditdah` on the **whole buffer** every `--decode-every-ms` (default 5000) and emits a full-replacement `transcript` event. Empirically reaches CER ~0.06 on training-set-a 30 WPM CW (3-4× better than `stream-live`'s 0.17 and ~14× better than the old `stream-live-ditdah` rolling-window backend's 0.83-0.89). Per-decode latency stays under 100 ms even on a 3-minute buffer. See `src\streaming_v2.rs` for design rationale and `tools\rolling-whole-buffer\` for the empirical validation harness.
-  - `stream-live-v3` — in-house envelope decoder that drives the GUI **VISUALIZER** tab. Goertzel envelope → percentile-based noise/signal floors → hysteresis state machine → k-means dot/dah classifier. Emits NDJSON `viz` frames (envelope curve, noise/signal floors, hysteresis bands, classified events, on-duration histogram, k-means centroids, current/locked WPM, SNR) so the operator can *see* exactly what the decoder is reacting to. Optional `--pin-wpm` (hard-pins the streamer's `locked_wpm` so the first decode honors the operator), `--pin-hz` (bypasses the auto pitch detector when it locks onto a noise/harmonic peak), and `--min-snr-db` (default 6.0; below this floor the decoder still emits viz frames but suppresses text — kills the "noise-locked dit-spam" failure mode where the auto-pitch detector locks onto a high-tone harmonic). The streamer also enforces a default dynamic-range bimodality gate (`(signal_floor − noise_floor) / envelope_max ≥ 0.55`) which catches high-variance noise that sneaks past the SNR ratio gate. When either gate fires the visualizer overlays a red `LOW SNR` badge so the suppression is visible. Live captures auto-save to `experiments\cw-decoder\captures\viz-yyyyMMdd-HHmmss.wav` for later labeling.
+  - `stream-live-v2` — whole-growing-buffer `ditdah` replay. This was a valuable intermediate reference because it proved that re-decoding the whole accumulated buffer and replacing the displayed transcript was far better than sliding-window `ditdah` stitching. It is no longer the GUI default, but remains useful for A/B comparison.
+  - `stream-live-v3` — **current GUI foundation.** In-house envelope decoder that drives Decode, Labeling, Tuning, Bench, and the **VISUALIZER** tab. Goertzel envelope → percentile-based noise/signal floors → hysteresis state machine → k-means dot/dah classifier. Emits NDJSON `viz` frames (envelope curve, noise/signal floors, hysteresis bands, classified events, on-duration histogram, k-means centroids, current/locked WPM, SNR) so the operator can *see* exactly what the decoder is reacting to. Its transcript is produced by the append-only event-stream decoder in `src\append_decode.rs`: each matured `on_dit`, `on_dah`, `off_char`, and `off_word` bar is consumed once in sample-time order, appended to a raw Morse stream (`.` / `-` / `/` / `//`), and decoded into a single growing text line with real spaces for word gaps. Optional `--pin-wpm` (hard-pins the streamer's `locked_wpm` so the first decode honors the operator), `--pin-hz` (bypasses the auto pitch detector when it locks onto a noise/harmonic peak), and `--min-snr-db` (default 6.0; below this floor the decoder still emits viz frames but suppresses text — kills the "noise-locked dit-spam" failure mode where the auto-pitch detector locks onto a high-tone harmonic). The streamer also enforces a default dynamic-range bimodality gate (`(signal_floor - noise_floor) / envelope_max >= 0.55`) which catches high-variance noise that sneaks past the SNR ratio gate. When either gate fires the visualizer overlays a red `LOW SNR` badge so the suppression is visible. Live captures auto-save to `experiments\cw-decoder\captures\viz-yyyyMMdd-HHmmss.wav` for later labeling. For file replay, `stream-live-v3 --file --play` clocks decoder feeding from the output playback cursor so the bars/transcript stay aligned with the audio instead of drifting in a separate process.
 - **Causal ditdah baseline**
   - `stream-file-ditdah` — file-driven causal whole-window `ditdah` replay
-  - `stream-live-ditdah` — live capture through the rolling-window causal baseline, with optional `--record` WAV mirror. **Deprecated** — kept only for A/B comparison; the GUI now uses `stream-live-v2`.
+  - `stream-live-ditdah` — live capture through the rolling-window causal baseline, with optional `--record` WAV mirror. **Deprecated** — kept only for A/B comparison; the GUI now uses the `stream-live-v3` append foundation.
 - **Labeling helpers**
   - `harvest-file` — find candidate "golden copy" windows by intersecting offline `ditdah` and the streaming decoder, optional `--needle` anchors
   - `preview-window` — render a slowed WAV preview of a window for human verification
@@ -99,7 +99,7 @@ Main experiment executable. It currently exposes several surfaces:
 - **Tone diagnostics**
   - `probe-fisher` — sweep candidate pitches across an audio file and rank them by trial-decode Fisher score
 - **Cold-start + lock-stability benchmark**
-  - `bench-latency` — feed a deterministic synthetic scenario matrix (silence/noise/voice lead-ins + long-clean-CW lock-stability stress) or a real recording (`--from-file --truth --cw-onset-ms`) through the streaming decoder and report two classes of metrics: cold-start *acquisition latency* (time from CW onset to first stable-N-correct decoded run) and *lock stability* once locked (post-first-lock uptime ratio, `PitchLost` count, relock cycles, longest non-Locked gap). Headline metric is `lat_ms = t_stable_N - cw_onset_ms`. Use `--label <name>` and `--json` to collect comparison runs across decoder configurations.
+  - `bench-latency` — feed a deterministic synthetic scenario matrix (silence/noise/voice lead-ins + long-clean-CW lock-stability stress) or a real recording (`--from-file --truth --cw-onset-ms`) through the streaming decoder and report two classes of metrics: cold-start *acquisition latency* (time from CW onset to first stable-N-correct decoded run) and *lock stability* once locked (post-first-lock uptime ratio, `PitchLost` count, relock cycles, longest non-Locked gap). Headline metric is `lat_ms = t_stable_N - cw_onset_ms`. Add `--foundation` to score the append-only event-stream transcript path used by the GUI; in that mode latency-specific lock metrics are intentionally empty and the output is a transcript-quality/regression record.
 
 All `--json` and `--record` flags are what the Avalonia GUI uses to drive the engine over stdout/stderr NDJSON.
 
@@ -111,6 +111,7 @@ Current uses:
 
 - exact-window scoring against saved `*.labels.jsonl`
 - full-stream scoring by replaying whole recordings causally and intersecting transcript state at label boundaries
+- foundation strategy scoring (`--strategy-sweep --strategies foundation`) so tuning can compare experimental modes against the same append-only path the GUI uses
 - fast parameter sweeps for the causal `ditdah` baseline (`--sweep-ditdah`, optionally `--wide-sweep`)
 - a built-in synthetic regression suite (silence, white/bursty/colored noise, clean and noisy synthesized CW at multiple SNRs) when no label flags are supplied
 
@@ -184,7 +185,25 @@ Recent custom-streaming changes on this branch added:
 
 This path is the more ambitious live decoder, but it still needs better corpus-driven measurement.
 
-### 2. Causal ditdah baseline
+### 2. Append-only event-stream foundation
+
+Implemented in `src\append_decode.rs` and surfaced by `stream-live-v3`.
+
+This is intentionally simple:
+
+- the envelope streamer classifies bars as `on_dit`, `on_dah`, `off_intra`, `off_char`, or `off_word`
+- each event is anchored to the audio sample range that produced it
+- a short trailing stability guard lets gaps mature before they are emitted
+- each event is consumed once in audio order
+- dits/dahs accumulate into one pending Morse character
+- `off_char` flushes that character
+- `off_word` flushes that character and appends a real space
+
+The raw debug representation is the same thing without Morse lookup: `.` for a dit, `-` for a dah, `/` for a character gap, and `//` for a word gap. This proved crucial because it made the decoder's output comparable to the colored Visualizer bars without being coupled to Avalonia redraws. Redraw-level logging repeated rolling windows and produced false text; event-stream logging exposed the actual heard sequence.
+
+This is now the current reference path for live decoding and regression prevention. More complex pipelines may improve the event classifier, pitch selection, preprocessing, or spacing policy, but they should preserve this append-only contract or prove a measurable improvement against it.
+
+### 3. Causal ditdah baseline
 
 Implemented in `src\ditdah_streaming.rs`.
 
@@ -201,7 +220,7 @@ This baseline exists because it is:
 - easier to sweep
 - easier to score against human labels
 
-It is the current reference path for label-driven tuning.
+It remains a useful historical reference and comparison strategy for label-driven tuning, but it is no longer the GUI foundation.
 
 ## Signal processing architecture
 
@@ -626,61 +645,81 @@ Companion `.mp3` recordings (including `K1ZZ_de_LA8OM_*`, `k5zd-ey8mm-40m-qso`, 
 
 ## Current results
 
-Using the current reference baseline settings:
+### Label corpus reference scores
 
-- `window = 20.0s`
-- `min-window = 0.5s`
-- `decode-every = 1000ms`
-- `confirmations = 3`
+The corpus currently has **9 labels**. The safest command form is explicit about the repo-root label directory:
 
-### Exact-window baseline score
+```powershell
+cargo run --release --manifest-path experiments\cw-decoder\Cargo.toml --bin eval -- --labels-dir data\cw-samples
+```
 
-Current scorer result:
+`--all-labels` is equivalent when run from the repo root, but it resolves `data\cw-samples\` relative to the current working directory and is easier to misuse from `experiments\cw-decoder`.
 
-- **7 / 10 exact**
-- **avg CER = 0.09**
+Current exact-window score:
+
+- **6 / 9 exact**
+- **avg CER = 0.10**
 - **total edit distance = 12**
 
-Interpretation:
+Current full-stream score:
 
-- **K1ZZ / DH8BQA** is now exact
-- **W1AW** is mostly solved in exact-window mode (6 / 7 exact); the remaining miss is a **leading-edge / warmup** problem (`TUST...` vs `QST...`)
-- **80m K5ZD / ZS4TX** labels still both miss, currently classified as one `garbage_decode` and one `near_match`
-- The new **TONE PURITY** gate is a no-op on this corpus — exact-window numbers are unchanged whether `--min-tone-purity 3.0` (default) or `--min-tone-purity 0` is used. The gate fires only on broadband impulses, which the labeled CW does not contain.
-
-### Full-stream baseline score
-
-Current scorer result with:
-
-- `mode = full-stream`
-- `post-roll = 1500ms`
-
-is:
-
-- **1 / 10 exact**
-- **avg CER = 0.92**
-- dominated by `empty_output` and `garbage_decode`
+- **1 / 9 exact**
+- **avg CER = 0.85**
 
 Interpretation:
 
-- the baseline is much better as an **exact-window decode reference** than as a fully solved streaming-commit path
-- commit timing, final flush, and segmentation are still major open problems
-- this is a useful result, not a failure: it tells us the corpus is measuring something real
+- exact-window scoring still tells us what the classifier can do when the target audio is bounded correctly
+- full-stream scoring tells us that acquisition, segmentation, gap maturity, and finalization are the hard live problems
+- the append-only event-stream foundation is the current best live-facing compromise because it removes rolling-window string replacement/stitching from the critical path while staying directly measurable against labels and replay transcripts
+
+### Append-foundation smoke evidence
+
+The foundation path now runs through the same Rust core in every surface:
+
+- `stream-live-v3` emits the append transcript as primary `text` / `transcript`
+- `cursor_transcript` keeps the older event-cursor transcript for diagnostics
+- `raw_morse` exposes the raw event stream for bar-level debugging
+- `eval --strategy-sweep --strategies foundation` compares the foundation against other strategies
+- `bench-latency --foundation --json` emits transcript-quality rows for the append foundation
+- the GUI defaults Decode/Labeling file and live runs to **Append event stream (foundation)**
+- the Visualizer still has an **APPEND DECODE** view/debug path, but it is now aligned with the same underlying append contract
+
+On synthetic PARIS bench scenarios the foundation clean/noise transcripts are recognizable immediately (`PARIS PARIS ...`) while voice-lead-in scenarios still show garbage before the target appears. That is useful: it confirms the foundation is simple and honest rather than hiding acquisition/target-isolation failures behind post-hoc stitching.
 
 ## Current thinking
 
 ## What we know with reasonable confidence
 
-1. **Labeling was the right move.**
-   It exposed boundary failures vs target-isolation failures much more clearly than raw listening or eyeballing waveforms.
-2. **The baseline remains the best tuning reference.**
-   It is simpler, sweepable, and already performs well enough on the easier labels to be meaningful.
-3. **The custom streaming decoder has improved materially.**
-   The new Fisher-based tone selection, adaptive thresholding, and lock watchdogs are promising, especially for live operation.
-4. **Hard contest audio is still the frontier.**
-   The remaining hard cases do not look like “just simplify the streamer” problems.
+1. **The simple append-event stream is working much better than the rolling-window transcript machinery.**
+   The important shift was moving from "decode a rolling window, then stitch text" to "classify bars, then append matured events once." That removes a whole class of ghost characters, repeated prefixes, disappearing/replacing text, and overlapping-window artifacts.
+2. **Visualizer truth is event truth, not redraw truth.**
+   The colored bars are a rolling display. Logging every redraw records repeated partial windows (`..`, then `..-`, then `..- ...`) and creates fake Morse. The useful debug layer is the audio-time event stream beneath the redraw.
+3. **Spacing is now visible and testable.**
+   The raw stream (`.` / `-` / `/` / `//`) made it obvious when a word gap was being emitted where a character gap was expected, for example `...//.-` (`S A`) instead of `.../.-` (`SA`). Future spacing work can now target that exact failure instead of guessing from final text.
+4. **Audio/playback synchronization matters.**
+   The old Visualizer file path decoded in one process and played audio in another, so visual bars could lead or lag what the operator heard. `stream-live-v3 --file --play` fixes this by using one process and feeding the decoder from the output playback cursor.
+5. **Hard contest audio is still the frontier.**
+   The foundation does not magically solve target isolation, voice lead-ins, same-band QRM, or weak/noisy spacing. It gives us a stable place to measure those failures without rolling-window artifacts obscuring them.
 
 ## What this implies for next steps
+
+### Keep the append foundation as the non-regression line
+
+The append-only path is now the default contract:
+
+```text
+audio -> envelope/viz events -> append event decoder -> transcript
+```
+
+Regressions should be caught at several levels:
+
+1. **Unit level:** `AppendEventDecoder` tests should cover repeated `viz` frames, character gaps, word gaps, and final pending-character flush.
+2. **CLI level:** `stream-live-v3 --json` transcript events must keep `transcript` / `text` as the append-foundation text, with `cursor_transcript` only as diagnostics.
+3. **GUI level:** Decode, Labeling, Bench, Tuning, and Visualizer should default to or explicitly include `foundation`; any future mode should be labeled as experimental.
+4. **Corpus level:** every future algorithm should report against `--labels-dir data\cw-samples` and include `foundation` in strategy sweeps.
+5. **Bench level:** `bench-latency --foundation --json` should remain a quick smoke that emits recognizable transcript rows before deeper latency metrics are trusted.
+
+The rule of thumb: improvements may change how events are detected, filtered, or classified, but they should not reintroduce rolling text stitching as the primary live transcript path.
 
 ### Keep pursuing labeling, but evolve it carefully
 
@@ -693,50 +732,54 @@ Instead:
 3. add some negative / no-copy examples
 4. add target-tone hints where multiple CW signals are present
 
-### Keep the baseline as the main evaluation reference
+### Use foundation-first evaluation
 
 For corpus work, the current order should stay:
 
-1. exact-window baseline score
-2. full-stream baseline score
-3. custom live/offline replay comparison
-4. future custom-streaming corpus score once instrumentation is ready
+1. append-foundation score / replay transcript
+2. exact-window label score as the upper-bound classifier check
+3. full-stream score as the live segmentation/finalization check
+4. experimental strategy sweeps that always include `foundation`
 
-### Use the custom streaming path as the algorithm sandbox
+### Use experiments as layers above the stable base
 
-The custom decoder is where more aggressive work belongs:
+The promising future work is no longer "replace the foundation." It is "make better events for the foundation to append":
 
-- better target isolation
-- better lock retention / drop policy
-- better segmentation under contest-style pacing
-- lower ghost output
+- **spacing classifier:** tune char-vs-word gap thresholds, make gap maturity explicit, and score raw Morse gaps against labels where possible
+- **target isolation:** track multiple tone ridges and choose or present candidates instead of winner-takes-all pitch lock
+- **preprocessing:** bandpass-around-pitch and dynamic compression helped real radio clips, but must be gated so clean synthetic CW does not regress
+- **matched element scoring:** replace hard threshold chatter with soft scores over candidate 1-dot, 3-dot, and 7-dot windows
+- **lock/acquisition policy:** speed up acquisition after voice/noise lead-ins without allowing noise-locked dit spam
+- **region segmentation:** detect active CW spans and compare region-local decode against the append live transcript
+- **multi-surface diagnostics:** keep raw Morse, transcript, bars, WPM, pitch, SNR, and label CER tied to the same audio-time cursor
 
-But improvements there should be measured back against:
+But every improvement must be measured back against:
 
 - the label corpus
 - replay CER
-- exact-window vs full-stream deltas
+- raw Morse gap fidelity
+- foundation-vs-experiment deltas
 
 ## Recommended next steps
 
-1. **Close the acquisition-latency gap on cold-start CW after a long voice lead-in.**
-   On the YouTube reference clip the decoder now correctly silences the bogus voice lock and recovers when real CW arrives, but the first ~10 characters (`CQ DE K UR ...`) are missed because the pre-lock Fisher search needs ~12 s of CW audio to commit a lock once a stale lock has been dropped. The fix is on the acquisition side, not the confidence machine: faster Fisher convergence, shorter `RELOCK_SECONDS` for the cold-start case, or a reduced `PITCH_LOCK_SECONDS` window once the previous lock has been explicitly rejected as bogus.
-2. **Add richer label metadata for hard cases**
-   - target tone (Phase 1A oracle-tone eval)
-   - multi-signal flag
-   - negative/no-copy labels (Phase 2 false-chars/min metric)
-3. **Score the custom streaming path against the same corpus end-to-end**
-   The branch now has stronger custom logic, but the corpus README story should eventually include real custom-vs-baseline numbers rather than replay-only intuition.
-4. **Improve full-stream commit behavior**
-   The baseline full-stream score shows that finalization and region-close behavior are still weak.
-5. **Use `probe-fisher` and label metadata together**
-   This looks like the right next diagnostic loop for multi-signal contest audio.
-6. **Top-K candidate tracker (Phase 3)** — replace single-pitch lock with a CFAR-scored ridge tracker over 350–1500 Hz so multi-signal contest audio can present per-track candidates instead of one winner-takes-all lock.
+1. **Promote foundation regression checks.**
+   Add/keep tests around `src\append_decode.rs`, require `foundation` in strategy sweeps, and preserve `raw_morse`/`cursor_transcript` diagnostics so future changes can explain differences instead of only showing final text.
+2. **Quantify spacing failures.**
+   The current foundation exposed word-gap mistakes cleanly. The next useful scorer should classify failures as character substitution vs char-gap vs word-gap errors.
+3. **Close the acquisition gap after voice/noise lead-ins.**
+   Synthetic bench results show the append foundation is honest: clean/noise PARIS is recognizable, but voice lead-ins still create pre-target garbage. That points to better target detection and lock admission, not transcript stitching.
+4. **Layer preprocessing carefully.**
+   Real-radio bandpass+compander preprocessing can help dramatically, but it previously broke clean synthetic CW in some paths. Treat preprocessing as an optional layer above the foundation with explicit A/B coverage.
+5. **Add richer label metadata for hard cases.**
+   Target tone, multi-signal flag, negative/no-copy regions, and gap annotations will make future experiments much easier to judge.
+6. **Top-K candidate tracker.**
+   Replace single-pitch lock with a CFAR-scored ridge tracker over 350-1500 Hz so multi-signal contest audio can present per-track candidates instead of one winner-takes-all lock.
 
 Current evidence suggests:
 
-- **W1AW-like misses** -> boundary / commit / warmup
-- **80m contest misses** -> target isolation + segmentation
+- **clean/noisy single-target misses** -> spacing maturity and final pending-character flush
+- **voice lead-in misses** -> acquisition / lock admission
+- **contest/multi-signal misses** -> target isolation + segmentation
 
 ## Practical workflow today
 
@@ -745,15 +788,16 @@ If the goal is the fastest useful loop on another PC with live radio audio:
 1. pull this branch
 2. build `experiments\cw-decoder`
 3. run the GUI
-4. use **Baseline ditdah** for honest tuning
-5. record live audio and use **Replay & Score**
-6. keep using the label corpus to decide whether improvements are real
+4. use **Append event stream (foundation)** for Decode / Labeling / Visualizer
+5. record live audio and use replay/label scoring to compare against ground truth
+6. keep `foundation` in every strategy sweep so improvements are real and regressions are obvious
 
 If the goal is custom-streaming research:
 
-- keep the GUI default at **Custom streaming**
+- keep the GUI default at **Append event stream (foundation)**
 - use live recording + replay CER for quick iteration
 - keep the label corpus as the harder regression gate
+- treat other modes as experiments layered above the stable base
 
 ## Build and run
 
@@ -786,6 +830,12 @@ Run the full-stream scorer:
 
 ```powershell
 cargo run --release --manifest-path experiments\cw-decoder\Cargo.toml --bin eval -- --labels-dir data\cw-samples --mode full-stream --window 20 --min-window 0.5 --decode-every-ms 1000 --confirmations 3 --post-roll-ms 1500
+```
+
+Run the foundation strategy in the same sweep harness used by the Tuning tab:
+
+```powershell
+cargo run --release --manifest-path experiments\cw-decoder\Cargo.toml --bin eval -- --labels-dir data\cw-samples --strategy-sweep --strategies foundation
 ```
 
 Run the experimental range-lock scorer against a focused label subset:
@@ -837,6 +887,12 @@ Compare two configurations by tagging each run with `--label`. Combine with `--j
 ```powershell
 .\experiments\cw-decoder\target\release\cw-decoder.exe bench-latency --label baseline    --json > bench-baseline.ndjson
 .\experiments\cw-decoder\target\release\cw-decoder.exe bench-latency --label no-purity   --purity 0 --json > bench-no-purity.ndjson
+```
+
+Run the append-foundation bench smoke. This records transcript quality for the GUI foundation; latency and lock fields are intentionally empty in this mode:
+
+```powershell
+.\experiments\cw-decoder\target\release\cw-decoder.exe bench-latency --foundation --json > bench-foundation.ndjson
 ```
 
 List live audio devices and run the legacy TUI:
@@ -911,5 +967,6 @@ The empirical conclusion (recorded on issue #322): per-frame normalization alone
 - `target\` — local Cargo build output (debug + release) for `cw-decoder` and `eval`
 - `gui\bin\`, `gui\obj\` — local .NET build output for the Avalonia GUI
 - `bench-runs\` — per-label JSON results from `bench-30wpm.ps1`
+- `artifacts\run\cw-debug-bars-*.txt` — Visualizer append-debug raw Morse streams (`.` / `-` / `/` / `//`) flushed when a clip stops
 
 These are not committed-meaningful build artifacts; they exist to make the GUI runnable without an extra build step on the developer machine.

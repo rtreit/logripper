@@ -296,6 +296,7 @@ public sealed partial class MainWindowViewModel
             WideBins = (int)Math.Max(0, _benchWideBins),
             DisableAutoThreshold = !_benchAutoThreshold,
             ForcePitchHz = _benchForcePitchHz > 0 ? (float)_benchForcePitchHz : (float?)null,
+            Foundation = true,
         };
 
         _benchCts?.Dispose();

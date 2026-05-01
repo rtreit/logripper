@@ -405,7 +405,7 @@ fn estimate_dot_kmeans(durations: &[f32]) -> f32 {
     if durations.len() < 4 {
         return median_lower_half(durations);
     }
-    let mut sorted: Vec<f32> = durations.iter().copied().collect();
+    let mut sorted: Vec<f32> = durations.to_vec();
     sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     let lo_seed = sorted[sorted.len() / 4];
     let hi_seed = sorted[(3 * sorted.len()) / 4];
@@ -479,6 +479,12 @@ pub struct LiveEnvelopeStreamer {
     min_dyn_range_ratio: f32,
     preprocess: PreprocessConfig,
     analysis_window_seconds: Option<f32>,
+    /// Total samples ever pushed into [`push_samples`], counted across
+    /// the entire streaming session (NOT capped to the rolling
+    /// `buffer.len()`). Drives the absolute sample anchors on
+    /// [`VizFrame`] so downstream commit cursors can identify the same
+    /// audio region across overlapping rolling-window re-decodes.
+    samples_fed_total: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -541,6 +547,22 @@ pub struct VizFrame {
     pub centroid_dot: f32,
     pub centroid_dah: f32,
     pub locked_wpm: Option<f32>,
+    /// Absolute sample index of the FIRST sample in the analysis slice
+    /// that produced this frame, counted from the start of the streaming
+    /// session (i.e., total samples ever fed into the streamer minus
+    /// the slice length). Stable across re-decodes of the same audio
+    /// region: an event whose `start_s` is `t` lives at absolute sample
+    /// `window_start_sample + round(t * sample_rate)`.
+    ///
+    /// Both `window_start_sample` and `window_end_sample` are populated
+    /// by `LiveEnvelopeStreamer`; standalone callers of
+    /// `decode_envelope_with_viz` get `0`/`buffer_len` because they do
+    /// not maintain a persistent session.
+    pub window_start_sample: u64,
+    /// Absolute sample index of the ONE-PAST-END sample of the analysis
+    /// slice. `window_end_sample - window_start_sample` equals the
+    /// number of samples in the analysed region.
+    pub window_end_sample: u64,
 }
 
 pub const MAX_VIZ_ENVELOPE_SAMPLES: usize = 1500;
@@ -577,7 +599,15 @@ impl LiveEnvelopeStreamer {
             // the dynamic-range gate. Visualizer envelope still spans the
             // full buffer.
             analysis_window_seconds: Some(3.0),
+            samples_fed_total: 0,
         }
+    }
+
+    /// Absolute number of samples ever pushed into this streamer since
+    /// construction. Monotonically increasing; not affected by the
+    /// internal rolling-buffer cap.
+    pub fn samples_fed_total(&self) -> u64 {
+        self.samples_fed_total
     }
 
     /// Override the rolling analysis-window length used for gate +
@@ -663,6 +693,7 @@ impl LiveEnvelopeStreamer {
 
     fn push_samples(&mut self, samples: &[f32]) {
         self.buffer.extend_from_slice(samples);
+        self.samples_fed_total = self.samples_fed_total.saturating_add(samples.len() as u64);
         let max_samples = (self.sample_rate as usize * MAX_LIVE_ENVELOPE_BUFFER_SECONDS)
             .max(self.decode_every_samples * 2);
         if self.buffer.len() > max_samples {
@@ -684,6 +715,16 @@ impl LiveEnvelopeStreamer {
             let (text, frame) = decode_envelope_with_viz(&self.buffer, self.sample_rate, &cfg);
             let mut frame = frame;
             frame.locked_wpm = self.pinned_wpm.or(self.locked_wpm);
+            // Anchor the rolling buffer in absolute session time so a
+            // downstream commit cursor can identify the same audio
+            // region across overlapping re-decodes. Events on the frame
+            // already carry buffer-relative `start_s`/`end_s`; absolute
+            // sample = `window_start_sample + round(start_s * sr)`.
+            let buffer_start_abs = self
+                .samples_fed_total
+                .saturating_sub(self.buffer.len() as u64);
+            frame.window_start_sample = buffer_start_abs;
+            frame.window_end_sample = self.samples_fed_total;
             let elem_count = frame.on_durations.len();
             let wpm = frame.wpm;
             (text, wpm, elem_count, Some(frame))
@@ -783,6 +824,8 @@ pub fn decode_envelope_with_viz(
         centroid_dot: 0.0,
         centroid_dah: 0.0,
         locked_wpm: None,
+        window_start_sample: 0,
+        window_end_sample: samples.len() as u64,
     };
 
     if samples.is_empty() {
@@ -946,6 +989,8 @@ pub fn decode_envelope_with_viz(
         centroid_dot,
         centroid_dah,
         locked_wpm: None,
+        window_start_sample: 0,
+        window_end_sample: samples.len() as u64,
     };
     (text, frame)
 }
@@ -1035,7 +1080,7 @@ fn downsample_envelope(env: &[f32]) -> Vec<f32> {
     if env.len() <= MAX_VIZ_ENVELOPE_SAMPLES {
         return env.to_vec();
     }
-    let bucket = (env.len() + MAX_VIZ_ENVELOPE_SAMPLES - 1) / MAX_VIZ_ENVELOPE_SAMPLES;
+    let bucket = env.len().div_ceil(MAX_VIZ_ENVELOPE_SAMPLES);
     let mut out = Vec::with_capacity(env.len() / bucket + 1);
     let mut i = 0;
     while i < env.len() {
@@ -1059,7 +1104,7 @@ fn kmeans_centroids(durations: &[f32]) -> (f32, f32) {
         let v = durations.first().copied().unwrap_or(0.0);
         return (v, v);
     }
-    let mut sorted: Vec<f32> = durations.iter().copied().collect();
+    let mut sorted: Vec<f32> = durations.to_vec();
     sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     let mut c_lo = sorted[sorted.len() / 4];
     let mut c_hi = sorted[(3 * sorted.len()) / 4];
@@ -1194,7 +1239,7 @@ fn decode_events(ons: &[f32], offs: &[f32], dot_s: f32) -> String {
 }
 
 fn percentile_pair(values: &[f32], p_lo: f32, p_hi: f32) -> (f32, f32) {
-    let mut sorted: Vec<f32> = values.iter().copied().collect();
+    let mut sorted: Vec<f32> = values.to_vec();
     sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     (
         region_stream::percentile_sorted(&sorted, p_lo),
@@ -1210,7 +1255,7 @@ pub(crate) fn robust_peak(values: &[f32], percentile: f32) -> f32 {
     if values.is_empty() {
         return 0.0;
     }
-    let mut sorted: Vec<f32> = values.iter().copied().collect();
+    let mut sorted: Vec<f32> = values.to_vec();
     sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     region_stream::percentile_sorted(&sorted, percentile)
 }
@@ -1219,13 +1264,13 @@ fn median_lower_half(values: &[f32]) -> f32 {
     if values.is_empty() {
         return 0.0;
     }
-    let mut sorted: Vec<f32> = values.iter().copied().collect();
+    let mut sorted: Vec<f32> = values.to_vec();
     sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     let cutoff = (sorted.len() / 2).max(1);
     sorted[cutoff / 2]
 }
 
-fn morse_to_char(s: &str) -> Option<char> {
+pub(crate) fn morse_to_char(s: &str) -> Option<char> {
     match s {
         ".-" => Some('A'),
         "-..." => Some('B'),
@@ -1777,7 +1822,7 @@ mod tests {
                              // PARIS = .--. .- .-. .. ...
         let s = synth_morse(rate, dot, 700.0, ".--. .- .-. .. ...");
         let txt = decode_envelope(&s, rate, &EnvelopeConfig::default());
-        assert_eq!(txt, "PARIS", "got {:?}", txt);
+        assert_eq!(txt, "PARIS", "got {txt:?}");
     }
 
     #[test]
@@ -1797,7 +1842,7 @@ mod tests {
                 analysis_window_seconds: None,
             },
         );
-        assert_eq!(txt, "K", "got {:?}", txt);
+        assert_eq!(txt, "K", "got {txt:?}");
     }
 
     #[test]
@@ -1917,13 +1962,8 @@ mod tests {
 
     #[test]
     fn kmeans_dot_estimate_separates_dits_and_dahs() {
-        let mut durs = Vec::new();
-        for _ in 0..6 {
-            durs.push(0.060);
-        }
-        for _ in 0..6 {
-            durs.push(0.180);
-        }
+        let mut durs = vec![0.060; 6];
+        durs.extend([0.180; 6]);
         let dot = estimate_dot_kmeans(&durs);
         assert!((dot - 0.060).abs() < 0.005, "expected ~0.060, got {dot}");
     }
@@ -2010,8 +2050,7 @@ mod tests {
         let (text, viz) = decode_envelope_with_viz(&s, rate, &cfg);
         assert_eq!(
             text, "",
-            "noise-only signal must not emit text (got {:?})",
-            text
+            "noise-only signal must not emit text (got {text:?})"
         );
         assert!(
             viz.snr_suppressed,
@@ -2096,8 +2135,7 @@ mod tests {
         let snr = snr_db(0.5, 1.0);
         assert!(
             snr >= cfg.min_snr_db && snr < DYN_RANGE_BYPASS_SNR_DB,
-            "test setup: snr {} should be in marginal band",
-            snr
+            "test setup: snr {snr} should be in marginal band"
         );
         assert!(
             !passes_quality_gate(&cfg, 0.5, 1.0, 10.0),
@@ -2173,8 +2211,7 @@ mod tests {
         );
         assert!(
             windowed_text.contains('K'),
-            "expected decoded text to contain 'K', got {:?}",
-            windowed_text
+            "expected decoded text to contain 'K', got {windowed_text:?}"
         );
     }
 

@@ -101,11 +101,12 @@ internal sealed class CwDecoderProcess : IDisposable
         Spawn(args);
     }
 
-    public void StartFileV3(string filePath, int decodeEveryMs = 250, double pinWpm = 0, double pinHz = 0)
+    public void StartFileV3(string filePath, int decodeEveryMs = 250, double pinWpm = 0, double pinHz = 0, bool playAudio = false)
     {
         Stop();
         var ic = CultureInfo.InvariantCulture;
         var args = $"stream-live-v3 --json --decode-every-ms {decodeEveryMs.ToString(ic)} --file \"{filePath}\"";
+        if (playAudio) args += " --play";
         if (pinWpm > 0) args += $" --pin-wpm {pinWpm.ToString(ic)}";
         if (pinHz > 0) args += $" --pin-hz {pinHz.ToString(ic)}";
         Spawn(args);

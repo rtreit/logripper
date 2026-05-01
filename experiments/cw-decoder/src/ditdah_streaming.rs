@@ -642,12 +642,368 @@ fn common_token_prefix(values: &VecDeque<String>) -> String {
     first[..common_len].join(" ")
 }
 
+// =====================================================================
+// LiveCommitCursor — event-driven, sample-indexed transcript commit.
+//
+// Background: V3's rolling-window decoder re-decodes the latest ~3 s of
+// audio every 250 ms. Each cycle's `LiveEnvelopeSnapshot::transcript`
+// is a *full* re-decode of that window, not an incremental delta. Doing
+// string-level stitching across cycles is fragile: re-segmentation at
+// the window boundaries flips the leading character now and then,
+// which defeats overlap detection and re-emits already-committed audio
+// as ghost text (e.g. "TSA USA EE   SA USA EE   ...").
+//
+// This cursor moves deduplication out of text space and into audio-time
+// space. Each `VizFrame` carries `window_start_sample`/`window_end_sample`
+// from `LiveEnvelopeStreamer`, and each `VizEvent` has buffer-relative
+// `start_s`/`end_s`. We convert events to absolute sample indices,
+// commit only events that lie safely behind the unstable trailing edge,
+// and never re-emit text whose audio sits at-or-before
+// `committed_until_sample`. The cursor advances monotonically; lock
+// release clears the pending Morse buffer but preserves committed text.
+// =====================================================================
+
+/// Output of [`LiveCommitCursor::update_from_viz`].
+#[derive(Debug, Clone, Default)]
+pub struct CommitUpdate {
+    /// Append-only committed transcript (entire history so far).
+    pub committed_text: String,
+    /// Provisional decode of events that are inside the safe interior
+    /// but have not yet been flushed (no character/word gap seen). May
+    /// change every cycle; should be displayed in a distinct style.
+    pub provisional_tail: String,
+    /// True when the cursor advanced over a region without producing
+    /// committed text (e.g. SNR suppression, lock loss, long stall).
+    /// Useful for diagnostics; the cursor itself does not emit
+    /// placeholder text into `committed_text`.
+    pub committed_gap: bool,
+    /// First sample of the gap region (only meaningful when
+    /// `committed_gap` is true).
+    pub gap_from_sample: u64,
+    /// One-past-end sample of the gap region (only meaningful when
+    /// `committed_gap` is true).
+    pub gap_to_sample: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct LiveCommitCursor {
+    committed_until_sample: u64,
+    committed_text: String,
+    pending_morse: String,
+    initialized: bool,
+    /// Hard cap on `committed_text` length to mirror the 12 000-char
+    /// behavior of the legacy `cap_session_transcript`. Trims to ~80 %
+    /// on a whitespace boundary when exceeded.
+    max_chars: usize,
+}
+
+impl Default for LiveCommitCursor {
+    fn default() -> Self {
+        Self::new(12_000)
+    }
+}
+
+/// Trailing safety guard, expressed in seconds. Events whose absolute
+/// end sample exceeds `window_end_sample - trailing_guard_samples` are
+/// considered too close to the rolling-window edge to be stable yet —
+/// next cycle's wider context may flip an OffChar boundary into an
+/// OffWord, or merge a dit+intra+dit into a single dah. Scales with
+/// `dot_seconds` so slow CW (5 WPM ≈ 240 ms dots, ≈ 1.7 s word gaps)
+/// gets a longer guard than fast CW.
+fn trailing_guard_seconds(dot_s: f32, decode_every_s: f32) -> f32 {
+    let dot = dot_s.max(0.001);
+    let by_dot = 8.0 * dot;
+    let by_cadence = 2.0 * decode_every_s;
+    f32_max3(0.50, by_dot, by_cadence)
+}
+
+/// Leading safety guard, expressed in seconds. Events whose absolute
+/// start sample lies inside the first `leading_guard_samples` of the
+/// rolling window may have their leading edge clipped by the window
+/// boundary, shortening an OnDah into an OnDit. Skip them.
+fn leading_guard_seconds(dot_s: f32) -> f32 {
+    let dot = dot_s.max(0.001);
+    f32_max2(0.10, 2.0 * dot)
+}
+
+#[inline]
+fn f32_max2(a: f32, b: f32) -> f32 {
+    if a >= b {
+        a
+    } else {
+        b
+    }
+}
+#[inline]
+fn f32_max3(a: f32, b: f32, c: f32) -> f32 {
+    f32_max2(a, f32_max2(b, c))
+}
+
+/// Tiny tolerance for absolute-sample comparisons. Events derived from
+/// floating-point window-relative seconds can land ±1 sample off when
+/// the same audio region is re-decoded in a later cycle. One frame at
+/// the decoder's native step (5 ms = 240 samples @ 48 kHz) is more
+/// than enough slack to avoid spurious "different" events while still
+/// preventing the cursor from rewinding by any audible amount.
+const EPSILON_SAMPLES: u64 = 32;
+
+impl LiveCommitCursor {
+    pub fn new(max_chars: usize) -> Self {
+        Self {
+            committed_until_sample: 0,
+            committed_text: String::new(),
+            pending_morse: String::new(),
+            initialized: false,
+            max_chars: max_chars.max(256),
+        }
+    }
+
+    pub fn committed_text(&self) -> &str {
+        &self.committed_text
+    }
+
+    pub fn committed_until_sample(&self) -> u64 {
+        self.committed_until_sample
+    }
+
+    pub fn pending_morse(&self) -> &str {
+        &self.pending_morse
+    }
+
+    /// Operator manually requested a fresh start (e.g. PR #366's
+    /// reset-lock control message). Drops everything; next cycle
+    /// initializes from the current safe interior.
+    pub fn reset_all(&mut self) {
+        self.committed_until_sample = 0;
+        self.committed_text.clear();
+        self.pending_morse.clear();
+        self.initialized = false;
+    }
+
+    /// Streamer-internal lock was released (PR #367). Keep committed
+    /// history; drop the in-progress Morse pattern so a stale dit/dah
+    /// fragment doesn't merge with the next character once a fresh
+    /// lock is acquired. Cursor itself stays at its current position.
+    pub fn on_lock_lost(&mut self) {
+        self.pending_morse.clear();
+    }
+
+    /// Drive the cursor from a single `VizFrame`. Idempotent across
+    /// cycles that re-decode the same audio region — re-feeding the
+    /// same frame produces no new committed text and no cursor motion.
+    pub fn update_from_viz(
+        &mut self,
+        viz: &crate::envelope_decoder::VizFrame,
+        decode_every_s: f32,
+    ) -> CommitUpdate {
+        let sr = viz.sample_rate.max(1) as f32;
+        let window_start = viz.window_start_sample;
+        let window_end = viz.window_end_sample;
+        if window_end <= window_start {
+            return self.snapshot_with_provisional();
+        }
+
+        // Gate: only commit when the streamer has locked AND the SNR
+        // gate didn't suppress this cycle. Same rule the legacy
+        // `should_stitch_to_session` enforced; mirrored here so the
+        // cursor is self-contained.
+        if viz.snr_suppressed || viz.locked_wpm.is_none() {
+            // Don't lose the in-progress character: a single gated
+            // cycle may bracket a real word with two clean cycles. We
+            // simply don't advance and don't compute provisional.
+            return self.snapshot_with_provisional();
+        }
+
+        let dot_s = if viz.dot_seconds > 0.0 {
+            viz.dot_seconds
+        } else if viz.wpm > 0.0 {
+            1.2 / viz.wpm
+        } else {
+            0.06
+        };
+        let trailing_guard_samples = (sr * trailing_guard_seconds(dot_s, decode_every_s)) as u64;
+        let leading_guard_samples = (sr * leading_guard_seconds(dot_s)) as u64;
+
+        let safe_start = window_start.saturating_add(leading_guard_samples);
+        let safe_end = window_end.saturating_sub(trailing_guard_samples);
+
+        let mut update = CommitUpdate::default();
+
+        if !self.initialized {
+            self.committed_until_sample = safe_start;
+            self.initialized = true;
+        }
+
+        // If the cursor has fallen behind the current safe interior
+        // (e.g., a long suppression/unlock window), the audio between
+        // committed_until and safe_start is no longer recoverable from
+        // the rolling buffer. Skip it; surface a diagnostic gap.
+        if self.committed_until_sample + EPSILON_SAMPLES < safe_start {
+            update.committed_gap = true;
+            update.gap_from_sample = self.committed_until_sample;
+            update.gap_to_sample = safe_start;
+            self.pending_morse.clear();
+            self.committed_until_sample = safe_start;
+        }
+
+        // Walk the events in time order. Events are buffer-relative
+        // seconds; convert to absolute samples.
+        let cursor_start = self.committed_until_sample;
+        for ev in &viz.events {
+            let start_s = ev.start_s.max(0.0);
+            let end_s = ev.end_s.max(start_s);
+            let ev_start = window_start.saturating_add((start_s * sr) as u64);
+            let ev_end = window_start.saturating_add((end_s * sr) as u64);
+
+            // Already committed.
+            if ev_end <= cursor_start.saturating_add(EPSILON_SAMPLES) {
+                continue;
+            }
+            // Outside the safe interior.
+            if ev_start < safe_start || ev_end > safe_end {
+                continue;
+            }
+            // Strictly past the current cursor (allow tiny epsilon).
+            if ev_start + EPSILON_SAMPLES < self.committed_until_sample {
+                continue;
+            }
+
+            use crate::envelope_decoder::VizEventKind::*;
+            match ev.kind {
+                OnDit => {
+                    self.pending_morse.push('.');
+                }
+                OnDah => {
+                    self.pending_morse.push('-');
+                }
+                OffIntra => {
+                    // intra-character gap: keep building the same
+                    // Morse symbol. Don't advance cursor across the
+                    // gap — the symbol it bridges may still extend
+                    // into the unstable region next cycle.
+                }
+                OffChar => {
+                    self.flush_pending_char();
+                    self.committed_until_sample = ev_end;
+                }
+                OffWord => {
+                    self.flush_pending_char();
+                    self.append_word_space();
+                    self.committed_until_sample = ev_end;
+                }
+            }
+        }
+
+        update.committed_text = self.committed_text.clone();
+        update.provisional_tail = self.compute_provisional_tail(viz);
+        update
+    }
+
+    fn snapshot_with_provisional(&self) -> CommitUpdate {
+        CommitUpdate {
+            committed_text: self.committed_text.clone(),
+            provisional_tail: String::new(),
+            committed_gap: false,
+            gap_from_sample: 0,
+            gap_to_sample: 0,
+        }
+    }
+
+    fn compute_provisional_tail(&self, viz: &crate::envelope_decoder::VizFrame) -> String {
+        // Decode the events that lie strictly past committed_until but
+        // still inside the analyzed window. We deliberately DO NOT use
+        // `snap.transcript` here: it is the rolling re-decode of the
+        // entire window and would reintroduce string-alignment risk.
+        let sr = viz.sample_rate.max(1) as f32;
+        let mut morse = self.pending_morse.clone();
+        let mut text = String::new();
+        for ev in &viz.events {
+            let start_s = ev.start_s.max(0.0);
+            let end_s = ev.end_s.max(start_s);
+            let ev_start = viz
+                .window_start_sample
+                .saturating_add((start_s * sr) as u64);
+            let ev_end = viz.window_start_sample.saturating_add((end_s * sr) as u64);
+            if ev_end <= self.committed_until_sample.saturating_add(EPSILON_SAMPLES) {
+                continue;
+            }
+            use crate::envelope_decoder::VizEventKind::*;
+            match ev.kind {
+                OnDit => morse.push('.'),
+                OnDah => morse.push('-'),
+                OffIntra => {}
+                OffChar => {
+                    if !morse.is_empty() {
+                        if let Some(c) = crate::envelope_decoder::morse_to_char(&morse) {
+                            text.push(c);
+                        }
+                        morse.clear();
+                    }
+                }
+                OffWord => {
+                    if !morse.is_empty() {
+                        if let Some(c) = crate::envelope_decoder::morse_to_char(&morse) {
+                            text.push(c);
+                        }
+                        morse.clear();
+                    }
+                    if !text.ends_with(' ') {
+                        text.push(' ');
+                    }
+                }
+            }
+            // Stop once we run past `safe_end` would help, but safe_end
+            // is local to update_from_viz; for the tail we want to show
+            // everything *not yet committed*, including the slightly
+            // unstable trailing region.
+            let _ = ev_start;
+        }
+        text
+    }
+
+    fn flush_pending_char(&mut self) {
+        if self.pending_morse.is_empty() {
+            return;
+        }
+        if let Some(c) = crate::envelope_decoder::morse_to_char(&self.pending_morse) {
+            self.committed_text.push(c);
+            self.cap_committed();
+        }
+        self.pending_morse.clear();
+    }
+
+    fn append_word_space(&mut self) {
+        if !self.committed_text.ends_with(' ') {
+            self.committed_text.push(' ');
+            self.cap_committed();
+        }
+    }
+
+    fn cap_committed(&mut self) {
+        if self.committed_text.chars().count() <= self.max_chars {
+            return;
+        }
+        let target = (self.max_chars * 4) / 5;
+        let total = self.committed_text.chars().count();
+        let drop_chars = total.saturating_sub(target);
+        let mut byte_cut = 0usize;
+        for (i, (b, _)) in self.committed_text.char_indices().enumerate() {
+            if i >= drop_chars {
+                byte_cut = b;
+                break;
+            }
+        }
+        // Snap to whitespace boundary so we don't shear a token.
+        if let Some(rel) = self.committed_text[byte_cut..].find(char::is_whitespace) {
+            byte_cut += rel + 1;
+        }
+        self.committed_text.replace_range(..byte_cut, "");
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{
-        append_snapshot_text, normalize_snapshot_text, run_causal_baseline_trace,
-        CausalBaselineConfig, PrefixStabilizer,
-    };
+    use super::*;
 
     #[test]
     fn normalize_snapshot_text_collapses_whitespace() {
@@ -863,5 +1219,254 @@ mod tests {
                 .map(|snapshot| snapshot.transcript.as_str()),
             Some(trace.transcript.as_str())
         );
+    }
+
+    // ----- LiveCommitCursor (Approach A+) tests -----
+
+    use crate::envelope_decoder::{VizEvent, VizEventKind, VizFrame};
+
+    /// Build a minimal viz frame with a list of events. `events_secs` is
+    /// `(kind, start_s, end_s)` triples relative to `window_start_sample`.
+    fn cursor_test_viz(
+        sr: u32,
+        window_start: u64,
+        window_end: u64,
+        dot_seconds: f32,
+        locked: bool,
+        snr_suppressed: bool,
+        events_secs: &[(VizEventKind, f32, f32)],
+    ) -> VizFrame {
+        let events = events_secs
+            .iter()
+            .map(|(k, s, e)| VizEvent {
+                start_s: *s,
+                end_s: *e,
+                duration_s: (e - s).max(0.0),
+                kind: *k,
+            })
+            .collect();
+        VizFrame {
+            sample_rate: sr,
+            frame_step_s: 0.005,
+            buffer_seconds: (window_end - window_start) as f32 / sr as f32,
+            pitch_hz: 600.0,
+            envelope: Vec::new(),
+            envelope_max: 1.0,
+            noise_floor: 0.01,
+            signal_floor: 0.5,
+            snr_db: 30.0,
+            snr_suppressed,
+            hyst_high: 0.4,
+            hyst_low: 0.2,
+            events,
+            on_durations: Vec::new(),
+            dot_seconds,
+            wpm: if dot_seconds > 0.0 {
+                1.2 / dot_seconds
+            } else {
+                20.0
+            },
+            centroid_dot: dot_seconds,
+            centroid_dah: dot_seconds * 3.0,
+            locked_wpm: if locked { Some(20.0) } else { None },
+            window_start_sample: window_start,
+            window_end_sample: window_end,
+        }
+    }
+
+    /// Helper: pattern for "K" = -.- (dah dit dah).
+    /// Returns a sequence of (kind, start_s, end_s) inside `[base, end]`.
+    /// Caller picks `base` and timing in dot units.
+    fn morse_k_events(base: f32, dot: f32) -> Vec<(VizEventKind, f32, f32)> {
+        // dah, intra, dit, intra, dah
+        let mut t = base;
+        let mut out = Vec::new();
+        out.push((VizEventKind::OnDah, t, t + 3.0 * dot));
+        t += 3.0 * dot;
+        out.push((VizEventKind::OffIntra, t, t + dot));
+        t += dot;
+        out.push((VizEventKind::OnDit, t, t + dot));
+        t += dot;
+        out.push((VizEventKind::OffIntra, t, t + dot));
+        t += dot;
+        out.push((VizEventKind::OnDah, t, t + 3.0 * dot));
+        out
+    }
+
+    #[test]
+    fn cursor_does_not_repeat_same_audio_region_across_overlapping_windows() {
+        // Two cycles re-decode the SAME absolute sample range; the second
+        // call must NOT re-commit the K.
+        let sr = 48_000u32;
+        let dot = 0.06; // 20 WPM
+        let window_start = 0u64;
+        // Window is 10 seconds wide so the K (~12 dots ≈ 0.72 s) sits well
+        // inside the safe interior.
+        let window_end = window_start + sr as u64 * 10;
+
+        let mut events = morse_k_events(2.0, dot);
+        // Terminating OffChar so the K commits.
+        events.push((VizEventKind::OffChar, 2.6, 2.6 + 3.0 * dot));
+
+        let viz1 = cursor_test_viz(sr, window_start, window_end, dot, true, false, &events);
+        let viz2 = cursor_test_viz(sr, window_start, window_end, dot, true, false, &events);
+
+        let mut cursor = LiveCommitCursor::default();
+        let u1 = cursor.update_from_viz(&viz1, 0.5);
+        assert_eq!(u1.committed_text, "K");
+
+        let u2 = cursor.update_from_viz(&viz2, 0.5);
+        assert_eq!(
+            u2.committed_text, "K",
+            "re-decoding identical events must not duplicate the character"
+        );
+    }
+
+    #[test]
+    fn cursor_handles_legitimate_repetition_in_distinct_audio_regions() {
+        // Three Ks at different absolute times must commit as "KKK".
+        let sr = 48_000u32;
+        let dot = 0.06;
+        let window_start = 0u64;
+        let window_end = sr as u64 * 10;
+
+        let mut events = Vec::new();
+        for base in [2.0_f32, 4.0, 6.0] {
+            events.extend(morse_k_events(base, dot));
+            events.push((VizEventKind::OffChar, base + 1.0, base + 1.0 + 3.0 * dot));
+        }
+        let viz = cursor_test_viz(sr, window_start, window_end, dot, true, false, &events);
+
+        let mut cursor = LiveCommitCursor::default();
+        let u = cursor.update_from_viz(&viz, 0.5);
+        assert_eq!(u.committed_text, "KKK");
+    }
+
+    #[test]
+    fn cursor_skips_unlocked_cycles_without_advancing() {
+        let sr = 48_000u32;
+        let dot = 0.06;
+        let mut events = morse_k_events(2.0, dot);
+        events.push((VizEventKind::OffChar, 2.6, 2.6 + 3.0 * dot));
+
+        // Unlocked: should produce no committed text and not advance cursor.
+        let viz_unlocked = cursor_test_viz(sr, 0, sr as u64 * 10, dot, false, false, &events);
+        let mut cursor = LiveCommitCursor::default();
+        let u = cursor.update_from_viz(&viz_unlocked, 0.5);
+        assert_eq!(u.committed_text, "");
+        assert_eq!(u.provisional_tail, "");
+
+        // Now a locked cycle covering the same audio commits the K.
+        let viz_locked = cursor_test_viz(sr, 0, sr as u64 * 10, dot, true, false, &events);
+        let u2 = cursor.update_from_viz(&viz_locked, 0.5);
+        assert_eq!(u2.committed_text, "K");
+    }
+
+    #[test]
+    fn cursor_skips_snr_suppressed_cycles() {
+        let sr = 48_000u32;
+        let dot = 0.06;
+        let mut events = morse_k_events(2.0, dot);
+        events.push((VizEventKind::OffChar, 2.6, 2.6 + 3.0 * dot));
+
+        let viz = cursor_test_viz(sr, 0, sr as u64 * 10, dot, true, true, &events);
+        let mut cursor = LiveCommitCursor::default();
+        let u = cursor.update_from_viz(&viz, 0.5);
+        assert_eq!(u.committed_text, "");
+    }
+
+    #[test]
+    fn cursor_does_not_commit_events_in_trailing_guard() {
+        // Place the K so its OffChar lands inside the trailing guard
+        // (~8*dot = 0.48s). It should be deferred to provisional, not
+        // committed.
+        let sr = 48_000u32;
+        let dot = 0.06;
+        let window_end_s: f32 = 5.0;
+        let base = window_end_s - 0.6; // K + OffChar will straddle the guard
+        let mut events = morse_k_events(base, dot);
+        events.push((VizEventKind::OffChar, base + 1.0, base + 1.0 + 3.0 * dot));
+
+        let viz = cursor_test_viz(
+            sr,
+            0,
+            (sr as f32 * window_end_s) as u64,
+            dot,
+            true,
+            false,
+            &events,
+        );
+        let mut cursor = LiveCommitCursor::default();
+        let u = cursor.update_from_viz(&viz, 0.5);
+        // Either provisional shows it, or nothing is committed yet.
+        assert_eq!(
+            u.committed_text, "",
+            "events too close to window end must not commit yet"
+        );
+    }
+
+    #[test]
+    fn cursor_advances_past_word_boundary_with_space() {
+        let sr = 48_000u32;
+        let dot = 0.06;
+        let mut events = morse_k_events(2.0, dot);
+        // OffWord between K and next K
+        events.push((VizEventKind::OffWord, 2.6, 2.6 + 7.0 * dot));
+        events.extend(morse_k_events(3.5, dot));
+        events.push((VizEventKind::OffChar, 4.1, 4.1 + 3.0 * dot));
+
+        let viz = cursor_test_viz(sr, 0, sr as u64 * 10, dot, true, false, &events);
+        let mut cursor = LiveCommitCursor::default();
+        let u = cursor.update_from_viz(&viz, 0.5);
+        assert_eq!(u.committed_text, "K K");
+    }
+
+    #[test]
+    fn cursor_reset_all_clears_state() {
+        let sr = 48_000u32;
+        let dot = 0.06;
+        let mut events = morse_k_events(2.0, dot);
+        events.push((VizEventKind::OffChar, 2.6, 2.6 + 3.0 * dot));
+        let viz = cursor_test_viz(sr, 0, sr as u64 * 10, dot, true, false, &events);
+
+        let mut cursor = LiveCommitCursor::default();
+        cursor.update_from_viz(&viz, 0.5);
+        assert_eq!(cursor.committed_text(), "K");
+        cursor.reset_all();
+        assert_eq!(cursor.committed_text(), "");
+    }
+
+    #[test]
+    fn cursor_reports_committed_gap_after_long_suppression() {
+        let sr = 48_000u32;
+        let dot = 0.06;
+        // First cycle locked: commit K starting at t=1.
+        let mut ev1 = morse_k_events(1.0, dot);
+        ev1.push((VizEventKind::OffChar, 1.6, 1.6 + 3.0 * dot));
+        let viz1 = cursor_test_viz(sr, 0, sr as u64 * 5, dot, true, false, &ev1);
+
+        let mut cursor = LiveCommitCursor::default();
+        let u1 = cursor.update_from_viz(&viz1, 0.5);
+        assert_eq!(u1.committed_text, "K");
+
+        // Second cycle: window has slid 100 s forward, so committed_until
+        // is far behind safe_start. Cursor should report a gap and jump.
+        let window_start = sr as u64 * 100;
+        let mut ev2 = morse_k_events(2.0, dot);
+        ev2.push((VizEventKind::OffChar, 2.6, 2.6 + 3.0 * dot));
+        let viz2 = cursor_test_viz(
+            sr,
+            window_start,
+            window_start + sr as u64 * 10,
+            dot,
+            true,
+            false,
+            &ev2,
+        );
+        let u2 = cursor.update_from_viz(&viz2, 0.5);
+        assert!(u2.committed_gap, "expected committed_gap after long jump");
+        assert!(u2.gap_to_sample > u2.gap_from_sample);
+        // K should still commit after the gap.
+        assert_eq!(u2.committed_text, "KK");
     }
 }

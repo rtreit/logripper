@@ -40,12 +40,17 @@ internal sealed class DecoderEvent
 
     // end
     [JsonPropertyName("transcript")] public string? Transcript { get; set; }
+    [JsonPropertyName("cursor_transcript")] public string? CursorTranscript { get; set; }
+    [JsonPropertyName("raw_morse")] public string? RawMorse { get; set; }
     [JsonPropertyName("pitch")] public double? Pitch { get; set; }
 
     // recording (ready / end)
     [JsonPropertyName("recording")] public string? Recording { get; set; }
 
     // viz (from stream-live-v3)
+    [JsonPropertyName("sample_rate")] public int? SampleRate { get; set; }
+    [JsonPropertyName("window_start_sample")] public ulong? WindowStartSample { get; set; }
+    [JsonPropertyName("window_end_sample")] public ulong? WindowEndSample { get; set; }
     [JsonPropertyName("envelope")] public double[]? Envelope { get; set; }
     [JsonPropertyName("envelope_max")] public double? EnvelopeMax { get; set; }
     [JsonPropertyName("noise_floor")] public double? NoiseFloor { get; set; }
