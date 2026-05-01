@@ -4,7 +4,7 @@ version = "0.0.0"
 edition = "2021"
 
 [dependencies]
-ditdah = { path = "../ditdah-upstream" }
+ditdah = { path = "../../experiments/cw-decoder/vendor/ditdah" }
 
 [[bin]]
 name = "ditdah-direct-up"

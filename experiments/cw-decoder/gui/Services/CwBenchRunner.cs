@@ -37,6 +37,7 @@ internal static class CwBenchRunner
         public int? WideBins { get; set; }
         public bool DisableAutoThreshold { get; set; }
         public float? ForcePitchHz { get; set; }
+        public bool Foundation { get; set; }
     }
 
     public sealed class RunResult
@@ -107,6 +108,10 @@ internal static class CwBenchRunner
         {
             psi.ArgumentList.Add("--force-pitch-hz");
             psi.ArgumentList.Add(fp.ToString(CultureInfo.InvariantCulture));
+        }
+        if (opts.Foundation)
+        {
+            psi.ArgumentList.Add("--foundation");
         }
 
         using var process = Process.Start(psi)
@@ -183,10 +188,12 @@ internal static class CwBenchRunner
             {
                 Label = GetString(r, "label") ?? string.Empty,
                 Scenario = GetString(r, "scenario") ?? string.Empty,
+                DecoderPath = GetString(r, "decoder_path") ?? string.Empty,
                 CwOnsetMs = GetUInt32(r, "cw_onset_ms") ?? 0u,
                 StableN = (int)(GetUInt32(r, "stable_n") ?? 0u),
                 TFirstPitchUpdateMs = GetUInt32(r, "t_first_pitch_update_ms"),
                 TFirstLockedMs = GetUInt32(r, "t_first_locked_ms"),
+                TFirstFoundationLockMs = GetUInt32(r, "t_first_foundation_lock_ms"),
                 TFirstCharMs = GetUInt32(r, "t_first_char_ms"),
                 TFirstCorrectCharMs = GetUInt32(r, "t_first_correct_char_ms"),
                 TStableNCorrectMs = GetUInt32(r, "t_stable_n_correct_ms"),
@@ -197,7 +204,14 @@ internal static class CwBenchRunner
                 LockUptimeRatio = GetSingle(r, "lock_uptime_ratio"),
                 LongestUnlockedGapMs = GetUInt32(r, "longest_unlocked_gap_ms") ?? 0u,
                 TotalUnlockedMsAfterLock = GetUInt32(r, "total_unlocked_ms_after_lock") ?? 0u,
+                QualityGateDrops = (int)(GetUInt32(r, "quality_gate_drops") ?? 0u),
+                QualityGateRecoveries = (int)(GetUInt32(r, "quality_gate_recoveries") ?? 0u),
+                QualityGateUptimeRatio = GetSingle(r, "quality_gate_uptime_ratio"),
+                LongestQualityGateClosedMs = GetUInt32(r, "longest_quality_gate_closed_ms") ?? 0u,
                 LockedPitchHz = GetSingle(r, "locked_pitch_hz"),
+                FinalPitchHz = GetSingle(r, "final_pitch_hz"),
+                FinalLockedWpm = GetSingle(r, "final_locked_wpm"),
+                CerVsTruth = GetSingle(r, "cer_vs_truth"),
                 Transcript = GetString(r, "transcript") ?? string.Empty,
             };
             return true;

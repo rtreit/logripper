@@ -81,7 +81,7 @@ pub fn apply(samples: &[f32], sample_rate: u32, pitch_hz: f32, cfg: &PreprocessC
     }
     let mut out = samples.to_vec();
     let pitch_ok = pitch_hz.is_finite() && pitch_hz > 0.0;
-    let in_range = !cfg.clamp_pitch || (pitch_hz >= 80.0 && pitch_hz <= 4000.0);
+    let in_range = !cfg.clamp_pitch || (80.0..=4000.0).contains(&pitch_hz);
     if pitch_ok && in_range && cfg.bandpass_width_hz > 1.0 {
         bandpass_in_place(&mut out, sample_rate, pitch_hz, cfg.bandpass_width_hz);
     }
@@ -269,9 +269,7 @@ mod tests {
         // RBJ constant-0dB BPF passes the center frequency near unity.
         assert!(
             r_out > r_in * 0.5,
-            "in-band tone should pass: in {} → out {}",
-            r_in,
-            r_out
+            "in-band tone should pass: in {r_in} -> out {r_out}"
         );
     }
 
@@ -292,16 +290,13 @@ mod tests {
         let ratio_loud = r_loud_out / r_loud_in;
         assert!(
             ratio_quiet > ratio_loud,
-            "compand must boost quiet (×{}) more than loud (×{})",
-            ratio_quiet,
-            ratio_loud
+            "compand must boost quiet (x{ratio_quiet}) more than loud (x{ratio_loud})"
         );
         // Ratios are dynamic-range compression: quiet should be lifted
         // by an order of magnitude in level.
         assert!(
             ratio_quiet > 5.0,
-            "quiet signal lift too small: ×{}",
-            ratio_quiet
+            "quiet signal lift too small: x{ratio_quiet}"
         );
     }
 
@@ -341,9 +336,7 @@ mod tests {
         let r_trail = rms(trail);
         assert!(
             r_burst > r_trail * 5.0,
-            "burst should dominate trailing silence: burst {} vs trail {}",
-            r_burst,
-            r_trail
+            "burst should dominate trailing silence: burst {r_burst} vs trail {r_trail}"
         );
     }
 }

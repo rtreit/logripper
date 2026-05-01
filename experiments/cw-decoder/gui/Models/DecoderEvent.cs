@@ -25,6 +25,12 @@ internal sealed class DecoderEvent
 
     // wpm
     [JsonPropertyName("wpm")] public double? Wpm { get; set; }
+    /// <summary>
+    /// Legacy k-means-derived WPM emitted alongside <see cref="Wpm"/> by
+    /// the decoder so the visualizer can A/B compare the period-based fix
+    /// against the original biased estimate.
+    /// </summary>
+    [JsonPropertyName("wpm_kmeans")] public double? WpmKmeans { get; set; }
 
     // char / garbled
     [JsonPropertyName("ch")] public string? Ch { get; set; }
@@ -40,12 +46,17 @@ internal sealed class DecoderEvent
 
     // end
     [JsonPropertyName("transcript")] public string? Transcript { get; set; }
+    [JsonPropertyName("cursor_transcript")] public string? CursorTranscript { get; set; }
+    [JsonPropertyName("raw_morse")] public string? RawMorse { get; set; }
     [JsonPropertyName("pitch")] public double? Pitch { get; set; }
 
     // recording (ready / end)
     [JsonPropertyName("recording")] public string? Recording { get; set; }
 
     // viz (from stream-live-v3)
+    [JsonPropertyName("sample_rate")] public int? SampleRate { get; set; }
+    [JsonPropertyName("window_start_sample")] public ulong? WindowStartSample { get; set; }
+    [JsonPropertyName("window_end_sample")] public ulong? WindowEndSample { get; set; }
     [JsonPropertyName("envelope")] public double[]? Envelope { get; set; }
     [JsonPropertyName("envelope_max")] public double? EnvelopeMax { get; set; }
     [JsonPropertyName("noise_floor")] public double? NoiseFloor { get; set; }

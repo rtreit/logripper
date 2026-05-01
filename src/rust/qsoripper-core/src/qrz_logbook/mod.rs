@@ -629,6 +629,50 @@ impl QrzLogbookClient {
         Ok(QrzUploadResult { logid })
     }
 
+    /// Upload a single QSO with `OPTION=REPLACE`, allowing QRZ to
+    /// auto-match an existing duplicate by its own detection criteria
+    /// (call+band+mode+date+time) and overwrite it.
+    ///
+    /// Unlike [`Self::replace_qso`], this does **not** require a known
+    /// `qrz_logid`. QRZ returns `RESULT=REPLACE` with the matched LOGID
+    /// when a duplicate is found, or `RESULT=OK` with a new LOGID when no
+    /// duplicate exists. Both are treated as success.
+    ///
+    /// This is used as a retry path when a plain `INSERT` fails with a
+    /// "duplicate" error — the QSO already exists on QRZ but we don't have
+    /// its LOGID locally.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error on network failure, authentication failure, or if
+    /// the QRZ API rejects the record.
+    pub async fn upload_qso_with_replace(
+        &self,
+        qso: &QsoRecord,
+        book_owner: Option<&str>,
+    ) -> Result<QrzUploadResult, QrzLogbookError> {
+        let adif_record = qso_to_qrz_adif(qso, book_owner);
+
+        let body = self
+            .post_form(&[
+                ("ACTION", "INSERT"),
+                ("OPTION", "REPLACE"),
+                ("ADIF", &adif_record),
+            ])
+            .await?;
+        let map = parse_kv_response(&body);
+        let map = check_result(map)?;
+
+        let logid = map.get("LOGID").cloned().unwrap_or_default();
+        if logid.is_empty() {
+            return Err(QrzLogbookError::ParseError(
+                "INSERT+REPLACE response missing LOGID".to_string(),
+            ));
+        }
+
+        Ok(QrzUploadResult { logid })
+    }
+
     /// Replace an existing QSO on the QRZ Logbook in place.
     ///
     /// Per the QRZ Logbook API contract this is `ACTION=INSERT` with

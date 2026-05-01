@@ -152,6 +152,9 @@ public partial class MainWindow : Window
     private void OnStartPlaybackClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
         => Vm?.StartPlayback();
 
+    private void OnRewindPlaybackClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+        => Vm?.RewindPlayback();
+
     private void OnStopPlaybackClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
         => Vm?.StopPlayback();
 

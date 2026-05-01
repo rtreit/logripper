@@ -410,7 +410,25 @@ pub fn decode_envelope_with_stats(
     };
 
     let text = decode_events(&ons, &offs, dot_s);
-    let wpm = if dot_s > 0.0 { 1.2 / dot_s } else { 0.0 };
+    // Classification (`dot_seconds`) keeps the k-means estimate so downstream
+    // consumers (bar monitor, append decoder, ditdah streaming) classify
+    // dits/dahs/gaps from the SAME dot the decoder used.
+    //
+    // The reported WPM uses the period-based estimator (rising-edge
+    // intervals) which is invariant to threshold/compander bias. Falls back
+    // to the k-means dot when the fix can't be applied (too few onsets, or
+    // no intra-element pairs).
+    let wpm_dot_s = if cfg.pin_wpm.is_some() {
+        dot_s
+    } else {
+        let timed = events_with_times(analysis_env, high, low, frame_dt);
+        estimate_dot_period(&timed).unwrap_or(dot_s)
+    };
+    let wpm = if wpm_dot_s > 0.0 {
+        1.2 / wpm_dot_s
+    } else {
+        0.0
+    };
     EnvelopeDecode {
         text,
         dot_seconds: dot_s,
@@ -429,7 +447,7 @@ fn estimate_dot_kmeans(durations: &[f32]) -> f32 {
     if durations.len() < 4 {
         return median_lower_half(durations);
     }
-    let mut sorted: Vec<f32> = durations.iter().copied().collect();
+    let mut sorted: Vec<f32> = durations.to_vec();
     sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     let lo_seed = sorted[sorted.len() / 4];
     let hi_seed = sorted[(3 * sorted.len()) / 4];
@@ -514,6 +532,12 @@ pub struct LiveEnvelopeStreamer {
     min_dyn_range_ratio: f32,
     preprocess: PreprocessConfig,
     analysis_window_seconds: Option<f32>,
+    /// Total samples ever pushed into [`push_samples`], counted across
+    /// the entire streaming session (NOT capped to the rolling
+    /// `buffer.len()`). Drives the absolute sample anchors on
+    /// [`VizFrame`] so downstream commit cursors can identify the same
+    /// audio region across overlapping rolling-window re-decodes.
+    samples_fed_total: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -573,9 +597,29 @@ pub struct VizFrame {
     pub on_durations: Vec<f32>,
     pub dot_seconds: f32,
     pub wpm: f32,
+    /// Legacy k-means-derived WPM kept alongside `wpm` so consumers can
+    /// compare the period-based fix to the original biased estimate. Equals
+    /// `wpm` when the period estimator falls back (no intra-element pairs).
+    pub wpm_kmeans: f32,
     pub centroid_dot: f32,
     pub centroid_dah: f32,
     pub locked_wpm: Option<f32>,
+    /// Absolute sample index of the FIRST sample in the analysis slice
+    /// that produced this frame, counted from the start of the streaming
+    /// session (i.e., total samples ever fed into the streamer minus
+    /// the slice length). Stable across re-decodes of the same audio
+    /// region: an event whose `start_s` is `t` lives at absolute sample
+    /// `window_start_sample + round(t * sample_rate)`.
+    ///
+    /// Both `window_start_sample` and `window_end_sample` are populated
+    /// by `LiveEnvelopeStreamer`; standalone callers of
+    /// `decode_envelope_with_viz` get `0`/`buffer_len` because they do
+    /// not maintain a persistent session.
+    pub window_start_sample: u64,
+    /// Absolute sample index of the ONE-PAST-END sample of the analysis
+    /// slice. `window_end_sample - window_start_sample` equals the
+    /// number of samples in the analysed region.
+    pub window_end_sample: u64,
 }
 
 pub const MAX_VIZ_ENVELOPE_SAMPLES: usize = 1500;
@@ -614,7 +658,15 @@ impl LiveEnvelopeStreamer {
             // the dynamic-range gate. Visualizer envelope still spans the
             // full buffer.
             analysis_window_seconds: Some(3.0),
+            samples_fed_total: 0,
         }
+    }
+
+    /// Absolute number of samples ever pushed into this streamer since
+    /// construction. Monotonically increasing; not affected by the
+    /// internal rolling-buffer cap.
+    pub fn samples_fed_total(&self) -> u64 {
+        self.samples_fed_total
     }
 
     /// Override the rolling analysis-window length used for gate +
@@ -723,6 +775,7 @@ impl LiveEnvelopeStreamer {
 
     fn push_samples(&mut self, samples: &[f32]) {
         self.buffer.extend_from_slice(samples);
+        self.samples_fed_total = self.samples_fed_total.saturating_add(samples.len() as u64);
         let max_samples = (self.sample_rate as usize * MAX_LIVE_ENVELOPE_BUFFER_SECONDS)
             .max(self.decode_every_samples * 2);
         if self.buffer.len() > max_samples {
@@ -744,6 +797,16 @@ impl LiveEnvelopeStreamer {
             let (text, frame) = decode_envelope_with_viz(&self.buffer, self.sample_rate, &cfg);
             let mut frame = frame;
             frame.locked_wpm = self.pinned_wpm.or(self.locked_wpm);
+            // Anchor the rolling buffer in absolute session time so a
+            // downstream commit cursor can identify the same audio
+            // region across overlapping re-decodes. Events on the frame
+            // already carry buffer-relative `start_s`/`end_s`; absolute
+            // sample = `window_start_sample + round(start_s * sr)`.
+            let buffer_start_abs = self
+                .samples_fed_total
+                .saturating_sub(self.buffer.len() as u64);
+            frame.window_start_sample = buffer_start_abs;
+            frame.window_end_sample = self.samples_fed_total;
             let elem_count = frame.on_durations.len();
             let wpm = frame.wpm;
             (text, wpm, elem_count, Some(frame))
@@ -902,9 +965,12 @@ pub fn decode_envelope_with_viz(
         on_durations: Vec::new(),
         dot_seconds: 0.0,
         wpm: 0.0,
+        wpm_kmeans: 0.0,
         centroid_dot: 0.0,
         centroid_dah: 0.0,
         locked_wpm: None,
+        window_start_sample: 0,
+        window_end_sample: samples.len() as u64,
     };
 
     if samples.is_empty() {
@@ -1017,7 +1083,27 @@ pub fn decode_envelope_with_viz(
     let (centroid_dot, centroid_dah) = kmeans_centroids(&on_durations);
 
     let text = decode_events(&on_durations, &off_durations, dot_s);
-    let wpm = if dot_s > 0.0 { 1.2 / dot_s } else { 0.0 };
+    // Reported WPM uses the period-based dot estimator (rising-edge
+    // intervals) which is invariant to threshold/hysteresis bias and to
+    // compander attack/decay asymmetry. The classification dot_s above
+    // still feeds the dot/dah split because keeping it consistent with
+    // the off-gap thresholds preserves decode quality. See
+    // `estimate_dot_period` docs and the bench in
+    // `tools/wpm-measure` for the verification corpus.
+    //
+    // `wpm_kmeans` is kept alongside the period-based `wpm` so the GUI
+    // (and any A/B comparison code) can show the legacy biased number.
+    let wpm_kmeans = if dot_s > 0.0 { 1.2 / dot_s } else { 0.0 };
+    let wpm_dot_s = if cfg.pin_wpm.is_some() {
+        dot_s
+    } else {
+        estimate_dot_period(&timed).unwrap_or(dot_s)
+    };
+    let wpm = if wpm_dot_s > 0.0 {
+        1.2 / wpm_dot_s
+    } else {
+        0.0
+    };
 
     let elem_split = 2.0 * dot_s;
     let char_gap = 2.0 * dot_s;
@@ -1065,9 +1151,12 @@ pub fn decode_envelope_with_viz(
         on_durations,
         dot_seconds: dot_s,
         wpm,
+        wpm_kmeans,
         centroid_dot,
         centroid_dah,
         locked_wpm: None,
+        window_start_sample: 0,
+        window_end_sample: samples.len() as u64,
     };
     (text, frame)
 }
@@ -1157,7 +1246,7 @@ fn downsample_envelope(env: &[f32]) -> Vec<f32> {
     if env.len() <= MAX_VIZ_ENVELOPE_SAMPLES {
         return env.to_vec();
     }
-    let bucket = (env.len() + MAX_VIZ_ENVELOPE_SAMPLES - 1) / MAX_VIZ_ENVELOPE_SAMPLES;
+    let bucket = env.len().div_ceil(MAX_VIZ_ENVELOPE_SAMPLES);
     let mut out = Vec::with_capacity(env.len() / bucket + 1);
     let mut i = 0;
     while i < env.len() {
@@ -1181,7 +1270,7 @@ fn kmeans_centroids(durations: &[f32]) -> (f32, f32) {
         let v = durations.first().copied().unwrap_or(0.0);
         return (v, v);
     }
-    let mut sorted: Vec<f32> = durations.iter().copied().collect();
+    let mut sorted: Vec<f32> = durations.to_vec();
     sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     let mut c_lo = sorted[sorted.len() / 4];
     let mut c_hi = sorted[(3 * sorted.len()) / 4];
@@ -1226,6 +1315,77 @@ fn kmeans_centroids(durations: &[f32]) -> (f32, f32) {
 fn dot_seconds_from_wpm(wpm: f32) -> f32 {
     // PARIS standard: 1 word = 50 dot units => dot = 1.2 / wpm seconds.
     (1.2_f32 / wpm.max(1.0)).max(MIN_ELEMENT_S)
+}
+
+/// Period-based dot estimator using inter-onset intervals between
+/// consecutive ON events. Decoupled from threshold/hysteresis bias and
+/// from envelope-decay asymmetry (compander attack 1ms / decay 10ms),
+/// because any per-edge stretch cancels out across the period from one
+/// rising edge to the next. The shortest cluster of inter-onset
+/// intervals corresponds to dot-followed-by-element pairs, where the
+/// period equals exactly two dot-units in PARIS timing.
+///
+/// Returns `None` when:
+///   - fewer than four onsets are available, or
+///   - no intra-element pairs are present (the shortest period is much
+///     larger than 2 × shortest ON duration, indicating that every gap
+///     is at least a character gap).
+///
+/// Callers should fall back to k-means on on-durations in that case.
+///
+/// Verified against `tools/wpm-measure`: this estimator returns 40.0 ms
+/// (= 30.00 WPM) on every 3-second window across all four SNR variants
+/// of `cw_30wpm_abbrev_*.wav`, while the k-means dot estimator on the
+/// same windows returns 36.1 ms (~33 WPM, fast bias) before compander
+/// and ~49 ms (~24 WPM, slow bias) after compander in the live path.
+fn estimate_dot_period(timed: &[TimedEvent]) -> Option<f32> {
+    let onsets: Vec<f32> = timed
+        .iter()
+        .filter(|e| e.is_on)
+        .map(|e| e.start_s)
+        .collect();
+    if onsets.len() < 4 {
+        return None;
+    }
+
+    let mut on_durations: Vec<f32> = timed
+        .iter()
+        .filter(|e| e.is_on)
+        .map(|e| e.duration_s)
+        .collect();
+    on_durations.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    // Rough p20 of ON durations as a dot upper bound (compander stretches
+    // ONs by ~10 ms at the threshold-cross level, so this overestimates
+    // dot, but it bounds the right order of magnitude).
+    let shortest_on = on_durations[(on_durations.len() / 5).max(1) - 1];
+
+    let mut intervals: Vec<f32> = onsets.windows(2).map(|w| w[1] - w[0]).collect();
+    intervals.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let n = intervals.len();
+    let third = (n / 3).max(1);
+    let lo_slice = &intervals[..third];
+    let med_idx = lo_slice.len() / 2;
+    let shortest_period = lo_slice[med_idx];
+
+    // For period / 2 to give the true dot, the shortest period must be
+    // ~2 × shortest_on (one element + one intra-element gap of equal
+    // length). If shortest_period > 3 × shortest_on, the shortest gap
+    // bridges a CHARACTER gap (≥3 dot units) or larger, and dividing by
+    // 2 would severely overestimate the dot. Likewise reject ratios
+    // below ~1.5 (which would indicate envelope fragmentation).
+    if shortest_period > 3.0 * shortest_on {
+        return None;
+    }
+    if shortest_period < 1.5 * shortest_on {
+        return None;
+    }
+
+    let dot = shortest_period * 0.5;
+    if dot.is_finite() && dot >= MIN_ELEMENT_S * 0.5 {
+        Some(dot.max(MIN_ELEMENT_S))
+    } else {
+        None
+    }
 }
 
 /// Returns `(on_durations_s, off_durations_s)` aligned so that
@@ -1316,7 +1476,7 @@ fn decode_events(ons: &[f32], offs: &[f32], dot_s: f32) -> String {
 }
 
 fn percentile_pair(values: &[f32], p_lo: f32, p_hi: f32) -> (f32, f32) {
-    let mut sorted: Vec<f32> = values.iter().copied().collect();
+    let mut sorted: Vec<f32> = values.to_vec();
     sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     (
         region_stream::percentile_sorted(&sorted, p_lo),
@@ -1332,7 +1492,7 @@ pub(crate) fn robust_peak(values: &[f32], percentile: f32) -> f32 {
     if values.is_empty() {
         return 0.0;
     }
-    let mut sorted: Vec<f32> = values.iter().copied().collect();
+    let mut sorted: Vec<f32> = values.to_vec();
     sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     region_stream::percentile_sorted(&sorted, percentile)
 }
@@ -1341,13 +1501,13 @@ fn median_lower_half(values: &[f32]) -> f32 {
     if values.is_empty() {
         return 0.0;
     }
-    let mut sorted: Vec<f32> = values.iter().copied().collect();
+    let mut sorted: Vec<f32> = values.to_vec();
     sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     let cutoff = (sorted.len() / 2).max(1);
     sorted[cutoff / 2]
 }
 
-fn morse_to_char(s: &str) -> Option<char> {
+pub(crate) fn morse_to_char(s: &str) -> Option<char> {
     match s {
         ".-" => Some('A'),
         "-..." => Some('B'),
@@ -1855,6 +2015,91 @@ mod tests {
     use super::*;
     use std::f32::consts::TAU;
 
+    fn timed_from_pattern(dot_s: f32, pattern: &str) -> Vec<TimedEvent> {
+        // pattern: '.' = dit (1T on, 1T off), '-' = dah (3T on, 1T off),
+        // ' ' adds two extra T (so 3T total = char gap), '/' adds six T
+        // (so 7T total = word gap). Trailing inter-element gap of pattern
+        // is dropped after the last symbol.
+        let mut out: Vec<TimedEvent> = Vec::new();
+        let mut t = 0.0_f32;
+        let chars: Vec<char> = pattern.chars().collect();
+        for (i, ch) in chars.iter().enumerate() {
+            let on_dur = match ch {
+                '.' => dot_s,
+                '-' => 3.0 * dot_s,
+                ' ' | '/' => {
+                    // pure gap symbol: extend trailing off
+                    if let Some(last) = out.last_mut() {
+                        if !last.is_on {
+                            let extra = if *ch == ' ' { 2.0 * dot_s } else { 6.0 * dot_s };
+                            last.duration_s += extra;
+                            last.end_s += extra;
+                            t += extra;
+                        }
+                    }
+                    continue;
+                }
+                _ => continue,
+            };
+            out.push(TimedEvent {
+                start_s: t,
+                end_s: t + on_dur,
+                duration_s: on_dur,
+                is_on: true,
+            });
+            t += on_dur;
+            // inter-element gap (1T) after every symbol except the last
+            if i + 1 < chars.len() {
+                out.push(TimedEvent {
+                    start_s: t,
+                    end_s: t + dot_s,
+                    duration_s: dot_s,
+                    is_on: false,
+                });
+                t += dot_s;
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn estimate_dot_period_recovers_true_dot_on_paris() {
+        // dot=40ms (30 WPM); pattern PARIS = .--. .- .-. .. ...
+        let dot = 0.040;
+        let timed = timed_from_pattern(dot, ".--. .- .-. .. ...");
+        let est = estimate_dot_period(&timed).expect("intra-element pairs present");
+        // Period method should recover 40 ms within 5%.
+        assert!(
+            (est - dot).abs() < 0.05 * dot,
+            "expected ~{}, got {}",
+            dot,
+            est
+        );
+    }
+
+    #[test]
+    fn estimate_dot_period_returns_none_when_no_intra_element_pairs() {
+        // ". ".repeat(N): every gap is a char gap; shortest period >> 2T.
+        let dot = 0.060;
+        let timed = timed_from_pattern(dot, ". . . . . . . . . . . . . . . . . . . .");
+        assert!(
+            estimate_dot_period(&timed).is_none(),
+            "guard should reject single-element-only patterns"
+        );
+    }
+
+    #[test]
+    fn estimate_dot_period_returns_none_for_trivial_input() {
+        assert!(estimate_dot_period(&[]).is_none());
+        assert!(estimate_dot_period(&[TimedEvent {
+            start_s: 0.0,
+            end_s: 0.04,
+            duration_s: 0.04,
+            is_on: true,
+        }])
+        .is_none());
+    }
+
     fn synth(samples: &mut Vec<f32>, rate: u32, secs: f32, on: bool, pitch: f32) {
         let n = (secs * rate as f32) as usize;
         for i in 0..n {
@@ -1899,7 +2144,7 @@ mod tests {
                              // PARIS = .--. .- .-. .. ...
         let s = synth_morse(rate, dot, 700.0, ".--. .- .-. .. ...");
         let txt = decode_envelope(&s, rate, &EnvelopeConfig::default());
-        assert_eq!(txt, "PARIS", "got {:?}", txt);
+        assert_eq!(txt, "PARIS", "got {txt:?}");
     }
 
     #[test]
@@ -1919,7 +2164,7 @@ mod tests {
                 analysis_window_seconds: None,
             },
         );
-        assert_eq!(txt, "K", "got {:?}", txt);
+        assert_eq!(txt, "K", "got {txt:?}");
     }
 
     #[test]
@@ -2135,13 +2380,8 @@ mod tests {
 
     #[test]
     fn kmeans_dot_estimate_separates_dits_and_dahs() {
-        let mut durs = Vec::new();
-        for _ in 0..6 {
-            durs.push(0.060);
-        }
-        for _ in 0..6 {
-            durs.push(0.180);
-        }
+        let mut durs = vec![0.060; 6];
+        durs.extend([0.180; 6]);
         let dot = estimate_dot_kmeans(&durs);
         assert!((dot - 0.060).abs() < 0.005, "expected ~0.060, got {dot}");
     }
@@ -2228,8 +2468,7 @@ mod tests {
         let (text, viz) = decode_envelope_with_viz(&s, rate, &cfg);
         assert_eq!(
             text, "",
-            "noise-only signal must not emit text (got {:?})",
-            text
+            "noise-only signal must not emit text (got {text:?})"
         );
         assert!(
             viz.snr_suppressed,
@@ -2314,8 +2553,7 @@ mod tests {
         let snr = snr_db(0.5, 1.0);
         assert!(
             snr >= cfg.min_snr_db && snr < DYN_RANGE_BYPASS_SNR_DB,
-            "test setup: snr {} should be in marginal band",
-            snr
+            "test setup: snr {snr} should be in marginal band"
         );
         assert!(
             !passes_quality_gate(&cfg, 0.5, 1.0, 10.0),
@@ -2391,8 +2629,7 @@ mod tests {
         );
         assert!(
             windowed_text.contains('K'),
-            "expected decoded text to contain 'K', got {:?}",
-            windowed_text
+            "expected decoded text to contain 'K', got {windowed_text:?}"
         );
     }
 

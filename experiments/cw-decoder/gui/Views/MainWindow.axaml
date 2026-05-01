@@ -655,7 +655,7 @@
                     <TextBlock Grid.Column="1" Text="{Binding SelectedCandidateNeedles}" Foreground="{StaticResource AccentLime}" />
                   </Grid>
                   <Border Grid.Row="3" BorderBrush="{StaticResource GridLine}" BorderThickness="1" CornerRadius="2" Padding="8">
-                    <Grid RowDefinitions="Auto,Auto,Auto" RowSpacing="8">
+                    <Grid RowDefinitions="Auto,Auto,Auto,Auto" RowSpacing="8">
                       <Grid ColumnDefinitions="Auto,*,Auto,Auto" ColumnSpacing="10">
                         <TextBlock Text="SIGNAL PROFILE" Classes="label" />
                         <TextBlock Grid.Column="1" Text="{Binding AdjustedRangeLabel}" Foreground="{StaticResource AccentMag}" />
@@ -665,7 +665,7 @@
                                 IsEnabled="{Binding CanUseSuggestedSpan}" FontSize="11" Padding="14,4" />
                       </Grid>
                       <TextBlock Grid.Row="1"
-                                 Text="Cyan outline = harvested span. Lime outline = pause-based suggestion. Drag the magenta handles or drag inside the magenta range to move the exact window."
+                                 Text="Cyan outline = harvested span. Lime outline = pause-based suggestion. Drag the magenta handles or drag inside the magenta range to move the exact window. Cyan playhead tracks audio playback."
                                  Classes="label" TextWrapping="Wrap" />
                       <Grid Grid.Row="2" RowDefinitions="Auto,*" RowSpacing="6">
                         <TextBlock Text="LOADING PROFILE..."
@@ -682,8 +682,41 @@
                                                SuggestedEndSeconds="{Binding CurrentSignalProfile.SuggestedEndSeconds}"
                                                SelectionStartSeconds="{Binding AdjustedStartSeconds, Mode=TwoWay}"
                                                SelectionEndSeconds="{Binding AdjustedEndSeconds, Mode=TwoWay}"
-                                               Threshold="{Binding CurrentSignalProfile.Threshold}" />
+                                               Threshold="{Binding CurrentSignalProfile.Threshold}"
+                                               PlayheadSeconds="{Binding LabelPreviewPlayheadSeconds}"
+                                               ShowPlayhead="{Binding IsLabelPreviewActive}" />
                       </Grid>
+                      <Border Grid.Row="3" BorderBrush="{StaticResource GridLine}" BorderThickness="1" CornerRadius="2" Padding="6"
+                              IsVisible="{Binding IsLabelPreviewActive}">
+                        <Grid RowDefinitions="Auto,Auto" RowSpacing="6">
+                          <Grid ColumnDefinitions="Auto,Auto,Auto,Auto,Auto" ColumnSpacing="6">
+                            <Button Classes="primary" Content="⏮" Click="OnRewindPlaybackClick"
+                                    IsEnabled="{Binding HasPlaybackSource}" FontSize="14" Padding="10,4"
+                                    ToolTip.Tip="Rewind to start of preview" />
+                            <Button Grid.Column="1" Classes="primary" Content="▶ PLAY" Click="OnStartPlaybackClick"
+                                    IsEnabled="{Binding CanStartPlayback}" FontSize="11" Padding="12,4" />
+                            <Button Grid.Column="2" Classes="primary" Content="{Binding PauseResumeLabel}" Click="OnPauseResumeClick"
+                                    IsEnabled="{Binding CanStopPlayback}" FontSize="11" Padding="12,4" />
+                            <Button Grid.Column="3" Classes="primary" Content="⏹ STOP" Click="OnStopPlaybackClick"
+                                    IsEnabled="{Binding CanStopPlayback}" FontSize="11" Padding="12,4" />
+                            <Button Grid.Column="4" Classes="primary" Content="✕ CLOSE" Click="OnClosePlaybackClick"
+                                    FontSize="11" Padding="12,4"
+                                    ToolTip.Tip="Close audio preview" />
+                          </Grid>
+                          <Grid Grid.Row="1" ColumnDefinitions="Auto,*,Auto" ColumnSpacing="10">
+                            <TextBlock Text="{Binding PlaybackPositionDisplay}" FontFamily="Consolas"
+                                       Foreground="{StaticResource AccentLime}" VerticalAlignment="Center" />
+                            <Slider Grid.Column="1" Minimum="0"
+                                    Maximum="{Binding PlaybackDurationSeconds}"
+                                    Value="{Binding PlaybackPositionSeconds, Mode=TwoWay}"
+                                    IsEnabled="{Binding HasPlaybackSource}"
+                                    VerticalAlignment="Center"
+                                    ToolTip.Tip="Drag to scrub through the slowed preview" />
+                            <TextBlock Grid.Column="2" Text="{Binding PlaybackDurationDisplay}" FontFamily="Consolas"
+                                       Foreground="{StaticResource AccentLime}" VerticalAlignment="Center" />
+                          </Grid>
+                        </Grid>
+                      </Border>
                     </Grid>
                   </Border>
                   <StackPanel Grid.Row="4" Spacing="6">
@@ -1061,19 +1094,28 @@
                 <NumericUpDown Minimum="1" Maximum="20" Increment="1" Value="{Binding BenchStableN, Mode=TwoWay}" Width="100" />
               </StackPanel>
               <StackPanel Grid.Column="1" Spacing="2">
-                <TextBlock Text="PURITY" Classes="label" />
+                <TextBlock Text="DECODER" Classes="label" />
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                  <RadioButton GroupName="BenchDecoder" Content="FOUNDATION" IsChecked="{Binding BenchUseFoundation, Mode=TwoWay}"
+                               ToolTip.Tip="V3 envelope_decoder + append_decode (stable baseline used everywhere else in CW SCOPE)" />
+                  <RadioButton GroupName="BenchDecoder" Content="STREAMING (V2)" IsChecked="{Binding BenchUseStreamingV2, Mode=TwoWay}"
+                               ToolTip.Tip="Legacy ConfidenceState path. Kept for A/B comparison only." />
+                </StackPanel>
+              </StackPanel>
+              <StackPanel Grid.Column="2" Spacing="2" IsEnabled="{Binding BenchV2KnobsEnabled}">
+                <TextBlock Text="PURITY (V2)" Classes="label" />
                 <NumericUpDown Minimum="0" Maximum="20" Increment="0.5" Value="{Binding BenchPurity, Mode=TwoWay}" Width="100" />
               </StackPanel>
-              <StackPanel Grid.Column="2" Spacing="2">
-                <TextBlock Text="WIDE BINS" Classes="label" />
+              <StackPanel Grid.Column="3" Spacing="2" IsEnabled="{Binding BenchV2KnobsEnabled}">
+                <TextBlock Text="WIDE BINS (V2)" Classes="label" />
                 <NumericUpDown Minimum="0" Maximum="6" Increment="1" Value="{Binding BenchWideBins, Mode=TwoWay}" Width="100" />
               </StackPanel>
-              <StackPanel Grid.Column="3" Spacing="2">
+              <StackPanel Grid.Column="4" Spacing="2">
                 <TextBlock Text="FORCE PITCH (Hz)" Classes="label" />
                 <NumericUpDown Minimum="0" Maximum="2000" Increment="10" Value="{Binding BenchForcePitchHz, Mode=TwoWay}" Width="120" />
               </StackPanel>
-              <StackPanel Grid.Column="4" Spacing="2" VerticalAlignment="Bottom">
-                <TextBlock Text="THRESHOLD" Classes="label" />
+              <StackPanel Grid.Column="5" Spacing="2" VerticalAlignment="Bottom" IsEnabled="{Binding BenchV2KnobsEnabled}">
+                <TextBlock Text="THRESHOLD (V2)" Classes="label" />
                 <CheckBox Content="AUTO" IsChecked="{Binding BenchAutoThreshold, Mode=TwoWay}" />
               </StackPanel>
               <StackPanel Grid.Column="7" VerticalAlignment="Bottom">
@@ -1091,7 +1133,9 @@
                           FontFamily="Consolas" FontSize="12">
                   <DataGrid.Columns>
                     <DataGridTextColumn Header="SCENARIO" Binding="{Binding ScenarioDisplay}" Width="*" />
+                    <DataGridTextColumn Header="DECODER" Binding="{Binding DecoderDisplay}" Width="110" />
                     <DataGridTextColumn Header="LAT" Binding="{Binding LatencyDisplay}" Width="80" />
+                    <DataGridTextColumn Header="CER" Binding="{Binding CerDisplay}" Width="70" />
                     <DataGridTextColumn Header="UPTIME" Binding="{Binding UptimeDisplay}" Width="80" />
                     <DataGridTextColumn Header="DROPS" Binding="{Binding DropsDisplay}" Width="70" />
                     <DataGridTextColumn Header="RELOCK" Binding="{Binding RelocksDisplay}" Width="70" />
@@ -1123,7 +1167,7 @@
         <Border Padding="14" Background="{StaticResource BgPanel}">
           <Grid RowDefinitions="Auto,Auto,*,Auto" ColumnDefinitions="*">
             <!-- Controls row -->
-            <Grid Grid.Row="0" ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,*,Auto"
+            <Grid Grid.Row="0" ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,*,Auto"
                   Margin="0,0,0,8">
               <Button Grid.Column="0" Classes="primary"
                       Content="{Binding VizStartStopLabel}"
@@ -1142,20 +1186,25 @@
                         Content="LOOPBACK"
                         IsChecked="{Binding VizUseLoopback}"
                         VerticalAlignment="Center" />
-              <TextBlock Grid.Column="4" Margin="20,0,6,0"
+              <CheckBox Grid.Column="4" Margin="14,0,0,0"
+                        Content="PERIOD WPM (FIX)"
+                        IsChecked="{Binding VizUsePeriodWpm}"
+                        ToolTip.Tip="When ON (default), the displayed WPM uses the period-based dot estimator (rising-edge intervals, invariant to compander/threshold bias). When OFF, shows the legacy k-means dot WPM. The decoder always classifies dits/dahs/gaps from the same k-means dot — this toggle ONLY changes the displayed WPM number."
+                        VerticalAlignment="Center" />
+              <TextBlock Grid.Column="5" Margin="20,0,6,0"
                          Text="WINDOW"
                          FontFamily="Consolas"
                          VerticalAlignment="Center"
                          Foreground="{StaticResource TextDim}" />
-              <Slider Grid.Column="5" Width="160"
+              <Slider Grid.Column="6" Width="160"
                       Minimum="2" Maximum="30"
                       TickFrequency="2" IsSnapToTickEnabled="True"
                       Value="{Binding VizWindowSeconds}" />
-              <TextBlock Grid.Column="6" Margin="6,0,0,0"
+              <TextBlock Grid.Column="7" Margin="6,0,0,0"
                          Text="{Binding VizWindowSeconds, StringFormat='{}{0:F0}s'}"
                          FontFamily="Consolas"
                          VerticalAlignment="Center" />
-              <TextBlock Grid.Column="8"
+              <TextBlock Grid.Column="9"
                          Text="{Binding VizStatus}"
                          FontFamily="Consolas"
                          FontSize="11"

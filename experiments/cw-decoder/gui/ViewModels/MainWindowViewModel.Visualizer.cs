@@ -27,6 +27,7 @@ public sealed class VizFrameVm
     public double FrameStepS { get; }
     public double DotSeconds { get; }
     public double Wpm { get; }
+    public double WpmKmeans { get; }
     public double? LockedWpm { get; }
     public double CentroidDot { get; }
     public double CentroidDah { get; }
@@ -48,6 +49,7 @@ public sealed class VizFrameVm
         FrameStepS = ev.FrameStepS ?? 0;
         DotSeconds = ev.DotSeconds ?? 0;
         Wpm = ev.Wpm ?? 0;
+        WpmKmeans = ev.WpmKmeans ?? (ev.Wpm ?? 0);
         LockedWpm = ev.LockedWpm;
         CentroidDot = ev.CentroidDot ?? 0;
         CentroidDah = ev.CentroidDah ?? 0;
@@ -123,6 +125,37 @@ public sealed partial class MainWindowViewModel
     /// </summary>
     public bool VizMute { get => _vizMute; set => Set(ref _vizMute, value); }
 
+    private bool _vizUsePeriodWpm = true;
+    /// <summary>
+    /// When true (default) the visualizer's "WPM" readout uses the
+    /// period-based dot estimator from the decoder (rising-edge intervals,
+    /// invariant to compander/threshold bias). When false it falls back
+    /// to the legacy k-means dot WPM emitted as <c>wpm_kmeans</c>.
+    /// Toggling does NOT restart the decoder; both values are emitted on
+    /// every viz frame so the swap is instant.
+    /// </summary>
+    public bool VizUsePeriodWpm
+    {
+        get => _vizUsePeriodWpm;
+        set
+        {
+            if (Set(ref _vizUsePeriodWpm, value))
+            {
+                // Refresh the displayed WPM using the most recent frame
+                // so the change is visible immediately.
+                if (_lastVizWpmPeriod.HasValue || _lastVizWpmKmeans.HasValue)
+                {
+                    VizCurrentWpm = value
+                        ? (_lastVizWpmPeriod ?? _lastVizWpmKmeans ?? 0)
+                        : (_lastVizWpmKmeans ?? _lastVizWpmPeriod ?? 0);
+                }
+            }
+        }
+    }
+
+    private double? _lastVizWpmPeriod;
+    private double? _lastVizWpmKmeans;
+
     public string VizStartStopLabel => VizRunning ? "STOP" : "START LIVE";
 
     /// <summary>Resolves the persistent capture directory and ensures it exists.</summary>
@@ -163,6 +196,7 @@ public sealed partial class MainWindowViewModel
             VizFrame = VizFrameVm.Empty;
             VizCurrentWpm = 0;
             VizStatus = "starting…";
+            VizBarMonitor.Reset("live");
             // Auto-save every live capture so it can be labeled later.
             var stamp = DateTime.Now.ToString("yyyyMMdd-HHmmss-fff");
             var captureDir = ResolveVizCaptureDir();
@@ -187,6 +221,8 @@ public sealed partial class MainWindowViewModel
         try { _vizPlayback.Stop(); } catch { /* best effort */ }
         VizRunning = false;
         VizStatus = "stopped";
+        var flushed = VizBarMonitor.Flush();
+        if (flushed is not null) VizStatus = $"stopped → {System.IO.Path.GetFileName(flushed)}";
     }
 
     public void StartVizFile(string filePath)
@@ -198,30 +234,10 @@ public sealed partial class MainWindowViewModel
             VizFrame = VizFrameVm.Empty;
             VizCurrentWpm = 0;
             VizStatus = $"file: {System.IO.Path.GetFileName(filePath)}";
+            VizBarMonitor.Reset(System.IO.Path.GetFileNameWithoutExtension(filePath));
             _vizProcess.StartFileV3(filePath, decodeEveryMs: 250,
-                pinWpm: VizPinWpm, pinHz: VizPinHz);
-
-            // The visualizer pipeline only reads samples from the WAV; it
-            // does not touch the audio output device. Start a second
-            // cw-decoder.exe process (`play-file`) in parallel so the
-            // operator can hear the file while watching the visualizer
-            // decode it. Honor VizMute so screen captures and unattended
-            // runs stay silent.
+                pinWpm: VizPinWpm, pinHz: VizPinHz, playAudio: !VizMute);
             try { _vizPlayback.Stop(); } catch { /* best effort */ }
-            if (!VizMute)
-            {
-                try
-                {
-                    _vizPlayback.Start(filePath);
-                }
-                catch (Exception audioEx)
-                {
-                    // Audio is best-effort: a missing output device or a
-                    // failed cw-decoder.exe play-file launch must not stop
-                    // the visualizer from running.
-                    VizStatus = $"file: {System.IO.Path.GetFileName(filePath)} (audio off: {audioEx.Message})";
-                }
-            }
 
             VizRunning = true;
         }
@@ -241,10 +257,12 @@ public sealed partial class MainWindowViewModel
         {
             VizRunning = false;
             try { _vizPlayback.Stop(); } catch { /* best effort */ }
+            var flushed = VizBarMonitor.Flush();
             if (VizStatus.StartsWith("live", StringComparison.OrdinalIgnoreCase))
             {
                 VizStatus = "process exited";
             }
+            if (flushed is not null) VizStatus += $" → {System.IO.Path.GetFileName(flushed)}";
         });
     }
 
@@ -258,23 +276,49 @@ public sealed partial class MainWindowViewModel
                     VizStatus = $"ready @ {ev.Rate ?? 0} Hz";
                     break;
                 case "transcript":
-                    // Prefer the cumulative session transcript (Rust side maintains
-                    // it via ditdah_streaming::append_snapshot_text). Fall back to
-                    // the rolling-window snapshot text if older builds emit only
-                    // the legacy field.
+                    // PR #370 (Approach A+): the Rust side now emits a
+                    // sample-indexed cumulative transcript via
+                    // LiveCommitCursor (`transcript` = committed +
+                    // provisional). It is monotonic and idempotent.
+                    //
+                    // Do NOT fall back to `ev.Text` (the rolling-window
+                    // re-decode). That field is produced by a different
+                    // decode path and can disagree with the cursor's
+                    // text; switching between the two between the
+                    // pre-lock and post-lock cycles makes the
+                    // transcript appear to vanish and get replaced when
+                    // the cursor first commits. Show the cursor text
+                    // only — empty until the streamer locks is
+                    // expected and accurate.
                     var sess = ev.Transcript;
-                    if (!string.IsNullOrEmpty(sess)) VizTranscript = sess!;
-                    else if (ev.Text is not null) VizTranscript = ev.Text;
-                    if (ev.Wpm.HasValue) VizCurrentWpm = ev.Wpm.Value;
+                    if (sess is not null) VizTranscript = sess;
+                    if (ev.Wpm.HasValue) _lastVizWpmPeriod = ev.Wpm.Value;
+                    if (ev.WpmKmeans.HasValue) _lastVizWpmKmeans = ev.WpmKmeans.Value;
+                    if (ev.Wpm.HasValue || ev.WpmKmeans.HasValue)
+                    {
+                        VizCurrentWpm = VizUsePeriodWpm
+                            ? (_lastVizWpmPeriod ?? _lastVizWpmKmeans ?? 0)
+                            : (_lastVizWpmKmeans ?? _lastVizWpmPeriod ?? 0);
+                    }
                     break;
                 case "viz":
                     VizFrame = new VizFrameVm(ev);
-                    if (ev.Wpm.HasValue) VizCurrentWpm = ev.Wpm.Value;
+                    VizBarMonitor.Ingest(ev);
+                    if (ev.Wpm.HasValue) _lastVizWpmPeriod = ev.Wpm.Value;
+                    if (ev.WpmKmeans.HasValue) _lastVizWpmKmeans = ev.WpmKmeans.Value;
+                    if (ev.Wpm.HasValue || ev.WpmKmeans.HasValue)
+                    {
+                        VizCurrentWpm = VizUsePeriodWpm
+                            ? (_lastVizWpmPeriod ?? _lastVizWpmKmeans ?? 0)
+                            : (_lastVizWpmKmeans ?? _lastVizWpmPeriod ?? 0);
+                    }
                     break;
                 case "end":
                     if (ev.Transcript is not null) VizTranscript = ev.Transcript;
                     VizRunning = false;
                     VizStatus = "ended";
+                    var flushed = VizBarMonitor.Flush();
+                    if (flushed is not null) VizStatus = $"ended → {System.IO.Path.GetFileName(flushed)}";
                     break;
             }
         });

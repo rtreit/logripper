@@ -1,0 +1,32 @@
+{
+  "Commit": "BASELINE",
+  "Subject": "Initial live-capture suite baseline",
+  "Fixtures": 3,
+  "AvgRecall_pct": 48.0,
+  "MinRecall_pct": 0.0,
+  "Generated": "2026-04-30T00:00:00Z",
+  "Notes": "Baseline captured by scripts/bench-live-capture-suite.ps1 on the cw-decoder release binary built from the V3 lock-release branch + GUI-stop parser fix. Re-run with -UpdateBaseline to refresh after intentional decoder changes. Recall = % of distinct >=2-char alpha tokens from the whole-buffer 'gold' decode that appear as whole tokens in the streaming 'live' transcript.",
+  "Results": [
+    {
+      "Fixture": "session-194729.wav",
+      "GoldChars": 578,
+      "LiveChars": 3178,
+      "Recall_pct": 45.2,
+      "Notes": "W1AW ARRL bulletin broadcast captured from radio, 32 kHz mono 16-bit, ~444 s. Real off-air signal with QRM/QRN. Live transcript is 5.5x longer than gold but only catches 45% of gold tokens, indicating heavy stitched garbage between real copy."
+    },
+    {
+      "Fixture": "session-204015.wav",
+      "GoldChars": 246,
+      "LiveChars": 552,
+      "Recall_pct": 0.0,
+      "Notes": "60 s capture from the screenshot-2 session. Visually-clean waveform on the visualizer but the gold whole-buffer decoder also produces garbage (E/?/single-letter spam) on this audio, indicating the acoustic input itself is fundamentally hard (probably multi-station / drift / QSB). Live track copies a different garbage stream from gold so token recall is 0% by construction. NOT evidence of a streaming-specific regression."
+    },
+    {
+      "Fixture": "cw_30wpm_abbrev_clean.wav",
+      "GoldChars": 359,
+      "LiveChars": 1367,
+      "Recall_pct": 98.9,
+      "Notes": "Canonical synthetic 30 WPM PARIS-derived fixture. Live recall stays >=95% across regressions; below that = real V3 streaming break."
+    }
+  ]
+}

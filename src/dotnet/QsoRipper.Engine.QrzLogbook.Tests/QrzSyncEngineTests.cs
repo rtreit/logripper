@@ -846,6 +846,65 @@ public sealed class QrzSyncEngineTests
 
     // -- Helpers ------------------------------------------------------------
 
+    // -- Duplicate retry tests -----------------------------------------------
+
+    [Fact]
+    public async Task Upload_duplicate_retries_with_replace_and_adopts_logid()
+    {
+        // A local QSO exists on QRZ but has no qrz_logid locally. The plain
+        // INSERT fails with "duplicate". Sync should retry with REPLACE, adopt
+        // the returned LOGID, and mark the QSO as Synced.
+        var store = CreateStore();
+        var local = MakeLocalQso("AK7S", BaseTime, Band._20M, Mode.Ft8, SyncStatus.LocalOnly);
+        await store.Logbook.InsertQsoAsync(local);
+
+        var api = new FakeQrzLogbookApi
+        {
+            UploadFunc = _ => throw new QrzLogbookException("QRZ Logbook API error: Unable to add QSO to database: duplicate"),
+            UploadReplaceLogid = "QRZ_ADOPTED_456",
+        };
+
+        var engine = new QrzSyncEngine(api);
+        var result = await engine.ExecuteSyncAsync(store.Logbook, fullSync: false);
+
+        // No errors — duplicate was handled.
+        Assert.Null(result.ErrorSummary);
+        Assert.Equal(1u, result.UploadedCount);
+
+        // REPLACE retry was called.
+        Assert.Single(api.UploadReplacedQsos);
+        Assert.Equal("AK7S", api.UploadReplacedQsos[0].WorkedCallsign);
+
+        // Local QSO is now Synced with the adopted LOGID.
+        var qsos = await store.Logbook.ListQsosAsync(new QsoListQuery());
+        Assert.Single(qsos);
+        Assert.Equal(SyncStatus.Synced, qsos[0].SyncStatus);
+        Assert.Equal("QRZ_ADOPTED_456", qsos[0].QrzLogid);
+    }
+
+    [Fact]
+    public async Task Upload_non_duplicate_error_still_reported()
+    {
+        var store = CreateStore();
+        var local = MakeLocalQso("K3SEW", BaseTime, Band._40M, Mode.Ssb, SyncStatus.LocalOnly);
+        await store.Logbook.InsertQsoAsync(local);
+
+        var api = new FakeQrzLogbookApi
+        {
+            UploadFunc = _ => throw new QrzLogbookException("invalid ADIF record"),
+        };
+
+        var engine = new QrzSyncEngine(api);
+        var result = await engine.ExecuteSyncAsync(store.Logbook, fullSync: false);
+
+        Assert.NotNull(result.ErrorSummary);
+        Assert.Contains("invalid ADIF record", result.ErrorSummary);
+        Assert.Equal(0u, result.UploadedCount);
+
+        // REPLACE retry must NOT have been called.
+        Assert.Empty(api.UploadReplacedQsos);
+    }
+
     private static MemoryStorage CreateStore() => new();
 
     private static QsoRecord MakeRemoteQso(string callsign, DateTimeOffset timestamp, Band band, Mode mode, string? logid)
@@ -913,6 +972,15 @@ public sealed class QrzSyncEngineTests
             }
 
             return Task.FromResult(UploadLogid);
+        }
+
+        public string UploadReplaceLogid { get; set; } = "REPLACE-12345";
+        public List<QsoRecord> UploadReplacedQsos { get; } = [];
+
+        public Task<string> UploadQsoWithReplaceAsync(QsoRecord qso, string? bookOwner = null)
+        {
+            UploadReplacedQsos.Add(qso);
+            return Task.FromResult(UploadReplaceLogid);
         }
 
         public Task<string> UpdateQsoAsync(QsoRecord qso, string? bookOwner = null)

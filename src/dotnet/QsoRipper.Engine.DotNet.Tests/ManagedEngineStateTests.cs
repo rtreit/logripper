@@ -1210,6 +1210,12 @@ public sealed class ManagedEngineStateTests : IDisposable
             return Task.FromResult(logId);
         }
 
+        public Task<string> UploadQsoWithReplaceAsync(QsoRecord qso, string? bookOwner = null)
+        {
+            var logId = $"FAKE-{Interlocked.Increment(ref _logIdCounter)}";
+            return Task.FromResult(logId);
+        }
+
         public Task<string> UpdateQsoAsync(QsoRecord qso, string? bookOwner = null)
         {
             var logId = $"FAKE-{Interlocked.Increment(ref _logIdCounter)}";
@@ -1228,6 +1234,8 @@ public sealed class ManagedEngineStateTests : IDisposable
             => Task.FromResult(new List<QsoRecord> { null! });
 
         public Task<string> UploadQsoAsync(QsoRecord qso, string? bookOwner = null) => Task.FromResult("FAKE-1");
+
+        public Task<string> UploadQsoWithReplaceAsync(QsoRecord qso, string? bookOwner = null) => Task.FromResult("FAKE-1");
 
         public Task<string> UpdateQsoAsync(QsoRecord qso, string? bookOwner = null) => Task.FromResult("FAKE-1");
 

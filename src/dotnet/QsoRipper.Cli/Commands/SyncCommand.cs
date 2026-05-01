@@ -56,6 +56,11 @@ internal static class SyncCommand
             Console.WriteLine($"Skipped (trashed): {last.DeletesSkippedRemote}");
         }
 
+        if (last.DuplicateReplaces > 0)
+        {
+            Console.WriteLine($"Replaced (dupes):  {last.DuplicateReplaces}");
+        }
+
         return 0;
     }
 }

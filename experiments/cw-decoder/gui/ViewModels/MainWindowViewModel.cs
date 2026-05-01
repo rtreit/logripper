@@ -30,6 +30,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
     private SweepTopResult? _topSweepResult;
 
     private const string CustomDecoderModeLabel = "Custom streaming";
+    private const string FoundationDecoderModeLabel = "Append event stream (foundation)";
     private const string BaselineDecoderModeLabel = "Baseline ditdah (rolling window)";
     private const string V2DecoderModeLabel = "Whole-buffer ditdah (v2)";
 
@@ -39,9 +40,9 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
         _inputDevices = devs.Inputs;
         _outputDevices = devs.Outputs;
         Devices = new ObservableCollection<string>(_inputDevices);
-        DecoderModes = new ObservableCollection<string>(new[] { V2DecoderModeLabel, CustomDecoderModeLabel, BaselineDecoderModeLabel });
+        DecoderModes = new ObservableCollection<string>(new[] { FoundationDecoderModeLabel, V2DecoderModeLabel, CustomDecoderModeLabel, BaselineDecoderModeLabel });
         SelectedDevice = Devices.Count > 0 ? Devices[0] : null;
-        SelectedDecoderMode = DecoderModes[0];
+        SelectedDecoderMode = FoundationDecoderModeLabel;
         Cells = new ObservableCollection<TranscriptCell>();
         WpmHistory = new ObservableCollection<double>();
         HarvestCandidates = new ObservableCollection<HarvestCandidate>();
@@ -206,6 +207,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
             if (Set(ref _selectedDecoderMode, value))
             {
                 OnPropertyChanged(nameof(IsCustomDecoderMode));
+                OnPropertyChanged(nameof(IsFoundationDecoderMode));
                 OnPropertyChanged(nameof(IsBaselineDecoderMode));
                 OnPropertyChanged(nameof(IsV2DecoderMode));
                 OnPropertyChanged(nameof(BaselineDecoderSummary));
@@ -365,6 +367,8 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
                 OnPropertyChanged(nameof(HasPlaybackSource));
                 OnPropertyChanged(nameof(PlaybackSourceDisplay));
                 OnPropertyChanged(nameof(CanStartPlayback));
+                OnPropertyChanged(nameof(IsLabelPreviewActive));
+                OnPropertyChanged(nameof(LabelPreviewPlayheadSeconds));
             }
         }
     }
@@ -373,7 +377,44 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
     public string PlaybackSourceDisplay => string.IsNullOrWhiteSpace(_playbackSourcePath) ? "" : System.IO.Path.GetFileName(_playbackSourcePath);
 
     private string _playbackSourceLabel = "AUDIO";
-    public string PlaybackSourceLabel { get => _playbackSourceLabel; private set => Set(ref _playbackSourceLabel, value); }
+    public string PlaybackSourceLabel
+    {
+        get => _playbackSourceLabel;
+        private set
+        {
+            if (Set(ref _playbackSourceLabel, value))
+            {
+                OnPropertyChanged(nameof(IsLabelPreviewActive));
+                OnPropertyChanged(nameof(LabelPreviewPlayheadSeconds));
+            }
+        }
+    }
+
+    /// <summary>
+    /// True when the playback panel is currently sourced from a slowed
+    /// "LABEL PREVIEW" render produced for the LABELING tab.
+    /// </summary>
+    public bool IsLabelPreviewActive => HasPlaybackSource
+        && string.Equals(_playbackSourceLabel, "LABEL PREVIEW", StringComparison.Ordinal);
+
+    /// <summary>
+    /// Maps the current playback position (which is in slowed-preview
+    /// seconds) back to the original-file timeline shown by the
+    /// SignalProfileEditor on the LABELING tab. Returns NaN when the
+    /// label preview is not active so the playhead stays hidden.
+    /// </summary>
+    public double LabelPreviewPlayheadSeconds => IsLabelPreviewActive
+        ? AdjustedStartSeconds + PlaybackPositionSeconds / Math.Max(1.0, PreviewSlowdown)
+        : double.NaN;
+
+    /// <summary>Rewind playback to the beginning. Triggers a seek if running.</summary>
+    public void RewindPlayback()
+    {
+        if (HasPlaybackSource)
+        {
+            PlaybackPositionSeconds = 0;
+        }
+    }
 
     private string _playbackStatusText = "Open a file or render a preview to play audio inline.";
     public string PlaybackStatusText { get => _playbackStatusText; private set => Set(ref _playbackStatusText, value); }
@@ -410,13 +451,17 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
             {
                 OnPropertyChanged(nameof(PlaybackPositionDisplay));
                 OnPropertyChanged(nameof(PlaybackProgress));
+                OnPropertyChanged(nameof(LabelPreviewPlayheadSeconds));
                 if (!_suppressSeekEcho && IsPlaybackRunning)
                 {
                     // User-driven change. Mark scrubbing so engine position
                     // updates don't fight the operator until the seek is
-                    // acknowledged.
+                    // acknowledged. Send to both transports; each ignores
+                    // the command unless it is the one currently driving
+                    // audio (decode-and-play vs play-file).
                     _userIsScrubbing = true;
                     try { _process.Seek(clamped); } catch { /* best effort */ }
+                    try { _playback.Seek(clamped); } catch { /* best effort */ }
                 }
             }
         }
@@ -874,7 +919,17 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
     public double HarvestHopSeconds { get => _harvestHopSeconds; set => Set(ref _harvestHopSeconds, value); }
 
     private double _previewSlowdown = 2.5;
-    public double PreviewSlowdown { get => _previewSlowdown; set => Set(ref _previewSlowdown, value); }
+    public double PreviewSlowdown
+    {
+        get => _previewSlowdown;
+        set
+        {
+            if (Set(ref _previewSlowdown, value))
+            {
+                OnPropertyChanged(nameof(LabelPreviewPlayheadSeconds));
+            }
+        }
+    }
 
     private bool _evaluateAllLabels = true;
     public bool EvaluateAllLabels
@@ -1069,6 +1124,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
         : $"{CurrentLabelSweepResult.SweepMode} sweep · {CurrentLabelSweepResult.CoarseConfigs} coarse + {CurrentLabelSweepResult.RefinedConfigs} refined configs · best exact={CurrentLabelSweepResult.Results.FirstOrDefault()?.Exact ?? 0}/{CurrentLabelSweepResult.Labels}";
 
     public bool IsCustomDecoderMode => string.Equals(SelectedDecoderMode, CustomDecoderModeLabel, StringComparison.Ordinal);
+    public bool IsFoundationDecoderMode => string.Equals(SelectedDecoderMode, FoundationDecoderModeLabel, StringComparison.Ordinal);
     public bool IsBaselineDecoderMode => string.Equals(SelectedDecoderMode, BaselineDecoderModeLabel, StringComparison.Ordinal);
     public bool IsV2DecoderMode => string.Equals(SelectedDecoderMode, V2DecoderModeLabel, StringComparison.Ordinal);
     public string BaselineDecoderSummary => $"Baseline uses Tuning settings: {CurrentBaselineConfig().WindowSeconds:F1}s window / {CurrentBaselineConfig().MinWindowSeconds:F1}s min / {CurrentBaselineConfig().DecodeEveryMs}ms cadence / {CurrentBaselineConfig().Confirmations} confirmations.";
@@ -1457,7 +1513,14 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
         ReplayStatus = null;
         ReplayCer = null;
 
-        _process.StartLive(SelectedDevice, CurrentConfig(), CurrentBaselineConfig(), IsBaselineDecoderMode, recordPath, UseLoopback, IsV2DecoderMode, IsV2DecoderMode ? PinWpm : 0);
+        if (IsFoundationDecoderMode)
+        {
+            _process.StartLiveV3(SelectedDevice, decodeEveryMs: 250, recordPath: recordPath, loopback: UseLoopback, pinWpm: 0, pinHz: 0);
+        }
+        else
+        {
+            _process.StartLive(SelectedDevice, CurrentConfig(), CurrentBaselineConfig(), IsBaselineDecoderMode, recordPath, UseLoopback, IsV2DecoderMode, IsV2DecoderMode ? PinWpm : 0);
+        }
         IsRunning = true;
     }
 
@@ -1505,8 +1568,8 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
         {
             var useBaseline = IsBaselineDecoderMode;
             var cfg = CurrentConfig();
-            ReplayDecoderLabel = useBaseline ? "OFFLINE REPLAY (BASELINE)" : "OFFLINE REPLAY (CUSTOM)";
-            var transcript = await Task.Run(() => RunOfflineReplay(path, useBaseline, cfg)).ConfigureAwait(false);
+            ReplayDecoderLabel = IsFoundationDecoderMode ? "OFFLINE REPLAY (FOUNDATION)" : useBaseline ? "OFFLINE REPLAY (BASELINE)" : "OFFLINE REPLAY (CUSTOM)";
+            var transcript = await Task.Run(() => RunOfflineReplay(path, useBaseline, IsFoundationDecoderMode, cfg)).ConfigureAwait(false);
             await Dispatcher.UIThread.InvokeAsync(() =>
             {
                 ReplayTranscript = string.IsNullOrWhiteSpace(transcript) ? "(empty)" : transcript.Trim();
@@ -1653,7 +1716,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
         IsPlaybackRunning = false;
     }
 
-    private static string RunOfflineReplay(string wavPath, bool useBaseline, DecoderConfig cfg)
+    private static string RunOfflineReplay(string wavPath, bool useBaseline, bool useFoundation, DecoderConfig cfg)
     {
         var exeEnv = Environment.GetEnvironmentVariable("CW_DECODER_EXE");
         string? exe = (!string.IsNullOrWhiteSpace(exeEnv) && System.IO.File.Exists(exeEnv)) ? exeEnv : null;
@@ -1685,7 +1748,16 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
             UseShellExecute = false,
             CreateNoWindow = true,
         };
-        if (useBaseline)
+        if (useFoundation)
+        {
+            psi.ArgumentList.Add("stream-live-v3");
+            psi.ArgumentList.Add("--json");
+            psi.ArgumentList.Add("--decode-every-ms");
+            psi.ArgumentList.Add("250");
+            psi.ArgumentList.Add("--file");
+            psi.ArgumentList.Add(wavPath);
+        }
+        else if (useBaseline)
         {
             psi.ArgumentList.Add("stream-file-ditdah");
             psi.ArgumentList.Add("--json");
@@ -1786,6 +1858,14 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
         var fileDur = TryProbeFileDurationSeconds(path);
         if (fileDur > 0) FileDurationSeconds = fileDur;
 
+        if (IsFoundationDecoderMode)
+        {
+            _process.StartFileV3(path, decodeEveryMs: 250, pinWpm: 0, pinHz: 0, playAudio: true);
+            IsRunning = true;
+            await Task.CompletedTask;
+            return;
+        }
+
         if (IsBaselineDecoderMode)
         {
             // Baseline path doesn't yet have a decode-and-play variant; fall
@@ -1818,8 +1898,20 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
     public void TogglePauseResume()
     {
         if (!IsPlaybackRunning) return;
-        if (IsPlaybackPaused) { _process.Resume(); IsPlaybackPaused = false; }
-        else { _process.Pause(); IsPlaybackPaused = true; }
+        if (IsPlaybackPaused)
+        {
+            // Send to both transports; each is a no-op if its process isn't
+            // the one currently driving audio (decode-and-play vs play-file).
+            try { _process.Resume(); } catch { /* best effort */ }
+            try { _playback.Resume(); } catch { /* best effort */ }
+            IsPlaybackPaused = false;
+        }
+        else
+        {
+            try { _process.Pause(); } catch { /* best effort */ }
+            try { _playback.Pause(); } catch { /* best effort */ }
+            IsPlaybackPaused = true;
+        }
     }
 
     /// <summary>
@@ -2045,7 +2137,14 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
 
         try
         {
-            _process.StartLive(SelectedDevice, CurrentConfig(), CurrentBaselineConfig(), IsBaselineDecoderMode, targetPath, UseLoopback, IsV2DecoderMode, IsV2DecoderMode ? PinWpm : 0);
+            if (IsFoundationDecoderMode)
+            {
+                _process.StartLiveV3(SelectedDevice, decodeEveryMs: 250, recordPath: targetPath, loopback: UseLoopback, pinWpm: 0, pinHz: 0);
+            }
+            else
+            {
+                _process.StartLive(SelectedDevice, CurrentConfig(), CurrentBaselineConfig(), IsBaselineDecoderMode, targetPath, UseLoopback, IsV2DecoderMode, IsV2DecoderMode ? PinWpm : 0);
+            }
             IsRunning = true;
             IsLabelingRecording = true;
         }
@@ -2505,7 +2604,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
         }
     }
 
-    private string _strategySweepWpms = "auto,28,region28,env,env28,live-env";
+    private string _strategySweepWpms = "foundation,auto,28,region28,env,env28,live-env";
     /// <summary>Comma-separated list of strategy tokens. Retained for
     /// backwards compatibility (some tests/bindings still reference it),
     /// but no longer the source of truth for the TUNING tab — the picker
@@ -2519,10 +2618,11 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
 
     /// <summary>Predefined strategy checkboxes shown in the TUNING tab picker.
     /// Tokens are forwarded verbatim to the Rust eval binary's
-    /// parse_strategy_list (auto, region, region&lt;N&gt;, env, env&lt;N&gt;,
-    /// live-env, bare numbers).</summary>
+    /// parse_strategy_list (foundation, auto, region, region&lt;N&gt;,
+    /// env, env&lt;N&gt;, live-env, bare numbers).</summary>
     public ObservableCollection<StrategyOption> StrategyOptions { get; } = new()
     {
+        new StrategyOption("foundation", "foundation", true,  "Append-only event-stream decoder used by DECODE/VISUALIZER"),
         new StrategyOption("auto",     "auto",     true,  "Whole-buffer ditdah, auto-detect WPM (DECODE tab default)"),
         new StrategyOption("22",       "22 wpm",   false, "Whole-buffer ditdah, pinned to 22 wpm"),
         new StrategyOption("25",       "25 wpm",   false, "Whole-buffer ditdah, pinned to 25 wpm"),
@@ -2577,8 +2677,8 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
     /// declaration order, then comma-split custom tokens.</summary>
     private List<string> BuildStrategyTokens()
     {
-        var tokens = new List<string> { "auto" };
-        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "auto" };
+        var tokens = new List<string> { "foundation" };
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "foundation" };
         foreach (var opt in StrategyOptions)
         {
             if (!opt.IsChecked) continue;
@@ -2686,8 +2786,9 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
         // source of truth. The Rust eval binary's parse_strategy_list accepts:
         // auto, region, region<N>, region:<N>, env, envelope, env<N>,
         // envelope<N>, env:<N>, envelope:<N>, live-env, liveenv, and bare
-        // numbers (ExactPin). BuildStrategyTokens always includes "auto"
-        // first and dedupes case-insensitively across picker + custom tokens.
+        // numbers (ExactPin). BuildStrategyTokens always includes
+        // "foundation" first and dedupes case-insensitively across picker
+        // + custom tokens.
         var strategies = BuildStrategyTokens();
 
         CancelAndDisposeEvaluation();
@@ -2965,7 +3066,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
             case "garbled":
                 break;
             case "transcript":
-                if (ev.Text is string txt)
+                if ((ev.Transcript ?? ev.Text) is string txt)
                 {
                     Cells.Clear();
                     _liveTranscriptBuilder.Clear();
@@ -3274,6 +3375,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
             OnPropertyChanged(nameof(CanExportSelectionToTrainingSet));
             OnPropertyChanged(nameof(CanResetAdjustedSpan));
             OnPropertyChanged(nameof(CanUseSuggestedSpan));
+            OnPropertyChanged(nameof(LabelPreviewPlayheadSeconds));
         }
     }
 
