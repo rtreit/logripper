@@ -44,6 +44,12 @@ internal sealed class SignalProfileEditor : Control
     public static readonly StyledProperty<double> ThresholdProperty =
         AvaloniaProperty.Register<SignalProfileEditor, double>(nameof(Threshold));
 
+    public static readonly StyledProperty<double> PlayheadSecondsProperty =
+        AvaloniaProperty.Register<SignalProfileEditor, double>(nameof(PlayheadSeconds), double.NaN);
+
+    public static readonly StyledProperty<bool> ShowPlayheadProperty =
+        AvaloniaProperty.Register<SignalProfileEditor, bool>(nameof(ShowPlayhead));
+
     private const double HandleHitPixels = 10;
     private const double MinSelectionSeconds = 0.08;
 
@@ -63,7 +69,9 @@ internal sealed class SignalProfileEditor : Control
             SuggestedEndSecondsProperty,
             SelectionStartSecondsProperty,
             SelectionEndSecondsProperty,
-            ThresholdProperty);
+            ThresholdProperty,
+            PlayheadSecondsProperty,
+            ShowPlayheadProperty);
     }
 
     public IEnumerable<SignalProfilePoint>? Points
@@ -126,6 +134,18 @@ internal sealed class SignalProfileEditor : Control
         set => SetValue(ThresholdProperty, value);
     }
 
+    public double PlayheadSeconds
+    {
+        get => GetValue(PlayheadSecondsProperty);
+        set => SetValue(PlayheadSecondsProperty, value);
+    }
+
+    public bool ShowPlayhead
+    {
+        get => GetValue(ShowPlayheadProperty);
+        set => SetValue(ShowPlayheadProperty, value);
+    }
+
     protected override Size MeasureOverride(Size availableSize)
     {
         double w = double.IsFinite(availableSize.Width) ? availableSize.Width : 400;
@@ -161,6 +181,7 @@ internal sealed class SignalProfileEditor : Control
         DrawSpanGuide(ctx, plot, SuggestedStartSeconds, SuggestedEndSeconds, Color.FromArgb(0x90, 0x84, 0xFF, 0x6E), dashed: true);
         DrawSpanGuide(ctx, plot, OriginalStartSeconds, OriginalEndSeconds, Color.FromArgb(0x90, 0x22, 0xD3, 0xEE), dashed: true);
         DrawSelection(ctx, plot);
+        DrawPlayhead(ctx, plot);
 
         DrawLabel(ctx, $"view {DisplayStartSeconds:F2}s - {DisplayEndSeconds:F2}s", new Point(plot.X, bounds.Bottom - 16), Color.FromRgb(0x7A, 0x91, 0xAC), 10);
         DrawLabel(ctx, $"selected {SelectionStartSeconds:F2}s - {SelectionEndSeconds:F2}s", new Point(plot.Right - 210, bounds.Bottom - 16), Color.FromRgb(0xE6, 0xF2, 0xFF), 10);
@@ -397,6 +418,42 @@ internal sealed class SignalProfileEditor : Control
 
         DrawHandle(ctx, x0, plot);
         DrawHandle(ctx, x1, plot);
+    }
+
+    private void DrawPlayhead(DrawingContext ctx, Rect plot)
+    {
+        if (!ShowPlayhead)
+        {
+            return;
+        }
+
+        double seconds = PlayheadSeconds;
+        if (!double.IsFinite(seconds) || DisplayEndSeconds <= DisplayStartSeconds)
+        {
+            return;
+        }
+
+        if (seconds < DisplayStartSeconds || seconds > DisplayEndSeconds)
+        {
+            return;
+        }
+
+        double x = XFromSeconds(seconds, plot);
+        var glow = new Pen(new SolidColorBrush(Color.FromArgb(0x60, 0x84, 0xFF, 0xE6)), 4);
+        var line = new Pen(new SolidColorBrush(Color.FromRgb(0x84, 0xFF, 0xE6)), 1.5);
+        ctx.DrawLine(glow, new Point(x, plot.Y), new Point(x, plot.Bottom));
+        ctx.DrawLine(line, new Point(x, plot.Y), new Point(x, plot.Bottom));
+
+        var triBrush = new SolidColorBrush(Color.FromRgb(0x84, 0xFF, 0xE6));
+        var tri = new StreamGeometry();
+        using (var tc = tri.Open())
+        {
+            tc.BeginFigure(new Point(x - 5, plot.Y), true);
+            tc.LineTo(new Point(x + 5, plot.Y));
+            tc.LineTo(new Point(x, plot.Y + 6));
+            tc.EndFigure(true);
+        }
+        ctx.DrawGeometry(triBrush, null, tri);
     }
 
     private static void DrawHandle(DrawingContext ctx, double x, Rect plot)

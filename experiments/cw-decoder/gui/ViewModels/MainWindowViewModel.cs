@@ -367,6 +367,8 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
                 OnPropertyChanged(nameof(HasPlaybackSource));
                 OnPropertyChanged(nameof(PlaybackSourceDisplay));
                 OnPropertyChanged(nameof(CanStartPlayback));
+                OnPropertyChanged(nameof(IsLabelPreviewActive));
+                OnPropertyChanged(nameof(LabelPreviewPlayheadSeconds));
             }
         }
     }
@@ -375,7 +377,44 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
     public string PlaybackSourceDisplay => string.IsNullOrWhiteSpace(_playbackSourcePath) ? "" : System.IO.Path.GetFileName(_playbackSourcePath);
 
     private string _playbackSourceLabel = "AUDIO";
-    public string PlaybackSourceLabel { get => _playbackSourceLabel; private set => Set(ref _playbackSourceLabel, value); }
+    public string PlaybackSourceLabel
+    {
+        get => _playbackSourceLabel;
+        private set
+        {
+            if (Set(ref _playbackSourceLabel, value))
+            {
+                OnPropertyChanged(nameof(IsLabelPreviewActive));
+                OnPropertyChanged(nameof(LabelPreviewPlayheadSeconds));
+            }
+        }
+    }
+
+    /// <summary>
+    /// True when the playback panel is currently sourced from a slowed
+    /// "LABEL PREVIEW" render produced for the LABELING tab.
+    /// </summary>
+    public bool IsLabelPreviewActive => HasPlaybackSource
+        && string.Equals(_playbackSourceLabel, "LABEL PREVIEW", StringComparison.Ordinal);
+
+    /// <summary>
+    /// Maps the current playback position (which is in slowed-preview
+    /// seconds) back to the original-file timeline shown by the
+    /// SignalProfileEditor on the LABELING tab. Returns NaN when the
+    /// label preview is not active so the playhead stays hidden.
+    /// </summary>
+    public double LabelPreviewPlayheadSeconds => IsLabelPreviewActive
+        ? AdjustedStartSeconds + PlaybackPositionSeconds / Math.Max(1.0, PreviewSlowdown)
+        : double.NaN;
+
+    /// <summary>Rewind playback to the beginning. Triggers a seek if running.</summary>
+    public void RewindPlayback()
+    {
+        if (HasPlaybackSource)
+        {
+            PlaybackPositionSeconds = 0;
+        }
+    }
 
     private string _playbackStatusText = "Open a file or render a preview to play audio inline.";
     public string PlaybackStatusText { get => _playbackStatusText; private set => Set(ref _playbackStatusText, value); }
@@ -412,13 +451,17 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
             {
                 OnPropertyChanged(nameof(PlaybackPositionDisplay));
                 OnPropertyChanged(nameof(PlaybackProgress));
+                OnPropertyChanged(nameof(LabelPreviewPlayheadSeconds));
                 if (!_suppressSeekEcho && IsPlaybackRunning)
                 {
                     // User-driven change. Mark scrubbing so engine position
                     // updates don't fight the operator until the seek is
-                    // acknowledged.
+                    // acknowledged. Send to both transports; each ignores
+                    // the command unless it is the one currently driving
+                    // audio (decode-and-play vs play-file).
                     _userIsScrubbing = true;
                     try { _process.Seek(clamped); } catch { /* best effort */ }
+                    try { _playback.Seek(clamped); } catch { /* best effort */ }
                 }
             }
         }
@@ -876,7 +919,17 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
     public double HarvestHopSeconds { get => _harvestHopSeconds; set => Set(ref _harvestHopSeconds, value); }
 
     private double _previewSlowdown = 2.5;
-    public double PreviewSlowdown { get => _previewSlowdown; set => Set(ref _previewSlowdown, value); }
+    public double PreviewSlowdown
+    {
+        get => _previewSlowdown;
+        set
+        {
+            if (Set(ref _previewSlowdown, value))
+            {
+                OnPropertyChanged(nameof(LabelPreviewPlayheadSeconds));
+            }
+        }
+    }
 
     private bool _evaluateAllLabels = true;
     public bool EvaluateAllLabels
@@ -1845,8 +1898,20 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
     public void TogglePauseResume()
     {
         if (!IsPlaybackRunning) return;
-        if (IsPlaybackPaused) { _process.Resume(); IsPlaybackPaused = false; }
-        else { _process.Pause(); IsPlaybackPaused = true; }
+        if (IsPlaybackPaused)
+        {
+            // Send to both transports; each is a no-op if its process isn't
+            // the one currently driving audio (decode-and-play vs play-file).
+            try { _process.Resume(); } catch { /* best effort */ }
+            try { _playback.Resume(); } catch { /* best effort */ }
+            IsPlaybackPaused = false;
+        }
+        else
+        {
+            try { _process.Pause(); } catch { /* best effort */ }
+            try { _playback.Pause(); } catch { /* best effort */ }
+            IsPlaybackPaused = true;
+        }
     }
 
     /// <summary>
@@ -3310,6 +3375,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
             OnPropertyChanged(nameof(CanExportSelectionToTrainingSet));
             OnPropertyChanged(nameof(CanResetAdjustedSpan));
             OnPropertyChanged(nameof(CanUseSuggestedSpan));
+            OnPropertyChanged(nameof(LabelPreviewPlayheadSeconds));
         }
     }
 
