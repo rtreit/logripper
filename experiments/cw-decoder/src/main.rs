@@ -336,6 +336,10 @@ enum Cmd {
         /// Emit newline-delimited JSON progress events for the GUI bridge.
         #[arg(long)]
         json: bool,
+        /// Accept NDJSON control commands on stdin: `pause`, `resume`,
+        /// `stop`, and `seek` (with `position` in seconds).
+        #[arg(long)]
+        stdin_control: bool,
     },
 
     /// Play an audio file through the default output device AND stream
@@ -934,7 +938,11 @@ fn run_cli() -> Result<()> {
             pitch_hz,
             wpm,
         } => run_profile_window(&path, start, end, pitch_hz, wpm),
-        Cmd::PlayFile { path, json } => run_play_file(&path, json),
+        Cmd::PlayFile {
+            path,
+            json,
+            stdin_control,
+        } => run_play_file(&path, json, stdin_control),
         Cmd::DecodeAndPlay {
             path,
             start,
@@ -1259,27 +1267,90 @@ fn run_bench_latency(
     let mut results = Vec::with_capacity(scenarios.len());
     for scen in &scenarios {
         let r = if foundation {
-            let transcript = cw_decoder_poc::append_decode::decode_samples_append(
+            // V3 foundation: envelope_decoder + append_decode, with
+            // commit-time char timestamps and quality-gate timeline.
+            // BENCH knob `force_pitch_hz` maps to V3 `pin_hz`; V2-only
+            // knobs (purity, wide_bins, auto_threshold, etc.) are
+            // ignored here and the GUI greys them out when foundation
+            // is selected.
+            let pin_hz = if force_pitch_hz > 0.0 {
+                Some(force_pitch_hz)
+            } else {
+                None
+            };
+            let bench = cw_decoder_poc::append_decode::decode_samples_append_bench(
                 &scen.audio.samples,
                 scen.audio.sample_rate,
                 None,
-                None,
+                pin_hz,
                 cw_decoder_poc::envelope_decoder::DEFAULT_MIN_SNR_DB,
-            )
-            .decoded_text
-            .trim()
-            .to_string();
-            bench_latency::BenchResult {
+            );
+            let truth_upper = scen.truth.to_uppercase();
+            let mut r = bench_latency::BenchResult {
                 scenario: scen.name.clone(),
                 config_label: label.to_string(),
                 cw_onset_ms: scen.cw_onset_ms,
-                truth: scen.truth.clone(),
-                transcript,
+                truth: truth_upper.clone(),
+                transcript: bench.decoded_text.trim().to_string(),
                 stable_n,
+                final_pitch_hz: bench.final_pitch_hz,
+                t_first_locked_ms: bench.t_first_lock_ms,
+                t_first_pitch_update_ms: bench.t_first_event_ms,
+                decoder_path: "foundation".to_string(),
+                final_locked_wpm: bench.final_locked_wpm,
+                t_first_foundation_lock_ms: bench.t_first_lock_ms,
+                quality_gate_drops: bench.quality_gate_drops,
+                quality_gate_recoveries: bench.quality_gate_recoveries,
+                longest_quality_gate_closed_ms: bench.longest_gate_closed_ms,
                 ..Default::default()
+            };
+            // Compute quality-gate uptime ratio over CW segment after
+            // first lock (foundation analogue of `lock_uptime_ratio`).
+            let total = bench
+                .gate_open_ms_after_lock
+                .saturating_add(bench.gate_closed_ms_after_lock);
+            if total > 0 {
+                r.quality_gate_uptime_ratio =
+                    Some(bench.gate_open_ms_after_lock as f32 / total as f32);
             }
+            // char_times length must match decoded chars after the
+            // .trim() above. Recompute char_times to match the trimmed
+            // transcript: drop leading/trailing entries that
+            // correspond to whitespace we just stripped.
+            let raw = bench.decoded_text;
+            let raw_chars: Vec<char> = raw.chars().collect();
+            let leading_ws = raw_chars.iter().take_while(|c| c.is_whitespace()).count();
+            let trailing_ws = raw_chars
+                .iter()
+                .rev()
+                .take_while(|c| c.is_whitespace())
+                .count();
+            let trimmed_len = raw_chars.len().saturating_sub(leading_ws + trailing_ws);
+            let trimmed_times: Vec<u32> = bench
+                .char_times_ms
+                .iter()
+                .copied()
+                .skip(leading_ws)
+                .take(trimmed_len)
+                .collect();
+            let transcript_owned = r.transcript.clone();
+            bench_latency::update_truth_metrics(
+                &transcript_owned,
+                &truth_upper,
+                &trimmed_times,
+                stable_n,
+                &mut r,
+            );
+            r.cer_vs_truth = bench_latency::character_error_rate(&r.transcript, &truth_upper);
+            r
         } else {
-            bench_latency::run_scenario(scen, cfg, chunk_ms, stable_n, label)?
+            let mut r = bench_latency::run_scenario(scen, cfg, chunk_ms, stable_n, label)?;
+            // run_scenario already sets decoder_path and CER but be
+            // defensive in case future refactors miss it.
+            if r.decoder_path.is_empty() {
+                r.decoder_path = "streaming-v2".to_string();
+            }
+            r
         };
         if json {
             // Compact NDJSON record for off-line comparison/aggregation.
@@ -1287,10 +1358,12 @@ fn run_bench_latency(
                 "type": "bench_result",
                 "label": r.config_label,
                 "scenario": r.scenario,
+                "decoder_path": r.decoder_path,
                 "cw_onset_ms": r.cw_onset_ms,
                 "stable_n": r.stable_n,
                 "t_first_pitch_update_ms": r.t_first_pitch_update_ms,
                 "t_first_locked_ms": r.t_first_locked_ms,
+                "t_first_foundation_lock_ms": r.t_first_foundation_lock_ms,
                 "t_first_char_ms": r.t_first_char_ms,
                 "t_first_correct_char_ms": r.t_first_correct_char_ms,
                 "t_stable_n_correct_ms": r.t_stable_n_correct_ms,
@@ -1300,8 +1373,14 @@ fn run_bench_latency(
                 "n_relock_cycles": r.n_relock_cycles,
                 "lock_uptime_ratio": r.lock_uptime_ratio,
                 "longest_unlocked_gap_ms": r.longest_unlocked_gap_ms,
-                "total_unlocked_ms_after_lock": r.total_unlocked_ms_after_lock,
+                "quality_gate_drops": r.quality_gate_drops,
+                "quality_gate_recoveries": r.quality_gate_recoveries,
+                "quality_gate_uptime_ratio": r.quality_gate_uptime_ratio,
+                "longest_quality_gate_closed_ms": r.longest_quality_gate_closed_ms,
                 "locked_pitch_hz": r.locked_pitch_hz,
+                "final_pitch_hz": r.final_pitch_hz,
+                "final_locked_wpm": r.final_locked_wpm,
+                "cer_vs_truth": r.cer_vs_truth,
                 "transcript": r.transcript,
                 "decoder_counters": r.decoder_counters.clone().unwrap_or(serde_json::Value::Null),
             });
@@ -1570,10 +1649,19 @@ fn run_profile_window(
     Ok(())
 }
 
-fn run_play_file(path: &std::path::Path, json: bool) -> Result<()> {
+fn run_play_file(path: &std::path::Path, json: bool, stdin_control: bool) -> Result<()> {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
     use std::time::Duration;
 
-    let playback = audio::play_output_file(path).context("starting audio playback")?;
+    let decoded =
+        audio::decode_file(path).with_context(|| format!("decoding {}", path.display()))?;
+    let input_rate = decoded.sample_rate;
+    let playback = audio::play_samples_with_control(decoded.samples, input_rate)
+        .context("starting audio playback")?;
+    let stop_flag = Arc::new(AtomicBool::new(false));
+    let control_rx = stdin_control.then(|| spawn_stdin_playback_control(Arc::clone(&stop_flag)));
+
     let mut emitter = json.then(json::JsonEmitter::new);
     if let Some(em) = emitter.as_mut() {
         em.emit(
@@ -1583,7 +1671,7 @@ fn run_play_file(path: &std::path::Path, json: bool) -> Result<()> {
                 "source": "playback",
                 "path": path.display().to_string(),
                 "device": playback.device_name,
-                "rate": playback.sample_rate,
+                "rate": playback.input_rate,
                 "duration": playback.duration_s,
             }),
         );
@@ -1597,9 +1685,44 @@ fn run_play_file(path: &std::path::Path, json: bool) -> Result<()> {
     }
 
     let mut last_position = -1.0_f32;
-    while !playback.is_finished() {
+    let mut last_paused = false;
+    while !playback.is_finished() && !stop_flag.load(Ordering::Relaxed) {
+        // Drain any pending control commands without blocking. Audio
+        // keeps playing on the cpal callback thread; we just react to
+        // the operator here.
+        if let Some(rx) = control_rx.as_ref() {
+            while let Ok(cmd) = rx.try_recv() {
+                match cmd {
+                    PlaybackControl::Pause => playback.pause(),
+                    PlaybackControl::Resume => playback.resume(),
+                    PlaybackControl::Seek(seconds) => {
+                        let _ = playback.seek_to_seconds(seconds);
+                    }
+                    PlaybackControl::Stop => stop_flag.store(true, Ordering::Relaxed),
+                    PlaybackControl::Config(_) => {
+                        // play-file has no decoder; ignore decoder config tweaks.
+                    }
+                }
+            }
+        }
+
         std::thread::sleep(Duration::from_millis(50));
-        let position = playback.position_s().min(playback.duration_s);
+
+        let paused_now = playback.is_paused();
+        if paused_now != last_paused {
+            last_paused = paused_now;
+            if let Some(em) = emitter.as_mut() {
+                em.emit(
+                    playback.position_seconds(),
+                    serde_json::json!({
+                        "type": "playback_state",
+                        "paused": paused_now,
+                    }),
+                );
+            }
+        }
+
+        let position = playback.position_seconds().min(playback.duration_s);
         if (position - last_position).abs() < 0.04 {
             continue;
         }
@@ -1617,7 +1740,7 @@ fn run_play_file(path: &std::path::Path, json: bool) -> Result<()> {
         }
     }
 
-    let end_position = playback.position_s().min(playback.duration_s);
+    let end_position = playback.position_seconds().min(playback.duration_s);
     if let Some(em) = emitter.as_mut() {
         em.emit(
             end_position,

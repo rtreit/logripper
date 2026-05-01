@@ -61,13 +61,17 @@ fn stretch(samples: &[f32], slowdown: f32) -> Vec<f32> {
         return Vec::new();
     }
 
+    let last = samples.len() - 1;
     let out_len = ((samples.len() as f32) * slowdown).ceil() as usize;
     let mut out = Vec::with_capacity(out_len);
     for i in 0..out_len {
         let src = i as f32 / slowdown;
-        let lo = src.floor() as usize;
-        let hi = (lo + 1).min(samples.len() - 1);
-        let frac = src - lo as f32;
+        // Clamp both indices: with large sample counts the f32 conversion of `i`
+        // loses precision (mantissa is 24 bits) and `floor()` can land at or past
+        // `samples.len()`, so we must guard `lo` not just `hi`.
+        let lo = (src.floor() as usize).min(last);
+        let hi = (lo + 1).min(last);
+        let frac = (src - lo as f32).clamp(0.0, 1.0);
         let interp = samples[lo] * (1.0 - frac) + samples[hi] * frac;
         out.push(interp);
     }
@@ -84,5 +88,18 @@ mod tests {
         let out = stretch(&input, 2.5);
         assert!(out.len() >= 10);
         assert!(out.iter().all(|v| (-1.0..=1.0).contains(v)));
+    }
+
+    #[test]
+    fn stretch_handles_large_inputs_without_panic() {
+        // f32 mantissa is 24 bits so indices > ~16M lose precision.
+        // Build an input large enough that `i as f32 / slowdown` can
+        // round to `samples.len()` and exercise the lo/hi clamp.
+        let len: usize = 14_233_578;
+        let input = vec![0.25_f32; len];
+        let out = stretch(&input, 2.5);
+        assert!(!out.is_empty());
+        // No panic = success; spot-check the tail value is finite.
+        assert!(out.last().copied().unwrap_or(f32::NAN).is_finite());
     }
 }
