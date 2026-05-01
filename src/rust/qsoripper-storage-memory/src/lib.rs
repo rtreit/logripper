@@ -5,7 +5,7 @@ use qsoripper_core::domain::lookup::normalize_callsign;
 use qsoripper_core::proto::qsoripper::domain::QsoRecord;
 use qsoripper_core::storage::{
     DeletedRecordsFilter, EngineStorage, LogbookCounts, LogbookStore, LookupSnapshot,
-    LookupSnapshotStore, QsoListQuery, QsoSortOrder, StorageError, SyncMetadata,
+    LookupSnapshotStore, QsoHistoryPage, QsoListQuery, QsoSortOrder, StorageError, SyncMetadata,
 };
 use std::cmp::Reverse;
 use std::collections::BTreeMap;
@@ -149,6 +149,54 @@ impl LogbookStore for MemoryStorage {
         };
 
         Ok(result)
+    }
+
+    async fn list_qso_history(
+        &self,
+        worked_callsign: &str,
+        limit: u32,
+    ) -> Result<QsoHistoryPage, StorageError> {
+        let normalized = normalize_callsign(worked_callsign);
+        if normalized.is_empty() {
+            return Ok(QsoHistoryPage::default());
+        }
+
+        let state = self.state.read().await;
+        let mut matching = state
+            .qsos
+            .values()
+            .filter(|record| {
+                record.deleted_at.is_none()
+                    && record.worked_callsign.eq_ignore_ascii_case(&normalized)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+
+        let total = u32::try_from(matching.len())
+            .map_err(|_| StorageError::backend("history total exceeds u32"))?;
+
+        if limit == 0 {
+            return Ok(QsoHistoryPage {
+                entries: Vec::new(),
+                total,
+            });
+        }
+
+        matching.sort_by_key(|record| {
+            (
+                Reverse(timestamp_to_millis(record.utc_timestamp.as_ref())),
+                Reverse(record.local_id.clone()),
+            )
+        });
+
+        let take = usize::try_from(limit)
+            .map_err(|_| StorageError::backend("limit does not fit in usize"))?;
+        matching.truncate(take);
+
+        Ok(QsoHistoryPage {
+            entries: matching,
+            total,
+        })
     }
 
     async fn qso_counts(&self) -> Result<LogbookCounts, StorageError> {
@@ -320,7 +368,7 @@ fn millis_to_timestamp(millis: i64) -> prost_types::Timestamp {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::panic)]
+#[allow(clippy::unwrap_used, clippy::panic, clippy::indexing_slicing)]
 mod tests {
     use super::MemoryStorage;
     use prost_types::Timestamp;
@@ -776,5 +824,71 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(purged, 0);
+    }
+
+    #[tokio::test]
+    async fn memory_storage_history_returns_exact_matches_only() {
+        let storage = MemoryStorage::new();
+        let logbook = storage.logbook();
+        for (id, worked, ts_secs) in [
+            ("q1", "K7ABC", 1_700_000_000_i64),
+            ("q2", "K7AB", 1_700_001_000),
+            ("q3", "K7ABCD", 1_700_002_000),
+            ("q4", "k7abc", 1_700_003_000),
+        ] {
+            let mut qso = QsoRecordBuilder::new("W1AW", worked)
+                .timestamp(Timestamp {
+                    seconds: ts_secs,
+                    nanos: 0,
+                })
+                .build();
+            qso.local_id = id.to_string();
+            logbook.insert_qso(&qso).await.unwrap();
+        }
+
+        let page = logbook.list_qso_history("k7abc", 10).await.unwrap();
+        assert_eq!(page.total, 2);
+        assert_eq!(page.entries.len(), 2);
+        assert_eq!(page.entries[0].local_id, "q4");
+        assert_eq!(page.entries[1].local_id, "q1");
+    }
+
+    #[tokio::test]
+    async fn memory_storage_history_excludes_soft_deleted_and_respects_limit() {
+        let storage = MemoryStorage::new();
+        let logbook = storage.logbook();
+        for (id, ts_secs) in [
+            ("a", 1_700_000_000_i64),
+            ("b", 1_700_001_000),
+            ("c", 1_700_002_000),
+            ("d", 1_700_003_000),
+        ] {
+            let mut qso = QsoRecordBuilder::new("W1AW", "K7ABC")
+                .timestamp(Timestamp {
+                    seconds: ts_secs,
+                    nanos: 0,
+                })
+                .build();
+            qso.local_id = id.to_string();
+            logbook.insert_qso(&qso).await.unwrap();
+        }
+        logbook
+            .soft_delete_qso("c", 1_700_500_000_000, false)
+            .await
+            .unwrap();
+
+        let page = logbook.list_qso_history("K7ABC", 2).await.unwrap();
+        assert_eq!(page.total, 3);
+        assert_eq!(page.entries.len(), 2);
+        assert_eq!(page.entries[0].local_id, "d");
+        assert_eq!(page.entries[1].local_id, "b");
+
+        let zero = logbook.list_qso_history("K7ABC", 0).await.unwrap();
+        assert_eq!(zero.total, 3);
+        assert!(zero.entries.is_empty());
+
+        let none = logbook.list_qso_history("NEVER", 5).await.unwrap();
+        assert_eq!(none.total, 0);
+        assert!(none.entries.is_empty());
     }
 }

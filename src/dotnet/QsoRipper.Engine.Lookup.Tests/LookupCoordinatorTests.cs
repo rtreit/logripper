@@ -1,5 +1,7 @@
+using Google.Protobuf.WellKnownTypes;
 using QsoRipper.Domain;
 using QsoRipper.Engine.Lookup.Qrz;
+using QsoRipper.Engine.Storage;
 
 namespace QsoRipper.Engine.Lookup.Tests;
 
@@ -260,5 +262,167 @@ public sealed class LookupCoordinatorTests
 
         Assert.Equal(ProviderLookupState.NotFound, result.State);
         Assert.Equal("disabled", provider.ProviderName);
+    }
+
+    [Fact]
+    public async Task Lookup_PopulatesPriorQsosFromLogbook()
+    {
+        var provider = new FakeProvider();
+        provider.Enqueue(FoundResult("W1AW"));
+        var logbook = new FakeLogbookStore();
+        logbook.Add(MakeQso("h1", "W1AW", Band._20M, Mode.Ssb, 1_700_000_000));
+        logbook.Add(MakeQso("h2", "W1AW", Band._40M, Mode.Cw, 1_700_001_000));
+        logbook.Add(MakeQso("h3", "K7XYZ", Band._20M, Mode.Ssb, 1_700_002_000));
+        var coordinator = new LookupCoordinator(provider, logbookStore: logbook);
+
+        var result = await coordinator.LookupAsync("W1AW");
+
+        Assert.Equal(LookupState.Found, result.State);
+        Assert.Equal(2u, result.PriorQsoTotalCount);
+        Assert.Equal(2, result.PriorQsos.Count);
+        Assert.Equal("h2", result.PriorQsos[0].LocalId);
+        Assert.Equal("h1", result.PriorQsos[1].LocalId);
+        Assert.Equal(Band._40M, result.PriorQsos[0].Band);
+    }
+
+    [Fact]
+    public async Task Lookup_NotFound_StillPopulatesPriorQsosFromLogbook()
+    {
+        var provider = new FakeProvider();
+        provider.Enqueue(new ProviderLookupResult { State = ProviderLookupState.NotFound });
+        var logbook = new FakeLogbookStore();
+        logbook.Add(MakeQso("h1", "W1AW", Band._20M, Mode.Ssb, 1_700_000_000));
+        var coordinator = new LookupCoordinator(provider, logbookStore: logbook);
+
+        var result = await coordinator.LookupAsync("W1AW");
+
+        Assert.Equal(LookupState.NotFound, result.State);
+        Assert.Equal(1u, result.PriorQsoTotalCount);
+        Assert.Single(result.PriorQsos);
+    }
+
+    [Fact]
+    public async Task GetCached_PopulatesPriorQsosOnCacheMiss()
+    {
+        var provider = new FakeProvider();
+        var logbook = new FakeLogbookStore();
+        logbook.Add(MakeQso("h1", "W1AW", Band._20M, Mode.Ssb, 1_700_000_000));
+        var coordinator = new LookupCoordinator(provider, logbookStore: logbook);
+
+        var result = await coordinator.GetCachedAsync("W1AW");
+
+        Assert.Equal(LookupState.NotFound, result.State);
+        Assert.Equal(1u, result.PriorQsoTotalCount);
+        Assert.Single(result.PriorQsos);
+    }
+
+    [Fact]
+    public async Task StreamLookup_DoesNotAttachHistoryToLoadingState()
+    {
+        var provider = new FakeProvider();
+        provider.Enqueue(FoundResult("W1AW"));
+        var logbook = new FakeLogbookStore();
+        logbook.Add(MakeQso("h1", "W1AW", Band._20M, Mode.Ssb, 1_700_000_000));
+        var coordinator = new LookupCoordinator(provider, logbookStore: logbook);
+
+        var updates = await coordinator.StreamLookupAsync("W1AW");
+
+        Assert.True(updates.Length >= 2);
+        var loading = updates[0];
+        Assert.Equal(LookupState.Loading, loading.State);
+        Assert.Empty(loading.PriorQsos);
+        Assert.Equal(0u, loading.PriorQsoTotalCount);
+
+        var final = updates[^1];
+        Assert.Equal(LookupState.Found, final.State);
+        Assert.Equal(1u, final.PriorQsoTotalCount);
+        Assert.Single(final.PriorQsos);
+    }
+
+    [Fact]
+    public async Task Lookup_DoesNotPersistPriorQsosToSnapshotStore()
+    {
+        var provider = new FakeProvider();
+        provider.Enqueue(FoundResult("W1AW"));
+        var logbook = new FakeLogbookStore();
+        logbook.Add(MakeQso("h1", "W1AW", Band._20M, Mode.Ssb, 1_700_000_000));
+        logbook.Add(MakeQso("h2", "W1AW", Band._40M, Mode.Cw, 1_700_001_000));
+        var snapshots = new InMemoryLookupSnapshotStore();
+        var coordinator = new LookupCoordinator(provider, snapshots, logbookStore: logbook);
+
+        var result = await coordinator.LookupAsync("W1AW");
+
+        Assert.Equal(2, result.PriorQsos.Count);
+
+        var snapshot = await snapshots.GetAsync("W1AW");
+        Assert.NotNull(snapshot);
+        Assert.Empty(snapshot!.Result.PriorQsos);
+        Assert.Equal(0u, snapshot.Result.PriorQsoTotalCount);
+    }
+
+    private sealed class InMemoryLookupSnapshotStore : ILookupSnapshotStore
+    {
+        private readonly Dictionary<string, LookupSnapshot> _snapshots = new(StringComparer.OrdinalIgnoreCase);
+
+        public ValueTask UpsertAsync(LookupSnapshot snapshot)
+        {
+            _snapshots[snapshot.Callsign] = snapshot;
+            return ValueTask.CompletedTask;
+        }
+
+        public ValueTask<LookupSnapshot?> GetAsync(string callsign)
+        {
+            _snapshots.TryGetValue(callsign, out var snapshot);
+            return ValueTask.FromResult<LookupSnapshot?>(snapshot);
+        }
+
+        public ValueTask<bool> DeleteAsync(string callsign)
+        {
+            return ValueTask.FromResult(_snapshots.Remove(callsign));
+        }
+    }
+
+    private static QsoRecord MakeQso(string localId, string worked, Band band, Mode mode, long utcSeconds) =>
+        new()
+        {
+            LocalId = localId,
+            StationCallsign = "K7TEST",
+            WorkedCallsign = worked,
+            Band = band,
+            Mode = mode,
+            UtcTimestamp = new Timestamp { Seconds = utcSeconds },
+        };
+
+    private sealed class FakeLogbookStore : ILogbookStore
+    {
+        private readonly List<QsoRecord> _qsos = new();
+
+        public void Add(QsoRecord qso) => _qsos.Add(qso);
+
+        public ValueTask InsertQsoAsync(QsoRecord qso) { _qsos.Add(qso); return ValueTask.CompletedTask; }
+        public ValueTask<bool> UpdateQsoAsync(QsoRecord qso) => ValueTask.FromResult(false);
+        public ValueTask<bool> DeleteQsoAsync(string localId) => ValueTask.FromResult(false);
+        public ValueTask<bool> SoftDeleteQsoAsync(string localId, DateTimeOffset deletedAt, bool pendingRemoteDelete) => ValueTask.FromResult(false);
+        public ValueTask<bool> RestoreQsoAsync(string localId) => ValueTask.FromResult(false);
+        public ValueTask<QsoRecord?> GetQsoAsync(string localId) => ValueTask.FromResult<QsoRecord?>(null);
+        public ValueTask<IReadOnlyList<QsoRecord>> ListQsosAsync(QsoListQuery query) =>
+            ValueTask.FromResult<IReadOnlyList<QsoRecord>>(_qsos);
+        public ValueTask<LogbookCounts> GetCountsAsync() => ValueTask.FromResult(new LogbookCounts(_qsos.Count, 0));
+        public ValueTask<int> PurgeDeletedQsosAsync(IReadOnlyList<string>? localIds, DateTimeOffset? olderThan) => ValueTask.FromResult(0);
+        public ValueTask<SyncMetadata> GetSyncMetadataAsync() => ValueTask.FromResult(new SyncMetadata());
+        public ValueTask UpsertSyncMetadataAsync(SyncMetadata metadata) => ValueTask.CompletedTask;
+
+        public ValueTask<QsoHistoryPage> ListQsoHistoryAsync(string workedCallsign, int limit)
+        {
+            var matches = _qsos
+                .Where(q => string.Equals(q.WorkedCallsign, workedCallsign, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+            var ordered = matches
+                .OrderByDescending(q => q.UtcTimestamp?.Seconds ?? 0)
+                .ThenByDescending(q => q.LocalId, StringComparer.Ordinal)
+                .Take(Math.Max(0, limit))
+                .ToList();
+            return ValueTask.FromResult(new QsoHistoryPage(ordered, matches.Count));
+        }
     }
 }

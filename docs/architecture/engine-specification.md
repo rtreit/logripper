@@ -333,6 +333,7 @@ Performs a single callsign lookup.
 4. Cache the result in the `lookup_snapshots` store with an expiry timestamp.
 5. Enrich with DXCC entity data if available.
 6. Return a `LookupResult` containing the `CallsignRecord`, lookup state, latency, and cache hit status.
+7. Populate `prior_qsos` and `prior_qso_total_count` from the local logbook for every non-`Loading` result (`Found`, `NotFound`, `Stale`, cache hit, batch entry). See [3.3.1 Prior QSO history](#331-prior-qso-history) below.
 
 Desktop clients may use this RPC for both fast-entry and advanced QSO-card workflows. Those clients should debounce user typing and cancel stale in-flight UI requests, but they must still route callsign enrichment through this shared lookup service rather than duplicating QRZ XML logic in the UI layer.
 
@@ -413,6 +414,19 @@ Performs lookups for multiple callsigns in a single request.
 - Per-callsign errors are reported in individual `LookupResult` entries, not as top-level gRPC errors.
 - `INTERNAL` — orchestration failure (e.g., a worker task panicked) before a per-callsign
   result could be produced.
+
+#### 3.3.1 Prior QSO history
+
+Every `LookupResult` returned by `Lookup`, `StreamLookup`, `GetCachedCallsign`, and `BatchLookup` (except the initial streaming `Loading` placeholder) must include the operator's prior contacts with the queried callsign:
+
+- `prior_qsos` — most-recent-first list of `QsoHistoryEntry` records, capped at the engine's history limit (the reference implementations use 25). Each entry carries `local_id`, `utc_timestamp`, `band`, `mode`, `submode`, `frequency_hz`, `frequency_rx_hz`, and `contest_id`.
+- `prior_qso_total_count` — total active prior QSOs with the worked callsign regardless of the cap, so clients can render "47 prior contacts (showing 25)".
+
+History is recomputed on every response (never cached in the lookup snapshot store) so manual logbook edits are reflected immediately. The query is an exact, case-insensitive match on `worked_callsign` against the active (not soft-deleted) logbook rows; a substring match on `worked_callsign` would silently produce wrong history (`K7A` matching `K7AB`). The `Loading` streaming placeholder must NOT carry history; populating it would defeat its low-latency purpose.
+
+Storage backends expose this via a dedicated `list_qso_history(worked_callsign, limit) -> { entries, total }` query rather than overloading the existing list-with-filter API. SQLite implementations should reuse the `idx_qsos_worked_callsign` index.
+
+The history shape is forward-compatible with future contest-mode dupe checking: `(band, mode, contest_id)` is sufficient for every common contest dupe rule, and `contest_id` lets a future contest engine partition current-contest contacts from past contacts. Contest mode is not part of this contract; when added later it will arrive as additive `LookupRequest` and `LookupResult` fields with no break to existing clients.
 
 ### 3.4 RigControlService
 
@@ -1570,6 +1584,7 @@ A conformant engine must pass all of the following scenarios:
 | `proto/domain/callsign_record.proto` | `CallsignRecord` | Normalized callsign lookup result |
 | `proto/domain/dxcc_entity.proto` | `DxccEntity` | DXCC entity reference data |
 | `proto/domain/lookup_result.proto` | `LookupResult` | Lookup outcome with metadata |
+| `proto/domain/qso_history_entry.proto` | `QsoHistoryEntry` | Compact prior-QSO summary returned with lookup results |
 | `proto/domain/station_profile.proto` | `StationProfile` | Durable station defaults |
 | `proto/domain/station_snapshot.proto` | `StationSnapshot` | Immutable per-QSO station capture |
 | `proto/domain/rig_snapshot.proto` | `RigSnapshot` | Rig frequency/mode snapshot |

@@ -194,6 +194,41 @@ public sealed class MemoryStorage : IEngineStorage, ILogbookStore, ILookupSnapsh
     }
 
     /// <inheritdoc />
+    public ValueTask<QsoHistoryPage> ListQsoHistoryAsync(string workedCallsign, int limit)
+    {
+        ArgumentNullException.ThrowIfNull(workedCallsign);
+
+        var normalized = workedCallsign.Trim();
+        if (normalized.Length == 0)
+        {
+            return new ValueTask<QsoHistoryPage>(QsoHistoryPage.Empty);
+        }
+
+        lock (_lock)
+        {
+            var matching = _qsos.Values
+                .Where(q => q.DeletedAt is null
+                    && string.Equals(q.WorkedCallsign, normalized, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+            var total = matching.Count;
+            if (limit <= 0 || total == 0)
+            {
+                return new ValueTask<QsoHistoryPage>(new QsoHistoryPage(Array.Empty<QsoRecord>(), total));
+            }
+
+            var ordered = matching
+                .OrderByDescending(q => ToOffset(q.UtcTimestamp))
+                .ThenByDescending(q => q.LocalId, StringComparer.Ordinal)
+                .Take(limit)
+                .Select(q => q.Clone())
+                .ToArray();
+
+            return new ValueTask<QsoHistoryPage>(new QsoHistoryPage(ordered, total));
+        }
+    }
+
+    /// <inheritdoc />
     public ValueTask<int> PurgeDeletedQsosAsync(IReadOnlyList<string>? localIds, DateTimeOffset? olderThan)
     {
         lock (_lock)

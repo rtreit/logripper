@@ -105,7 +105,11 @@ Wraps the async state machine for callsign lookups:
 Loading → Found | NotFound | Error | Stale | Cancelled
 ```
 
-Includes: state enum, optional CallsignRecord, cache_hit flag, lookup_latency_ms.
+Includes: state enum, optional CallsignRecord, cache_hit flag, lookup_latency_ms, plus prior-QSO history (`prior_qsos` and `prior_qso_total_count`) populated from the local logbook on every non-`Loading` result.
+
+### QsoHistoryEntry (`qso_history_entry.proto`)
+
+Compact summary of a prior QSO with the queried callsign, returned alongside `LookupResult` so UIs can show a "worked before" badge without a second round-trip. Fields are a strict subset of `QsoRecord`: `local_id`, `utc_timestamp`, `band`, `mode`, `submode`, `frequency_hz`, `frequency_rx_hz`, `contest_id`. The shape covers both normal-mode badges and future contest-mode dupe rules — `(band, mode, contest_id)` is sufficient for every common contest dupe rule, and `contest_id` lets a future contest engine differentiate current-contest contacts from past contacts. Contest mode is not implemented yet; this shape is forward-compatible so adding it later is purely additive.
 
 ### Supporting Enums
 

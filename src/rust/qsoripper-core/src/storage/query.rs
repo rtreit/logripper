@@ -1,6 +1,6 @@
 //! Query and snapshot types shared across storage adapters.
 
-use crate::proto::qsoripper::domain::{Band, LookupResult, Mode};
+use crate::proto::qsoripper::domain::{Band, LookupResult, Mode, QsoRecord};
 use prost_types::Timestamp;
 
 /// Soft-delete visibility filter for QSO list queries.
@@ -84,6 +84,16 @@ pub struct SyncMetadata {
     pub last_sync: Option<Timestamp>,
     /// Remote logbook owner reported by QRZ.
     pub qrz_logbook_owner: Option<String>,
+}
+
+/// A page of prior QSOs for a worked callsign, plus the unbounded total
+/// active-row count regardless of the requested limit.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct QsoHistoryPage {
+    /// Most-recent-first prior QSOs (capped by the caller's limit).
+    pub entries: Vec<QsoRecord>,
+    /// Total number of active prior QSOs regardless of `limit`.
+    pub total: u32,
 }
 
 /// A persisted callsign lookup snapshot stored below the hot in-memory cache.

@@ -696,5 +696,59 @@ public sealed class MemoryStorageTests
         var purged = await _storage.Logbook.PurgeDeletedQsosAsync(null, null);
         Assert.Equal(0, purged);
     }
+
+    [Fact]
+    public async Task ListQsoHistory_returns_exact_match_excludes_soft_deleted_and_orders_recent_first()
+    {
+        await _storage.Logbook.InsertQsoAsync(MakeQso("a", "K7ABC", Band._20M, Mode.Ssb, "2026-01-01T00:00:00Z"));
+        await _storage.Logbook.InsertQsoAsync(MakeQso("b", "K7ABC", Band._40M, Mode.Cw, "2026-02-01T00:00:00Z"));
+        await _storage.Logbook.InsertQsoAsync(MakeQso("c", "K7ABCD", Band._20M, Mode.Ssb, "2026-02-15T00:00:00Z"));
+        await _storage.Logbook.InsertQsoAsync(MakeQso("d", "k7abc", Band._15M, Mode.Ft8, "2026-03-01T00:00:00Z"));
+        await _storage.Logbook.SoftDeleteQsoAsync("b", DateTimeOffset.UtcNow, pendingRemoteDelete: false);
+
+        var page = await _storage.Logbook.ListQsoHistoryAsync("k7abc", limit: 10);
+
+        Assert.Equal(2, page.Total);
+        Assert.Equal(2, page.Entries.Count);
+        Assert.Equal("d", page.Entries[0].LocalId);
+        Assert.Equal("a", page.Entries[1].LocalId);
+    }
+
+    [Fact]
+    public async Task ListQsoHistory_caps_entries_at_limit_but_total_reflects_full_count()
+    {
+        await _storage.Logbook.InsertQsoAsync(MakeQso("a", "K7ABC", Band._20M, Mode.Ssb, "2026-01-01T00:00:00Z"));
+        await _storage.Logbook.InsertQsoAsync(MakeQso("b", "K7ABC", Band._40M, Mode.Cw, "2026-02-01T00:00:00Z"));
+        await _storage.Logbook.InsertQsoAsync(MakeQso("c", "K7ABC", Band._15M, Mode.Ft8, "2026-03-01T00:00:00Z"));
+
+        var page = await _storage.Logbook.ListQsoHistoryAsync("K7ABC", limit: 1);
+
+        Assert.Equal(3, page.Total);
+        Assert.Single(page.Entries);
+        Assert.Equal("c", page.Entries[0].LocalId);
+    }
+
+    [Fact]
+    public async Task ListQsoHistory_returns_empty_for_unknown_callsign()
+    {
+        await _storage.Logbook.InsertQsoAsync(MakeQso("a", "K7ABC", Band._20M, Mode.Ssb, "2026-01-01T00:00:00Z"));
+
+        var page = await _storage.Logbook.ListQsoHistoryAsync("NEVER", limit: 10);
+
+        Assert.Equal(0, page.Total);
+        Assert.Empty(page.Entries);
+    }
+
+    [Fact]
+    public async Task ListQsoHistory_zero_limit_returns_total_with_no_entries()
+    {
+        await _storage.Logbook.InsertQsoAsync(MakeQso("a", "K7ABC", Band._20M, Mode.Ssb, "2026-01-01T00:00:00Z"));
+        await _storage.Logbook.InsertQsoAsync(MakeQso("b", "K7ABC", Band._40M, Mode.Cw, "2026-02-01T00:00:00Z"));
+
+        var page = await _storage.Logbook.ListQsoHistoryAsync("K7ABC", limit: 0);
+
+        Assert.Equal(2, page.Total);
+        Assert.Empty(page.Entries);
+    }
 }
 #pragma warning restore CA1707

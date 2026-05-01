@@ -7,5 +7,6 @@ mod query;
 pub use error::StorageError;
 pub use ports::{EngineStorage, LogbookStore, LookupSnapshotStore};
 pub use query::{
-    DeletedRecordsFilter, LogbookCounts, LookupSnapshot, QsoListQuery, QsoSortOrder, SyncMetadata,
+    DeletedRecordsFilter, LogbookCounts, LookupSnapshot, QsoHistoryPage, QsoListQuery,
+    QsoSortOrder, SyncMetadata,
 };

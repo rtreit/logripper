@@ -1,6 +1,6 @@
 //! Builder for configuring the `SQLite` storage adapter.
 
-use crate::migrations::{INITIAL_SCHEMA, SOFT_DELETE_MIGRATION};
+use crate::migrations::{HISTORY_INDEX_MIGRATION, INITIAL_SCHEMA, SOFT_DELETE_MIGRATION};
 use crate::SqliteStorage;
 use qsoripper_core::storage::StorageError;
 use sqlite::{Connection, ConnectionThreadSafe, State, Value};
@@ -84,6 +84,9 @@ impl SqliteStorageBuilder {
             .execute(INITIAL_SCHEMA)
             .map_err(map_sqlite_error)?;
         apply_soft_delete_migration(&connection)?;
+        connection
+            .execute(HISTORY_INDEX_MIGRATION)
+            .map_err(map_sqlite_error)?;
 
         Ok(SqliteStorage {
             connection: Mutex::new(connection),

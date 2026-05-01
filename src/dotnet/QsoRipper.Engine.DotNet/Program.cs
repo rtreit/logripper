@@ -117,7 +117,7 @@ static ILookupCoordinator CreateLookupCoordinator(IEngineStorage storage, Shared
         provider = new DisabledCallsignProvider();
     }
 
-    return new LookupCoordinator(provider, storage.LookupSnapshots);
+    return new LookupCoordinator(provider, storage.LookupSnapshots, logbookStore: storage.Logbook);
 }
 
 static RigControlMonitor? CreateRigControlMonitor()

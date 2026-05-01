@@ -874,6 +874,90 @@ public sealed class SqliteStorageTests : IDisposable
     }
 
     [Fact]
+    public async Task ListQsoHistory_exact_match_excludes_soft_deleted_and_caps_entries()
+    {
+        await _storage.Logbook.InsertQsoAsync(MakeQso("a", "K7ABC", Band._20M, Mode.Ssb, "2026-01-01T00:00:00Z"));
+        await _storage.Logbook.InsertQsoAsync(MakeQso("b", "K7ABC", Band._40M, Mode.Cw, "2026-02-01T00:00:00Z"));
+        await _storage.Logbook.InsertQsoAsync(MakeQso("c", "K7ABCD", Band._20M, Mode.Ssb, "2026-02-15T00:00:00Z"));
+        await _storage.Logbook.InsertQsoAsync(MakeQso("d", "k7abc", Band._15M, Mode.Ft8, "2026-03-01T00:00:00Z"));
+        await _storage.Logbook.SoftDeleteQsoAsync("b", DateTimeOffset.UtcNow, pendingRemoteDelete: false);
+
+        var page = await _storage.Logbook.ListQsoHistoryAsync("k7abc", limit: 10);
+        Assert.Equal(2, page.Total);
+        Assert.Equal(2, page.Entries.Count);
+        Assert.Equal("d", page.Entries[0].LocalId);
+        Assert.Equal("a", page.Entries[1].LocalId);
+
+        var limited = await _storage.Logbook.ListQsoHistoryAsync("K7ABC", limit: 1);
+        Assert.Equal(2, limited.Total);
+        Assert.Single(limited.Entries);
+        Assert.Equal("d", limited.Entries[0].LocalId);
+
+        var zero = await _storage.Logbook.ListQsoHistoryAsync("K7ABC", limit: 0);
+        Assert.Equal(2, zero.Total);
+        Assert.Empty(zero.Entries);
+
+        var none = await _storage.Logbook.ListQsoHistoryAsync("NEVER", limit: 5);
+        Assert.Equal(0, none.Total);
+        Assert.Empty(none.Entries);
+    }
+
+    [Fact]
+    public async Task ListQsoHistory_query_uses_expression_index()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"qsoripper-history-index-{Guid.NewGuid():N}.db");
+        try
+        {
+            using (var storage = new SqliteStorageBuilder().Path(path).Build())
+            {
+                for (var i = 0; i < 32; i++)
+                {
+                    var qso = MakeQso(
+                        $"row-{i}",
+                        $"K7AB{i}",
+                        Band._20M,
+                        Mode.Ssb,
+                        $"2026-01-{(i % 28) + 1:D2}T00:00:00Z");
+                    await storage.Logbook.InsertQsoAsync(qso);
+                }
+            }
+
+            using (var connection = new SqliteConnection($"Data Source={path};Pooling=False"))
+            {
+                connection.Open();
+                using var command = connection.CreateCommand();
+                command.CommandText =
+                    "EXPLAIN QUERY PLAN " +
+                    "SELECT record FROM qsos " +
+                    "WHERE deleted_at_ms IS NULL " +
+                    "AND UPPER(worked_callsign) = $cs " +
+                    "ORDER BY utc_timestamp_ms DESC, local_id DESC " +
+                    "LIMIT $lim";
+                command.Parameters.AddWithValue("$cs", "K7AB0");
+                command.Parameters.AddWithValue("$lim", 10);
+
+                var plan = new System.Text.StringBuilder();
+                using var reader = command.ExecuteReader();
+                while (reader.Read())
+                {
+                    plan.AppendLine(reader.GetString(reader.GetOrdinal("detail")));
+                }
+
+                Assert.Contains("idx_qsos_worked_callsign_upper", plan.ToString(), StringComparison.Ordinal);
+            }
+
+            SqliteConnection.ClearAllPools();
+        }
+        finally
+        {
+            if (File.Exists(path))
+            {
+                File.Delete(path);
+            }
+        }
+    }
+
+    [Fact]
     public async Task Migration_idempotent_when_storage_reopens_existing_file()
     {
         var path = Path.Combine(Path.GetTempPath(), $"qsoripper-soft-delete-{Guid.NewGuid():N}.db");

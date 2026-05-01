@@ -8,7 +8,7 @@ use qsoripper_core::domain::lookup::normalize_callsign;
 use qsoripper_core::proto::qsoripper::domain::{LookupResult, QsoRecord, SyncStatus};
 use qsoripper_core::storage::{
     DeletedRecordsFilter, EngineStorage, LogbookCounts, LogbookStore, LookupSnapshot,
-    LookupSnapshotStore, QsoListQuery, QsoSortOrder, StorageError, SyncMetadata,
+    LookupSnapshotStore, QsoHistoryPage, QsoListQuery, QsoSortOrder, StorageError, SyncMetadata,
 };
 use sqlite::{ConnectionThreadSafe, ReadableWithIndex, State, Statement, Value};
 use std::sync::{Mutex, MutexGuard};
@@ -261,6 +261,60 @@ impl LogbookStore for SqliteStorage {
             .into_iter()
             .map(|payload| decode_qso(&payload))
             .collect()
+    }
+
+    async fn list_qso_history(
+        &self,
+        worked_callsign: &str,
+        limit: u32,
+    ) -> Result<QsoHistoryPage, StorageError> {
+        let normalized = normalize_callsign(worked_callsign);
+        if normalized.is_empty() {
+            return Ok(QsoHistoryPage::default());
+        }
+
+        let connection = self.connection()?;
+        let total_i64 = query_optional::<i64>(
+            &connection,
+            "SELECT COUNT(*) FROM qsos \
+             WHERE deleted_at_ms IS NULL \
+             AND UPPER(worked_callsign) = ?",
+            &[Value::String(normalized.clone())],
+            0,
+        )
+        .map_err(map_sqlite_error)?
+        .unwrap_or(0);
+        let total = u32::try_from(total_i64)
+            .map_err(|_| StorageError::backend("history total exceeds u32"))?;
+
+        if limit == 0 || total == 0 {
+            return Ok(QsoHistoryPage {
+                entries: Vec::new(),
+                total,
+            });
+        }
+
+        let mut statement = prepare_statement(
+            &connection,
+            "SELECT record FROM qsos \
+             WHERE deleted_at_ms IS NULL \
+             AND UPPER(worked_callsign) = ? \
+             ORDER BY utc_timestamp_ms DESC, local_id DESC \
+             LIMIT ?",
+            &[Value::String(normalized), Value::Integer(i64::from(limit))],
+        )
+        .map_err(map_sqlite_error)?;
+        let mut payloads = Vec::new();
+        while let State::Row = statement.next().map_err(map_sqlite_error)? {
+            payloads.push(statement.read::<Vec<u8>, _>(0).map_err(map_sqlite_error)?);
+        }
+
+        let entries = payloads
+            .into_iter()
+            .map(|payload| decode_qso(&payload))
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(QsoHistoryPage { entries, total })
     }
 
     async fn qso_counts(&self) -> Result<LogbookCounts, StorageError> {
@@ -549,7 +603,7 @@ fn millis_to_timestamp(millis: Option<i64>) -> Option<prost_types::Timestamp> {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::panic)]
+#[allow(clippy::unwrap_used, clippy::panic, clippy::indexing_slicing)]
 mod tests {
     use super::SqliteStorageBuilder;
     use prost_types::Timestamp;
@@ -559,7 +613,7 @@ mod tests {
     use qsoripper_core::storage::{
         EngineStorage, LookupSnapshot, LookupSnapshotStore, QsoListQuery,
     };
-    use sqlite::Connection;
+    use sqlite::{Connection, State, Value};
     use std::fs;
     use std::path::PathBuf;
     use std::sync::Arc;
@@ -935,5 +989,102 @@ mod tests {
         let loaded = engine.get_qso(&stored.local_id).await.unwrap();
 
         assert_eq!(loaded.cw_decode_rx_wpm, None);
+    }
+
+    #[tokio::test]
+    async fn sqlite_storage_history_exact_match_excludes_soft_deleted() {
+        let storage: Arc<dyn EngineStorage> =
+            Arc::new(SqliteStorageBuilder::new().in_memory().build().unwrap());
+        let logbook = storage.logbook();
+
+        for (id, worked, ts_secs) in [
+            ("a", "K7ABC", 1_700_000_000_i64),
+            ("b", "K7ABC", 1_700_001_000),
+            ("c", "K7ABCD", 1_700_002_000),
+            ("d", "k7abc", 1_700_003_000),
+        ] {
+            let mut qso = QsoRecordBuilder::new("W1AW", worked)
+                .band(Band::Band20m)
+                .mode(Mode::Ssb)
+                .timestamp(Timestamp {
+                    seconds: ts_secs,
+                    nanos: 0,
+                })
+                .build();
+            qso.local_id = id.to_string();
+            logbook.insert_qso(&qso).await.unwrap();
+        }
+        logbook
+            .soft_delete_qso("b", 1_700_900_000_000, false)
+            .await
+            .unwrap();
+
+        let page = logbook.list_qso_history("k7abc", 10).await.unwrap();
+        assert_eq!(page.total, 2);
+        assert_eq!(page.entries.len(), 2);
+        assert_eq!(page.entries[0].local_id, "d");
+        assert_eq!(page.entries[1].local_id, "a");
+
+        let limited = logbook.list_qso_history("K7ABC", 1).await.unwrap();
+        assert_eq!(limited.total, 2);
+        assert_eq!(limited.entries.len(), 1);
+        assert_eq!(limited.entries[0].local_id, "d");
+
+        let zero = logbook.list_qso_history("K7ABC", 0).await.unwrap();
+        assert_eq!(zero.total, 2);
+        assert!(zero.entries.is_empty());
+
+        let none = logbook.list_qso_history("NEVER", 5).await.unwrap();
+        assert_eq!(none.total, 0);
+        assert!(none.entries.is_empty());
+    }
+
+    #[tokio::test]
+    async fn sqlite_storage_history_query_uses_expression_index() {
+        let storage = Arc::new(SqliteStorageBuilder::new().in_memory().build().unwrap());
+        // Seed enough rows that the planner prefers the expression index over
+        // a full scan. Without enough rows, SQLite may pick SCAN even when an
+        // index is available, since the cost difference is negligible for tiny
+        // tables.
+        for i in 0..32 {
+            let mut qso = QsoRecordBuilder::new("W1AW", format!("K7AB{i}"))
+                .band(Band::Band20m)
+                .mode(Mode::Ssb)
+                .timestamp(Timestamp {
+                    seconds: 1_700_000_000 + i64::from(i),
+                    nanos: 0,
+                })
+                .build();
+            qso.local_id = format!("row-{i}");
+            storage.logbook().insert_qso(&qso).await.unwrap();
+        }
+
+        let connection = storage.connection().unwrap();
+        let mut statement = connection
+            .prepare(
+                "EXPLAIN QUERY PLAN \
+                 SELECT record FROM qsos \
+                 WHERE deleted_at_ms IS NULL \
+                 AND UPPER(worked_callsign) = ? \
+                 ORDER BY utc_timestamp_ms DESC, local_id DESC \
+                 LIMIT ?",
+            )
+            .unwrap();
+        statement
+            .bind((1, Value::String("K7AB0".to_string())))
+            .unwrap();
+        statement.bind((2, Value::Integer(10))).unwrap();
+
+        let mut plan = String::new();
+        while let State::Row = statement.next().unwrap() {
+            let detail = statement.read::<String, _>("detail").unwrap();
+            plan.push_str(&detail);
+            plan.push('\n');
+        }
+
+        assert!(
+            plan.contains("idx_qsos_worked_callsign_upper"),
+            "expected query plan to use idx_qsos_worked_callsign_upper, got:\n{plan}"
+        );
     }
 }
