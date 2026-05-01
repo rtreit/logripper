@@ -1266,6 +1266,11 @@ mod tests {
             } else {
                 20.0
             },
+            wpm_kmeans: if dot_seconds > 0.0 {
+                1.2 / dot_seconds
+            } else {
+                20.0
+            },
             centroid_dot: dot_seconds,
             centroid_dah: dot_seconds * 3.0,
             locked_wpm: if locked { Some(20.0) } else { None },

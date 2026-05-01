@@ -1,0 +1,13 @@
+[package]
+name = "wpm-measure"
+version = "0.0.0"
+edition = "2021"
+
+[dependencies]
+hound = "3"
+
+[[bin]]
+name = "wpm-measure"
+path = "main.rs"
+
+[workspace]

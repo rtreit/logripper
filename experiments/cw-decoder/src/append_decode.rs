@@ -425,6 +425,7 @@ mod tests {
             on_durations: vec![],
             dot_seconds: 0.04,
             wpm: 30.0,
+            wpm_kmeans: 30.0,
             centroid_dot: 0.04,
             centroid_dah: 0.12,
             locked_wpm: Some(30.0),
