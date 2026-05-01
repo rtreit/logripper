@@ -521,7 +521,7 @@ function Get-EngineProfiles {
                 QSORIPPER_SQLITE_PATH = '{persistenceLocation}'
             }
             BuildFilePath = 'cargo'
-            BuildArguments = @('build', '--manifest-path', $rustManifestPath, '-p', 'qsoripper-server')
+            BuildArguments = @('build', '--manifest-path', $rustManifestPath)
             LaunchFilePath = $rustBinaryPath
             LaunchArguments = @('--listen', '{listenAddress}', '--config', '{configPath}')
             SupportsStorageSession = $true
