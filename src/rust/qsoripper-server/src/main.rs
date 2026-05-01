@@ -377,8 +377,8 @@ impl DeveloperLogbookService {
         )
         .await
         {
-            Ok(synced) => {
-                *stored = synced;
+            Ok(outcome) => {
+                *stored = outcome.qso;
                 (true, None)
             }
             Err(err) => (false, Some(err)),

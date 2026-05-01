@@ -17,4 +17,7 @@ message SyncWithQrzResponse {
   uint32 remote_deletes_pushed = 9;
   // Number of QRZ download records skipped because they matched a soft-deleted local row (Phase 1).
   uint32 deletes_skipped_remote = 10;
+  // Number of uploads that were retried with OPTION=REPLACE because QRZ
+  // already had a matching QSO (duplicate INSERT → auto-matched REPLACE).
+  uint32 duplicate_replaces = 11;
 }

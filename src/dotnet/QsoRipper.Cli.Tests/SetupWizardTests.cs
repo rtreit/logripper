@@ -9,48 +9,57 @@ public class SetupWizardTests
     [Fact]
     public void PromptField_returns_default_on_empty_input()
     {
-        var original = Console.In;
+        var originalIn = Console.In;
+        var originalOut = Console.Out;
         try
         {
             Console.SetIn(new StringReader(Environment.NewLine));
+            Console.SetOut(TextWriter.Null);
             var result = SetupCommand.PromptField("Test", "default_value");
             Assert.Equal("default_value", result);
         }
         finally
         {
-            Console.SetIn(original);
+            Console.SetIn(originalIn);
+            Console.SetOut(originalOut);
         }
     }
 
     [Fact]
     public void PromptField_returns_user_input_when_provided()
     {
-        var original = Console.In;
+        var originalIn = Console.In;
+        var originalOut = Console.Out;
         try
         {
             Console.SetIn(new StringReader("user_input" + Environment.NewLine));
+            Console.SetOut(TextWriter.Null);
             var result = SetupCommand.PromptField("Test", "default_value");
             Assert.Equal("user_input", result);
         }
         finally
         {
-            Console.SetIn(original);
+            Console.SetIn(originalIn);
+            Console.SetOut(originalOut);
         }
     }
 
     [Fact]
     public void PromptField_trims_whitespace()
     {
-        var original = Console.In;
+        var originalIn = Console.In;
+        var originalOut = Console.Out;
         try
         {
             Console.SetIn(new StringReader("  trimmed  " + Environment.NewLine));
+            Console.SetOut(TextWriter.Null);
             var result = SetupCommand.PromptField("Test", "default");
             Assert.Equal("trimmed", result);
         }
         finally
         {
-            Console.SetIn(original);
+            Console.SetIn(originalIn);
+            Console.SetOut(originalOut);
         }
     }
 
@@ -69,16 +78,19 @@ public class SetupWizardTests
     [InlineData("n", false, false)]
     public void PromptYesNo_handles_inputs(string input, bool defaultYes, bool expected)
     {
-        var original = Console.In;
+        var originalIn = Console.In;
+        var originalOut = Console.Out;
         try
         {
             Console.SetIn(new StringReader(input + Environment.NewLine));
+            Console.SetOut(TextWriter.Null);
             var result = SetupCommand.PromptYesNo("Question?", defaultYes);
             Assert.Equal(expected, result);
         }
         finally
         {
-            Console.SetIn(original);
+            Console.SetIn(originalIn);
+            Console.SetOut(originalOut);
         }
     }
 

@@ -28,6 +28,15 @@ public interface IQrzLogbookApi
     Task<string> UploadQsoAsync(QsoRecord qso, string? bookOwner = null);
 
     /// <summary>
+    /// Upload a single QSO with <c>OPTION=REPLACE</c>, allowing QRZ to auto-match
+    /// any existing duplicate by its own detection criteria (call+band+mode+date+time)
+    /// and overwrite it. Unlike <see cref="UpdateQsoAsync"/>, this does not require a
+    /// known LOGID. Used as a retry path when a plain INSERT fails with a "duplicate" error.
+    /// Returns the QRZ-assigned or matched LOGID on success.
+    /// </summary>
+    Task<string> UploadQsoWithReplaceAsync(QsoRecord qso, string? bookOwner = null);
+
+    /// <summary>
     /// Update an existing QSO on QRZ via the REPLACE action.
     /// The <paramref name="qso"/> must have a non-empty <see cref="QsoRecord.QrzLogid"/>
     /// that identifies the remote record to overwrite.
