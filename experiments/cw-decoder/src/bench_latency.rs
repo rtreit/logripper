@@ -89,6 +89,43 @@ pub struct BenchResult {
     /// bench sweeps can tell *why* a configuration improved or
     /// regressed instead of just looking at acquisition_latency.
     pub decoder_counters: Option<serde_json::Value>,
+
+    // --- Decoder-path discriminator and V3-foundation-only metrics ----
+    //
+    // The two decoders (legacy `streaming::StreamingDecoder` aka V2 and
+    // the V3 envelope+append foundation) measure stability differently
+    // — V2 in terms of its `Confidence` state machine, V3 in terms of
+    // its quality-gate (SNR floor + dynamic-range bimodality). The
+    // gate metrics below are populated ONLY by the foundation path and
+    // must not be conflated with `n_pitch_lost_after_lock` etc.
+    /// Identifies which decoder produced this row. One of
+    /// `"foundation"` (V3 default) or `"streaming-v2"` (legacy
+    /// experimental comparison).
+    pub decoder_path: String,
+    /// Character-error rate vs `truth`, normalised whitespace, both
+    /// uppercased, computed via Levenshtein distance / max-len. `None`
+    /// when transcript or truth is empty.
+    pub cer_vs_truth: Option<f32>,
+    /// Final `locked_wpm` reported by the V3 envelope streamer at the
+    /// last frame of the run. `None` for V2 or when no lock happened.
+    pub final_locked_wpm: Option<f32>,
+    /// First sample-time (ms) at which the V3 quality gate was open
+    /// (`!snr_suppressed`) AND `locked_wpm` was set. `None` for V2 or
+    /// when no foundation lock happened.
+    pub t_first_foundation_lock_ms: Option<u32>,
+    /// Count of V3 quality-gate open→closed transitions after the
+    /// first foundation lock. The gate fuses SNR and dynamic-range
+    /// bimodality, so this is "stability lost", not just "pitch lost".
+    pub quality_gate_drops: usize,
+    /// Count of V3 quality-gate closed→open transitions after the
+    /// first foundation lock (i.e. recoveries / re-acquisitions).
+    pub quality_gate_recoveries: usize,
+    /// Fraction of post-first-foundation-lock CW spent with the gate
+    /// open. `None` when no lock happened.
+    pub quality_gate_uptime_ratio: Option<f32>,
+    /// Longest single closed-gate stretch (ms) after first foundation
+    /// lock.
+    pub longest_quality_gate_closed_ms: u32,
 }
 
 impl BenchResult {
@@ -123,6 +160,7 @@ pub fn run_scenario(
         cw_onset_ms: scenario.cw_onset_ms,
         truth: truth_upper.clone(),
         stable_n,
+        decoder_path: "streaming-v2".to_string(),
         ..Default::default()
     };
 
@@ -180,6 +218,7 @@ pub fn run_scenario(
         stable_n,
         &mut result,
     );
+    result.cer_vs_truth = character_error_rate(&result.transcript, &truth_upper);
     Ok(result)
 }
 
@@ -327,7 +366,7 @@ fn process_events(
 /// After the run, scan the transcript for the first contiguous N-char
 /// substring that is also a substring of the truth. Records both the
 /// first-correct-char and stable-N latencies, plus the false-char count.
-fn update_truth_metrics(
+pub fn update_truth_metrics(
     transcript: &str,
     truth: &str,
     char_times: &[u32],
@@ -335,12 +374,23 @@ fn update_truth_metrics(
     out: &mut BenchResult,
 ) {
     let t = transcript.to_uppercase();
+    // Uppercase truth too: the foundation transcript is always upper
+    // (Morse decode emits uppercase letters), and operator-supplied
+    // truth files are commonly mixed-case. Without this normalisation
+    // we silently report `stable_hits = 0` on perfectly correct copy.
+    let truth_upper = truth.to_uppercase();
     let chars: Vec<char> = t.chars().collect();
+    // Defensive: callers must record one timestamp per appended
+    // transcript char. If they get out of sync, fall back gracefully
+    // instead of panicking on the index below.
+    if chars.len() != char_times.len() {
+        return;
+    }
     // First "correct char" = any character in transcript that exists in
     // the truth (a generous sanity check; the headline metric is
     // stable-N).
     for (i, c) in chars.iter().enumerate() {
-        if !c.is_whitespace() && truth.contains(*c) {
+        if !c.is_whitespace() && truth_upper.contains(*c) {
             out.t_first_correct_char_ms = Some(char_times[i]);
             break;
         }
@@ -349,7 +399,7 @@ fn update_truth_metrics(
         for end in stable_n..=chars.len() {
             let start = end - stable_n;
             let sub: String = chars[start..end].iter().collect();
-            if !sub.trim().is_empty() && truth.contains(&sub) {
+            if !sub.trim().is_empty() && truth_upper.contains(&sub) {
                 let stable_idx = end - 1;
                 out.t_stable_n_correct_ms = Some(char_times[stable_idx]);
                 // Count "garbage" chars emitted before the stable run started.
@@ -359,6 +409,59 @@ fn update_truth_metrics(
             }
         }
     }
+}
+
+/// Normalise a transcript or truth string for fair comparison: upper
+/// case, trim ends, collapse internal whitespace runs to a single
+/// space. Both decoders emit word gaps as plain spaces, so word-gap
+/// quality is scored as part of CER instead of being stripped away.
+fn normalise_for_cer(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut prev_space = false;
+    for c in s.trim().chars() {
+        if c.is_whitespace() {
+            if !prev_space {
+                out.push(' ');
+                prev_space = true;
+            }
+        } else {
+            out.extend(c.to_uppercase());
+            prev_space = false;
+        }
+    }
+    out
+}
+
+/// Levenshtein character-error rate between `transcript` and `truth`
+/// after whitespace+case normalisation. Returns `None` when both
+/// inputs are empty (CER is undefined). When one side is empty and
+/// the other is not, returns 1.0 (everything is wrong).
+pub fn character_error_rate(transcript: &str, truth: &str) -> Option<f32> {
+    let a = normalise_for_cer(transcript);
+    let b = normalise_for_cer(truth);
+    let a_chars: Vec<char> = a.chars().collect();
+    let b_chars: Vec<char> = b.chars().collect();
+    if a_chars.is_empty() && b_chars.is_empty() {
+        return None;
+    }
+    let n = a_chars.len();
+    let m = b_chars.len();
+    if n == 0 || m == 0 {
+        return Some(1.0);
+    }
+    // Two-row DP — only the previous row is needed.
+    let mut prev: Vec<usize> = (0..=m).collect();
+    let mut curr: Vec<usize> = vec![0; m + 1];
+    for i in 1..=n {
+        curr[0] = i;
+        for j in 1..=m {
+            let cost = usize::from(a_chars[i - 1] != b_chars[j - 1]);
+            curr[j] = (prev[j] + 1).min(curr[j - 1] + 1).min(prev[j - 1] + cost);
+        }
+        std::mem::swap(&mut prev, &mut curr);
+    }
+    let dist = prev[m];
+    Some(dist as f32 / n.max(m) as f32)
 }
 
 // --- Synthetic generators -----------------------------------------------
@@ -592,8 +695,9 @@ pub fn default_scenarios(sample_rate: u32) -> Vec<Scenario> {
 pub fn print_results_table(results: &[BenchResult]) {
     println!();
     println!(
-        "{:<24} {:>9} {:>9} {:>10} {:>7} {:>5} {:>6} {:>9} {:>9}",
+        "{:<24} {:<12} {:>9} {:>9} {:>10} {:>7} {:>5} {:>6} {:>9} {:>9} {:>6}",
         "scenario",
+        "decoder",
         "stableN_ms",
         "lat_ms",
         "uptime",
@@ -602,49 +706,87 @@ pub fn print_results_table(results: &[BenchResult]) {
         "relock",
         "longest",
         "pitch_hz",
+        "cer",
     );
-    println!("{}", "-".repeat(110));
+    println!("{}", "-".repeat(130));
     for r in results {
         let fmt = |v: Option<u32>| v.map(|x| format!("{x}")).unwrap_or_else(|| "-".into());
         let lat = r
             .acquisition_latency_ms()
             .map(|x| format!("{x:+}"))
             .unwrap_or_else(|| "-".into());
-        let uptime = r
-            .lock_uptime_ratio
-            .map(|u| format!("{:.1}%", u * 100.0))
-            .unwrap_or_else(|| "-".into());
-        let pitch = r
-            .locked_pitch_hz
-            .map(|p| format!("{p:.1}"))
-            .unwrap_or_else(|| "-".into());
-        let longest = if r.longest_unlocked_gap_ms > 0 {
-            format!("{} ms", r.longest_unlocked_gap_ms)
+        let is_foundation = r.decoder_path == "foundation";
+        // V3 uptime / drops / longest live in the quality_gate_*
+        // fields. V2 uptime / drops / longest live in lock_uptime_ratio
+        // / n_pitch_lost_after_lock / longest_unlocked_gap_ms. Print
+        // whichever is appropriate for the row's decoder_path.
+        let uptime = if is_foundation {
+            r.quality_gate_uptime_ratio
+        } else {
+            r.lock_uptime_ratio
+        }
+        .map(|u| format!("{:.1}%", u * 100.0))
+        .unwrap_or_else(|| "-".into());
+        let drops = if is_foundation {
+            r.quality_gate_drops
+        } else {
+            r.n_pitch_lost_after_lock
+        };
+        let relock = if is_foundation {
+            r.quality_gate_recoveries
+        } else {
+            r.n_relock_cycles
+        };
+        let longest_ms = if is_foundation {
+            r.longest_quality_gate_closed_ms
+        } else {
+            r.longest_unlocked_gap_ms
+        };
+        let longest = if longest_ms > 0 {
+            format!("{longest_ms} ms")
         } else {
             "-".into()
         };
+        let pitch = r
+            .locked_pitch_hz
+            .or(r.final_pitch_hz)
+            .map(|p| format!("{p:.1}"))
+            .unwrap_or_else(|| "-".into());
+        let cer = r
+            .cer_vs_truth
+            .map(|c| format!("{c:.3}"))
+            .unwrap_or_else(|| "-".into());
+        let decoder = if r.decoder_path.is_empty() {
+            "-"
+        } else {
+            r.decoder_path.as_str()
+        };
         println!(
-            "{:<24} {:>9} {:>9} {:>10} {:>7} {:>5} {:>6} {:>9} {:>9}",
+            "{:<24} {:<12} {:>9} {:>9} {:>10} {:>7} {:>5} {:>6} {:>9} {:>9} {:>6}",
             truncate(&r.scenario, 24),
+            truncate(decoder, 12),
             fmt(r.t_stable_n_correct_ms),
             lat,
             uptime,
-            r.n_pitch_lost_after_lock,
+            drops,
             r.false_chars_before_stable,
-            r.n_relock_cycles,
+            relock,
             longest,
             pitch,
+            cer,
         );
     }
     println!();
     println!("Legend:");
+    println!("  decoder    = decoder path that produced the row (foundation = V3 envelope+append, streaming-v2 = legacy)");
     println!("  stableN_ms = first time the next N decoded chars match a substring of truth");
     println!("  lat_ms     = stableN_ms - cw_onset_ms (lower = faster cold-start acquisition)");
-    println!("  uptime     = % of post-first-lock CW spent in Locked confidence state");
-    println!("  drops      = PitchLost events fired AFTER first lock (ideally 0 on clean CW)");
+    println!("  uptime     = % of post-first-lock CW spent stable (V3: gate open; V2: Confidence::Locked)");
+    println!("  drops      = stability transitions lost after first lock (V3: gate close; V2: PitchLost). 0 ideal on clean CW");
     println!("  false      = chars emitted before the stable-N point (ghost copy)");
-    println!("  relock     = number of Hunting->Locked cycles after the first lock");
-    println!("  longest    = longest single non-Locked stretch after first lock");
+    println!("  relock     = number of recovery transitions after the first lock");
+    println!("  longest    = longest single non-stable stretch after first lock");
+    println!("  cer        = character-error rate vs truth (Levenshtein, normalised whitespace, 0 = perfect)");
     println!();
     println!("Transcripts:");
     for r in results {
@@ -658,8 +800,11 @@ fn truncate(s: &str, n: usize) -> String {
     if s.chars().count() <= n {
         s.to_string()
     } else {
-        let mut out: String = s.chars().take(n.saturating_sub(1)).collect();
-        out.push('…');
+        // Use ASCII "..." rather than the Unicode ellipsis so the
+        // Windows console (which often interprets stdout bytes as
+        // CP1252) doesn't render it as mojibake like "â€¦".
+        let mut out: String = s.chars().take(n.saturating_sub(3)).collect();
+        out.push_str("...");
         out
     }
 }
@@ -864,5 +1009,47 @@ mod tests {
                 "lock uptime ratio {uptime:.2} below 0.9 on clean CW",
             );
         }
+    }
+
+    #[test]
+    fn cer_is_zero_on_identical_strings() {
+        let cer = character_error_rate("CQ DE K7AB", "CQ DE K7AB");
+        assert_eq!(cer, Some(0.0));
+    }
+
+    #[test]
+    fn cer_normalises_case_and_whitespace() {
+        // Different case + multi-space runs collapse to identical normalised form.
+        let cer = character_error_rate("cq  de   k7ab", "CQ DE K7AB");
+        assert_eq!(cer, Some(0.0));
+    }
+
+    #[test]
+    fn cer_one_for_complete_mismatch() {
+        let cer = character_error_rate("XYZ", "ABC").unwrap();
+        assert!((cer - 1.0).abs() < 1e-6, "expected 1.0, got {cer}");
+    }
+
+    #[test]
+    fn cer_none_on_both_empty() {
+        assert_eq!(character_error_rate("", ""), None);
+    }
+
+    #[test]
+    fn update_truth_metrics_uppercases_lowercase_truth() {
+        // Regression: previously truth was compared case-sensitively
+        // and a lowercase truth like "paris" vs uppercase transcript
+        // "PARIS" would never hit stable-N. The fixed version
+        // uppercases truth as well.
+        let mut out = BenchResult {
+            cw_onset_ms: 0,
+            stable_n: 3,
+            ..Default::default()
+        };
+        update_truth_metrics("PARIS", "paris paris", &[10, 20, 30, 40, 50], 3, &mut out);
+        assert!(
+            out.t_stable_n_correct_ms.is_some(),
+            "stable-N should fire when transcript is uppercase form of lowercase truth"
+        );
     }
 }

@@ -26,6 +26,8 @@ internal sealed class AudioPlaybackProcess : IDisposable
         psi.ArgumentList.Add("play-file");
         psi.ArgumentList.Add(path);
         psi.ArgumentList.Add("--json");
+        psi.ArgumentList.Add("--stdin-control");
+        psi.RedirectStandardInput = true;
 
         var process = Process.Start(psi) ?? throw new InvalidOperationException("Failed to start cw-decoder playback.");
         _proc = process;
@@ -37,6 +39,34 @@ internal sealed class AudioPlaybackProcess : IDisposable
             try { process.WaitForExit(); } catch { }
             Exited?.Invoke(process.ExitCode);
         });
+    }
+
+    /// <summary>Pause the running play-file process. No-op otherwise.</summary>
+    public void Pause() => SendCommand("{\"cmd\":\"pause\"}");
+
+    /// <summary>Resume the running play-file process. No-op otherwise.</summary>
+    public void Resume() => SendCommand("{\"cmd\":\"resume\"}");
+
+    /// <summary>
+    /// Seek the running play-file process to <paramref name="positionSeconds"/>
+    /// (in original-file seconds). No-op when not playing.
+    /// </summary>
+    public void Seek(double positionSeconds)
+    {
+        var ic = System.Globalization.CultureInfo.InvariantCulture;
+        SendCommand($"{{\"cmd\":\"seek\",\"position\":{positionSeconds.ToString(ic)}}}");
+    }
+
+    private void SendCommand(string ndjsonLine)
+    {
+        var p = _proc;
+        if (p is null || p.HasExited) return;
+        try
+        {
+            p.StandardInput.WriteLine(ndjsonLine);
+            p.StandardInput.Flush();
+        }
+        catch { /* best effort: process may be in shutdown */ }
     }
 
     public void Stop()

@@ -9,10 +9,12 @@ public sealed class BenchScenarioResult
 {
     public string Label { get; init; } = string.Empty;
     public string Scenario { get; init; } = string.Empty;
+    public string DecoderPath { get; init; } = string.Empty;
     public uint CwOnsetMs { get; init; }
     public int StableN { get; init; }
     public uint? TFirstPitchUpdateMs { get; init; }
     public uint? TFirstLockedMs { get; init; }
+    public uint? TFirstFoundationLockMs { get; init; }
     public uint? TFirstCharMs { get; init; }
     public uint? TFirstCorrectCharMs { get; init; }
     public uint? TStableNCorrectMs { get; init; }
@@ -23,24 +25,50 @@ public sealed class BenchScenarioResult
     public float? LockUptimeRatio { get; init; }
     public uint LongestUnlockedGapMs { get; init; }
     public uint TotalUnlockedMsAfterLock { get; init; }
+    public int QualityGateDrops { get; init; }
+    public int QualityGateRecoveries { get; init; }
+    public float? QualityGateUptimeRatio { get; init; }
+    public uint LongestQualityGateClosedMs { get; init; }
     public float? LockedPitchHz { get; init; }
+    public float? FinalPitchHz { get; init; }
+    public float? FinalLockedWpm { get; init; }
+    public float? CerVsTruth { get; init; }
     public string Transcript { get; init; } = string.Empty;
+
+    private bool IsFoundation => string.Equals(DecoderPath, "foundation", System.StringComparison.OrdinalIgnoreCase);
 
     // Display helpers for the DataGrid columns.
     public string ScenarioDisplay => Scenario;
+    public string DecoderDisplay => string.IsNullOrEmpty(DecoderPath) ? "—" : DecoderPath;
     public string LatencyDisplay => AcquisitionLatencyMs.HasValue
         ? $"{AcquisitionLatencyMs.Value / 1000.0:0.0} s"
         : "—";
-    public string UptimeDisplay => LockUptimeRatio.HasValue
-        ? $"{LockUptimeRatio.Value * 100.0:0.0}%"
-        : "—";
-    public string DropsDisplay => NPitchLostAfterLock.ToString();
-    public string RelocksDisplay => NRelockCycles.ToString();
-    public string LongestGapDisplay => LongestUnlockedGapMs > 0
-        ? $"{LongestUnlockedGapMs / 1000.0:0.0} s"
-        : "0";
+    public string UptimeDisplay
+    {
+        get
+        {
+            var ratio = IsFoundation ? QualityGateUptimeRatio : LockUptimeRatio;
+            return ratio.HasValue ? $"{ratio.Value * 100.0:0.0}%" : "—";
+        }
+    }
+    public string DropsDisplay => (IsFoundation ? QualityGateDrops : NPitchLostAfterLock).ToString();
+    public string RelocksDisplay => (IsFoundation ? QualityGateRecoveries : NRelockCycles).ToString();
+    public string LongestGapDisplay
+    {
+        get
+        {
+            var ms = IsFoundation ? LongestQualityGateClosedMs : LongestUnlockedGapMs;
+            return ms > 0 ? $"{ms / 1000.0:0.0} s" : "0";
+        }
+    }
     public string GhostsDisplay => FalseCharsBeforeStable.ToString();
-    public string PitchDisplay => LockedPitchHz.HasValue
-        ? $"{LockedPitchHz.Value:0} Hz"
-        : "—";
+    public string PitchDisplay
+    {
+        get
+        {
+            var p = LockedPitchHz ?? FinalPitchHz;
+            return p.HasValue ? $"{p.Value:0} Hz" : "—";
+        }
+    }
+    public string CerDisplay => CerVsTruth.HasValue ? $"{CerVsTruth.Value:0.000}" : "—";
 }
