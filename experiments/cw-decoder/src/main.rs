@@ -3377,6 +3377,117 @@ pub enum StdinControlMessage {
     ResetLock,
 }
 
+/// Outcome of parsing one stdin control line. Pulled out as its own
+/// function so the parser can be regression-tested without spawning a
+/// real reader thread or wiring stdin redirection.
+#[derive(Debug)]
+pub(crate) enum StdinParseOutcome {
+    /// Line should be ignored (empty / unrecognized JSON / malformed).
+    Skip,
+    /// Operator requested graceful shutdown via a literal `stop` line.
+    /// The reader loop must set the stop atomic and break.
+    Stop,
+    /// A control message that the decoder loop should observe.
+    Message(StdinControlMessage),
+}
+
+#[cfg(test)]
+impl StdinParseOutcome {
+    fn is_stop(&self) -> bool {
+        matches!(self, StdinParseOutcome::Stop)
+    }
+    fn is_skip(&self) -> bool {
+        matches!(self, StdinParseOutcome::Skip)
+    }
+    fn is_reset_lock(&self) -> bool {
+        matches!(
+            self,
+            StdinParseOutcome::Message(StdinControlMessage::ResetLock)
+        )
+    }
+}
+
+/// Parse a single line received on the V3/streaming control stdin.
+///
+/// `state` is the current cumulative [`streaming::DecoderConfig`]; we
+/// mutate it in place so omitted fields keep their previous value.
+///
+/// Critical invariant: a literal `stop` line MUST yield
+/// [`StdinParseOutcome::Stop`] so the reader loop can finalize the WAV
+/// recording. Without that, the GUI's graceful Stop signal is silently
+/// dropped here, the GUI eventually falls back to `Process.Kill`,
+/// `LiveCapture::drop` never runs, and every saved capture lands on
+/// disk with `riffSize=0/dataSize=0` — making it unusable for offline
+/// replay or regression scoring (see
+/// `parser_treats_literal_stop_line_as_stop` test).
+pub(crate) fn parse_stdin_control_line(
+    state: &mut streaming::DecoderConfig,
+    line: &str,
+) -> StdinParseOutcome {
+    let trimmed = line.trim();
+    if trimmed.is_empty() {
+        return StdinParseOutcome::Skip;
+    }
+    if trimmed.eq_ignore_ascii_case("stop") {
+        return StdinParseOutcome::Stop;
+    }
+    let v: serde_json::Value = match serde_json::from_str(trimmed) {
+        Ok(v) => v,
+        Err(_) => return StdinParseOutcome::Skip,
+    };
+    match v.get("type").and_then(|t| t.as_str()) {
+        Some("reset_lock") => return StdinParseOutcome::Message(StdinControlMessage::ResetLock),
+        Some("config") => {}
+        _ => return StdinParseOutcome::Skip,
+    }
+    if let Some(x) = v.get("min_snr_db").and_then(|x| x.as_f64()) {
+        state.min_snr_db = x as f32;
+    }
+    if let Some(x) = v.get("pitch_min_snr_db").and_then(|x| x.as_f64()) {
+        state.pitch_min_snr_db = x as f32;
+    }
+    if let Some(x) = v.get("threshold_scale").and_then(|x| x.as_f64()) {
+        state.threshold_scale = x as f32;
+    }
+    if let Some(b) = v.get("auto_threshold").and_then(|x| x.as_bool()) {
+        state.auto_threshold = b;
+    }
+    if let Some(b) = v.get("experimental_range_lock").and_then(|x| x.as_bool()) {
+        state.experimental_range_lock = b;
+    }
+    if let Some(x) = v.get("range_lock_min_hz").and_then(|x| x.as_f64()) {
+        state.range_lock_min_hz = x as f32;
+    }
+    if let Some(x) = v.get("range_lock_max_hz").and_then(|x| x.as_f64()) {
+        state.range_lock_max_hz = x as f32;
+    }
+    if let Some(x) = v.get("min_tone_purity").and_then(|x| x.as_f64()) {
+        state.min_tone_purity = x as f32;
+    }
+    if let Some(x) = v.get("force_pitch_hz").and_then(|x| x.as_f64()) {
+        state.force_pitch_hz = if x > 0.0 { Some(x as f32) } else { None };
+    } else if v
+        .get("force_pitch_hz")
+        .map(|x| x.is_null())
+        .unwrap_or(false)
+    {
+        state.force_pitch_hz = None;
+    }
+    if let Some(x) = v.get("wide_bin_count").and_then(|x| x.as_i64()) {
+        state.wide_bin_count = x.clamp(0, 16) as u8;
+    }
+    if let Some(x) = v.get("min_pulse_dot_fraction").and_then(|x| x.as_f64()) {
+        state.min_pulse_dot_fraction = x.max(0.0) as f32;
+    }
+    if let Some(x) = v.get("min_gap_dot_fraction").and_then(|x| x.as_f64()) {
+        state.min_gap_dot_fraction = x.max(0.0) as f32;
+    }
+    if let Some(x) = v.get("hysteresis_fraction").and_then(|x| x.as_f64()) {
+        state.hysteresis_fraction = x.max(0.0) as f32;
+    }
+    StdinParseOutcome::Message(StdinControlMessage::Config(*state))
+}
+
 /// Spawn a background thread that reads NDJSON control lines from stdin
 /// and forwards parsed [`StdinControlMessage`] values to the returned
 /// receiver. Lines that don't parse as a recognized command are
@@ -3385,6 +3496,7 @@ pub enum StdinControlMessage {
 /// Wire format (one JSON object per line):
 ///   {"type":"config","min_snr_db":6.0,"pitch_min_snr_db":8.0,"threshold_scale":1.0}
 ///   {"type":"reset_lock"}
+///   stop
 ///
 /// For `config`, any field may be omitted; omitted fields keep their
 /// previous value.
@@ -3397,72 +3509,19 @@ fn spawn_stdin_config_channel(
         let stdin = std::io::stdin();
         let mut state = streaming::DecoderConfig::defaults();
         for line in stdin.lock().lines().map_while(Result::ok) {
-            let trimmed = line.trim();
-            if trimmed.is_empty() {
-                continue;
-            }
-            let v: serde_json::Value = match serde_json::from_str(trimmed) {
-                Ok(v) => v,
-                Err(_) => continue,
-            };
-            match v.get("type").and_then(|t| t.as_str()) {
-                Some("reset_lock") => {
-                    if tx.send(StdinControlMessage::ResetLock).is_err() {
+            match parse_stdin_control_line(&mut state, &line) {
+                StdinParseOutcome::Skip => continue,
+                StdinParseOutcome::Stop => {
+                    if let Some(stop) = stop_on_eof.as_ref() {
+                        stop.store(true, std::sync::atomic::Ordering::Relaxed);
+                    }
+                    break;
+                }
+                StdinParseOutcome::Message(msg) => {
+                    if tx.send(msg).is_err() {
                         break;
                     }
-                    continue;
                 }
-                Some("config") => {}
-                _ => continue,
-            }
-            if let Some(x) = v.get("min_snr_db").and_then(|x| x.as_f64()) {
-                state.min_snr_db = x as f32;
-            }
-            if let Some(x) = v.get("pitch_min_snr_db").and_then(|x| x.as_f64()) {
-                state.pitch_min_snr_db = x as f32;
-            }
-            if let Some(x) = v.get("threshold_scale").and_then(|x| x.as_f64()) {
-                state.threshold_scale = x as f32;
-            }
-            if let Some(b) = v.get("auto_threshold").and_then(|x| x.as_bool()) {
-                state.auto_threshold = b;
-            }
-            if let Some(b) = v.get("experimental_range_lock").and_then(|x| x.as_bool()) {
-                state.experimental_range_lock = b;
-            }
-            if let Some(x) = v.get("range_lock_min_hz").and_then(|x| x.as_f64()) {
-                state.range_lock_min_hz = x as f32;
-            }
-            if let Some(x) = v.get("range_lock_max_hz").and_then(|x| x.as_f64()) {
-                state.range_lock_max_hz = x as f32;
-            }
-            if let Some(x) = v.get("min_tone_purity").and_then(|x| x.as_f64()) {
-                state.min_tone_purity = x as f32;
-            }
-            // force_pitch_hz: <number> sets a forced lock; 0/null clears it.
-            if let Some(x) = v.get("force_pitch_hz").and_then(|x| x.as_f64()) {
-                state.force_pitch_hz = if x > 0.0 { Some(x as f32) } else { None };
-            } else if v
-                .get("force_pitch_hz")
-                .map(|x| x.is_null())
-                .unwrap_or(false)
-            {
-                state.force_pitch_hz = None;
-            }
-            if let Some(x) = v.get("wide_bin_count").and_then(|x| x.as_i64()) {
-                state.wide_bin_count = x.clamp(0, 16) as u8;
-            }
-            if let Some(x) = v.get("min_pulse_dot_fraction").and_then(|x| x.as_f64()) {
-                state.min_pulse_dot_fraction = x.max(0.0) as f32;
-            }
-            if let Some(x) = v.get("min_gap_dot_fraction").and_then(|x| x.as_f64()) {
-                state.min_gap_dot_fraction = x.max(0.0) as f32;
-            }
-            if let Some(x) = v.get("hysteresis_fraction").and_then(|x| x.as_f64()) {
-                state.hysteresis_fraction = x.max(0.0) as f32;
-            }
-            if tx.send(StdinControlMessage::Config(state)).is_err() {
-                break;
             }
         }
         // Stdin EOF — propagate as graceful stop so Drop runs and the WAV
@@ -4598,5 +4657,62 @@ mod v3_session_transcript_tests {
         // about lock state, so be conservative and skip.
         let snap = make_snapshot("CQ", None);
         assert!(!should_stitch_to_session(&snap));
+    }
+}
+
+#[cfg(test)]
+mod stdin_control_tests {
+    use super::*;
+
+    /// Critical regression: the GUI's graceful Stop signal arrives as a
+    /// literal `stop\n` line, not as JSON. Without the `Stop` outcome,
+    /// the V3 child never observes the request, the GUI eventually falls
+    /// back to Process.Kill, LiveCapture::drop never runs, and every
+    /// saved capture lands on disk with riffSize=0/dataSize=0 — making
+    /// real-radio diagnostic captures unusable for offline replay /
+    /// regression scoring.
+    #[test]
+    fn parser_treats_literal_stop_line_as_stop() {
+        let mut state = streaming::DecoderConfig::defaults();
+        assert!(parse_stdin_control_line(&mut state, "stop").is_stop());
+        assert!(parse_stdin_control_line(&mut state, "  STOP  \r").is_stop());
+        assert!(parse_stdin_control_line(&mut state, "Stop\n").is_stop());
+    }
+
+    #[test]
+    fn parser_skips_blank_and_unknown_lines() {
+        let mut state = streaming::DecoderConfig::defaults();
+        assert!(parse_stdin_control_line(&mut state, "").is_skip());
+        assert!(parse_stdin_control_line(&mut state, "    ").is_skip());
+        assert!(parse_stdin_control_line(&mut state, "garbage{").is_skip());
+        // Valid JSON without a recognized type is also a no-op.
+        assert!(parse_stdin_control_line(&mut state, r#"{"hello":"world"}"#).is_skip());
+    }
+
+    #[test]
+    fn parser_recognizes_reset_lock_and_config() {
+        let mut state = streaming::DecoderConfig::defaults();
+        assert!(parse_stdin_control_line(&mut state, r#"{"type":"reset_lock"}"#).is_reset_lock());
+        match parse_stdin_control_line(
+            &mut state,
+            r#"{"type":"config","min_snr_db":12.5,"threshold_scale":1.5}"#,
+        ) {
+            StdinParseOutcome::Message(StdinControlMessage::Config(cfg)) => {
+                assert!((cfg.min_snr_db - 12.5).abs() < 1e-3);
+                assert!((cfg.threshold_scale - 1.5).abs() < 1e-3);
+            }
+            other => panic!("expected Config message, got {other:?}"),
+        }
+        // Cumulative state: a partial config message preserves prior values.
+        match parse_stdin_control_line(&mut state, r#"{"type":"config","min_snr_db":3.0}"#) {
+            StdinParseOutcome::Message(StdinControlMessage::Config(cfg)) => {
+                assert!((cfg.min_snr_db - 3.0).abs() < 1e-3);
+                assert!(
+                    (cfg.threshold_scale - 1.5).abs() < 1e-3,
+                    "threshold_scale should persist across config updates",
+                );
+            }
+            other => panic!("expected Config message, got {other:?}"),
+        }
     }
 }
